@@ -1,0 +1,24 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Node
+node_modules/
+dist/
+
+# Runtime data & secrets (DB, panel SSH key, backups) — MUST NOT be committed
+data/
+*.db
+
+# Local env; keep the template
+.env
+.env.local
+.env.*.local
+!.env.example
+
+# IDE / OS
+.idea/
+.vscode/
+.DS_Store
