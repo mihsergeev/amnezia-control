@@ -1,0 +1,62 @@
+services:
+  db:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: acontrol
+      POSTGRES_USER: acontrol
+      POSTGRES_PASSWORD: ${ACONTROL_DB_PASSWORD}
+    volumes:
+      - ./data/postgres:/var/lib/postgresql/data
+    networks:
+      - internal
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U acontrol -d acontrol"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
+  backend:
+    build: ./backend
+    restart: unless-stopped
+    environment:
+      VPNPANEL_DB_URL: postgresql+asyncpg://acontrol:${ACONTROL_DB_PASSWORD}@db:5432/acontrol
+      VPNPANEL_JWT_SECRET: ${ACONTROL_JWT_SECRET}
+      VPNPANEL_ADMIN_USER: ${ACONTROL_ADMIN_USER}
+      VPNPANEL_ADMIN_PASSWORD: ${ACONTROL_ADMIN_PASSWORD}
+      VPNPANEL_DATA_DIR: /data
+      VPNPANEL_PANEL_IP: ${ACONTROL_PANEL_IP}
+      VPNPANEL_DEFAULT_SSH_USER: ${ACONTROL_DEFAULT_SSH_USER:-acontrol}
+      VPNPANEL_STATS_INTERVAL: ${ACONTROL_STATS_INTERVAL:-300}
+      VPNPANEL_EXPIRY_INTERVAL: ${ACONTROL_EXPIRY_INTERVAL:-300}
+      VPNPANEL_DISK_ALERT_PERCENT: ${ACONTROL_DISK_ALERT_PERCENT:-90}
+      VPNPANEL_BACKUP_INTERVAL_HOURS: ${ACONTROL_BACKUP_INTERVAL_HOURS:-24}
+      VPNPANEL_BACKUP_KEEP: ${ACONTROL_BACKUP_KEEP:-14}
+    volumes:
+      - ./data:/data
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - internal
+
+  frontend:
+    build: ./frontend
+    restart: unless-stopped
+    depends_on:
+      - backend
+    networks:
+      - internal
+      - caddy
+    # Edge TLS + IP allow-list via caddy-docker-proxy. Domain and allowed IPs
+    # come from .env. To disable the IP allow-list, drop the @denied/abort labels.
+    labels:
+      caddy: ${ACONTROL_DOMAIN}
+      caddy.@denied.not.remote_ip: ${ACONTROL_ALLOW_IPS}
+      caddy.abort: "@denied"
+      caddy.reverse_proxy: "{{upstreams 80}}"
+
+networks:
+  internal:
+  caddy:
+    external: true
