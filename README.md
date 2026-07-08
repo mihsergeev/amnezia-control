@@ -95,7 +95,7 @@ The panel holds its own SSH keypair and connects to each node as an unprivileged
 ## Quick start
 
 ```bash
-git clone <your-repo-url> acontrol && cd acontrol
+git clone https://github.com/mihsergeev/amnezia-control.git acontrol && cd acontrol
 cp .env.example .env
 # edit .env — set ADMIN_PASSWORD, DB_PASSWORD, JWT_SECRET, PANEL_IP
 docker compose up -d --build
