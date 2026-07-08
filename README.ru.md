@@ -95,7 +95,7 @@
 ## Быстрый старт
 
 ```bash
-git clone <адрес-репозитория> acontrol && cd acontrol
+git clone https://github.com/mihsergeev/amnezia-control.git acontrol && cd acontrol
 cp .env.example .env
 # отредактируйте .env — задайте ADMIN_PASSWORD, DB_PASSWORD, JWT_SECRET, PANEL_IP
 docker compose up -d --build
