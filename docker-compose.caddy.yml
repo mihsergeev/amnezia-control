@@ -10,6 +10,9 @@
 # allow-list, remove the @denied / abort labels below.
 services:
   frontend:
+    # caddy proxies via the internal network — no host port needed, so drop
+    # the base compose's published port (avoids a host port conflict).
+    ports: !reset []
     networks:
       - internal
       - caddy
