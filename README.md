@@ -87,7 +87,7 @@ The panel holds its own SSH keypair and connects to each node as an unprivileged
 ## Requirements
 
 - A Linux host for the panel with **Docker** and **Docker Compose** (v2)
-- A domain name if you want automatic HTTPS (via the bundled Caddy setup) — otherwise any reachable port works
+- A reverse proxy for HTTPS (nginx / Caddy / Traefik) — an optional caddy-docker-proxy override is included
 - VPN **nodes**: Linux with Docker; reachable over SSH from the panel
 
 ---
@@ -101,11 +101,20 @@ cp .env.example .env
 docker compose up -d --build
 ```
 
-The panel comes up behind `caddy-docker-proxy` (external Docker network `caddy`) on the domain set in the `frontend` service labels. Generate the JWT secret with `openssl rand -hex 32`.
+This is **standalone**: the panel is published on the host at `ACONTROL_BIND` (default `127.0.0.1:8080`). Open it at http://127.0.0.1:8080, or set `ACONTROL_BIND=0.0.0.0:8080` to expose it on all interfaces. Generate the JWT secret with `openssl rand -hex 32`.
 
-### Reverse proxy / HTTPS
+### HTTPS / reverse proxy
 
-`docker-compose.yml` ships a `caddy-docker-proxy` setup with automatic TLS and an **IP allow-list** (see the `caddy.@denied.not.remote_ip` label on the `frontend` service). Edit that label to your own admin IPs, or replace the whole block with your reverse proxy of choice — the frontend just serves HTTP on port 80 inside the network and proxies `/api` to the backend.
+The panel serves plain HTTP — **put a reverse proxy with TLS in front** (nginx, Caddy, Traefik, …) pointing at `ACONTROL_BIND`. It's a login-protected control panel, so don't expose it over plain HTTP on the internet.
+
+**Optional — caddy-docker-proxy.** If you already run [caddy-docker-proxy](https://github.com/lucaslorentz/caddy-docker-proxy) (external Docker network `caddy`), an override adds automatic TLS + an IP allow-list:
+
+```bash
+# set ACONTROL_DOMAIN and ACONTROL_ALLOW_IPS in .env, then:
+docker compose -f docker-compose.yml -f docker-compose.caddy.yml up -d --build
+```
+
+(or put `COMPOSE_FILE=docker-compose.yml:docker-compose.caddy.yml` in `.env`). See [`docker-compose.caddy.yml`](docker-compose.caddy.yml).
 
 ---
 

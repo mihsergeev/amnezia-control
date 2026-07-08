@@ -87,7 +87,7 @@
 ## Требования
 
 - Linux-хост под панель с **Docker** и **Docker Compose** (v2)
-- Доменное имя, если нужен автоматический HTTPS (через встроенный Caddy) — иначе достаточно любого доступного порта
+- Реверс-прокси для HTTPS (nginx / Caddy / Traefik) — опциональный override под caddy-docker-proxy в комплекте
 - VPN-**ноды**: Linux с Docker, доступные по SSH с панели
 
 ---
@@ -101,11 +101,20 @@ cp .env.example .env
 docker compose up -d --build
 ```
 
-Панель поднимается за `caddy-docker-proxy` (внешняя docker-сеть `caddy`) на домене из меток сервиса `frontend`. JWT-секрет удобно сгенерировать через `openssl rand -hex 32`.
+Это **самодостаточный** режим: панель публикуется на хосте по адресу `ACONTROL_BIND` (по умолчанию `127.0.0.1:8080`). Откройте http://127.0.0.1:8080 или задайте `ACONTROL_BIND=0.0.0.0:8080`, чтобы открыть на всех интерфейсах. JWT-секрет удобно сгенерировать через `openssl rand -hex 32`.
 
-### Реверс-прокси / HTTPS
+### HTTPS / реверс-прокси
 
-В `docker-compose.yml` уже настроен `caddy-docker-proxy` с автоматическим TLS и **IP-whitelist** (метка `caddy.@denied.not.remote_ip` у сервиса `frontend`). Впишите туда свои админские IP или замените весь блок на свой реверс-прокси — фронтенд просто отдаёт HTTP на порту 80 внутри сети и проксирует `/api` на бэкенд.
+Панель отдаёт обычный HTTP — **поставьте перед ней реверс-прокси с TLS** (nginx, Caddy, Traefik, …), проксирующий на `ACONTROL_BIND`. Это админ-панель под логином, не выставляйте её в интернет по голому HTTP.
+
+**Опционально — caddy-docker-proxy.** Если у вас уже крутится [caddy-docker-proxy](https://github.com/lucaslorentz/caddy-docker-proxy) (внешняя docker-сеть `caddy`), override добавляет автоматический TLS и IP-whitelist:
+
+```bash
+# задайте ACONTROL_DOMAIN и ACONTROL_ALLOW_IPS в .env, затем:
+docker compose -f docker-compose.yml -f docker-compose.caddy.yml up -d --build
+```
+
+(либо впишите `COMPOSE_FILE=docker-compose.yml:docker-compose.caddy.yml` в `.env`). См. [`docker-compose.caddy.yml`](docker-compose.caddy.yml).
 
 ---
 
