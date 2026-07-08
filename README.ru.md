@@ -107,14 +107,17 @@ docker compose up -d --build
 
 Панель отдаёт обычный HTTP — **поставьте перед ней реверс-прокси с TLS** (nginx, Caddy, Traefik, …), проксирующий на `ACONTROL_BIND`. Это админ-панель под логином, не выставляйте её в интернет по голому HTTP.
 
-**Опционально — caddy-docker-proxy.** Если у вас уже крутится [caddy-docker-proxy](https://github.com/lucaslorentz/caddy-docker-proxy) (внешняя docker-сеть `caddy`), override добавляет автоматический TLS и IP-whitelist:
+**Опционально — caddy-docker-proxy.** Только если у вас именно [caddy-docker-proxy](https://github.com/lucaslorentz/caddy-docker-proxy) (прокси, читающий docker-**метки**), override подключается к его сети и настраивает TLS + IP-whitelist через метки:
 
 ```bash
-# задайте ACONTROL_DOMAIN и ACONTROL_ALLOW_IPS в .env, затем:
+# в .env: задайте ACONTROL_DOMAIN, ACONTROL_ALLOW_IPS и
+# ACONTROL_CADDY_NETWORK (сеть, за которой следит ваш caddy-docker-proxy), затем:
 docker compose -f docker-compose.yml -f docker-compose.caddy.yml up -d --build
 ```
 
-(либо впишите `COMPOSE_FILE=docker-compose.yml:docker-compose.caddy.yml` в `.env`). См. [`docker-compose.caddy.yml`](docker-compose.caddy.yml).
+(либо впишите `COMPOSE_FILE=docker-compose.yml:docker-compose.caddy.yml` в `.env`). Фронтенд панели должен быть в **той же docker-сети**, что и caddy-docker-proxy — задайте `ACONTROL_CADDY_NETWORK`, если она называется не `caddy`.
+
+**Любой другой прокси** (обычный Caddy с Caddyfile, nginx, Traefik) эти метки не читает — используйте standalone: опубликуйте порт (`ACONTROL_BIND`) и направьте прокси на него, либо подключите свой прокси к сети `acontrol_internal` и проксируйте на `acontrol-frontend-1:80`.
 
 ---
 
