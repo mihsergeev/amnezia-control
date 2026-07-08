@@ -18,7 +18,9 @@ services:
       - caddy
     labels:
       caddy: ${ACONTROL_DOMAIN}
-      caddy.@denied.not.remote_ip: ${ACONTROL_ALLOW_IPS}
+      # Deny everyone NOT in ACONTROL_ALLOW_IPS. Left empty → default matches
+      # all IPs, so "not in all" denies no one = open to everyone.
+      caddy.@denied.not.remote_ip: ${ACONTROL_ALLOW_IPS:-0.0.0.0/0 ::/0}
       caddy.abort: "@denied"
       caddy.reverse_proxy: "{{upstreams 80}}"
 

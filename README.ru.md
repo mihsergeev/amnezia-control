@@ -115,7 +115,7 @@ docker compose up -d --build
 docker compose -f docker-compose.yml -f docker-compose.caddy.yml up -d --build
 ```
 
-(либо впишите `COMPOSE_FILE=docker-compose.yml:docker-compose.caddy.yml` в `.env`). Фронтенд панели должен быть в **той же docker-сети**, что и caddy-docker-proxy — задайте `ACONTROL_CADDY_NETWORK`, если она называется не `caddy`.
+(либо впишите `COMPOSE_FILE=docker-compose.yml:docker-compose.caddy.yml` в `.env`). Фронтенд панели должен быть в **той же docker-сети**, что и caddy-docker-proxy — задайте `ACONTROL_CADDY_NETWORK`, если она называется не `caddy`. Оставьте `ACONTROL_ALLOW_IPS` пустым — доступ будет со всех IP (защита остаётся на логине + 2FA).
 
 **Любой другой прокси** (обычный Caddy с Caddyfile, nginx, Traefik) эти метки не читает — используйте standalone: опубликуйте порт (`ACONTROL_BIND`) и направьте прокси на него, либо подключите свой прокси к сети `acontrol_internal` и проксируйте на `acontrol-frontend-1:80`.
 
