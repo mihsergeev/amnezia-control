@@ -45,18 +45,12 @@ services:
     restart: unless-stopped
     depends_on:
       - backend
+    # Panel is served on the host at ACONTROL_BIND (default 127.0.0.1:8080).
+    # Put a reverse proxy with HTTPS in front, or use docker-compose.caddy.yml.
+    ports:
+      - "${ACONTROL_BIND:-127.0.0.1:8080}:80"
     networks:
       - internal
-      - caddy
-    # Edge TLS + IP allow-list via caddy-docker-proxy. Domain and allowed IPs
-    # come from .env. To disable the IP allow-list, drop the @denied/abort labels.
-    labels:
-      caddy: ${ACONTROL_DOMAIN}
-      caddy.@denied.not.remote_ip: ${ACONTROL_ALLOW_IPS}
-      caddy.abort: "@denied"
-      caddy.reverse_proxy: "{{upstreams 80}}"
 
 networks:
   internal:
-  caddy:
-    external: true

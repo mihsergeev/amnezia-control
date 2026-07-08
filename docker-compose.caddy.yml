@@ -1,0 +1,24 @@
+# Optional override for deployments that use caddy-docker-proxy for edge TLS
+# + IP allow-list. Requires an external Docker network named "caddy" created by
+# a running caddy-docker-proxy instance.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.caddy.yml up -d --build
+#
+# or set COMPOSE_FILE=docker-compose.yml:docker-compose.caddy.yml in your .env.
+#
+# Set ACONTROL_DOMAIN and ACONTROL_ALLOW_IPS in .env. To disable the IP
+# allow-list, remove the @denied / abort labels below.
+services:
+  frontend:
+    networks:
+      - internal
+      - caddy
+    labels:
+      caddy: ${ACONTROL_DOMAIN}
+      caddy.@denied.not.remote_ip: ${ACONTROL_ALLOW_IPS}
+      caddy.abort: "@denied"
+      caddy.reverse_proxy: "{{upstreams 80}}"
+
+networks:
+  caddy:
+    external: true
