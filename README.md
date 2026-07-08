@@ -177,6 +177,18 @@ Telegram / webhook alert channels are configured **from the UI** (🔔 button) a
 
 ---
 
+## Updating
+
+The panel is a normal git checkout — pull and rebuild:
+
+```bash
+cd acontrol
+git pull
+docker compose up -d --build
+```
+
+Database migrations run automatically on backend startup. If you use the caddy override, keep `COMPOSE_FILE` in `.env` (or add `-f docker-compose.yml -f docker-compose.caddy.yml`). Grab a DB backup first (**Backup → Download**) as a restore point.
+
 ## Development
 
 ```bash
