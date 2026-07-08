@@ -107,14 +107,17 @@ This is **standalone**: the panel is published on the host at `ACONTROL_BIND` (d
 
 The panel serves plain HTTP — **put a reverse proxy with TLS in front** (nginx, Caddy, Traefik, …) pointing at `ACONTROL_BIND`. It's a login-protected control panel, so don't expose it over plain HTTP on the internet.
 
-**Optional — caddy-docker-proxy.** If you already run [caddy-docker-proxy](https://github.com/lucaslorentz/caddy-docker-proxy) (external Docker network `caddy`), an override adds automatic TLS + an IP allow-list:
+**Optional — caddy-docker-proxy.** If (and only if) you run [caddy-docker-proxy](https://github.com/lucaslorentz/caddy-docker-proxy) — the *label-reading* proxy — an override joins its network and configures TLS + an IP allow-list via labels:
 
 ```bash
-# set ACONTROL_DOMAIN and ACONTROL_ALLOW_IPS in .env, then:
+# in .env: set ACONTROL_DOMAIN, ACONTROL_ALLOW_IPS, and
+# ACONTROL_CADDY_NETWORK (the network your caddy-docker-proxy watches), then:
 docker compose -f docker-compose.yml -f docker-compose.caddy.yml up -d --build
 ```
 
-(or put `COMPOSE_FILE=docker-compose.yml:docker-compose.caddy.yml` in `.env`). See [`docker-compose.caddy.yml`](docker-compose.caddy.yml).
+(or put `COMPOSE_FILE=docker-compose.yml:docker-compose.caddy.yml` in `.env`). The panel's frontend must share the **same Docker network** as caddy-docker-proxy — set `ACONTROL_CADDY_NETWORK` if it isn't named `caddy`.
+
+**Any other proxy** (plain Caddy with a Caddyfile, nginx, Traefik) doesn't read these labels — use standalone mode instead: publish the port (`ACONTROL_BIND`) and point your proxy at it, or attach your proxy to the `acontrol_internal` network and proxy to `acontrol-frontend-1:80`.
 
 ---
 

@@ -25,3 +25,6 @@ services:
 networks:
   caddy:
     external: true
+    # Name of the existing network your caddy-docker-proxy watches.
+    # Override in .env if it isn't literally "caddy" (e.g. ACONTROL_CADDY_NETWORK=web).
+    name: ${ACONTROL_CADDY_NETWORK:-caddy}
