@@ -177,6 +177,18 @@ usermod -aG docker acontrol   # если группа docker есть
 
 ---
 
+## Обновление
+
+Панель — обычный git-checkout: обновите и пересоберите:
+
+```bash
+cd acontrol
+git pull
+docker compose up -d --build
+```
+
+Миграции БД накатываются автоматически при старте бэкенда. Если используете caddy-override — держите `COMPOSE_FILE` в `.env` (или добавьте `-f docker-compose.yml -f docker-compose.caddy.yml`). Перед обновлением снимите бэкап БД (**Бэкап → Скачать**) как точку отката.
+
 ## Разработка
 
 ```bash
