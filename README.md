@@ -115,7 +115,7 @@ The panel serves plain HTTP — **put a reverse proxy with TLS in front** (nginx
 docker compose -f docker-compose.yml -f docker-compose.caddy.yml up -d --build
 ```
 
-(or put `COMPOSE_FILE=docker-compose.yml:docker-compose.caddy.yml` in `.env`). The panel's frontend must share the **same Docker network** as caddy-docker-proxy — set `ACONTROL_CADDY_NETWORK` if it isn't named `caddy`.
+(or put `COMPOSE_FILE=docker-compose.yml:docker-compose.caddy.yml` in `.env`). The panel's frontend must share the **same Docker network** as caddy-docker-proxy — set `ACONTROL_CADDY_NETWORK` if it isn't named `caddy`. Leave `ACONTROL_ALLOW_IPS` empty to allow from any IP (rely on the login + 2FA).
 
 **Any other proxy** (plain Caddy with a Caddyfile, nginx, Traefik) doesn't read these labels — use standalone mode instead: publish the port (`ACONTROL_BIND`) and point your proxy at it, or attach your proxy to the `acontrol_internal` network and proxy to `acontrol-frontend-1:80`.
 
