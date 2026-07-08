@@ -112,10 +112,10 @@ The panel serves plain HTTP — **put a reverse proxy with TLS in front** (nginx
 ```bash
 # in .env: set ACONTROL_DOMAIN, ACONTROL_ALLOW_IPS, and
 # ACONTROL_CADDY_NETWORK (the network your caddy-docker-proxy watches), then:
-docker compose -f docker-compose.yml -f docker-compose.caddy.yml up -d --build
+docker compose -f compose.yml -f compose.caddy.yml up -d --build
 ```
 
-(or put `COMPOSE_FILE=docker-compose.yml:docker-compose.caddy.yml` in `.env`). The panel's frontend must share the **same Docker network** as caddy-docker-proxy — set `ACONTROL_CADDY_NETWORK` if it isn't named `caddy`. Leave `ACONTROL_ALLOW_IPS` empty to allow from any IP (rely on the login + 2FA).
+(or put `COMPOSE_FILE=compose.yml:compose.caddy.yml` in `.env`). The panel's frontend must share the **same Docker network** as caddy-docker-proxy — set `ACONTROL_CADDY_NETWORK` if it isn't named `caddy`. Leave `ACONTROL_ALLOW_IPS` empty to allow from any IP (rely on the login + 2FA).
 
 **Any other proxy** (plain Caddy with a Caddyfile, nginx, Traefik) doesn't read these labels — use standalone mode instead: publish the port (`ACONTROL_BIND`) and point your proxy at it, or attach your proxy to the `acontrol_internal` network and proxy to `acontrol-frontend-1:80`.
 
@@ -190,7 +190,7 @@ git pull
 docker compose up -d --build
 ```
 
-Database migrations run automatically on backend startup. If you use the caddy override, keep `COMPOSE_FILE` in `.env` (or add `-f docker-compose.yml -f docker-compose.caddy.yml`). Grab a DB backup first (**Backup → Download**) as a restore point.
+Database migrations run automatically on backend startup. If you use the caddy override, keep `COMPOSE_FILE` in `.env` (or add `-f compose.yml -f compose.caddy.yml`). Grab a DB backup first (**Backup → Download**) as a restore point.
 
 ## Development
 

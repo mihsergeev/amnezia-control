@@ -46,7 +46,7 @@ services:
     depends_on:
       - backend
     # Panel is served on the host at ACONTROL_BIND (default 127.0.0.1:8080).
-    # Put a reverse proxy with HTTPS in front, or use docker-compose.caddy.yml.
+    # Put a reverse proxy with HTTPS in front, or use compose.caddy.yml.
     ports:
       - "${ACONTROL_BIND:-127.0.0.1:8080}:80"
     networks:

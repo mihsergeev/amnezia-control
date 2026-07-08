@@ -2,9 +2,9 @@
 # + IP allow-list. Requires an external Docker network named "caddy" created by
 # a running caddy-docker-proxy instance.
 #
-#   docker compose -f docker-compose.yml -f docker-compose.caddy.yml up -d --build
+#   docker compose -f compose.yml -f compose.caddy.yml up -d --build
 #
-# or set COMPOSE_FILE=docker-compose.yml:docker-compose.caddy.yml in your .env.
+# or set COMPOSE_FILE=compose.yml:compose.caddy.yml in your .env.
 #
 # Set ACONTROL_DOMAIN and ACONTROL_ALLOW_IPS in .env. To disable the IP
 # allow-list, remove the @denied / abort labels below.
