@@ -4,6 +4,15 @@ All notable changes to Amnezia Control are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.20.0] — 2026-07-10
+
+### Added
+- **Config snapshots & rollback now cover XRay and OpenVPN too** (not just
+  AmneziaWG). Before every rebuild each protocol's config is snapshotted on the
+  node (now a tar of the whole config, so OpenVPN's PKI is included), and a
+  **Roll back** menu appears in each client list. XRay's "Update core" also
+  preserves the config out of the live container, like AmneziaWG.
+
 ## [0.19.0] — 2026-07-10
 
 ### Added
@@ -190,6 +199,7 @@ Initial public release.
   scheduled auto-backups.
 - Dark / light theme and English / Russian UI.
 
+[0.20.0]: https://github.com/mihsergeev/amnezia-control/releases/tag/v0.20.0
 [0.19.0]: https://github.com/mihsergeev/amnezia-control/releases/tag/v0.19.0
 [0.18.5]: https://github.com/mihsergeev/amnezia-control/releases/tag/v0.18.5
 [0.18.4]: https://github.com/mihsergeev/amnezia-control/releases/tag/v0.18.4

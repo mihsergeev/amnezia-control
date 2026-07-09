@@ -17,6 +17,8 @@ from app.schemas import (
     OvpnReissueRequest,
     OvpnRevokeRequest,
     OvpnStateOut,
+    SnapshotOut,
+    SnapshotRestoreRequest,
 )
 from app.sshkeys import ensure_panel_key, key_paths
 
@@ -244,6 +246,8 @@ async def deploy_openvpn(
     script = openvpn.build_deploy_script(body.port, body.site, server.host)
     try:
         async with _connect(server) as conn:
+            # снимок конфига ДО (пере)развёртывания — для отката
+            await deploy.snapshot_config(conn, "openvpn")
             await deploy.launch(conn, script, tag="openvpn")
     except Exception as exc:  # noqa: BLE001
         raise _ovpn_error(exc) from exc
@@ -264,3 +268,36 @@ async def deploy_status(
     except Exception as exc:  # noqa: BLE001
         raise _ovpn_error(exc) from exc
     return DeployStatusOut(**result)
+
+
+@router.get("/config-backups", response_model=list[SnapshotOut])
+async def config_backups(
+    server_id: int, _: CurrentUser, session: SessionDep
+) -> list[SnapshotOut]:
+    server = await _get_or_404(server_id, session)
+    try:
+        async with _connect(server) as conn:
+            snaps = await deploy.list_snapshots(conn, "openvpn")
+    except Exception as exc:  # noqa: BLE001
+        raise _ovpn_error(exc) from exc
+    return [SnapshotOut(**s) for s in snaps]
+
+
+@router.post("/config-restore", status_code=status.HTTP_202_ACCEPTED)
+async def config_restore(
+    server_id: int, body: SnapshotRestoreRequest, user: CurrentUser, session: SessionDep
+) -> dict:
+    server = await _get_or_404(server_id, session)
+    try:
+        async with _connect(server) as conn:
+            ok = await deploy.restore_snapshot(conn, "openvpn", body.id)
+    except ValueError as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001
+        raise _ovpn_error(exc) from exc
+    if not ok:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Снимок не найден на ноде")
+    await audit.record(
+        session, user.username, "openvpn_config_restore", server.name, body.id
+    )
+    return {"started": True}

@@ -202,30 +202,53 @@ def _paths(tag: str) -> tuple[str, str, str]:
     return d, f"{d}/run.sh", f"{d}/deploy.log"
 
 
-# --- снимки awg-конфига для отката пересборки -------------------------------
-SNAP_ROOT = f"{WORK_ROOT}/awg-snapshots"
-_SNAP_FILES = (
-    "awg0.conf clientsTable wireguard_server_private_key.key "
-    "wireguard_server_public_key.key wireguard_psk.key"
-)
+# --- снимки конфигов протоколов для отката пересборки -----------------------
+# $HOME/.acontrol/snapshots/<tag>/<ts>.tar.gz — tar конфига из ЖИВОГО контейнера.
+SNAP_ROOT = f"{WORK_ROOT}/snapshots"
 _SNAP_ID_RE = re.compile(r"^\d{8}-\d{6}$")
 
+# спецификация снимка на протокол: контейнер, пути внутри контейнера для tar,
+# clientsTable для подсчёта клиентов, команда применения восстановленного конфига
+_SNAP_SPECS: dict[str, dict] = {
+    "awg": {
+        "container": CONTAINER,  # amnezia-awg2
+        "paths": "/opt/amnezia/awg",
+        "table": "/opt/amnezia/awg/clientsTable",
+        "reload": (
+            "sudo docker exec %C sh -c "
+            "'awg-quick down /opt/amnezia/awg/awg0.conf >/dev/null 2>&1; "
+            "awg-quick up /opt/amnezia/awg/awg0.conf'"
+        ),
+    },
+    "xray": {
+        "container": "amnezia-xray",
+        "paths": "/opt/amnezia/xray",
+        "table": "/opt/amnezia/xray/clientsTable",
+        "reload": "sudo docker restart %C",
+    },
+    "openvpn": {
+        "container": "amnezia-openvpn-cloak",
+        "paths": "/opt/amnezia/openvpn /opt/amnezia/cloak /opt/amnezia/shadowsocks",
+        "table": "/opt/amnezia/openvpn/clientsTable",
+        "reload": "sudo docker restart %C",
+    },
+}
 
-async def snapshot_awg_config(
-    conn: asyncssh.SSHClientConnection, keep: int = 10
+
+async def snapshot_config(
+    conn: asyncssh.SSHClientConnection, tag: str, keep: int = 10
 ) -> str | None:
-    """Снимает текущий awg-конфиг из ЖИВОГО контейнера в
-    $HOME/.acontrol/awg-snapshots/<ts> (для отката пересборки). Возвращает id
-    снимка (ts) или None, если снимать нечего. Хранит последние `keep`."""
+    """Снимок конфига протокола (tar из ЖИВОГО контейнера) в
+    $HOME/.acontrol/snapshots/<tag>/<ts>.tar.gz. Возвращает id снимка или None."""
+    spec = _SNAP_SPECS[tag]
     cmd = (
-        f'C={CONTAINER}; R={SNAP_ROOT}; '
+        f'C={spec["container"]}; R={SNAP_ROOT}/{tag}; '
         f'sudo docker ps --format "{{{{.Names}}}}" | grep -qx "$C" || {{ echo NO_CONT; exit 0; }}; '
-        f'TS=$(date +%Y%m%d-%H%M%S); S="$R/$TS"; mkdir -p "$S"; ok=0; '
-        f'for f in {_SNAP_FILES}; do '
-        f'B=$(sudo docker exec "$C" cat "/opt/amnezia/awg/$f" 2>/dev/null | base64 -w0 2>/dev/null || true); '
-        f'[ -n "$B" ] && echo "$B" | base64 -d > "$S/$f" && ok=1; done; '
-        f'[ "$ok" = 1 ] && echo "SNAP $TS" || rm -rf "$S"; '
-        f'ls -1dt "$R"/*/ 2>/dev/null | tail -n +{keep + 1} | while read d; do rm -rf "$d"; done'
+        f'mkdir -p "$R"; TS=$(date +%Y%m%d-%H%M%S); F="$R/$TS.tar.gz"; '
+        f'if sudo docker exec "$C" tar -czf - {spec["paths"]} 2>/dev/null > "$F" && [ -s "$F" ]; then '
+        f'n=$(sudo docker exec "$C" grep -c "clientId" "{spec["table"]}" 2>/dev/null || echo 0); '
+        f'echo "$n" > "$R/$TS.n"; echo "SNAP $TS"; else rm -f "$F"; fi; '
+        f'ls -1t "$R"/*.tar.gz 2>/dev/null | tail -n +{keep + 1} | while read f; do rm -f "$f" "${{f%.tar.gz}}.n"; done'
     )
     out = await conn.run(cmd, check=False)
     for line in (out.stdout or "").splitlines():
@@ -234,13 +257,12 @@ async def snapshot_awg_config(
     return None
 
 
-async def list_awg_snapshots(conn: asyncssh.SSHClientConnection) -> list[dict]:
-    """Список снимков awg-конфига: [{id, peers}], новые первыми."""
+async def list_snapshots(conn: asyncssh.SSHClientConnection, tag: str) -> list[dict]:
+    """Список снимков конфига: [{id, clients}], новые первыми."""
     cmd = (
-        f'R={SNAP_ROOT}; ls -1dt "$R"/*/ 2>/dev/null | while read d; do '
-        'ts=$(basename "$d"); '
-        'p=$(grep -c "\\[Peer\\]" "$d/awg0.conf" 2>/dev/null || echo 0); '
-        'echo "$ts|$p"; done'
+        f'R={SNAP_ROOT}/{tag}; ls -1t "$R"/*.tar.gz 2>/dev/null | while read f; do '
+        'ts=$(basename "$f" .tar.gz); n=$(cat "${f%.tar.gz}.n" 2>/dev/null || echo 0); '
+        'echo "$ts|$n"; done'
     )
     out = await conn.run(cmd, check=False)
     res: list[dict] = []
@@ -248,28 +270,25 @@ async def list_awg_snapshots(conn: asyncssh.SSHClientConnection) -> list[dict]:
         line = line.strip()
         if "|" not in line:
             continue
-        ts, p = line.rsplit("|", 1)
+        ts, n = line.rsplit("|", 1)
         if _SNAP_ID_RE.match(ts):
-            res.append({"id": ts, "peers": int(p) if p.strip().isdigit() else 0})
+            res.append({"id": ts, "clients": int(n) if n.strip().isdigit() else 0})
     return res
 
 
-async def restore_awg_snapshot(
-    conn: asyncssh.SSHClientConnection, snap_id: str
+async def restore_snapshot(
+    conn: asyncssh.SSHClientConnection, tag: str, snap_id: str
 ) -> bool:
-    """Восстанавливает awg-конфиг из снимка (пишет на хост-маунт + поднимает awg0)."""
+    """Восстанавливает конфиг из снимка (распаковка tar В живой контейнер + reload)."""
     if not _SNAP_ID_RE.match(snap_id or ""):
         raise ValueError("некорректный id снимка")
-    bringup = (
-        "awg-quick down /opt/amnezia/awg/awg0.conf >/dev/null 2>&1; "
-        "awg-quick up /opt/amnezia/awg/awg0.conf"
-    )
+    spec = _SNAP_SPECS[tag]
+    reload_cmd = spec["reload"].replace("%C", spec["container"])
     cmd = (
-        f'C={CONTAINER}; S={SNAP_ROOT}/{snap_id}; D=/opt/amnezia/awg; '
-        f'[ -f "$S/awg0.conf" ] || {{ echo NO_SNAP; exit 0; }}; '
-        f'for f in {_SNAP_FILES}; do [ -f "$S/$f" ] && sudo cp "$S/$f" "$D/$f"; done; '
-        f'sudo docker exec "$C" sh -c {_shell_quote(bringup)} >/dev/null 2>&1; '
-        f'echo RESTORE_OK'
+        f'C={spec["container"]}; F={SNAP_ROOT}/{tag}/{snap_id}.tar.gz; '
+        f'[ -f "$F" ] || {{ echo NO_SNAP; exit 0; }}; '
+        f'cat "$F" | sudo docker exec -i "$C" tar -xzf - -C / 2>/dev/null; '
+        f'{reload_cmd} >/dev/null 2>&1; echo RESTORE_OK'
     )
     out = await conn.run(cmd, check=False)
     return "RESTORE_OK" in (out.stdout or "")

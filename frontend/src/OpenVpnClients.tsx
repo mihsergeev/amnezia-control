@@ -10,16 +10,18 @@ import {
 } from './api'
 import { ExpiryCell, ExpirySelect } from './Expiry'
 import { ClientStatsModal } from './ClientStatsModal'
+import { RollbackMenu } from './RollbackMenu'
 import { useI18n } from './i18n'
 
 type Props = {
   serverId: number
+  serverName: string
   onUnauthorized: () => void
 }
 
 type ConfigView = { name: string; amnezia: string }
 
-export function OpenVpnClients({ serverId, onUnauthorized }: Props) {
+export function OpenVpnClients({ serverId, serverName, onUnauthorized }: Props) {
   const { t } = useI18n()
   const [state, setState] = useState<OvpnState | null>(null)
   const [loading, setLoading] = useState(true)
@@ -232,6 +234,15 @@ export function OpenVpnClients({ serverId, onUnauthorized }: Props) {
               >
                 {t('+ Выдать конфиг')}
               </button>
+              <span style={{ marginLeft: 'auto' }}>
+                <RollbackMenu
+                  serverId={serverId}
+                  serverName={serverName}
+                  proto="openvpn"
+                  onRestored={load}
+                  onUnauthorized={onUnauthorized}
+                />
+              </span>
             </div>
           )}
 

@@ -10,17 +10,24 @@ import {
   type XrayVersion,
 } from './api'
 import { ExpiryCell, ExpirySelect } from './Expiry'
+import { RollbackMenu } from './RollbackMenu'
 import { useI18n } from './i18n'
 
 type Props = {
   serverId: number
+  serverName: string
   onUnauthorized: () => void
   onRequestUpdate?: () => void
 }
 
 type ConfigView = { name: string; amnezia: string }
 
-export function XrayClients({ serverId, onUnauthorized, onRequestUpdate }: Props) {
+export function XrayClients({
+  serverId,
+  serverName,
+  onUnauthorized,
+  onRequestUpdate,
+}: Props) {
   const { t } = useI18n()
   const [state, setState] = useState<XrayState | null>(null)
   const [version, setVersion] = useState<XrayVersion | null>(null)
@@ -188,13 +195,22 @@ export function XrayClients({ serverId, onUnauthorized, onRequestUpdate }: Props
               <span className="version-ok"> {t('актуальна')}</span>
             )}
           </span>
-          {onRequestUpdate && (
-            <button className="ghost" onClick={onRequestUpdate}>
-              {version.update_available
-                ? t('Обновить ядро')
-                : t('Переустановить')}
-            </button>
-          )}
+          <div className="version-actions">
+            <RollbackMenu
+              serverId={serverId}
+              serverName={serverName}
+              proto="xray"
+              onRestored={load}
+              onUnauthorized={onUnauthorized}
+            />
+            {onRequestUpdate && (
+              <button className="ghost" onClick={onRequestUpdate}>
+                {version.update_available
+                  ? t('Обновить ядро')
+                  : t('Переустановить')}
+              </button>
+            )}
+          </div>
         </div>
       )}
 

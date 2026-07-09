@@ -328,6 +328,8 @@ const EN: Record<string, string> = {
   'Смена пароля': 'Password change',
   'Host-ключ ноды изменился': "Node host key changed",
   'Откат конфига AmneziaWG': 'AmneziaWG config rollback',
+  'Откат конфига XRay': 'XRay config rollback',
+  'Откат конфига OpenVPN': 'OpenVPN config rollback',
   'Включена 2FA': '2FA enabled',
   'Отключена 2FA': '2FA disabled',
 

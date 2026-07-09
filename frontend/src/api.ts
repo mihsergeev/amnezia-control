@@ -217,15 +217,23 @@ export type VersionInfo = {
   update_available: boolean
 }
 
-// снимки awg-конфига на ноде (для отката пересборки)
-export type AwgSnapshot = { id: string; peers: number }
+// снимки конфига на ноде (для отката пересборки), для любого протокола
+export type SnapProto = 'awg' | 'xray' | 'openvpn'
+export type Snapshot = { id: string; clients: number }
 
-export function listConfigBackups(serverId: number): Promise<AwgSnapshot[]> {
-  return api<AwgSnapshot[]>(`/api/servers/${serverId}/awg/config-backups`)
+export function listConfigBackups(
+  serverId: number,
+  proto: SnapProto,
+): Promise<Snapshot[]> {
+  return api<Snapshot[]>(`/api/servers/${serverId}/${proto}/config-backups`)
 }
 
-export async function restoreConfig(serverId: number, id: string): Promise<void> {
-  await api(`/api/servers/${serverId}/awg/config-restore`, {
+export async function restoreConfig(
+  serverId: number,
+  proto: SnapProto,
+  id: string,
+): Promise<void> {
+  await api(`/api/servers/${serverId}/${proto}/config-restore`, {
     method: 'POST',
     body: JSON.stringify({ id }),
   })

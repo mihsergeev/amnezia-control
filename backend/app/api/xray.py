@@ -9,6 +9,8 @@ from app.deps import CurrentUser, SessionDep
 from app.models import ClientLimit, Server
 from app.schemas import (
     DeployStatusOut,
+    SnapshotOut,
+    SnapshotRestoreRequest,
     XrayClientOut,
     XrayConfigRequest,
     XrayConfigResponse,
@@ -184,6 +186,39 @@ async def deploy_status(
     return DeployStatusOut(**result)
 
 
+@router.get("/config-backups", response_model=list[SnapshotOut])
+async def config_backups(
+    server_id: int, _: CurrentUser, session: SessionDep
+) -> list[SnapshotOut]:
+    server = await _get_or_404(server_id, session)
+    try:
+        async with _connect(server) as conn:
+            snaps = await deploy.list_snapshots(conn, "xray")
+    except Exception as exc:  # noqa: BLE001
+        raise _xray_error(exc) from exc
+    return [SnapshotOut(**s) for s in snaps]
+
+
+@router.post("/config-restore", status_code=status.HTTP_202_ACCEPTED)
+async def config_restore(
+    server_id: int, body: SnapshotRestoreRequest, user: CurrentUser, session: SessionDep
+) -> dict:
+    server = await _get_or_404(server_id, session)
+    try:
+        async with _connect(server) as conn:
+            ok = await deploy.restore_snapshot(conn, "xray", body.id)
+    except ValueError as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001
+        raise _xray_error(exc) from exc
+    if not ok:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Снимок не найден на ноде")
+    await audit.record(
+        session, user.username, "xray_config_restore", server.name, body.id
+    )
+    return {"started": True}
+
+
 @router.get("/version", response_model=XrayVersionOut)
 async def xray_version(
     server_id: int, _: CurrentUser, session: SessionDep
@@ -228,6 +263,8 @@ async def update_xray(
             container = await xray.detect_container(conn)
             bits = await xray.read_server_bits(conn, container)
             script = xray.build_deploy_script(bits["port"], bits["site"], latest["tag"])
+            # снимок конфига ДО пересборки — для отката
+            await deploy.snapshot_config(conn, "xray")
             await deploy.launch(conn, script, tag="xray")
     except Exception as exc:  # noqa: BLE001
         raise _xray_error(exc) from exc
