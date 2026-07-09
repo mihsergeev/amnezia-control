@@ -4,6 +4,15 @@ All notable changes to Amnezia Control are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.18.3] — 2026-07-10
+
+### Fixed
+- **"Top clients" stats showed raw public keys** instead of names for clients
+  that weren't issued through the panel (bulk-imported or created on the node).
+  The collector now caches each client's name from the node's `clientsTable`, so
+  the traffic stats show the same names as the client list. (Names appear after
+  the next metrics-collection cycle.)
+
 ## [0.18.2] — 2026-07-10
 
 ### Fixed
@@ -154,6 +163,7 @@ Initial public release.
   scheduled auto-backups.
 - Dark / light theme and English / Russian UI.
 
+[0.18.3]: https://github.com/mihsergeev/amnezia-control/releases/tag/v0.18.3
 [0.18.2]: https://github.com/mihsergeev/amnezia-control/releases/tag/v0.18.2
 [0.18.1]: https://github.com/mihsergeev/amnezia-control/releases/tag/v0.18.1
 [0.18.0]: https://github.com/mihsergeev/amnezia-control/releases/tag/v0.18.0

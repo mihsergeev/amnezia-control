@@ -9,6 +9,7 @@ from app.deps import CurrentUser, SessionDep
 from app.models import (
     AwgConfig,
     AwgNote,
+    ClientName,
     ClientTrafficSample,
     NodeMetric,
     OvpnConfig,
@@ -81,9 +82,24 @@ async def top_clients(
             )
         ).all()
     }
+    # кэш имён с ноды (clientsTable) — покрывает клиентов, созданных не через панель
+    cached_names = {
+        (sid, proto, cid): n
+        for sid, proto, cid, n in (
+            await session.execute(
+                select(
+                    ClientName.server_id, ClientName.protocol,
+                    ClientName.client_id, ClientName.name,
+                )
+            )
+        ).all()
+    }
 
     def resolve_name(s: ClientTrafficSample) -> str:
         key = (s.server_id, s.client_id)
+        cached = cached_names.get((s.server_id, s.protocol, s.client_id))
+        if cached:
+            return cached
         if s.protocol == "awg":
             return awg_names.get(key) or awg_notes.get(key) or s.client_id[:12]
         if s.protocol == "openvpn":

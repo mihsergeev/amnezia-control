@@ -194,6 +194,24 @@ class ClientTrafficSample(Base):
     )
 
 
+class ClientName(Base):
+    """Кэш имён клиентов, снятых с ноды (clientsTable) — чтобы в статистике
+    показывать имена даже для клиентов, созданных не через панель (bulk / на ноде).
+    Наполняется сборщиком; одна строка на клиента (не тайм-серия)."""
+
+    __tablename__ = "client_names"
+    __table_args__ = (UniqueConstraint("server_id", "protocol", "client_id"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    server_id: Mapped[int] = mapped_column(Integer, index=True)
+    protocol: Mapped[str] = mapped_column(String(16))
+    client_id: Mapped[str] = mapped_column(String(64))
+    name: Mapped[str] = mapped_column(String(128), default="")
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
 class NodeMetric(Base):
     """Последний снимок ресурсов ноды (CPU/RAM/диск/аптайм) — для карточек и алертов."""
 
