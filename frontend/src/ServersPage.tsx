@@ -1,4 +1,10 @@
-import { useCallback, useEffect, useState, type FormEvent } from 'react'
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+  type FormEvent,
+} from 'react'
 import {
   api,
   ApiError,
@@ -19,7 +25,14 @@ import { useI18n } from './i18n'
 const FALLBACK_USER = 'acontrol'
 
 function emptyForm(defaultUser: string): ServerForm {
-  return { name: '', host: '', ssh_port: 22, ssh_user: defaultUser, note: '' }
+  return {
+    name: '',
+    host: '',
+    ssh_port: 22,
+    ssh_user: defaultUser,
+    note: '',
+    group_name: '',
+  }
 }
 
 type Props = {
@@ -184,6 +197,7 @@ export function ServersPage({ onUnauthorized }: Props) {
       ssh_port: server.ssh_port,
       ssh_user: server.ssh_user,
       note: server.note,
+      group_name: server.group_name,
     })
     setEditingId(server.id)
     setFormOpen(true)
@@ -320,6 +334,49 @@ export function ServersPage({ onUnauthorized }: Props) {
     }
   }
 
+  const [collapsed, setCollapsed] = useState<Record<string, boolean>>(() => {
+    try {
+      return JSON.parse(localStorage.getItem('acontrol_groups_collapsed') || '{}')
+    } catch {
+      return {}
+    }
+  })
+
+  function toggleGroup(name: string) {
+    setCollapsed((prev) => {
+      const next = { ...prev, [name]: !prev[name] }
+      localStorage.setItem('acontrol_groups_collapsed', JSON.stringify(next))
+      return next
+    })
+  }
+
+  // серверы, сгруппированные по group_name; без группы — в конце
+  const groupList = useMemo(() => {
+    const map = new Map<string, Server[]>()
+    for (const s of servers) {
+      const g = s.group_name || ''
+      const arr = map.get(g)
+      if (arr) arr.push(s)
+      else map.set(g, [s])
+    }
+    const names = [...map.keys()].sort((a, b) => {
+      if (a === '') return 1
+      if (b === '') return -1
+      return a.localeCompare(b, 'ru', { numeric: true, sensitivity: 'base' })
+    })
+    return names.map((name) => ({ name, servers: map.get(name)! }))
+  }, [servers])
+
+  const hasGroups = groupList.some((g) => g.name !== '')
+  // существующие имена групп — для подсказки в форме
+  const existingGroups = useMemo(
+    () =>
+      [...new Set(servers.map((s) => s.group_name).filter(Boolean))].sort((a, b) =>
+        a.localeCompare(b, 'ru'),
+      ),
+    [servers],
+  )
+
   return (
     <section>
       <div className="page-head">
@@ -345,7 +402,8 @@ export function ServersPage({ onUnauthorized }: Props) {
       )}
 
       <div className="server-list">
-        {servers.map((s) => {
+        {groupList.map((g) => {
+          const cards = g.servers.map((s) => {
           const info = parseCheckInfo(s)
           const protocols = protocolsFromContainers(info?.amnezia_containers ?? [])
           const online = s.last_check_ok === true
@@ -453,6 +511,26 @@ export function ServersPage({ onUnauthorized }: Props) {
             )}
           </div>
           )
+          })
+          if (!hasGroups) return cards
+          return (
+            <div className="server-group" key={g.name || '__ungrouped'}>
+              <button
+                type="button"
+                className="group-header"
+                onClick={() => toggleGroup(g.name)}
+              >
+                <span className="group-caret">
+                  {collapsed[g.name] ? '▸' : '▾'}
+                </span>
+                <span className="group-name">{g.name || t('Без группы')}</span>
+                <span className="group-count">{g.servers.length}</span>
+              </button>
+              {!collapsed[g.name] && (
+                <div className="group-cards">{cards}</div>
+              )}
+            </div>
+          )
         })}
       </div>
 
@@ -512,6 +590,20 @@ export function ServersPage({ onUnauthorized }: Props) {
                 onChange={(e) => setForm({ ...form, note: e.target.value })}
                 placeholder={t('необязательно')}
               />
+            </label>
+            <label>
+              {t('Группа (папка)')}
+              <input
+                list="acontrol-groups"
+                value={form.group_name}
+                onChange={(e) => setForm({ ...form, group_name: e.target.value })}
+                placeholder={t('необязательно — компания, локация…')}
+              />
+              <datalist id="acontrol-groups">
+                {existingGroups.map((g) => (
+                  <option key={g} value={g} />
+                ))}
+              </datalist>
             </label>
 
             {editingId === null && (

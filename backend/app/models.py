@@ -39,6 +39,7 @@ class Server(Base):
     ssh_port: Mapped[int] = mapped_column(Integer, default=22)
     ssh_user: Mapped[str] = mapped_column(String(64), default="root")
     note: Mapped[str] = mapped_column(Text, default="")
+    group_name: Mapped[str] = mapped_column(String(64), default="")
     last_check_ok: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
     last_check_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True

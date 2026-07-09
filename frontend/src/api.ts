@@ -105,6 +105,7 @@ export type Server = {
   ssh_port: number
   ssh_user: string
   note: string
+  group_name: string
   last_check_ok: boolean | null
   last_check_at: string | null
   last_check_info: string
@@ -135,6 +136,7 @@ export type ServerForm = {
   ssh_port: number
   ssh_user: string
   note: string
+  group_name: string
 }
 
 export type PanelConfig = {
