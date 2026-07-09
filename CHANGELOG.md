@@ -4,6 +4,14 @@ All notable changes to Amnezia Control are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.15.1] — 2026-07-09
+
+### Changed
+- Clearer "add server" flow: the setup method is now an explicit choice between
+  **auto-setup by SSH password** and **run a script yourself**. The script path
+  creates the SSH user, installs the key and opens the firewall on its own — no
+  need to prepare the user by hand first.
+
 ## [0.15.0] — 2026-07-08
 
 ### Added
@@ -45,5 +53,6 @@ Initial public release.
   scheduled auto-backups.
 - Dark / light theme and English / Russian UI.
 
+[0.15.1]: https://github.com/mihsergeev/amnezia-control/releases/tag/v0.15.1
 [0.15.0]: https://github.com/mihsergeev/amnezia-control/releases/tag/v0.15.0
 [0.14.0]: https://github.com/mihsergeev/amnezia-control/releases/tag/v0.14.0
