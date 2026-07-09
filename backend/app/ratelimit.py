@@ -30,11 +30,15 @@ def is_locked(key: str, *, now: float | None = None) -> bool:
     return len(recent) >= MAX_FAILURES
 
 
-def record_failure(key: str, *, now: float | None = None) -> None:
+def record_failure(key: str, *, now: float | None = None) -> bool:
+    """Регистрирует неудачную попытку. Возвращает True, если ИМЕННО эта попытка
+    перевела ключ в состояние блокировки (для однократного алерта)."""
     t = _now(now)
     times = [ts for ts in _failures.get(key, []) if t - ts < LOCKOUT]
     times.append(t)
     _failures[key] = times
+    recent = [ts for ts in times if t - ts < WINDOW]
+    return len(recent) == MAX_FAILURES
 
 
 def clear(key: str) -> None:

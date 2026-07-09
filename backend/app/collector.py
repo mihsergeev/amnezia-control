@@ -7,7 +7,7 @@ from datetime import datetime, timedelta, timezone
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app import alerts, awg, nodestat, openvpn, settings_store, sshops, xray
+from app import alerts, audit, awg, nodestat, openvpn, settings_store, sshops, xray
 from app.config import Settings
 from app.models import ClientTrafficSample, NodeMetric, Server, TrafficSample
 from app.sshkeys import ensure_panel_key, key_paths
@@ -15,6 +15,10 @@ from app.sshkeys import ensure_panel_key, key_paths
 log = logging.getLogger("acontrol.collector")
 
 ONLINE_WINDOW = 180  # секунд — пир считается онлайн, если хендшейк свежее
+
+# server_id нод, по которым уже отправлен алерт о смене host-ключа (чтобы не
+# спамить каждый цикл); снимается, когда нода снова успешно подключается
+_hostkey_alerted: set[int] = set()
 
 _ZERO = {"rx": 0, "tx": 0, "total": 0, "online": 0}
 
@@ -81,7 +85,9 @@ async def _xray_part(conn, host) -> tuple[dict, list[dict]]:
     return {"rx": 0, "tx": 0, "total": len(clients), "online": 0}, []
 
 
-async def _sample_server(server: Server, key_path, timeout: int) -> dict | None:
+async def _sample_server(
+    server: Server, key_path, timeout: int, hostkey_changed: set[int]
+) -> dict | None:
     try:
         async with sshops.connect(
             server.host, server.ssh_port, server.ssh_user, key_path, timeout
@@ -100,6 +106,10 @@ async def _sample_server(server: Server, key_path, timeout: int) -> dict | None:
                 res = await nodestat.read_resources(conn)
             except Exception:  # noqa: BLE001 — ресурсы не критичны
                 res = None
+    except sshops.HostKeyChangedError:
+        # host-ключ ноды не совпал — сигналим наверх (возможен MITM/подмена)
+        hostkey_changed.add(server.id)
+        return None
     except Exception:  # noqa: BLE001 — сервер офлайн, пропускаем
         return None
     return {
@@ -121,8 +131,12 @@ async def collect_once(
     async with session_factory() as session:
         servers = list(await session.scalars(select(Server)))
 
+    hostkey_changed: set[int] = set()
     results = await asyncio.gather(
-        *[_sample_server(s, key_path, settings.ssh_connect_timeout) for s in servers]
+        *[
+            _sample_server(s, key_path, settings.ssh_connect_timeout, hostkey_changed)
+            for s in servers
+        ]
     )
     names = {s.id: s.name for s in servers}
     samples = [r for r in results if r is not None]
@@ -156,7 +170,38 @@ async def collect_once(
                 await alerts.reconcile(session, settings, online_map, names)
         except Exception:  # noqa: BLE001 — алерты не должны ронять сбор метрик
             log.exception("ошибка сверки статусов серверов")
+    try:
+        await _handle_hostkey_alerts(
+            session_factory, settings, hostkey_changed, online_map, names
+        )
+    except Exception:  # noqa: BLE001
+        log.exception("ошибка обработки смены host-ключей")
     return len(samples)
+
+
+async def _handle_hostkey_alerts(
+    session_factory, settings: Settings, hostkey_changed: set[int],
+    online_map: dict[int, bool], names: dict[int, str],
+) -> None:
+    """Однократный security-алерт о смене host-ключа ноды (возможен MITM)."""
+    # нода снова успешно подключилась (ключ совпал) — разрешаем алертить заново
+    for sid, online in online_map.items():
+        if online:
+            _hostkey_alerted.discard(sid)
+    fresh = [sid for sid in hostkey_changed if sid not in _hostkey_alerted]
+    if not fresh:
+        return
+    async with session_factory() as session:
+        for sid in fresh:
+            _hostkey_alerted.add(sid)
+            name = names.get(sid, str(sid))
+            await audit.record(session, "система", "host_key_changed", name)
+            await alerts.security_alert(
+                session, settings,
+                f"🚨 Amnezia Control: host-ключ ноды «{name}» ИЗМЕНИЛСЯ — возможна "
+                f"подмена/MITM. Если ноду пересоздавали, удалите её строку из "
+                f"data/ssh/known_hosts.",
+            )
 
 
 async def _store_client_samples(session_factory, samples) -> None:

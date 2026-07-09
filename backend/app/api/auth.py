@@ -1,7 +1,7 @@
 from fastapi import APIRouter, HTTPException, Request, status
 from sqlalchemy import select
 
-from app import audit, ratelimit, totp
+from app import alerts, audit, ratelimit, totp
 from app.config import get_settings
 from app.deps import CurrentUser, SessionDep
 from app.models import User
@@ -27,12 +27,30 @@ def _client_key(request: Request) -> str:
     return request.client.host if request.client else "unknown"
 
 
+async def _record_failure(session, settings, key: str, username: str, action: str) -> None:
+    """Пишет неудачный вход в журнал; на переходе в блокировку — алерт (брутфорс)."""
+    locked_now = ratelimit.record_failure(key)
+    await audit.record(session, username, action, key)
+    if locked_now:
+        await audit.record(
+            session, username, "login_lockout", key,
+            f"{ratelimit.MAX_FAILURES} неудачных попыток",
+        )
+        await alerts.security_alert(
+            session, settings,
+            f"🚨 Amnezia Control: {ratelimit.MAX_FAILURES} неудачных попыток входа "
+            f"подряд с IP {key} — вход временно заблокирован.",
+        )
+
+
 @router.post("/login", response_model=TokenResponse)
 async def login(
     body: LoginRequest, request: Request, session: SessionDep
 ) -> TokenResponse:
+    settings = get_settings()
     key = _client_key(request)
     if ratelimit.is_locked(key):
+        await audit.record(session, body.username, "login_blocked", key, "rate-limited")
         raise HTTPException(
             status.HTTP_429_TOO_MANY_REQUESTS,
             "Слишком много попыток входа — подождите несколько минут",
@@ -44,7 +62,7 @@ async def login(
         body.password, user.password_hash if user else _DUMMY_HASH
     )
     if user is None or not password_ok:
-        ratelimit.record_failure(key)
+        await _record_failure(session, settings, key, body.username, "login_fail")
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Неверный логин или пароль")
     if user.totp_enabled:
         # detail — машиночитаемый маркер для фронта (показать поле кода)
@@ -53,22 +71,22 @@ async def login(
         counter = totp.matched_counter(user.totp_secret, body.otp)
         # отвергаем неверный код И уже использованный (защита от replay)
         if counter is None or counter <= user.totp_last_counter:
-            ratelimit.record_failure(key)
+            await _record_failure(session, settings, key, body.username, "login_2fa_fail")
             raise HTTPException(status.HTTP_401_UNAUTHORIZED, "2fa_invalid")
         user.totp_last_counter = counter
-        await session.commit()
+        await session.commit()  # фиксируем счётчик ДО audit (у audit свой rollback)
     ratelimit.clear(key)
-    settings = get_settings()
     token = create_access_token(
         user.username, settings.jwt_secret, settings.jwt_ttl_minutes,
         user.token_version,
     )
+    await audit.record(session, user.username, "login_ok", key)
     return TokenResponse(access_token=token)
 
 
 @router.post("/password", response_model=TokenResponse)
 async def change_password(
-    body: PasswordChangeRequest, user: CurrentUser, session: SessionDep
+    body: PasswordChangeRequest, request: Request, user: CurrentUser, session: SessionDep
 ) -> TokenResponse:
     """Смена пароля из UI: проверяет текущий, инвалидирует все старые токены."""
     if not verify_password(body.current_password, user.password_hash):
@@ -78,6 +96,11 @@ async def change_password(
     await session.commit()
     await audit.record(session, user.username, "password_change", user.username)
     settings = get_settings()
+    await alerts.security_alert(
+        session, settings,
+        f"🔑 Amnezia Control: пароль администратора «{user.username}» изменён "
+        f"(IP {_client_key(request)}).",
+    )
     token = create_access_token(
         user.username, settings.jwt_secret, settings.jwt_ttl_minutes,
         user.token_version,

@@ -167,6 +167,8 @@ Telegram / webhook alert channels are configured **from the UI** (🔔 button) a
 - Put **HTTPS** in front (Caddy edge or your own proxy) — the full-access link and QR configs are secrets in transit.
 - The **"Full access" export** produces a `vpn://` link containing a private SSH key that is root-equivalent on the node — treat it like a secret. It uses a dedicated key; regenerating invalidates the old one.
 - DB backups (`db.json`) contain secrets (password hash, client private keys, panel SSH key) — store them safely; the auto-backups dir is `0700`.
+- **Security events** — brute-force lockout, a node's host key changing (possible MITM), and password change are written to the **audit log** and sent to your **Telegram/webhook alerts** (🔔) if configured. Watch for them.
+- **Lost the password *and* 2FA?** Set `ACONTROL_ADMIN_PASSWORD_RESET=1` (with a new `ACONTROL_ADMIN_PASSWORD`), restart once to reset the password and disable 2FA, then set it back to `0` and restart.
 
 ---
 

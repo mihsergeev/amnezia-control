@@ -7,7 +7,7 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="VPNPANEL_", env_file=".env")
 
     app_name: str = "Amnezia Control"
-    version: str = "0.17.0"
+    version: str = "0.18.0"
     debug: bool = False
 
     db_url: str = "sqlite+aiosqlite:///./data/panel.db"
@@ -47,9 +47,15 @@ class Settings(BaseSettings):
     jwt_secret: str = "dev-insecure-change-me"
     jwt_ttl_minutes: int = 12 * 60
 
-    # Начальная учётка админа; при смене пароля в .env хэш в БД обновится при старте
+    # Начальная учётка админа (сидируется при первом старте; далее пароль
+    # меняется в UI и из .env НЕ пересинхронизируется)
     admin_user: str = "admin"
     admin_password: str = "admin"
+
+    # Аварийный сброс (break-glass): при VPNPANEL_ADMIN_PASSWORD_RESET=1 старт
+    # сбрасывает пароль админа на admin_password и отключает 2FA. Убрать флаг
+    # из .env после входа. Нужно, если потерян пароль И 2FA.
+    admin_password_reset: bool = False
 
 
 @lru_cache

@@ -311,6 +311,15 @@ const EN: Record<string, string> = {
   'Удалён сервер': 'Server deleted',
   'Экспорт полного доступа': 'Full-access export',
   'Восстановление из бэкапа': 'Restore from backup',
+  'Вход выполнен': 'Signed in',
+  'Неудачный вход': 'Failed login',
+  'Неудачный вход (2FA)': 'Failed login (2FA)',
+  'Вход заблокирован (лимит)': 'Login blocked (rate limit)',
+  'Блокировка входа (брутфорс)': 'Login lockout (brute force)',
+  'Смена пароля': 'Password change',
+  'Host-ключ ноды изменился': "Node host key changed",
+  'Включена 2FA': '2FA enabled',
+  'Отключена 2FA': '2FA disabled',
 
   // --- дашборд ---
   'серверов онлайн': 'servers online',
