@@ -49,3 +49,48 @@ async def test_top_clients_empty(factory):
     async with factory() as s:
         rows = await stats.top_clients(None, s, limit=10)
     assert rows == []
+
+
+async def test_top_clients_uses_name_cache(factory):
+    """Клиент без панельного конфига (создан на ноде) получает имя из кэша,
+    а не префикс pubkey."""
+    from app.models import ClientName
+
+    now = datetime.now(timezone.utc)
+    async with factory() as s:
+        s.add(Server(id=1, name="srv-a", host="h", ssh_port=22, ssh_user="acontrol"))
+        s.add(ClientTrafficSample(server_id=1, protocol="awg", client_id="PUBX",
+                                  rx=500, tx=100, ts=now))
+        s.add(ClientName(server_id=1, protocol="awg", client_id="PUBX",
+                         name="@node_client"))
+        await s.commit()
+    async with factory() as s:
+        rows = await stats.top_clients(None, s, limit=10)
+    assert rows[0].client_id == "PUBX"
+    assert rows[0].name == "@node_client"  # из кэша, не "PUBX"[:12]
+
+
+async def test_collector_stores_client_names(factory):
+    from app.models import ClientName
+    from app import collector
+    from sqlalchemy import select
+
+    samples = [{
+        "server_id": 1,
+        "clients": [
+            {"protocol": "awg", "client_id": "PUBX", "rx": 1, "tx": 1, "name": "@bob"},
+            {"protocol": "awg", "client_id": "PUBY", "rx": 1, "tx": 1, "name": "—"},
+            {"protocol": "awg", "client_id": "PUBZ", "rx": 1, "tx": 1, "name": ""},
+        ],
+    }]
+    await collector._store_client_names(factory, samples)
+    async with factory() as s:
+        rows = {r.client_id: r.name for r in await s.scalars(select(ClientName))}
+    assert rows == {"PUBX": "@bob"}  # "—" и пустые не кэшируются
+
+    # апдейт имени
+    samples[0]["clients"][0]["name"] = "@bob2"
+    await collector._store_client_names(factory, samples)
+    async with factory() as s:
+        rows = {r.client_id: r.name for r in await s.scalars(select(ClientName))}
+    assert rows == {"PUBX": "@bob2"}

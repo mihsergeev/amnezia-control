@@ -9,7 +9,13 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app import alerts, audit, awg, nodestat, openvpn, settings_store, sshops, xray
 from app.config import Settings
-from app.models import ClientTrafficSample, NodeMetric, Server, TrafficSample
+from app.models import (
+    ClientName,
+    ClientTrafficSample,
+    NodeMetric,
+    Server,
+    TrafficSample,
+)
 from app.sshkeys import ensure_panel_key, key_paths
 
 log = logging.getLogger("acontrol.collector")
@@ -39,7 +45,7 @@ async def _awg_part(conn, host) -> tuple[dict, list[dict]]:
     }
     clients = [
         {"protocol": "awg", "client_id": c.public_key, "rx": c.rx_bytes,
-         "tx": c.tx_bytes}
+         "tx": c.tx_bytes, "name": c.name}
         for c in state.clients
     ]
     return totals, clients
@@ -50,6 +56,11 @@ async def _openvpn_part(conn, host) -> tuple[dict, list[dict]]:
     container = await openvpn.detect_container(conn)
     table = await openvpn._read_table(conn, container)
     total = len(table)
+    ovpn_names = {
+        e.get("clientId"): (e.get("userData", {}) or {}).get("clientName", "")
+        for e in table
+        if isinstance(e, dict)
+    }
     status = await openvpn._run(
         conn, openvpn._docker_exec(container, "cat /openvpn-status.log 2>/dev/null")
     )
@@ -74,7 +85,7 @@ async def _openvpn_part(conn, host) -> tuple[dict, list[dict]]:
                 online += 1
                 clients.append(
                     {"protocol": "openvpn", "client_id": parts[0],
-                     "rx": crx, "tx": ctx}
+                     "rx": crx, "tx": ctx, "name": ovpn_names.get(parts[0], "")}
                 )
     return {"rx": rx, "tx": tx, "total": total, "online": online}, clients
 
@@ -161,6 +172,10 @@ async def collect_once(
             await _store_client_samples(session_factory, samples)
         except Exception:  # noqa: BLE001 — пер-клиентская стата не критична
             log.exception("ошибка сохранения трафика клиентов")
+        try:
+            await _store_client_names(session_factory, samples)
+        except Exception:  # noqa: BLE001 — кэш имён не критичен
+            log.exception("ошибка сохранения имён клиентов")
 
     # алерты о падении/восстановлении: online = удалось снять метрики
     online_map = {s.id: r is not None for s, r in zip(servers, results)}
@@ -224,6 +239,40 @@ async def _store_client_samples(session_factory, samples) -> None:
         async with session_factory() as session:
             session.add_all(rows)
             await session.commit()
+
+
+async def _store_client_names(session_factory, samples) -> None:
+    """Апсертит имена клиентов (из clientsTable ноды) в кэш ClientName — чтобы
+    статистика показывала имена и для клиентов, созданных не через панель."""
+    wanted: dict[tuple[int, str, str], str] = {}
+    for s in samples:
+        sid = s["server_id"]
+        for c in s.get("clients", []):
+            name = (c.get("name") or "").strip()
+            if not name or name == "—":
+                continue
+            wanted[(sid, c["protocol"], c["client_id"])] = name[:128]
+    if not wanted:
+        return
+    server_ids = {k[0] for k in wanted}
+    async with session_factory() as session:
+        existing = {
+            (r.server_id, r.protocol, r.client_id): r
+            for r in await session.scalars(
+                select(ClientName).where(ClientName.server_id.in_(server_ids))
+            )
+        }
+        for (sid, proto, cid), name in wanted.items():
+            row = existing.get((sid, proto, cid))
+            if row is None:
+                session.add(
+                    ClientName(
+                        server_id=sid, protocol=proto, client_id=cid, name=name
+                    )
+                )
+            elif row.name != name:
+                row.name = name
+        await session.commit()
 
 
 async def _store_node_metrics(session_factory, settings: Settings, samples, names):
