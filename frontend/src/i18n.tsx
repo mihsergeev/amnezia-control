@@ -341,6 +341,14 @@ const EN: Record<string, string> = {
   'SSH-пароль пользователя {user}': 'SSH password for {user}',
   'Отдельный пароль для sudo?': 'Separate sudo password?',
   'Пароль для sudo (если отличается)': 'sudo password (if different)',
+  'Автоматически по SSH-паролю': 'Automatically, via SSH password',
+  'Панель сама зайдёт по паролю и всё настроит':
+    'The panel connects with the password and sets everything up',
+  'Скриптом — запущу на сервере сам': 'With a script — I run it on the server',
+  'Панель даст скрипт: создаст юзера, ключ, откроет фаервол':
+    'The panel gives a script: creates the user, key, opens the firewall',
+  'После «Сохранить» панель покажет скрипт. Зайдите на сервер по SSH под root и вставьте его — он создаст пользователя «{user}», добавит ключ панели и откроет фаервол (если есть). Затем нажмите «Проверить» на карточке сервера — он подключится.':
+    'After “Save”, the panel shows a script. SSH into the server as root and paste it — it creates the “{user}” user, adds the panel key and opens the firewall (if any). Then click “Check” on the server card — it will connect.',
   'Панель один раз зайдёт по паролю, установит свой ключ и откроет SSH-порт только для IP панели. Пароль не сохраняется.':
     'The panel connects once via password, installs its key and opens the SSH port only for the panel IP. The password is not stored.',
   '⚠️ Если на сервере включён фаервол и он блокирует SSH с IP панели — подключиться не получится (будет таймаут). В этом случае снимите галку и запустите ручной скрипт прямо на сервере — он откроет доступ панели.':

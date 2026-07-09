@@ -126,18 +126,10 @@ docker compose -f compose.yml -f compose.caddy.yml up -d --build
 
 ## Adding a VPN node
 
-Each node needs an `acontrol` user with docker access. Create it once (as root on the node):
+Add the server in the panel (name, host, SSH port, SSH user) and pick a setup method:
 
-```bash
-useradd -m -s /bin/bash acontrol
-echo 'acontrol ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/acontrol && chmod 440 /etc/sudoers.d/acontrol
-usermod -aG docker acontrol   # if a docker group exists
-```
-
-Then add the server in the panel — two ways:
-
-1. **Auto-setup by SSH password** — the panel connects once with a password, installs its key and opens the SSH port **for the panel IP only**. The password is not stored. Requires `PasswordAuthentication yes` on the node.
-2. **Manual script** — the panel shows a root script you run on the node (useful when a firewall blocks inbound SSH from the panel, since the script opens access for the panel IP itself).
+1. **With a script** (recommended for a fresh node) — save, then run the shown script as **root** on the node (SSH in and paste it). It **creates the SSH user**, installs the panel's key and opens the firewall for the panel IP. Nothing to prepare by hand. Then click **Check** on the card. Also works when a firewall blocks inbound SSH from the panel, since the script opens access itself.
+2. **Auto-setup by SSH password** — the panel connects once with the given user's password, installs its key and opens the SSH port **for the panel IP only** (password not stored). The user must already exist with a password, and the node needs `PasswordAuthentication yes`.
 
 You can also **import** existing AmneziaVPN servers via their "full access" `vpn://` link, or add many at once from a `host:port user password` list.
 

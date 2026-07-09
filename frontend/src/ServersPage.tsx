@@ -608,14 +608,44 @@ export function ServersPage({ onUnauthorized }: Props) {
 
             {editingId === null && (
               <div className="bootstrap-block">
-                <label className="checkbox">
-                  <input
-                    type="checkbox"
-                    checked={useBootstrap}
-                    onChange={(e) => setUseBootstrap(e.target.checked)}
-                  />
-                  {t('Настроить автоматически по SSH-паролю')}
-                </label>
+                <div className="setup-choice">
+                  <label
+                    className={`setup-option${useBootstrap ? ' setup-option-active' : ''}`}
+                  >
+                    <input
+                      type="radio"
+                      name="setup-method"
+                      checked={useBootstrap}
+                      onChange={() => setUseBootstrap(true)}
+                    />
+                    <div>
+                      <span className="setup-option-title">
+                        {t('Автоматически по SSH-паролю')}
+                      </span>
+                      <span className="setup-option-desc">
+                        {t('Панель сама зайдёт по паролю и всё настроит')}
+                      </span>
+                    </div>
+                  </label>
+                  <label
+                    className={`setup-option${!useBootstrap ? ' setup-option-active' : ''}`}
+                  >
+                    <input
+                      type="radio"
+                      name="setup-method"
+                      checked={!useBootstrap}
+                      onChange={() => setUseBootstrap(false)}
+                    />
+                    <div>
+                      <span className="setup-option-title">
+                        {t('Скриптом — запущу на сервере сам')}
+                      </span>
+                      <span className="setup-option-desc">
+                        {t('Панель даст скрипт: создаст юзера, ключ, откроет фаервол')}
+                      </span>
+                    </div>
+                  </label>
+                </div>
                 {useBootstrap ? (
                   <>
                     <p className="muted small">
@@ -661,7 +691,8 @@ export function ServersPage({ onUnauthorized }: Props) {
                 ) : (
                   <p className="muted small">
                     {t(
-                      'После создания панель покажет скрипт для ручного запуска на сервере.',
+                      'После «Сохранить» панель покажет скрипт. Зайдите на сервер по SSH под root и вставьте его — он создаст пользователя «{user}», добавит ключ панели и откроет фаервол (если есть). Затем нажмите «Проверить» на карточке сервера — он подключится.',
+                      { user: form.ssh_user },
                     )}
                   </p>
                 )}

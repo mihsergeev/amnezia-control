@@ -746,6 +746,54 @@ button.group-header:hover .group-name {
   border-radius: 8px;
 }
 
+/* выбор способа добавления сервера (пароль / скрипт) */
+.setup-choice {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.setup-option {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.55rem;
+  padding: 0.55rem 0.7rem;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  cursor: pointer;
+  background: var(--bg-card);
+}
+
+.setup-option:hover {
+  border-color: var(--border-strong);
+}
+
+.setup-option-active {
+  border-color: rgba(53, 99, 233, 0.6);
+  background: var(--hover);
+}
+
+.setup-option > input {
+  margin-top: 0.2rem;
+  flex-shrink: 0;
+}
+
+.setup-option > div {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+}
+
+.setup-option-title {
+  font-weight: 600;
+  font-size: 0.9rem;
+}
+
+.setup-option-desc {
+  color: var(--text-muted);
+  font-size: 0.8rem;
+}
+
 /* ---------- модалка ---------- */
 
 .script-box {
