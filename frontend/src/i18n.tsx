@@ -46,6 +46,17 @@ const EN: Record<string, string> = {
   'Развернуть AmneziaWG': 'Deploy AmneziaWG',
   'Развернуть XRay / REALITY': 'Deploy XRay / REALITY',
   'Развернуть OpenVPN / Cloak': 'Deploy OpenVPN / Cloak',
+  'Сменить пароль': 'Change password',
+  'Текущий пароль': 'Current password',
+  'Новый пароль (мин. 8 символов)': 'New password (min. 8 characters)',
+  'Повторите новый пароль': 'Repeat new password',
+  'Пароль изменён. Все прежние сессии завершены.':
+    'Password changed. All previous sessions have been ended.',
+  'Смена пароля завершит все другие активные сессии.':
+    'Changing the password ends all other active sessions.',
+  'Пароль должен быть не короче 8 символов':
+    'Password must be at least 8 characters',
+  'Пароли не совпадают': 'Passwords do not match',
   'Скрипт настройки': 'Setup script',
   'Изменить': 'Edit',
   'Удалить сервер': 'Delete server',

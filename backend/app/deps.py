@@ -26,11 +26,14 @@ async def get_current_user(
     )
     if credentials is None:
         raise unauthorized
-    username = decode_access_token(credentials.credentials, get_settings().jwt_secret)
-    if username is None:
+    payload = decode_access_token(credentials.credentials, get_settings().jwt_secret)
+    if payload is None:
         raise unauthorized
-    user = await session.scalar(select(User).where(User.username == username))
+    user = await session.scalar(select(User).where(User.username == payload["sub"]))
     if user is None:
+        raise unauthorized
+    # токен, выпущенный до смены пароля (иная version), больше не действителен
+    if payload.get("ver", 0) != user.token_version:
         raise unauthorized
     return user
 

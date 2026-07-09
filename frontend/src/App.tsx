@@ -8,6 +8,7 @@ import { Menu } from './Menu'
 import { BackupsModal } from './BackupsModal'
 import { AlertsModal } from './AlertsModal'
 import { TwoFAModal } from './TwoFAModal'
+import { PasswordModal } from './PasswordModal'
 import { useI18n } from './i18n'
 import './App.css'
 
@@ -22,6 +23,7 @@ function App() {
   const [backupsOpen, setBackupsOpen] = useState(false)
   const [alertsOpen, setAlertsOpen] = useState(false)
   const [twoFaOpen, setTwoFaOpen] = useState(false)
+  const [pwOpen, setPwOpen] = useState(false)
   const [theme, setTheme] = useState<'dark' | 'light'>(() =>
     document.documentElement.getAttribute('data-theme') === 'light'
       ? 'light'
@@ -166,6 +168,15 @@ function App() {
             </button>
           )}
           {authed && (
+            <button
+              className="ghost icon-btn"
+              onClick={() => setPwOpen(true)}
+              title={t('Сменить пароль')}
+            >
+              🔑
+            </button>
+          )}
+          {authed && (
             <>
               <input
                 ref={fileRef}
@@ -227,6 +238,10 @@ function App() {
           onClose={() => setTwoFaOpen(false)}
           onUnauthorized={logout}
         />
+      )}
+
+      {pwOpen && (
+        <PasswordModal onClose={() => setPwOpen(false)} onUnauthorized={logout} />
       )}
     </main>
   )

@@ -4,6 +4,39 @@ All notable changes to Amnezia Control are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.17.0] — 2026-07-09
+
+### Security
+
+A full security audit and hardening pass. No exploited vulnerability in a
+correctly-configured deployment was found, but several defense-in-depth gaps and
+one latent bug were fixed:
+
+- **Restore RCE fixed** — a crafted backup archive with an absolute-path member
+  could write files outside the data directory (arbitrary file write → RCE). The
+  restore endpoint now rejects absolute paths and verifies every member stays
+  inside the data dir, and caps the upload size.
+- **SSH host-key pinning (TOFU)** — the panel used to disable host-key
+  verification entirely. It now records each node's host key on first connect and
+  verifies it thereafter, so a man-in-the-middle between panel and node is
+  detected. If you rebuild a node, remove its line from `data/ssh/known_hosts`.
+- **Refuses to start on default/weak secrets** — an empty/default `JWT_SECRET`
+  (`< 32` chars) or a default admin password now aborts startup instead of
+  running with a forgeable token. `.env.example` no longer ships working
+  placeholders.
+- **Change the admin password in the UI** (🔑) — changing it invalidates all
+  existing sessions (JWT token-version). The password is no longer re-synced from
+  `.env` on every restart.
+- **Login brute-force protection** — per-IP throttling with a temporary lockout;
+  timing-equalised login (no username enumeration); TOTP codes can't be replayed.
+- **Security headers** — CSP, `X-Frame-Options: DENY` (anti-clickjacking),
+  `nosniff`, `Referrer-Policy`, HSTS; `server_tokens off`; API docs disabled in
+  production.
+- **Hardening** — node-supplied interface/IP names are validated before use in
+  shell commands; the panel SSH key is written atomically as `0600`; backups dir
+  is `0700`; `ssh_user` restricted to a safe charset; import decompression is
+  size-capped; containers get `no-new-privileges`.
+
 ## [0.16.0] — 2026-07-09
 
 ### Added
@@ -79,6 +112,7 @@ Initial public release.
   scheduled auto-backups.
 - Dark / light theme and English / Russian UI.
 
+[0.17.0]: https://github.com/mihsergeev/amnezia-control/releases/tag/v0.17.0
 [0.16.0]: https://github.com/mihsergeev/amnezia-control/releases/tag/v0.16.0
 [0.15.3]: https://github.com/mihsergeev/amnezia-control/releases/tag/v0.15.3
 [0.15.2]: https://github.com/mihsergeev/amnezia-control/releases/tag/v0.15.2

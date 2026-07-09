@@ -2,6 +2,8 @@ services:
   db:
     image: postgres:17-alpine
     restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
     environment:
       POSTGRES_DB: acontrol
       POSTGRES_USER: acontrol
@@ -19,6 +21,8 @@ services:
   backend:
     build: ./backend
     restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
     environment:
       VPNPANEL_DB_URL: postgresql+asyncpg://acontrol:${ACONTROL_DB_PASSWORD}@db:5432/acontrol
       VPNPANEL_JWT_SECRET: ${ACONTROL_JWT_SECRET}
@@ -43,6 +47,8 @@ services:
   frontend:
     build: ./frontend
     restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
     depends_on:
       - backend
     # Panel is served on the host at ACONTROL_BIND (default 127.0.0.1:8080).

@@ -41,6 +41,18 @@ export async function api<T>(path: string, options: RequestInit = {}): Promise<T
   return body as T
 }
 
+// Смена пароля: возвращает новый токен (старые инвалидируются на бэкенде).
+export async function changePassword(
+  current_password: string,
+  new_password: string,
+): Promise<void> {
+  const r = await api<{ access_token: string }>('/api/auth/password', {
+    method: 'POST',
+    body: JSON.stringify({ current_password, new_password }),
+  })
+  setToken(r.access_token)
+}
+
 // Скачивание бэкапа: fetch с токеном → blob → триггерим загрузку файла.
 export async function downloadBackup(): Promise<void> {
   const token = getToken()

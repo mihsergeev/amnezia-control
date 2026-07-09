@@ -160,10 +160,13 @@ Telegram / webhook alert channels are configured **from the UI** (🔔 button) a
 
 ## Security notes
 
-- Enable **2FA** (🔒 in the header) once you have set an admin password.
-- Keep the edge **IP allow-list** tight (Caddy labels) — the panel is a high-value target.
-- The **"Full access" export** produces a `vpn://` link containing a private SSH key that manages the node — treat it like a secret. It uses a dedicated key, regenerating invalidates the old one.
-- DB backups (`db.json`) contain secrets (password hash, client private keys) — store them safely.
+- Set a strong `ACONTROL_JWT_SECRET` (`openssl rand -hex 32`) and admin password — **the panel refuses to start** on empty/default values.
+- Change the admin password from the UI (🔑); it invalidates all existing sessions. Enable **2FA** (🔒).
+- The panel **pins each node's SSH host key** on first connect (TOFU) and verifies it after. If you rebuild a node, delete its line from `data/ssh/known_hosts` so the new key can be pinned.
+- Keep the edge **IP allow-list** tight (Caddy labels) — an **empty** `ACONTROL_ALLOW_IPS` means "allow all", leaving only the login in front.
+- Put **HTTPS** in front (Caddy edge or your own proxy) — the full-access link and QR configs are secrets in transit.
+- The **"Full access" export** produces a `vpn://` link containing a private SSH key that is root-equivalent on the node — treat it like a secret. It uses a dedicated key; regenerating invalidates the old one.
+- DB backups (`db.json`) contain secrets (password hash, client private keys, panel SSH key) — store them safely; the auto-backups dir is `0700`.
 
 ---
 

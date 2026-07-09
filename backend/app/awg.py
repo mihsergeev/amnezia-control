@@ -263,6 +263,23 @@ async def _run(conn: asyncssh.SSHClientConnection, cmd: str, *, stdin: str | Non
     return result.stdout or ""
 
 
+_IFACE_RE = re.compile(r"^[A-Za-z0-9_-]+$")
+
+
+def _safe_interface(name: str) -> str:
+    if not _IFACE_RE.fullmatch(name):
+        raise AwgError("Недопустимое имя интерфейса от ноды")
+    return name
+
+
+def _safe_ip(ip: str) -> str:
+    try:
+        ipaddress.ip_address(ip)
+    except ValueError as exc:
+        raise AwgError("Недопустимый IP-адрес клиента") from exc
+    return ip
+
+
 async def detect_container(conn: asyncssh.SSHClientConnection) -> str:
     cmd = _DOCKER + "$DOCKER ps --format '{{.Names}}' | grep -m1 amnezia-awg"
     out = (await _run(conn, cmd)).strip()
@@ -281,6 +298,9 @@ async def read_state(
     if not iface_path:
         raise AwgError("Конфиг awg0.conf не найден в контейнере")
     interface_name = iface_path.rsplit("/", 1)[-1].removesuffix(".conf")
+    # имя интерфейса приходит от ноды и подставляется в команды — валидируем,
+    # чтобы враждебная нода не могла внедрить shell-метасимволы
+    interface_name = _safe_interface(interface_name)
 
     # printf с ведущим \n гарантирует перевод строки перед каждым маркером,
     # даже если предыдущий файл не заканчивается на \n (иначе разбор секций рвётся)
@@ -398,7 +418,7 @@ async def create_client(
     fixed_ip: str | None = None,
 ) -> tuple[AwgClient, str]:
     if fixed_ip:
-        ip = fixed_ip
+        ip = _safe_ip(fixed_ip)
     else:
         used = {c.address.split("/")[0] for c in state.clients if c.address}
         ip = allocate_ip(state.address, used)
@@ -464,6 +484,7 @@ async def _append_to_table(conn, state, pub, name, ip) -> None:
 async def revoke_client(
     conn: asyncssh.SSHClientConnection, container: str, interface: str, public_key: str
 ) -> None:
+    interface = _safe_interface(interface)
     # снимаем пира вживую
     await _run(
         conn,

@@ -42,6 +42,29 @@ def verify(
         return False
 
 
+def matched_counter(
+    secret_b32: str, code: str, *, window: int = 1, now: float | None = None
+) -> int | None:
+    """Как verify, но возвращает совпавший 30-секундный счётчик (или None).
+
+    Нужен для защиты от повторного использования кода: вызывающий сравнивает
+    счётчик с последним использованным и отвергает <=.
+    """
+    if not secret_b32 or not code:
+        return None
+    code = code.strip()
+    if not code.isdigit():
+        return None
+    step = int((time.time() if now is None else now) // 30)
+    for w in range(-window, window + 1):
+        try:
+            if hmac.compare_digest(_hotp(secret_b32, step + w), code):
+                return step + w
+        except (ValueError, TypeError):
+            return None
+    return None
+
+
 def provisioning_uri(
     secret_b32: str, account: str, issuer: str = "Amnezia Control"
 ) -> str:
