@@ -1,10 +1,11 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 
 export type MenuItem = {
-  label: string
-  onClick: () => void
+  label?: string
+  onClick?: () => void
   danger?: boolean
   disabled?: boolean
+  divider?: boolean
 }
 
 type Props = {
@@ -12,10 +13,19 @@ type Props = {
   items: MenuItem[]
   className?: string
   align?: 'left' | 'right'
+  caret?: boolean
+  title?: string
 }
 
 /** Лёгкое выпадающее меню: закрывается по клику вне и по Escape. */
-export function Menu({ label, items, className = 'ghost', align = 'right' }: Props) {
+export function Menu({
+  label,
+  items,
+  className = 'ghost',
+  align = 'right',
+  caret = true,
+  title,
+}: Props) {
   const [open, setOpen] = useState(false)
   const ref = useRef<HTMLDivElement>(null)
 
@@ -37,24 +47,34 @@ export function Menu({ label, items, className = 'ghost', align = 'right' }: Pro
 
   return (
     <div className="menu-wrap" ref={ref}>
-      <button className={className} onClick={() => setOpen((v) => !v)}>
-        {label} <span className="menu-caret">▾</span>
+      <button
+        className={className}
+        title={title}
+        aria-label={title}
+        onClick={() => setOpen((v) => !v)}
+      >
+        {label}
+        {caret && <span className="menu-caret"> ▾</span>}
       </button>
       {open && (
         <div className={`menu-pop menu-pop-${align}`}>
-          {items.map((it, i) => (
-            <button
-              key={i}
-              className={`menu-item${it.danger ? ' menu-item-danger' : ''}`}
-              disabled={it.disabled}
-              onClick={() => {
-                setOpen(false)
-                it.onClick()
-              }}
-            >
-              {it.label}
-            </button>
-          ))}
+          {items.map((it, i) =>
+            it.divider ? (
+              <div key={i} className="menu-divider" role="separator" />
+            ) : (
+              <button
+                key={i}
+                className={`menu-item${it.danger ? ' menu-item-danger' : ''}`}
+                disabled={it.disabled}
+                onClick={() => {
+                  setOpen(false)
+                  it.onClick?.()
+                }}
+              >
+                {it.label}
+              </button>
+            ),
+          )}
         </div>
       )}
     </div>

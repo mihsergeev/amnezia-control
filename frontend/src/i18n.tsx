@@ -47,6 +47,7 @@ const EN: Record<string, string> = {
   'Развернуть XRay / REALITY': 'Deploy XRay / REALITY',
   'Развернуть OpenVPN / Cloak': 'Deploy OpenVPN / Cloak',
   'Сменить пароль': 'Change password',
+  'Меню': 'Menu',
   'Текущий пароль': 'Current password',
   'Новый пароль (мин. 8 символов)': 'New password (min. 8 characters)',
   'Повторите новый пароль': 'Repeat new password',

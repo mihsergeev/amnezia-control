@@ -4,6 +4,14 @@ All notable changes to Amnezia Control are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.18.4] — 2026-07-10
+
+### Changed
+- **Tidier header.** The row of icon buttons (alerts, 2FA, change-password, the
+  wide Backup dropdown, Sign out) is consolidated into a single **⚙ menu** with
+  grouped items; only the version, theme and language toggles stay inline. Less
+  clutter, especially on narrower screens. Refreshed the README hero screenshot.
+
 ## [0.18.3] — 2026-07-10
 
 ### Fixed
@@ -163,6 +171,7 @@ Initial public release.
   scheduled auto-backups.
 - Dark / light theme and English / Russian UI.
 
+[0.18.4]: https://github.com/mihsergeev/amnezia-control/releases/tag/v0.18.4
 [0.18.3]: https://github.com/mihsergeev/amnezia-control/releases/tag/v0.18.3
 [0.18.2]: https://github.com/mihsergeev/amnezia-control/releases/tag/v0.18.2
 [0.18.1]: https://github.com/mihsergeev/amnezia-control/releases/tag/v0.18.1
