@@ -1,19 +1,29 @@
 version: 2
 updates:
+  # Обновления группируются в один PR на экосистему, чтобы не заваливать список
   - package-ecosystem: pip
     directory: /backend
     schedule:
       interval: weekly
     open-pull-requests-limit: 5
+    groups:
+      backend-pip:
+        patterns: ["*"]
   - package-ecosystem: npm
     directory: /frontend
     schedule:
       interval: weekly
     open-pull-requests-limit: 5
+    groups:
+      frontend-npm:
+        patterns: ["*"]
   - package-ecosystem: github-actions
     directory: /
     schedule:
       interval: weekly
+    groups:
+      actions:
+        patterns: ["*"]
   - package-ecosystem: docker
     directory: /backend
     schedule:
@@ -22,3 +32,6 @@ updates:
     directory: /frontend
     schedule:
       interval: weekly
+    groups:
+      frontend-docker:
+        patterns: ["*"]
