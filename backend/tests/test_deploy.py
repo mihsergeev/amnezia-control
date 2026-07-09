@@ -94,3 +94,18 @@ async def test_launch_uses_tagged_home_path():
     assert '$HOME/.acontrol/openvpn/run.sh' in joined
     assert '/tmp/acontrol' not in joined  # больше не общий /tmp
     assert '.acontrol/awg' not in joined  # и не чужой протокол
+
+
+async def test_foreign_awg_container_detection():
+    class C:
+        def __init__(self, out):
+            self.out = out
+
+        async def run(self, cmd, input=None, check=False):  # noqa: A002
+            return type("R", (), {"stdout": self.out})()
+
+    # исходный (не панельный) контейнер обнаружен → deploy/update заблокируются
+    assert await deploy.foreign_awg_container(C("amnezia-awg\namnezia-awg2\n")) == "amnezia-awg"
+    # только панельный amnezia-awg2 → безопасно
+    assert await deploy.foreign_awg_container(C("amnezia-awg2\n")) is None
+    assert await deploy.foreign_awg_container(C("")) is None

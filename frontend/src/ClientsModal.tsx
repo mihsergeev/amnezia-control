@@ -387,16 +387,19 @@ export function ClientsModal({
                 <span className="version-ok"> {t('актуальна')}</span>
               )}
               {!version.deployed && (
-                <span className="muted"> · {t('образ собран не панелью')}</span>
+                <span className="muted">
+                  {' '}· {t('образ собран не панелью — пересборка недоступна')}
+                </span>
               )}
             </span>
-            <button className="ghost" onClick={() => onRequestUpdate('awg')}>
-              {version.deployed
-                ? version.update_available
-                  ? t('Обновить')
-                  : t('Переустановить')
-                : t('Пересобрать')}
-            </button>
+            {/* Пересборка безопасна только для образа, собранного панелью (конфиг
+                на хост-маунте). Для внешнего образа она создала бы ПАРАЛЛЕЛЬНЫЙ
+                пустой контейнер (клиенты живут в исходном) — поэтому кнопку прячем. */}
+            {version.deployed && (
+              <button className="ghost" onClick={() => onRequestUpdate('awg')}>
+                {version.update_available ? t('Обновить') : t('Переустановить')}
+              </button>
+            )}
           </div>
         )}
 
