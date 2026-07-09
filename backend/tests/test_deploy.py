@@ -121,7 +121,7 @@ def test_build_script_preserves_live_config_before_guard():
     assert s.index('docker exec "$CONT" cat') < s.index('if [ ! -f "$D/awg0.conf" ]')
 
 
-async def test_awg_snapshot_helpers():
+async def test_snapshot_helpers_all_protocols():
     import pytest
 
     class C:
@@ -131,14 +131,17 @@ async def test_awg_snapshot_helpers():
         async def run(self, cmd, check=False):  # noqa: A002
             return type("R", (), {"stdout": self.out})()
 
-    assert await deploy.snapshot_awg_config(C("SNAP 20260710-023528\n")) == "20260710-023528"
-    assert await deploy.snapshot_awg_config(C("NO_CONT\n")) is None
-    snaps = await deploy.list_awg_snapshots(C("20260710-023528|3\n20260709-010101|0\n"))
+    for tag in ("awg", "xray", "openvpn"):
+        assert await deploy.snapshot_config(C("SNAP 20260710-023528\n"), tag) == "20260710-023528"
+        assert await deploy.snapshot_config(C("NO_CONT\n"), tag) is None
+        assert await deploy.restore_snapshot(C("RESTORE_OK\n"), tag, "20260710-023528") is True
+        assert await deploy.restore_snapshot(C("NO_SNAP\n"), tag, "20260710-023528") is False
+        with pytest.raises(ValueError):
+            await deploy.restore_snapshot(C(), tag, "x; rm -rf /")
+    snaps = await deploy.list_snapshots(
+        C("20260710-023528|3\n20260709-010101|0\n"), "xray"
+    )
     assert snaps == [
-        {"id": "20260710-023528", "peers": 3},
-        {"id": "20260709-010101", "peers": 0},
+        {"id": "20260710-023528", "clients": 3},
+        {"id": "20260709-010101", "clients": 0},
     ]
-    with pytest.raises(ValueError):
-        await deploy.restore_awg_snapshot(C(), "x; rm -rf /")
-    assert await deploy.restore_awg_snapshot(C("RESTORE_OK\n"), "20260710-023528") is True
-    assert await deploy.restore_awg_snapshot(C("NO_SNAP\n"), "20260710-023528") is False

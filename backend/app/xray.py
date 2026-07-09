@@ -367,6 +367,14 @@ log "[3/5] docker build (xray {xray_release})"
 sudo docker build --build-arg XRAY_RELEASE={xray_release} -t "$IMG" "$BUILD" 2>&1 | tail -3 || fail build
 
 log "[4/5] конфиг"
+# перед пересборкой вытаскиваем конфиг из ЖИВОГО контейнера на хост-маунт
+# (конфиг мог лежать ВНУТРИ контейнера) — иначе guard сгенерит пустой и потеряет клиентов
+if sudo docker ps --format '{{{{.Names}}}}' | grep -qx "$C"; then
+  for f in server.json clientsTable xray_uuid.key xray_public.key xray_private.key xray_short_id.key; do
+    B=$(sudo docker exec "$C" cat "/opt/amnezia/xray/$f" 2>/dev/null | base64 -w0 2>/dev/null || true)
+    [ -n "$B" ] && echo "$B" | base64 -d | sudo tee "$D/$f" >/dev/null || true
+  done
+fi
 if ! sudo test -f "$D/server.json"; then
   log "генерация ключей + server.json (новый сервер)"
   sudo docker run --rm -v "$D":/opt/amnezia/xray --entrypoint sh "$IMG" -c 'cd /opt/amnezia/xray; xray uuid > xray_uuid.key; openssl rand -hex 8 > xray_short_id.key; xray x25519 > xray_x25519.raw 2>&1' || fail keys

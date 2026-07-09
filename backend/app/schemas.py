@@ -199,12 +199,12 @@ class DeployStatusOut(BaseModel):
     log: str
 
 
-class AwgSnapshotOut(BaseModel):
+class SnapshotOut(BaseModel):
     id: str  # метка времени снимка (ГГГГММДД-ЧЧММСС)
-    peers: int
+    clients: int
 
 
-class AwgRestoreRequest(BaseModel):
+class SnapshotRestoreRequest(BaseModel):
     id: str = Field(min_length=1, max_length=32)
 
 
