@@ -23,8 +23,10 @@ BASE_REPO = "amneziavpn/amneziawg-go"
 IMAGE = "acontrol-awg"
 CONTAINER = "amnezia-awg2"
 SUBNET = "10.8.1.0/24"
-WORK_DIR = "/tmp/acontrol"
-DEPLOY_LOG = "/tmp/acontrol/deploy.log"
+# Каталог рабочих файлов деплоя — в $HOME текущего ssh-пользователя (всегда наш,
+# без коллизий владельца в общем /tmp) и СВОЙ у каждого протокола (tag), чтобы
+# лог одного деплоя не подменял другой на сервере с несколькими протоколами.
+WORK_ROOT = "$HOME/.acontrol"
 HUB_TAGS_URL = "https://hub.docker.com/v2/repositories/amneziavpn/amneziawg-go/tags?page_size=50"
 
 START_SH = """#!/bin/sh
@@ -181,21 +183,33 @@ def _systemd_unit() -> str:
     )
 
 
-async def launch(conn: asyncssh.SSHClientConnection, script: str) -> None:
-    """Кладёт скрипт на ноду (в user-writable /tmp) и запускает детачед."""
-    await conn.run(f"mkdir -p {WORK_DIR}", check=False)
+def _paths(tag: str) -> tuple[str, str, str]:
+    d = f"{WORK_ROOT}/{tag}"
+    return d, f"{d}/run.sh", f"{d}/deploy.log"
+
+
+async def launch(
+    conn: asyncssh.SSHClientConnection, script: str, *, tag: str = "awg"
+) -> None:
+    """Кладёт скрипт в $HOME/.acontrol/<tag> (свой каталог протокола) и запускает
+    детачед. Отдельный каталог на протокол не даёт логам деплоя перемешиваться."""
+    d, run, log = _paths(tag)
+    await conn.run(f'mkdir -p "{d}"', check=False)
     await conn.run(
-        f"cat > {WORK_DIR}/run.sh && rm -f {DEPLOY_LOG}",
+        f'cat > "{run}" && rm -f "{log}"',
         input=script, check=False,
     )
     await conn.run(
-        f"nohup setsid bash {WORK_DIR}/run.sh > {DEPLOY_LOG} 2>&1 </dev/null & disown",
+        f'nohup setsid bash "{run}" > "{log}" 2>&1 </dev/null & disown',
         check=False,
     )
 
 
-async def read_status(conn: asyncssh.SSHClientConnection) -> dict:
-    result = await conn.run(f"cat {DEPLOY_LOG} 2>/dev/null", check=False)
+async def read_status(
+    conn: asyncssh.SSHClientConnection, *, tag: str = "awg"
+) -> dict:
+    _d, _run, log = _paths(tag)
+    result = await conn.run(f'cat "{log}" 2>/dev/null', check=False)
     log = result.stdout if isinstance(result.stdout, str) else ""
     if "DEPLOY_DONE" in log:
         state = "done"

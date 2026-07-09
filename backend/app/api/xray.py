@@ -162,7 +162,7 @@ async def deploy_xray(
     script = xray.build_deploy_script(body.port, body.site, release)
     try:
         async with _connect(server) as conn:
-            await deploy.launch(conn, script)
+            await deploy.launch(conn, script, tag="xray")
     except Exception as exc:  # noqa: BLE001
         raise _xray_error(exc) from exc
     await audit.record(
@@ -178,7 +178,7 @@ async def deploy_status(
     server = await _get_or_404(server_id, session)
     try:
         async with _connect(server) as conn:
-            result = await deploy.read_status(conn)
+            result = await deploy.read_status(conn, tag="xray")
     except Exception as exc:  # noqa: BLE001
         raise _xray_error(exc) from exc
     return DeployStatusOut(**result)
@@ -228,7 +228,7 @@ async def update_xray(
             container = await xray.detect_container(conn)
             bits = await xray.read_server_bits(conn, container)
             script = xray.build_deploy_script(bits["port"], bits["site"], latest["tag"])
-            await deploy.launch(conn, script)
+            await deploy.launch(conn, script, tag="xray")
     except Exception as exc:  # noqa: BLE001
         raise _xray_error(exc) from exc
     await audit.record(
