@@ -48,6 +48,10 @@ const EN: Record<string, string> = {
   'Развернуть OpenVPN / Cloak': 'Deploy OpenVPN / Cloak',
   'Сменить пароль': 'Change password',
   'Меню': 'Menu',
+  'Откатить': 'Roll back',
+  '{n} клиентов': '{n} clients',
+  'Откатить конфиг «{name}» к снимку от {ts} ({n} клиентов)? Текущий конфиг будет заменён.':
+    'Roll back the config on “{name}” to the {ts} snapshot ({n} clients)? The current config will be replaced.',
   'Пересобрать образ на «{name}»? Текущие клиенты и ключи сохраняются.':
     'Rebuild the image on “{name}”? Current clients and keys are preserved.',
   'Текущий пароль': 'Current password',
@@ -323,6 +327,7 @@ const EN: Record<string, string> = {
   'Блокировка входа (брутфорс)': 'Login lockout (brute force)',
   'Смена пароля': 'Password change',
   'Host-ключ ноды изменился': "Node host key changed",
+  'Откат конфига AmneziaWG': 'AmneziaWG config rollback',
   'Включена 2FA': '2FA enabled',
   'Отключена 2FA': '2FA disabled',
 

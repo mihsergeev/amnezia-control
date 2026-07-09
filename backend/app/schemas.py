@@ -199,6 +199,15 @@ class DeployStatusOut(BaseModel):
     log: str
 
 
+class AwgSnapshotOut(BaseModel):
+    id: str  # метка времени снимка (ГГГГММДД-ЧЧММСС)
+    peers: int
+
+
+class AwgRestoreRequest(BaseModel):
+    id: str = Field(min_length=1, max_length=32)
+
+
 class VersionOut(BaseModel):
     deployed: bool
     current_version: str | None  # тег образа, напр. "0.2.19"

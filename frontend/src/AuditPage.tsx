@@ -19,6 +19,7 @@ const LABELS: Record<string, string> = {
   awg_reissue: 'Перевыпущен AmneziaWG',
   awg_deploy: 'Развёрнут AmneziaWG',
   awg_update: 'Обновлён AmneziaWG',
+  awg_config_restore: 'Откат конфига AmneziaWG',
   openvpn_issue: 'Выдан OpenVPN',
   openvpn_revoke: 'Отозван OpenVPN',
   openvpn_reissue: 'Перевыпущен OpenVPN',

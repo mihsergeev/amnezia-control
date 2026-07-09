@@ -8,6 +8,8 @@ from app.config import get_settings
 from app.deps import CurrentUser, SessionDep
 from app.models import AwgConfig, AwgNote, ClientLimit, Server
 from app.schemas import (
+    AwgRestoreRequest,
+    AwgSnapshotOut,
     AwgStateOut,
     ConfigTextResponse,
     CreateClientRequest,
@@ -299,6 +301,8 @@ async def update_awg(
     try:
         async with _connect(server) as conn:
             await _guard_foreign_awg(conn)
+            # снимок текущего конфига ДО пересборки — для отката, если что-то пойдёт не так
+            await deploy.snapshot_awg_config(conn)
             await deploy.launch(conn, script, tag="awg")
     except HTTPException:
         raise
@@ -306,6 +310,41 @@ async def update_awg(
         raise _ssh_error(exc) from exc
     await audit.record(session, user.username, "awg_update", server.name)
     return {"started": True}
+
+
+@router.get("/config-backups", response_model=list[AwgSnapshotOut])
+async def config_backups(
+    server_id: int, _: CurrentUser, session: SessionDep
+) -> list[AwgSnapshotOut]:
+    """Снимки awg-конфига на ноде (делаются перед каждой пересборкой) — для отката."""
+    server = await _get_or_404(server_id, session)
+    try:
+        async with _connect(server) as conn:
+            snaps = await deploy.list_awg_snapshots(conn)
+    except Exception as exc:  # noqa: BLE001
+        raise _ssh_error(exc) from exc
+    return [AwgSnapshotOut(**s) for s in snaps]
+
+
+@router.post("/config-restore", status_code=status.HTTP_202_ACCEPTED)
+async def config_restore(
+    server_id: int, body: AwgRestoreRequest, user: CurrentUser, session: SessionDep
+) -> dict:
+    """Откат awg-конфига к снимку (возвращает клиентов и ключи из снимка)."""
+    server = await _get_or_404(server_id, session)
+    try:
+        async with _connect(server) as conn:
+            ok = await deploy.restore_awg_snapshot(conn, body.id)
+    except ValueError as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001
+        raise _ssh_error(exc) from exc
+    if not ok:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Снимок не найден на ноде")
+    await audit.record(
+        session, user.username, "awg_config_restore", server.name, body.id
+    )
+    return {"restored": True}
 
 
 @router.get("/deploy/status", response_model=DeployStatusOut)

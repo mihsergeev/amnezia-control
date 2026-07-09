@@ -119,3 +119,26 @@ def test_build_script_preserves_live_config_before_guard():
     assert 'base64 -d | sudo tee "$D/$f"' in s
     # preserve идёт ДО guard [ ! -f awg0.conf ]
     assert s.index('docker exec "$CONT" cat') < s.index('if [ ! -f "$D/awg0.conf" ]')
+
+
+async def test_awg_snapshot_helpers():
+    import pytest
+
+    class C:
+        def __init__(self, out=""):
+            self.out = out
+
+        async def run(self, cmd, check=False):  # noqa: A002
+            return type("R", (), {"stdout": self.out})()
+
+    assert await deploy.snapshot_awg_config(C("SNAP 20260710-023528\n")) == "20260710-023528"
+    assert await deploy.snapshot_awg_config(C("NO_CONT\n")) is None
+    snaps = await deploy.list_awg_snapshots(C("20260710-023528|3\n20260709-010101|0\n"))
+    assert snaps == [
+        {"id": "20260710-023528", "peers": 3},
+        {"id": "20260709-010101", "peers": 0},
+    ]
+    with pytest.raises(ValueError):
+        await deploy.restore_awg_snapshot(C(), "x; rm -rf /")
+    assert await deploy.restore_awg_snapshot(C("RESTORE_OK\n"), "20260710-023528") is True
+    assert await deploy.restore_awg_snapshot(C("NO_SNAP\n"), "20260710-023528") is False

@@ -202,6 +202,79 @@ def _paths(tag: str) -> tuple[str, str, str]:
     return d, f"{d}/run.sh", f"{d}/deploy.log"
 
 
+# --- снимки awg-конфига для отката пересборки -------------------------------
+SNAP_ROOT = f"{WORK_ROOT}/awg-snapshots"
+_SNAP_FILES = (
+    "awg0.conf clientsTable wireguard_server_private_key.key "
+    "wireguard_server_public_key.key wireguard_psk.key"
+)
+_SNAP_ID_RE = re.compile(r"^\d{8}-\d{6}$")
+
+
+async def snapshot_awg_config(
+    conn: asyncssh.SSHClientConnection, keep: int = 10
+) -> str | None:
+    """Снимает текущий awg-конфиг из ЖИВОГО контейнера в
+    $HOME/.acontrol/awg-snapshots/<ts> (для отката пересборки). Возвращает id
+    снимка (ts) или None, если снимать нечего. Хранит последние `keep`."""
+    cmd = (
+        f'C={CONTAINER}; R={SNAP_ROOT}; '
+        f'sudo docker ps --format "{{{{.Names}}}}" | grep -qx "$C" || {{ echo NO_CONT; exit 0; }}; '
+        f'TS=$(date +%Y%m%d-%H%M%S); S="$R/$TS"; mkdir -p "$S"; ok=0; '
+        f'for f in {_SNAP_FILES}; do '
+        f'B=$(sudo docker exec "$C" cat "/opt/amnezia/awg/$f" 2>/dev/null | base64 -w0 2>/dev/null || true); '
+        f'[ -n "$B" ] && echo "$B" | base64 -d > "$S/$f" && ok=1; done; '
+        f'[ "$ok" = 1 ] && echo "SNAP $TS" || rm -rf "$S"; '
+        f'ls -1dt "$R"/*/ 2>/dev/null | tail -n +{keep + 1} | while read d; do rm -rf "$d"; done'
+    )
+    out = await conn.run(cmd, check=False)
+    for line in (out.stdout or "").splitlines():
+        if line.startswith("SNAP "):
+            return line.split()[1]
+    return None
+
+
+async def list_awg_snapshots(conn: asyncssh.SSHClientConnection) -> list[dict]:
+    """Список снимков awg-конфига: [{id, peers}], новые первыми."""
+    cmd = (
+        f'R={SNAP_ROOT}; ls -1dt "$R"/*/ 2>/dev/null | while read d; do '
+        'ts=$(basename "$d"); '
+        'p=$(grep -c "\\[Peer\\]" "$d/awg0.conf" 2>/dev/null || echo 0); '
+        'echo "$ts|$p"; done'
+    )
+    out = await conn.run(cmd, check=False)
+    res: list[dict] = []
+    for line in (out.stdout or "").splitlines():
+        line = line.strip()
+        if "|" not in line:
+            continue
+        ts, p = line.rsplit("|", 1)
+        if _SNAP_ID_RE.match(ts):
+            res.append({"id": ts, "peers": int(p) if p.strip().isdigit() else 0})
+    return res
+
+
+async def restore_awg_snapshot(
+    conn: asyncssh.SSHClientConnection, snap_id: str
+) -> bool:
+    """Восстанавливает awg-конфиг из снимка (пишет на хост-маунт + поднимает awg0)."""
+    if not _SNAP_ID_RE.match(snap_id or ""):
+        raise ValueError("некорректный id снимка")
+    bringup = (
+        "awg-quick down /opt/amnezia/awg/awg0.conf >/dev/null 2>&1; "
+        "awg-quick up /opt/amnezia/awg/awg0.conf"
+    )
+    cmd = (
+        f'C={CONTAINER}; S={SNAP_ROOT}/{snap_id}; D=/opt/amnezia/awg; '
+        f'[ -f "$S/awg0.conf" ] || {{ echo NO_SNAP; exit 0; }}; '
+        f'for f in {_SNAP_FILES}; do [ -f "$S/$f" ] && sudo cp "$S/$f" "$D/$f"; done; '
+        f'sudo docker exec "$C" sh -c {_shell_quote(bringup)} >/dev/null 2>&1; '
+        f'echo RESTORE_OK'
+    )
+    out = await conn.run(cmd, check=False)
+    return "RESTORE_OK" in (out.stdout or "")
+
+
 async def launch(
     conn: asyncssh.SSHClientConnection, script: str, *, tag: str = "awg"
 ) -> None:
