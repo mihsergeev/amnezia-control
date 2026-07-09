@@ -140,6 +140,20 @@ def build_script(mode: str, port: int, cfg: dict[str, str]) -> str:
         'sudo docker build -t $IMG "$BUILD" 2>&1 | tail -3',
         "",
         'log "[5/6] конфиг + контейнер"',
+        # КРИТИЧНО: перед пересборкой вытаскиваем текущий конфиг из ЖИВОГО
+        # контейнера на хост-маунт. Конфиг мог лежать ВНУТРИ контейнера (не на
+        # хосте) — тогда guard ниже решил бы, что конфига нет, сгенерил пустой и
+        # затёр клиентов (инцидент de-hz 10.07). Читаем через docker exec, что
+        # покрывает оба случая (внутри контейнера / на маунте). base64 —
+        # побайтовое сохранение (важен завершающий \n у clientsTable).
+        'if sudo docker ps --format "{{.Names}}" | grep -qx "$CONT"; then',
+        '  for f in awg0.conf clientsTable wireguard_server_private_key.key '
+        'wireguard_server_public_key.key wireguard_psk.key; do',
+        '    B=$(sudo docker exec "$CONT" cat "/opt/amnezia/awg/$f" 2>/dev/null '
+        '| base64 -w0 2>/dev/null || true);',
+        '    [ -n "$B" ] && echo "$B" | base64 -d | sudo tee "$D/$f" >/dev/null || true;',
+        '  done',
+        'fi',
         'if [ ! -f "$D/awg0.conf" ]; then',
         f'  echo {_b64(cfg["conf"])} | base64 -d | sudo tee "$D/awg0.conf" >/dev/null',
         f'  echo {_b64(cfg["pub"])} | base64 -d | sudo tee "$D/wireguard_server_public_key.key" >/dev/null',

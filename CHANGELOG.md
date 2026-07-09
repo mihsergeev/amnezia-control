@@ -4,6 +4,17 @@ All notable changes to Amnezia Control are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.18.5] — 2026-07-10
+
+### Fixed
+- **AmneziaWG "Rebuild" could wipe clients even for a panel-built image.** The
+  config-preserve check looked for `awg0.conf` on the host bind-mount; if the
+  running container kept its config internally, the check thought there was no
+  config, regenerated a blank one (new keys) and dropped all peers. Rebuild now
+  first **reads the current config out of the running container** and writes it
+  to the host, so it is preserved regardless of where it lived. The rebuild
+  button also asks for confirmation.
+
 ## [0.18.4] — 2026-07-10
 
 ### Changed
@@ -171,6 +182,7 @@ Initial public release.
   scheduled auto-backups.
 - Dark / light theme and English / Russian UI.
 
+[0.18.5]: https://github.com/mihsergeev/amnezia-control/releases/tag/v0.18.5
 [0.18.4]: https://github.com/mihsergeev/amnezia-control/releases/tag/v0.18.4
 [0.18.3]: https://github.com/mihsergeev/amnezia-control/releases/tag/v0.18.3
 [0.18.2]: https://github.com/mihsergeev/amnezia-control/releases/tag/v0.18.2

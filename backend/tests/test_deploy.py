@@ -109,3 +109,13 @@ async def test_foreign_awg_container_detection():
     # только панельный amnezia-awg2 → безопасно
     assert await deploy.foreign_awg_container(C("amnezia-awg2\n")) is None
     assert await deploy.foreign_awg_container(C("")) is None
+
+
+def test_build_script_preserves_live_config_before_guard():
+    """Регресс de-hz 10.07: пересборка должна вытаскивать конфиг из ЖИВОГО
+    контейнера на хост ДО guard, иначе guard сгенерит пустой и затрёт клиентов."""
+    s = deploy.build_script("update", 47180, deploy.generate_server_config(47180))
+    assert 'docker exec "$CONT" cat "/opt/amnezia/awg/$f"' in s
+    assert 'base64 -d | sudo tee "$D/$f"' in s
+    # preserve идёт ДО guard [ ! -f awg0.conf ]
+    assert s.index('docker exec "$CONT" cat') < s.index('if [ ! -f "$D/awg0.conf" ]')

@@ -727,6 +727,16 @@ export function ServersPage({ onUnauthorized }: Props) {
           onUnauthorized={onUnauthorized}
           onRequestUpdate={(protocol) => {
             const srv = clientsFor
+            if (!srv) return
+            if (
+              !window.confirm(
+                t(
+                  'Пересобрать образ на «{name}»? Текущие клиенты и ключи сохраняются.',
+                  { name: srv.name },
+                ),
+              )
+            )
+              return
             setClientsFor(null)
             setDeployFor({ server: srv, mode: 'update', protocol })
           }}

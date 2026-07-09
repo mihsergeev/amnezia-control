@@ -48,6 +48,8 @@ const EN: Record<string, string> = {
   'Развернуть OpenVPN / Cloak': 'Deploy OpenVPN / Cloak',
   'Сменить пароль': 'Change password',
   'Меню': 'Menu',
+  'Пересобрать образ на «{name}»? Текущие клиенты и ключи сохраняются.':
+    'Rebuild the image on “{name}”? Current clients and keys are preserved.',
   'Текущий пароль': 'Current password',
   'Новый пароль (мин. 8 символов)': 'New password (min. 8 characters)',
   'Повторите новый пароль': 'Repeat new password',
