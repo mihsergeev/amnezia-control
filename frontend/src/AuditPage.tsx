@@ -22,6 +22,7 @@ const LABELS: Record<string, string> = {
   openvpn_issue: 'Выдан OpenVPN',
   openvpn_revoke: 'Отозван OpenVPN',
   openvpn_reissue: 'Перевыпущен OpenVPN',
+  openvpn_deploy: 'Развёрнут OpenVPN/Cloak',
   xray_issue: 'Выдан XRay',
   xray_revoke: 'Отозван XRay',
   xray_deploy: 'Развёрнут XRay',

@@ -2,16 +2,18 @@ import asyncssh
 from fastapi import APIRouter, HTTPException, status
 from sqlalchemy import delete, select
 
-from app import audit, awg, limits, openvpn, sshops
+from app import audit, awg, deploy, limits, openvpn, sshops
 from app.config import get_settings
 from app.deps import CurrentUser, SessionDep
 from app.models import ClientLimit, OvpnConfig, Server
 from app.schemas import (
+    DeployStatusOut,
     OvpnClientOut,
     OvpnConfigRequest,
     OvpnConfigResponse,
     OvpnCreateRequest,
     OvpnCreateResponse,
+    OvpnDeployRequest,
     OvpnReissueRequest,
     OvpnRevokeRequest,
     OvpnStateOut,
@@ -232,3 +234,33 @@ async def revoke_client(
         )
     )
     await session.commit()
+
+
+@router.post("/deploy", status_code=status.HTTP_202_ACCEPTED)
+async def deploy_openvpn(
+    server_id: int, body: OvpnDeployRequest, user: CurrentUser, session: SessionDep
+) -> dict:
+    server = await _get_or_404(server_id, session)
+    script = openvpn.build_deploy_script(body.port, body.site, server.host)
+    try:
+        async with _connect(server) as conn:
+            await deploy.launch(conn, script)
+    except Exception as exc:  # noqa: BLE001
+        raise _ovpn_error(exc) from exc
+    await audit.record(
+        session, user.username, "openvpn_deploy", server.name, f"port {body.port}"
+    )
+    return {"started": True}
+
+
+@router.get("/deploy/status", response_model=DeployStatusOut)
+async def deploy_status(
+    server_id: int, _: CurrentUser, session: SessionDep
+) -> DeployStatusOut:
+    server = await _get_or_404(server_id, session)
+    try:
+        async with _connect(server) as conn:
+            result = await deploy.read_status(conn)
+    except Exception as exc:  # noqa: BLE001
+        raise _ovpn_error(exc) from exc
+    return DeployStatusOut(**result)

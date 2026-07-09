@@ -29,7 +29,7 @@ Nodes are managed over plain SSH (no agent installed on them). Three protocols a
 **Servers & nodes**
 - Add servers with one-command onboarding (auto-setup over SSH password, or a copy-paste root script)
 - Import already-deployed servers from an AmneziaVPN "full access" `vpn://` link or a bulk host list
-- Deploy AmneziaWG / XRay to a clean server (build-on-target from the official base image, config-preserving)
+- Deploy AmneziaWG / XRay / OpenVPN-over-Cloak to a clean server (build-on-target, config-preserving)
 - Update the server core in one click; live deploy log
 - Per-node resource monitoring: CPU load, RAM, disk, uptime — right on the card
 - Organize servers into collapsible **groups** (folders) — by company, location, etc.

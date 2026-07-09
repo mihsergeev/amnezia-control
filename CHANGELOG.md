@@ -4,6 +4,18 @@ All notable changes to Amnezia Control are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.16.0] — 2026-07-09
+
+### Added
+- **Deploy OpenVPN-over-Cloak to a clean server** — the "More" menu on an online
+  server without OpenVPN now has "Deploy OpenVPN / Cloak". It builds an
+  Alpine image (openvpn + [Cloak](https://github.com/cbeuw/Cloak) + shadowsocks),
+  generates the easy-rsa PKI, Cloak keys and shadowsocks config, and starts the
+  container with a live log — same build-on-target, config-preserving model as the
+  AmneziaWG and XRay deploys. Previously OpenVPN/Cloak servers could only be
+  managed (issue/revoke) if the container already existed; now the panel can stand
+  one up from scratch.
+
 ## [0.15.3] — 2026-07-09
 
 ### Fixed
@@ -67,6 +79,7 @@ Initial public release.
   scheduled auto-backups.
 - Dark / light theme and English / Russian UI.
 
+[0.16.0]: https://github.com/mihsergeev/amnezia-control/releases/tag/v0.16.0
 [0.15.3]: https://github.com/mihsergeev/amnezia-control/releases/tag/v0.15.3
 [0.15.2]: https://github.com/mihsergeev/amnezia-control/releases/tag/v0.15.2
 [0.15.1]: https://github.com/mihsergeev/amnezia-control/releases/tag/v0.15.1

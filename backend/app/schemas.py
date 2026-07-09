@@ -308,6 +308,11 @@ class OvpnRevokeRequest(BaseModel):
     client_id: str = Field(min_length=1)
 
 
+class OvpnDeployRequest(BaseModel):
+    port: int = Field(default=8443, ge=1, le=65535)
+    site: str = Field(default="tile.openstreetmap.org", max_length=253)
+
+
 class XrayClientOut(BaseModel):
     client_id: str
     name: str

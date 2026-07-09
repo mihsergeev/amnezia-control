@@ -319,6 +319,213 @@ async def revoke_client(
     await _write_table(conn, container, data)
 
 
+# --- Разворачивание OpenVPN/Cloak на чистой ноде (build-on-target) ------------
+
+# Свой Alpine-образ: openvpn + easy-rsa + shadowsocks-rust(ssserver) + ck-server
+# (Cloak). ifconfig — из net-tools, killall — из psmisc.
+_OVPN_DOCKERFILE = """FROM alpine:3.20
+LABEL maintainer="AmneziaVPN"
+RUN apk add --no-cache openvpn easy-rsa iptables ip6tables net-tools psmisc \\
+  dumb-init shadowsocks-rust openssl bash curl ca-certificates
+RUN curl -fsSL -o /usr/local/bin/ck-server \\
+  https://github.com/cbeuw/Cloak/releases/download/v2.12.0/ck-server-linux-amd64-v2.12.0 \\
+  && chmod +x /usr/local/bin/ck-server
+ENTRYPOINT ["dumb-init","/opt/amnezia/start.sh"]
+"""
+
+# Скрипт генерации PKI + Cloak-ключей + shadowsocks; запускается ВНУТРИ образа
+# (одноразовый контейнер с монтированием /opt/amnezia). RedirAddr берётся из
+# $AMNEZIA_SITE. Идемпотентность обеспечивает вызывающий (проверка ca.crt).
+_OVPN_GEN = """#!/bin/sh
+set -e
+O=/opt/amnezia/openvpn
+K=/opt/amnezia/cloak
+S=/opt/amnezia/shadowsocks
+mkdir -p "$O" "$K" "$S"
+
+export EASYRSA_PKI="$O/pki" EASYRSA_BATCH=1
+cd /usr/share/easy-rsa
+./easyrsa init-pki
+EASYRSA_REQ_CN=AmneziaVPN ./easyrsa build-ca nopass
+./easyrsa build-server-full AmneziaReq nopass
+./easyrsa gen-dh
+./easyrsa gen-crl
+cp "$EASYRSA_PKI/ca.crt" "$O/ca.crt"
+cp "$EASYRSA_PKI/issued/AmneziaReq.crt" "$O/AmneziaReq.crt"
+cp "$EASYRSA_PKI/private/AmneziaReq.key" "$O/AmneziaReq.key"
+cp "$EASYRSA_PKI/dh.pem" "$O/dh.pem"
+cp "$EASYRSA_PKI/crl.pem" "$O/crl.pem"
+openvpn --genkey --secret "$O/ta.key"
+printf '[]\\n' > "$O/clientsTable"
+
+cat > "$O/server.conf" <<'EOF'
+port 1194
+proto tcp
+dev tun
+ca /opt/amnezia/openvpn/ca.crt
+cert /opt/amnezia/openvpn/AmneziaReq.crt
+key /opt/amnezia/openvpn/AmneziaReq.key
+dh /opt/amnezia/openvpn/dh.pem
+server 10.8.0.0 255.255.255.0
+ifconfig-pool-persist ipp.txt
+duplicate-cn
+keepalive 10 120
+cipher AES-256-GCM
+data-ciphers AES-256-GCM
+auth SHA512
+user nobody
+group nobody
+persist-key
+persist-tun
+crl-verify /opt/amnezia/openvpn/crl.pem
+status openvpn-status.log
+verb 1
+tls-server
+tls-version-min 1.2
+tls-auth /opt/amnezia/openvpn/ta.key 0
+EOF
+
+KP=$(ck-server -k)
+PUB=$(printf '%s' "$KP" | cut -d, -f1 | tr -d ' \\r\\n')
+PRIV=$(printf '%s' "$KP" | cut -d, -f2 | tr -d ' \\r\\n')
+AUID=$(ck-server -u | tr -d ' \\r\\n')
+BUID=$(ck-server -u | tr -d ' \\r\\n')
+printf '%s\\n' "$PUB"  > "$K/cloak_public.key"
+printf '%s\\n' "$PRIV" > "$K/cloak_private.key"
+printf '%s\\n' "$AUID" > "$K/cloak_admin_uid.key"
+printf '%s\\n' "$BUID" > "$K/cloak_bypass_uid.key"
+SITE="${AMNEZIA_SITE:-tile.openstreetmap.org}"
+cat > "$K/ck-config.json" <<EOF
+{
+    "ProxyBook": { "openvpn": ["tcp", "localhost:1194"], "shadowsocks": ["tcp", "localhost:6789"] },
+    "BypassUID": ["$BUID"],
+    "BindAddr": [":443"],
+    "RedirAddr": "$SITE",
+    "PrivateKey": "$PRIV",
+    "AdminUID": "$AUID",
+    "DatabasePath": "userinfo.db",
+    "StreamTimeout": 300
+}
+EOF
+
+SSPW=$(openssl rand -base64 32 | tr -d '\\r\\n')
+printf '%s\\n' "$SSPW" > "$S/shadowsocks.key"
+cat > "$S/ss-config.json" <<EOF
+{
+    "local_port": 8585,
+    "method": "chacha20-ietf-poly1305",
+    "password": "$SSPW",
+    "server": "0.0.0.0",
+    "server_port": 6789,
+    "timeout": 60
+}
+EOF
+echo GEN_OK
+"""
+
+
+def _b64(text: str) -> str:
+    return base64.b64encode(text.encode()).decode()
+
+
+def build_deploy_script(port: int, site: str, server_ip: str = "") -> str:
+    """Скрипт build-on-target для OpenVPN/Cloak: собирает образ, генерит PKI +
+    Cloak + shadowsocks, поднимает контейнер. Запускается от ssh_user через sudo,
+    файлы в /opt пишутся через `base64 -d | sudo tee`. Маркеры DEPLOY_DONE /
+    DEPLOY_ERROR (их читает deploy.read_status).
+
+    server_ip — публичный IP ноды для `ifconfig eth0:0` внутри контейнера; если
+    пусто или это хостнейм, определяется на ноде (`ip route get`).
+    """
+    port = int(port)
+    if not site or any(ch in site for ch in " \t\n'\"$`\\;&|<>()"):
+        site = "tile.openstreetmap.org"
+    if any(ch in server_ip for ch in " \t\n'\"$`\\;&|<>()"):
+        server_ip = ""
+    df_b64 = _b64(_OVPN_DOCKERFILE)
+    gen_b64 = _b64(_OVPN_GEN)
+    lines = [
+        "set +e",
+        'fail(){ echo "DEPLOY_ERROR: $1"; exit 1; }',
+        'log(){ echo "[$(date +%H:%M:%S)] $*"; }',
+        f"PORT={port}",
+        f"SITE={site}",
+        f"SRVIP={server_ip}",
+        # если IP не задан или это хостнейм — определяем основной IP ноды
+        "case \"$SRVIP\" in \"\"|*[!0-9.]*) "
+        "SRVIP=$(ip route get 1.1.1.1 2>/dev/null | sed -n 's/.*src \\([0-9.]*\\).*/\\1/p' | head -1) ;; esac",
+        "IMG=amnezia-openvpn-cloak",
+        "C=amnezia-openvpn-cloak",
+        "BUILD=/opt/amnezia-build/ovpn",
+        "D=/opt/amnezia",
+        "",
+        'log "[1/6] docker"',
+        "command -v docker >/dev/null 2>&1 || "
+        '{ curl -fsSL https://get.docker.com | sudo sh >/dev/null || fail "docker install"; }',
+        "",
+        'log "[2/6] Dockerfile + gen.sh"',
+        'sudo mkdir -p "$BUILD" "$D" || fail mkdir',
+        f'echo {df_b64} | base64 -d | sudo tee "$BUILD/Dockerfile" >/dev/null || fail dockerfile',
+        f'echo {gen_b64} | base64 -d | sudo tee "$BUILD/gen.sh" >/dev/null || fail genwrite',
+        "",
+        'log "[3/6] docker build"',
+        'sudo docker build -t "$IMG" "$BUILD" 2>&1 | tail -3 || fail build',
+        "",
+        'log "[4/6] конфиг (PKI + Cloak + shadowsocks)"',
+        'if ! sudo test -f "$D/openvpn/ca.crt"; then',
+        '  log "генерация нового конфига (новый сервер)"',
+        '  sudo docker run --rm -e AMNEZIA_SITE="$SITE" -v "$D":/opt/amnezia '
+        '-v "$BUILD/gen.sh":/gen.sh --entrypoint sh "$IMG" /gen.sh 2>&1 | tail -4',
+        '  sudo test -f "$D/openvpn/ca.crt" || fail gen',
+        "else",
+        '  log "конфиг уже есть — сохранён, клиенты не тронуты"',
+        "fi",
+        "",
+        'log "[5/6] start.sh + фаервол"',
+        'sudo tee "$D/start.sh" >/dev/null <<EOF',
+        "#!/bin/bash",
+        'echo "Container startup"',
+        "ifconfig eth0:0 $SRVIP netmask 255.255.255.255 up",
+        "if [ ! -c /dev/net/tun ]; then mkdir -p /dev/net; mknod /dev/net/tun c 10 200; fi",
+        "iptables -A INPUT -i tun0 -j ACCEPT",
+        "iptables -A FORWARD -i tun0 -j ACCEPT",
+        "iptables -A OUTPUT -o tun0 -j ACCEPT",
+        "iptables -A FORWARD -i tun0 -o eth0 -s 10.8.0.0/24 -j ACCEPT",
+        "iptables -A FORWARD -m state --state ESTABLISHED,RELATED -j ACCEPT",
+        "iptables -t nat -A POSTROUTING -s 10.8.0.0/24 -o eth0 -j MASQUERADE",
+        "killall -KILL openvpn 2>/dev/null",
+        "killall -KILL ck-server 2>/dev/null",
+        "killall -KILL ssserver 2>/dev/null",
+        "if [ -f /opt/amnezia/openvpn/ca.crt ]; then "
+        "(openvpn --config /opt/amnezia/openvpn/server.conf --daemon); fi",
+        "if [ -f /opt/amnezia/shadowsocks/ss-config.json ]; then "
+        "(ssserver -c /opt/amnezia/shadowsocks/ss-config.json &); fi",
+        "if [ -f /opt/amnezia/cloak/ck-config.json ]; then "
+        "(ck-server -c /opt/amnezia/cloak/ck-config.json &); fi",
+        "tail -f /dev/null",
+        "EOF",
+        'sudo chmod +x "$D/start.sh"',
+        # Cloak слушает TCP → открываем PORT/tcp наружу (Docker публикует, но
+        # ufw/firewalld могут блокировать)
+        'if command -v ufw >/dev/null 2>&1; then sudo ufw allow "$PORT"/tcp >/dev/null 2>&1 || true; '
+        'sudo ufw route allow proto tcp from any to any port "$PORT" >/dev/null 2>&1 || true; fi',
+        'if command -v firewall-cmd >/dev/null 2>&1; then '
+        'sudo firewall-cmd --permanent --add-port="$PORT"/tcp >/dev/null 2>&1 && '
+        'sudo firewall-cmd --reload >/dev/null 2>&1 || true; fi',
+        "",
+        'log "[6/6] контейнер"',
+        'sudo docker rm -f "$C" >/dev/null 2>&1 || true',
+        'sudo docker run -d --name "$C" --restart always --privileged --cap-add=NET_ADMIN \\',
+        '  -p "${PORT}":443/tcp -v "$D":/opt/amnezia "$IMG" >/dev/null || fail run',
+        "sleep 6",
+        "sudo docker ps --format '{{.Names}}' | grep -Fx \"$C\" >/dev/null || "
+        '{ sudo docker logs "$C" 2>&1 | tail -20; fail notrunning; }',
+        'log "openvpn-cloak запущен, Cloak на хост-порту $PORT"',
+        "echo DEPLOY_DONE",
+    ]
+    return "\n".join(lines) + "\n"
+
+
 def assemble_ovpn_link(
     *, host, description, dns1, dns2, client_id, ca, cert, key, ta,
     cloak_pub, cloak_uid, redir, cloak_port, ss_method, ss_password, ss_server_port,
