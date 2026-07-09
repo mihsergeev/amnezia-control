@@ -742,7 +742,7 @@ export function ServersPage({ onUnauthorized }: Props) {
           mode={deployFor.mode}
           protocol={deployFor.protocol}
           onClose={() => setDeployFor(null)}
-          onDone={load}
+          onDone={() => check(deployFor.server)}
           onUnauthorized={onUnauthorized}
         />
       )}
