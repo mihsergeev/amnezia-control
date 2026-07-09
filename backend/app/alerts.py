@@ -53,6 +53,17 @@ async def send_alert(cfg: dict, text: str) -> list[str]:
     return errors
 
 
+async def security_alert(session: AsyncSession, settings: Settings, text: str) -> None:
+    """Шлёт security-событие (брутфорс, смена host-ключа, смена пароля и т.п.)
+    во все настроенные каналы. Best-effort — не роняет вызывающую операцию."""
+    try:
+        cfg = await settings_store.get_alert_config(session, settings)
+        if alerts_enabled(cfg):
+            await send_alert(cfg, text)
+    except Exception:  # noqa: BLE001
+        log.warning("security-алерт не отправлен", exc_info=True)
+
+
 async def reconcile(
     session: AsyncSession,
     settings: Settings,

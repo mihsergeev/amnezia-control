@@ -167,6 +167,66 @@ def test_known_hosts_tofu(tmp_path):
     assert kh.read_text().count("[203.0.113.10]:2221") == 1
 
 
+async def test_login_events_audited(client: httpx.AsyncClient, auth_headers):
+    # auth_headers уже сделал успешный вход (login_ok); добавим неудачный
+    await client.post(
+        "/api/auth/login", json={"username": "admin", "password": "bad"}
+    )
+    r = await client.get("/api/audit?limit=50", headers=auth_headers)
+    actions = {e["action"] for e in r.json()}
+    assert "login_ok" in actions
+    assert "login_fail" in actions
+
+
+async def test_break_glass_reset(tmp_path):
+    from sqlalchemy import select
+
+    from app.bootstrap import ensure_admin
+    from app.config import Settings
+    from app.db import Base, create_engine_and_factory
+    from app.models import User
+    from app.security import verify_password
+
+    db = (tmp_path / "bg.db").as_posix()
+    engine, factory = create_engine_and_factory(f"sqlite+aiosqlite:///{db}")
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+
+    strong = {"jwt_secret": "a" * 40}
+    await ensure_admin(
+        factory, Settings(admin_user="admin", admin_password="oldpass123", **strong)
+    )
+    async with factory() as s:
+        u = await s.scalar(select(User).where(User.username == "admin"))
+        u.totp_enabled = True
+        u.totp_secret = "SECRET"
+        u.token_version = 3
+        await s.commit()
+
+    # без флага — пароль не трогается
+    await ensure_admin(
+        factory, Settings(admin_user="admin", admin_password="other999", **strong)
+    )
+    async with factory() as s:
+        u = await s.scalar(select(User).where(User.username == "admin"))
+        assert verify_password("oldpass123", u.password_hash)  # не сброшен
+
+    # с флагом — сброс пароля + отключение 2FA + инвалидация токенов
+    await ensure_admin(
+        factory,
+        Settings(
+            admin_user="admin", admin_password="newpass456",
+            admin_password_reset=True, **strong,
+        ),
+    )
+    async with factory() as s:
+        u = await s.scalar(select(User).where(User.username == "admin"))
+        assert verify_password("newpass456", u.password_hash)
+        assert u.totp_enabled is False
+        assert u.token_version == 4  # инкремент
+    await engine.dispose()
+
+
 def test_enforce_secrets_rejects_weak():
     from app.config import Settings
     from app.main import _enforce_secrets

@@ -4,6 +4,26 @@ All notable changes to Amnezia Control are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.18.0] — 2026-07-09
+
+### Security (detection & recovery follow-up to 0.17.0)
+
+- **Security-event alerts** — brute-force lockout, a node's **host key changing**
+  (possible MITM), and admin password change are now sent to your configured
+  Telegram/webhook alerts.
+- **Auth events in the audit log** — successful/failed logins, lockouts, host-key
+  changes, and password changes are recorded (forensics after an incident).
+- **Break-glass recovery** — `ACONTROL_ADMIN_PASSWORD_RESET=1` resets the admin
+  password and disables 2FA on next start, for when both are lost.
+- **Panel SSH key hardened on nodes** — new-node setup installs the key with
+  `restrict` (command-execution only, no tunneling/pivoting) and
+  `from="<panel_ip>"` (bound to the panel's IP), shrinking the blast radius if the
+  key ever leaks. Existing nodes: re-run the setup script or add the options by
+  hand.
+- **CI & supply-chain** — GitHub Actions run the test suite plus `pip-audit`,
+  `npm audit`, and a Trivy image scan; Dependabot watches pip/npm/Docker/Actions.
+  Added a `SECURITY.md` disclosure policy.
+
 ## [0.17.0] — 2026-07-09
 
 ### Security
@@ -112,6 +132,7 @@ Initial public release.
   scheduled auto-backups.
 - Dark / light theme and English / Russian UI.
 
+[0.18.0]: https://github.com/mihsergeev/amnezia-control/releases/tag/v0.18.0
 [0.17.0]: https://github.com/mihsergeev/amnezia-control/releases/tag/v0.17.0
 [0.16.0]: https://github.com/mihsergeev/amnezia-control/releases/tag/v0.16.0
 [0.15.3]: https://github.com/mihsergeev/amnezia-control/releases/tag/v0.15.3

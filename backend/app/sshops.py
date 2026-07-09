@@ -1,5 +1,6 @@
 import asyncio
 import os
+import re
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -87,11 +88,25 @@ def _firewall_snippet(panel_ip: str, ssh_port: int, sudo: str) -> str:
     )
 
 
+def _key_options(panel_ip: str) -> str:
+    """Опции для строки authorized_keys панельного ключа.
+
+    restrict — ключ только для выполнения команд (без pty/форвардингов/туннелей,
+    т.е. украденный ключ нельзя использовать как сетевой плацдарм).
+    from="<panel_ip>" — привязка к IP панели (ключ бесполезен с другого адреса).
+    """
+    ip = (panel_ip or "").strip()
+    if ip and re.fullmatch(r"[0-9A-Fa-f:.,/ ]+", ip):
+        return f'from="{ip}",restrict '
+    return "restrict "
+
+
 def build_setup_script(
     public_key: str, ssh_user: str, ssh_port: int, panel_ip: str
 ) -> str:
     """Скрипт для ручного запуска админом под root на новой ноде."""
     firewall = _firewall_snippet(panel_ip, ssh_port, sudo="")
+    opts = _key_options(panel_ip)
     return f"""#!/bin/sh
 # Amnezia Control: подготовка сервера. Выполнить под root.
 set -e
@@ -106,7 +121,7 @@ HOME_DIR=$(getent passwd '{ssh_user}' | cut -d: -f6)
 [ -n "$HOME_DIR" ] || {{ echo "ACONTROL SETUP FAILED: не удалось создать пользователя {ssh_user}"; exit 1; }}
 mkdir -p "$HOME_DIR/.ssh" && chmod 700 "$HOME_DIR/.ssh"
 touch "$HOME_DIR/.ssh/authorized_keys"
-grep -qF "$KEY" "$HOME_DIR/.ssh/authorized_keys" || printf '%s\\n' "$KEY" >> "$HOME_DIR/.ssh/authorized_keys"
+grep -qF "$KEY" "$HOME_DIR/.ssh/authorized_keys" || printf '{opts}%s\\n' "$KEY" >> "$HOME_DIR/.ssh/authorized_keys"
 chmod 600 "$HOME_DIR/.ssh/authorized_keys"
 chown -R '{ssh_user}:' "$HOME_DIR/.ssh"
 set +e  # фаервол — best-effort, не должен ронять настройку
@@ -121,11 +136,12 @@ def _build_bootstrap_script(public_key: str, ssh_port: int, panel_ip: str) -> st
     используется sudo -S (пароль подаётся на stdin), если мы не root.
     """
     firewall = _firewall_snippet(panel_ip, ssh_port, sudo="$SUDO")
+    opts = _key_options(panel_ip)
     return f"""set -e
 KEY='{public_key}'
 mkdir -p "$HOME/.ssh" && chmod 700 "$HOME/.ssh"
 touch "$HOME/.ssh/authorized_keys"
-grep -qF "$KEY" "$HOME/.ssh/authorized_keys" || printf '%s\\n' "$KEY" >> "$HOME/.ssh/authorized_keys"
+grep -qF "$KEY" "$HOME/.ssh/authorized_keys" || printf '{opts}%s\\n' "$KEY" >> "$HOME/.ssh/authorized_keys"
 chmod 600 "$HOME/.ssh/authorized_keys"
 set +e
 if [ "$(id -u)" = 0 ]; then SUDO=""; else SUDO="sudo -S"; fi
@@ -153,6 +169,10 @@ def _sh_quote(s: str) -> str:
 # --- TOFU-пиннинг host-ключей нод ---------------------------------------------
 # Ключ ноды запоминается при первом подключении (в data/ssh/known_hosts, рядом с
 # ключом панели), дальше сверяется. Несовпадение (MITM/подмена ноды) → ошибка.
+
+
+class HostKeyChangedError(Exception):
+    """Host-ключ ноды не совпал с запомненным (возможен MITM/подмена ноды)."""
 
 
 def _kh_path(key_path: Path) -> Path:
@@ -219,7 +239,10 @@ async def _tofu_connect(
         common["client_keys"] = [str(key_path)]
     if _host_known(kh, host, port):
         # ключ ноды известен — строго проверяем (несовпадение = ошибка)
-        return await asyncssh.connect(known_hosts=str(kh), **common)
+        try:
+            return await asyncssh.connect(known_hosts=str(kh), **common)
+        except asyncssh.HostKeyNotVerifiable as exc:
+            raise HostKeyChangedError(f"{host}:{port}") from exc
     # первый контакт — принимаем и запоминаем (TOFU)
     conn = await asyncssh.connect(known_hosts=None, **common)
     _record_host_key(kh, host, port, conn)
@@ -251,6 +274,12 @@ async def check_server(
                 run = await conn.run(CHECK_COMMAND, check=False)
     except asyncio.TimeoutError:
         return CheckResult(ok=False, error="Таймаут подключения")
+    except HostKeyChangedError:
+        return CheckResult(
+            ok=False,
+            error="Host-ключ ноды ИЗМЕНИЛСЯ — возможна подмена/MITM. Если вы "
+            "пересоздавали ноду, удалите её строку из data/ssh/known_hosts.",
+        )
     except asyncssh.PermissionDenied:
         return CheckResult(
             ok=False,

@@ -31,6 +31,15 @@ const LABELS: Record<string, string> = {
   server_delete: 'Удалён сервер',
   fullaccess_export: 'Экспорт полного доступа',
   restore: 'Восстановление из бэкапа',
+  login_ok: 'Вход выполнен',
+  login_fail: 'Неудачный вход',
+  login_2fa_fail: 'Неудачный вход (2FA)',
+  login_blocked: 'Вход заблокирован (лимит)',
+  login_lockout: 'Блокировка входа (брутфорс)',
+  password_change: 'Смена пароля',
+  host_key_changed: 'Host-ключ ноды изменился',
+  '2fa_enable': 'Включена 2FA',
+  '2fa_disable': 'Отключена 2FA',
 }
 
 export function AuditPage({ onUnauthorized }: Props) {
