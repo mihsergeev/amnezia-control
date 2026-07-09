@@ -1,0 +1,63 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install
+        run: pip install .[dev]
+      - name: Tests
+        run: pytest -q
+      - name: Dependency audit (pip-audit)
+        continue-on-error: true # информативно, не блокирует
+        run: |
+          pip install pip-audit
+          pip-audit
+
+  frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - name: Install
+        run: npm ci
+      - name: Dependency audit (npm audit)
+        continue-on-error: true # информативно, не блокирует
+        run: npm audit --audit-level=high
+      - name: Build
+        run: npm run build
+
+  image-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build backend image
+        run: docker build -t acontrol-backend ./backend
+      - name: Trivy scan (backend image)
+        continue-on-error: true # отчёт по CVE в образе, не блокирует
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: acontrol-backend
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: "0"
