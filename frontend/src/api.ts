@@ -217,6 +217,20 @@ export type VersionInfo = {
   update_available: boolean
 }
 
+// снимки awg-конфига на ноде (для отката пересборки)
+export type AwgSnapshot = { id: string; peers: number }
+
+export function listConfigBackups(serverId: number): Promise<AwgSnapshot[]> {
+  return api<AwgSnapshot[]>(`/api/servers/${serverId}/awg/config-backups`)
+}
+
+export async function restoreConfig(serverId: number, id: string): Promise<void> {
+  await api(`/api/servers/${serverId}/awg/config-restore`, {
+    method: 'POST',
+    body: JSON.stringify({ id }),
+  })
+}
+
 export type ServerStat = {
   id: number
   name: string

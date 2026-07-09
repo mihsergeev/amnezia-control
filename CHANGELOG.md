@@ -4,6 +4,14 @@ All notable changes to Amnezia Control are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.19.0] — 2026-07-10
+
+### Added
+- **Config snapshots & one-click rollback for AmneziaWG.** Before every rebuild
+  the panel now snapshots the current config (peers + keys) on the node. If a
+  rebuild goes wrong, use **Roll back** in the client list to restore any recent
+  snapshot — clients and keys come back. Snapshots rotate (last 10 kept).
+
 ## [0.18.5] — 2026-07-10
 
 ### Fixed
@@ -182,6 +190,7 @@ Initial public release.
   scheduled auto-backups.
 - Dark / light theme and English / Russian UI.
 
+[0.19.0]: https://github.com/mihsergeev/amnezia-control/releases/tag/v0.19.0
 [0.18.5]: https://github.com/mihsergeev/amnezia-control/releases/tag/v0.18.5
 [0.18.4]: https://github.com/mihsergeev/amnezia-control/releases/tag/v0.18.4
 [0.18.3]: https://github.com/mihsergeev/amnezia-control/releases/tag/v0.18.3

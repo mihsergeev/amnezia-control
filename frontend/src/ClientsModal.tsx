@@ -3,8 +3,11 @@ import QRCode from 'qrcode'
 import {
   api,
   ApiError,
+  listConfigBackups,
+  restoreConfig,
   setClientLimit,
   type AwgClient,
+  type AwgSnapshot,
   type AwgState,
   type CreatedClient,
   type Protocol,
@@ -12,6 +15,7 @@ import {
   type VersionInfo,
 } from './api'
 import { formatBytes, formatHandshake, isOnline } from './format'
+import { Menu } from './Menu'
 import { OpenVpnClients } from './OpenVpnClients'
 import { XrayClients } from './XrayClients'
 import { AmneziaQr } from './AmneziaQr'
@@ -31,6 +35,12 @@ type SortKey = 'name' | 'handshake' | 'traffic'
 type CfgFormat = 'conf' | 'amnezia'
 type ConfigView = { name: string; config: string; amnezia: string }
 
+/** 20260710-021530 -> 2026-07-10 02:15 */
+function fmtSnap(id: string): string {
+  const m = id.match(/^(\d{4})(\d{2})(\d{2})-(\d{2})(\d{2})\d{2}$/)
+  return m ? `${m[1]}-${m[2]}-${m[3]} ${m[4]}:${m[5]}` : id
+}
+
 export function ClientsModal({
   server,
   protocols,
@@ -45,6 +55,7 @@ export function ClientsModal({
   )
   const [state, setState] = useState<AwgState | null>(null)
   const [version, setVersion] = useState<VersionInfo | null>(null)
+  const [snapshots, setSnapshots] = useState<AwgSnapshot[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [addOpen, setAddOpen] = useState(false)
@@ -91,13 +102,39 @@ export function ClientsModal({
     }
   }, [server.id, handleError])
 
+  const loadSnapshots = useCallback(() => {
+    listConfigBackups(server.id)
+      .then(setSnapshots)
+      .catch(() => setSnapshots([]))
+  }, [server.id])
+
   useEffect(() => {
     if (!hasAwg) return
     void load()
     api<VersionInfo>(`/api/servers/${server.id}/awg/version`)
       .then(setVersion)
       .catch(() => setVersion(null))
-  }, [load, server.id, hasAwg])
+    loadSnapshots()
+  }, [load, loadSnapshots, server.id, hasAwg])
+
+  async function onRestoreSnapshot(snap: AwgSnapshot) {
+    if (
+      !window.confirm(
+        t(
+          'Откатить конфиг «{name}» к снимку от {ts} ({n} клиентов)? Текущий конфиг будет заменён.',
+          { name: server.name, ts: fmtSnap(snap.id), n: String(snap.peers) },
+        ),
+      )
+    )
+      return
+    try {
+      await restoreConfig(server.id, snap.id)
+      await load()
+      loadSnapshots()
+    } catch (err) {
+      handleError(err)
+    }
+  }
 
   function showConfig(name: string, config: string, amnezia: string) {
     setView({ name, config, amnezia })
@@ -392,14 +429,30 @@ export function ClientsModal({
                 </span>
               )}
             </span>
-            {/* Пересборка безопасна только для образа, собранного панелью (конфиг
-                на хост-маунте). Для внешнего образа она создала бы ПАРАЛЛЕЛЬНЫЙ
-                пустой контейнер (клиенты живут в исходном) — поэтому кнопку прячем. */}
-            {version.deployed && (
-              <button className="ghost" onClick={() => onRequestUpdate('awg')}>
-                {version.update_available ? t('Обновить') : t('Переустановить')}
-              </button>
-            )}
+            <div className="version-actions">
+              {/* откат к снимку, снятому перед пересборкой (страховка) */}
+              {snapshots.length > 0 && (
+                <Menu
+                  className="ghost"
+                  align="right"
+                  label={t('Откатить')}
+                  items={snapshots.map((s) => ({
+                    label: `${fmtSnap(s.id)} · ${t('{n} клиентов', {
+                      n: String(s.peers),
+                    })}`,
+                    onClick: () => onRestoreSnapshot(s),
+                  }))}
+                />
+              )}
+              {/* Пересборка безопасна только для образа, собранного панелью
+                  (конфиг на хост-маунте). Для внешнего образа она создала бы
+                  ПАРАЛЛЕЛЬНЫЙ пустой контейнер — поэтому кнопку прячем. */}
+              {version.deployed && (
+                <button className="ghost" onClick={() => onRequestUpdate('awg')}>
+                  {version.update_available ? t('Обновить') : t('Переустановить')}
+                </button>
+              )}
+            </div>
           </div>
         )}
 

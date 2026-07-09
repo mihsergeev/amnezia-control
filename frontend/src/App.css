@@ -991,6 +991,13 @@ tr:hover .note-edit {
   font-size: 0.78rem;
 }
 
+.version-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  flex-shrink: 0;
+}
+
 .update-badge {
   margin-left: 0.5rem;
   background: rgba(230, 160, 40, 0.16);
