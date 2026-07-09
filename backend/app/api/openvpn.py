@@ -244,7 +244,7 @@ async def deploy_openvpn(
     script = openvpn.build_deploy_script(body.port, body.site, server.host)
     try:
         async with _connect(server) as conn:
-            await deploy.launch(conn, script)
+            await deploy.launch(conn, script, tag="openvpn")
     except Exception as exc:  # noqa: BLE001
         raise _ovpn_error(exc) from exc
     await audit.record(
@@ -260,7 +260,7 @@ async def deploy_status(
     server = await _get_or_404(server_id, session)
     try:
         async with _connect(server) as conn:
-            result = await deploy.read_status(conn)
+            result = await deploy.read_status(conn, tag="openvpn")
     except Exception as exc:  # noqa: BLE001
         raise _ovpn_error(exc) from exc
     return DeployStatusOut(**result)

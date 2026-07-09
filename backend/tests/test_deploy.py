@@ -58,3 +58,39 @@ def test_start_sh_and_systemd_present() -> None:
     unit = deploy._systemd_unit()
     assert "After=docker.service" in unit
     assert "amnezia-awg2" in unit
+
+
+class _FakeConn:
+    """Мини-заглушка asyncssh-соединения: помнит команды, отдаёт содержимое
+    файлов по `cat "<path>"`."""
+
+    def __init__(self, files: dict[str, str]):
+        self.files = files
+        self.cmds: list[str] = []
+
+    async def run(self, cmd, input=None, check=False):  # noqa: A002
+        self.cmds.append(cmd)
+        m = re.search(r'cat "([^"]+)" 2>/dev/null', cmd)
+        stdout = self.files.get(m.group(1), "") if m else ""
+        return type("R", (), {"stdout": stdout})()
+
+
+async def test_deploy_status_isolated_per_protocol():
+    """Регресс: обновление одного протокола не должно показывать лог другого
+    (раньше был общий /tmp/acontrol/deploy.log — AWG показывал лог XRay)."""
+    xray_log = deploy._paths("xray")[2]
+    conn = _FakeConn({xray_log: "docker build (xray)\nDEPLOY_DONE"})
+    awg = await deploy.read_status(conn, tag="awg")
+    xray = await deploy.read_status(conn, tag="xray")
+    assert awg["state"] == "unknown"  # AWG НЕ видит лог XRay
+    assert "DEPLOY_DONE" not in awg["log"]
+    assert xray["state"] == "done"  # XRay видит свой лог
+
+
+async def test_launch_uses_tagged_home_path():
+    conn = _FakeConn({})
+    await deploy.launch(conn, "echo hi\n", tag="openvpn")
+    joined = " ".join(conn.cmds)
+    assert '$HOME/.acontrol/openvpn/run.sh' in joined
+    assert '/tmp/acontrol' not in joined  # больше не общий /tmp
+    assert '.acontrol/awg' not in joined  # и не чужой протокол

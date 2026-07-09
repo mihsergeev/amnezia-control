@@ -262,7 +262,7 @@ async def deploy_awg(
     script = deploy.build_script("deploy", body.port, cfg)
     try:
         async with _connect(server) as conn:
-            await deploy.launch(conn, script)
+            await deploy.launch(conn, script, tag="awg")
     except Exception as exc:  # noqa: BLE001
         raise _ssh_error(exc) from exc
     await audit.record(
@@ -281,7 +281,7 @@ async def update_awg(
     script = deploy.build_script("update", 47180, cfg)
     try:
         async with _connect(server) as conn:
-            await deploy.launch(conn, script)
+            await deploy.launch(conn, script, tag="awg")
     except Exception as exc:  # noqa: BLE001
         raise _ssh_error(exc) from exc
     await audit.record(session, user.username, "awg_update", server.name)
@@ -295,7 +295,7 @@ async def deploy_status(
     server = await _get_or_404(server_id, session)
     try:
         async with _connect(server) as conn:
-            result = await deploy.read_status(conn)
+            result = await deploy.read_status(conn, tag="awg")
     except Exception as exc:  # noqa: BLE001
         raise _ssh_error(exc) from exc
     return DeployStatusOut(**result)

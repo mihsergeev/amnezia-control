@@ -4,6 +4,16 @@ All notable changes to Amnezia Control are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.18.1] — 2026-07-10
+
+### Fixed
+- **Deploy/rebuild showed the wrong protocol's log.** On a server running more
+  than one protocol (e.g. AmneziaWG + XRay), clicking "Rebuild" on one tab could
+  display the other protocol's leftover deploy log — all protocols shared a single
+  `/tmp/acontrol/deploy.log`. Each protocol now uses its own directory under
+  `$HOME/.acontrol/<protocol>/` (also owned by the SSH user, avoiding a silent
+  no-op when the shared `/tmp` path was owned by a different user).
+
 ## [0.18.0] — 2026-07-09
 
 ### Security (detection & recovery follow-up to 0.17.0)
@@ -132,6 +142,7 @@ Initial public release.
   scheduled auto-backups.
 - Dark / light theme and English / Russian UI.
 
+[0.18.1]: https://github.com/mihsergeev/amnezia-control/releases/tag/v0.18.1
 [0.18.0]: https://github.com/mihsergeev/amnezia-control/releases/tag/v0.18.0
 [0.17.0]: https://github.com/mihsergeev/amnezia-control/releases/tag/v0.17.0
 [0.16.0]: https://github.com/mihsergeev/amnezia-control/releases/tag/v0.16.0
