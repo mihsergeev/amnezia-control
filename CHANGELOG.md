@@ -4,6 +4,13 @@ All notable changes to Amnezia Control are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.15.2] — 2026-07-09
+
+### Fixed
+- After deploying a protocol (e.g. XRay) the server is now **re-checked
+  automatically**, so the new protocol shows up immediately — previously you had
+  to click "Check" by hand for the badge and clients tab to appear.
+
 ## [0.15.1] — 2026-07-09
 
 ### Changed
@@ -53,6 +60,7 @@ Initial public release.
   scheduled auto-backups.
 - Dark / light theme and English / Russian UI.
 
+[0.15.2]: https://github.com/mihsergeev/amnezia-control/releases/tag/v0.15.2
 [0.15.1]: https://github.com/mihsergeev/amnezia-control/releases/tag/v0.15.1
 [0.15.0]: https://github.com/mihsergeev/amnezia-control/releases/tag/v0.15.0
 [0.14.0]: https://github.com/mihsergeev/amnezia-control/releases/tag/v0.14.0
