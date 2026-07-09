@@ -45,6 +45,7 @@ const EN: Record<string, string> = {
   'Ещё': 'More',
   'Развернуть AmneziaWG': 'Deploy AmneziaWG',
   'Развернуть XRay / REALITY': 'Deploy XRay / REALITY',
+  'Развернуть OpenVPN / Cloak': 'Deploy OpenVPN / Cloak',
   'Скрипт настройки': 'Setup script',
   'Изменить': 'Edit',
   'Удалить сервер': 'Delete server',
@@ -218,6 +219,8 @@ const EN: Record<string, string> = {
     'The server builds the Xray-core image (alpine) and starts VLESS+REALITY on 443. Takes 1–3 minutes.',
   'Сервер собирает образ из amneziavpn/amneziawg-go:latest и запускает AmneziaWG. Это займёт 1–3 минуты.':
     'The server builds the image from amneziavpn/amneziawg-go:latest and starts AmneziaWG. Takes 1–3 minutes.',
+  'Сервер собирает образ (openvpn + Cloak + shadowsocks) и генерирует PKI. Это займёт 1–3 минуты.':
+    'The server builds the image (openvpn + Cloak + shadowsocks) and generates the PKI. Takes 1–3 minutes.',
   'Сервер тянет свежий базовый образ и пересобирает контейнер. Клиенты и ключи сохраняются.':
     'The server pulls a fresh base image and rebuilds the container. Clients and keys are preserved.',
   '● выполняется…': '● running…',

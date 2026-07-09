@@ -6,7 +6,7 @@ type Props = {
   serverId: number
   serverName: string
   mode: 'deploy' | 'update'
-  protocol?: 'awg' | 'xray'
+  protocol?: 'awg' | 'xray' | 'openvpn'
   onClose: () => void
   onDone: () => void
   onUnauthorized: () => void
@@ -22,7 +22,12 @@ export function DeployModal({
   onUnauthorized,
 }: Props) {
   const { t } = useI18n()
-  const label = protocol === 'xray' ? 'XRay' : 'AmneziaWG'
+  const label =
+    protocol === 'xray'
+      ? 'XRay'
+      : protocol === 'openvpn'
+        ? 'OpenVPN/Cloak'
+        : 'AmneziaWG'
   const [status, setStatus] = useState<DeployStatus | null>(null)
   const [error, setError] = useState<string | null>(null)
   const startedRef = useRef(false)
@@ -68,7 +73,11 @@ export function DeployModal({
             ? `/api/servers/${serverId}/${protocol}/update`
             : `/api/servers/${serverId}/${protocol}/deploy`
         const deployBody =
-          protocol === 'xray' ? JSON.stringify({ port: 443 }) : JSON.stringify({ port: 47180 })
+          protocol === 'xray'
+            ? JSON.stringify({ port: 443 })
+            : protocol === 'openvpn'
+              ? JSON.stringify({ port: 8443 })
+              : JSON.stringify({ port: 47180 })
         await api(path, {
           method: 'POST',
           body: mode === 'deploy' ? deployBody : undefined,
@@ -113,7 +122,9 @@ export function DeployModal({
             ? t('Сервер тянет свежий базовый образ и пересобирает контейнер. Клиенты и ключи сохраняются.')
             : protocol === 'xray'
               ? t('Сервер собирает образ Xray-core (alpine) и запускает VLESS+REALITY на 443. Это займёт 1–3 минуты.')
-              : t('Сервер собирает образ из amneziavpn/amneziawg-go:latest и запускает AmneziaWG. Это займёт 1–3 минуты.')}
+              : protocol === 'openvpn'
+                ? t('Сервер собирает образ (openvpn + Cloak + shadowsocks) и генерирует PKI. Это займёт 1–3 минуты.')
+                : t('Сервер собирает образ из amneziavpn/amneziawg-go:latest и запускает AmneziaWG. Это займёт 1–3 минуты.')}
         </p>
 
         <div className="deploy-state">

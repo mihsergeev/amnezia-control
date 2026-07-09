@@ -125,7 +125,7 @@ export function ServersPage({ onUnauthorized }: Props) {
   const [deployFor, setDeployFor] = useState<{
     server: Server
     mode: 'deploy' | 'update'
-    protocol: 'awg' | 'xray'
+    protocol: 'awg' | 'xray' | 'openvpn'
   } | null>(null)
   const [fullAccess, setFullAccess] = useState<{
     server: Server
@@ -418,6 +418,12 @@ export function ServersPage({ onUnauthorized }: Props) {
             moreItems.push({
               label: t('Развернуть XRay / REALITY'),
               onClick: () => setDeployFor({ server: s, mode: 'deploy', protocol: 'xray' }),
+            })
+          }
+          if (online && !protocols.some((p) => p.key === 'openvpn')) {
+            moreItems.push({
+              label: t('Развернуть OpenVPN / Cloak'),
+              onClick: () => setDeployFor({ server: s, mode: 'deploy', protocol: 'openvpn' }),
             })
           }
           if (online) {
