@@ -40,6 +40,7 @@ class ServerCreate(BaseModel):
     ssh_port: int = Field(default=22, ge=1, le=65535)
     ssh_user: str = Field(default="root", min_length=1, max_length=64)
     note: str = ""
+    group_name: str = Field(default="", max_length=64)
 
 
 class ServerUpdate(BaseModel):
@@ -48,6 +49,7 @@ class ServerUpdate(BaseModel):
     ssh_port: int | None = Field(default=None, ge=1, le=65535)
     ssh_user: str | None = Field(default=None, min_length=1, max_length=64)
     note: str | None = None
+    group_name: str | None = Field(default=None, max_length=64)
 
 
 class ServerOut(BaseModel):
@@ -59,6 +61,7 @@ class ServerOut(BaseModel):
     ssh_port: int
     ssh_user: str
     note: str
+    group_name: str
     last_check_ok: bool | None
     last_check_at: datetime | None
     last_check_info: str

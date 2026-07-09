@@ -150,6 +150,9 @@ const EN: Record<string, string> = {
 
   'Открыть клиентов': 'Open clients',
   'Исходный код (AGPL-3.0)': 'Source code (AGPL-3.0)',
+  'Без группы': 'Ungrouped',
+  'Группа (папка)': 'Group (folder)',
+  'необязательно — компания, локация…': 'optional — company, location…',
 
   // --- топ клиентов ---
   'Топ клиентов по трафику': 'Top clients by traffic',

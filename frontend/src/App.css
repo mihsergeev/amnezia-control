@@ -418,6 +418,62 @@ input:focus {
   gap: 0.75rem;
 }
 
+/* --- группы серверов (папки) --- */
+.server-group {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.group-cards {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+button.group-header {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  width: 100%;
+  background: transparent;
+  border: none;
+  box-shadow: none;
+  padding: 0.4rem 0.35rem;
+  cursor: pointer;
+  color: var(--text-muted);
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+
+button.group-header:hover {
+  background: transparent;
+}
+
+button.group-header:hover .group-name {
+  text-decoration: underline;
+}
+
+.group-caret {
+  width: 0.85rem;
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+
+.group-name {
+  color: var(--text);
+}
+
+.group-count {
+  background: var(--hover);
+  color: var(--text-muted);
+  border-radius: 999px;
+  padding: 0.03rem 0.5rem;
+  font-size: 0.72rem;
+  font-weight: 600;
+}
+
 .server-card {
   background: var(--bg-card);
   border: 1px solid var(--border);
