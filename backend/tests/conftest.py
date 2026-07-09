@@ -34,6 +34,16 @@ async def client(tmp_path, monkeypatch) -> AsyncIterator[httpx.AsyncClient]:
     config.get_settings.cache_clear()
 
 
+@pytest.fixture(autouse=True)
+def _reset_ratelimit():
+    """Сбрасываем in-memory лимитер входа между тестами (глобальное состояние)."""
+    from app import ratelimit
+
+    ratelimit._failures.clear()
+    yield
+    ratelimit._failures.clear()
+
+
 @pytest.fixture
 async def auth_headers(client: httpx.AsyncClient) -> dict[str, str]:
     response = await client.post(

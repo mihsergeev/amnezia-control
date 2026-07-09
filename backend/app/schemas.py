@@ -22,6 +22,11 @@ class TwoFAVerifyRequest(BaseModel):
     otp: str = Field(min_length=1, max_length=16)
 
 
+class PasswordChangeRequest(BaseModel):
+    current_password: str = Field(min_length=1, max_length=128)
+    new_password: str = Field(min_length=8, max_length=128)
+
+
 class TokenResponse(BaseModel):
     access_token: str
     token_type: str = "bearer"
@@ -38,7 +43,11 @@ class ServerCreate(BaseModel):
     name: str = Field(min_length=1, max_length=128)
     host: str = Field(min_length=1, max_length=255)
     ssh_port: int = Field(default=22, ge=1, le=65535)
-    ssh_user: str = Field(default="root", min_length=1, max_length=64)
+    # только безопасный набор символов для имени пользователя (без shell-метасимволов)
+    ssh_user: str = Field(
+        default="root", min_length=1, max_length=64,
+        pattern=r"^[A-Za-z_][A-Za-z0-9_-]*$",
+    )
     note: str = ""
     group_name: str = Field(default="", max_length=64)
 
@@ -47,7 +56,10 @@ class ServerUpdate(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=128)
     host: str | None = Field(default=None, min_length=1, max_length=255)
     ssh_port: int | None = Field(default=None, ge=1, le=65535)
-    ssh_user: str | None = Field(default=None, min_length=1, max_length=64)
+    ssh_user: str | None = Field(
+        default=None, min_length=1, max_length=64,
+        pattern=r"^[A-Za-z_][A-Za-z0-9_-]*$",
+    )
     note: str | None = None
     group_name: str | None = Field(default=None, max_length=64)
 

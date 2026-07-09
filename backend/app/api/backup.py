@@ -23,6 +23,8 @@ from app.models import (
 
 router = APIRouter(prefix="/backup", tags=["backup"])
 
+_MAX_RESTORE_BYTES = 100 * 1024 * 1024  # 100 МБ — бэкапы много меньше
+
 # порядок важен для восстановления (нет FK, но держим осмысленный порядок)
 _MODELS = [User, Server, AwgConfig, AwgNote, OvpnConfig, TrafficSample]
 
@@ -152,8 +154,7 @@ async def backup_now(_: CurrentUser, session: SessionDep) -> dict:
     from app import autobackup
 
     settings = get_settings()
-    d = autobackup.backups_dir(settings.data_dir)
-    os.makedirs(d, exist_ok=True)
+    d = autobackup.ensure_backups_dir(settings.data_dir)
     archive = await _build_archive(session, settings.data_dir, settings.version)
     stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
     path = os.path.join(d, f"acontrol-backup-{stamp}.tar.gz")
@@ -190,7 +191,20 @@ async def restore_backup(
 
     ПЕРЕЗАПИСЫВАЕТ все таблицы и SSH-ключ панели данными из архива.
     """
-    body = await request.body()
+    # ограничение размера тела (бэкапы маленькие; защита от memory-DoS)
+    cl = request.headers.get("content-length")
+    if cl and cl.isdigit() and int(cl) > _MAX_RESTORE_BYTES:
+        raise HTTPException(413, "архив слишком большой")
+    chunks: list[bytes] = []
+    total = 0
+    async for chunk in request.stream():
+        total += len(chunk)
+        if total > _MAX_RESTORE_BYTES:
+            raise HTTPException(
+                413, "архив слишком большой"
+            )
+        chunks.append(chunk)
+    body = b"".join(chunks)
     try:
         tar = tarfile.open(fileobj=io.BytesIO(body), mode="r:gz")
     except (tarfile.TarError, OSError) as exc:
@@ -222,13 +236,20 @@ async def restore_backup(
 
     # восстановление data/ (ssh-ключ и пр.), без postgres
     settings = get_settings()
+    base = os.path.realpath(settings.data_dir)
     for m in tar.getmembers():
         if not (m.isfile() and m.name.startswith("data/")):
             continue
         rel = m.name[len("data/"):]
         if not rel or ".." in rel or rel.startswith(("postgres/", "pgdata/")):
             continue
-        dest = os.path.join(settings.data_dir, rel)
+        # КРИТИЧНО: отвергаем абсолютные пути ("data//etc/x" → rel="/etc/x", где
+        # os.path.join отбрасывает base) и любой выход за пределы data_dir
+        if os.path.isabs(rel):
+            continue
+        dest = os.path.realpath(os.path.join(base, rel))
+        if dest != base and not dest.startswith(base + os.sep):
+            continue
         os.makedirs(os.path.dirname(dest), exist_ok=True)
         src = tar.extractfile(m)
         if src is None:

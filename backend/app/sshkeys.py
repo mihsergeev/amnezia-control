@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 
 import asyncssh
@@ -15,8 +16,14 @@ def ensure_panel_key(data_dir: str) -> str:
     key_path, pub_path = key_paths(data_dir)
     if not key_path.exists():
         key_path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            os.chmod(key_path.parent, 0o700)
+        except OSError:
+            pass
         key = asyncssh.generate_private_key("ssh-ed25519", comment=KEY_COMMENT)
-        key_path.write_bytes(key.export_private_key())
+        # атомарно создаём приватный ключ сразу с правами 0600 (без окна 0644)
+        fd = os.open(str(key_path), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(fd, "wb") as fh:
+            fh.write(key.export_private_key())
         pub_path.write_bytes(key.export_public_key())
-        key_path.chmod(0o600)
     return pub_path.read_text().strip()

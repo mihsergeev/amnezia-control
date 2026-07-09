@@ -41,14 +41,26 @@ def _b64_decode(text: str) -> bytes:
     raise ImportParseError("не удалось декодировать base64")
 
 
+# лимит на распакованный размер — защита от zlib-бомбы в присланной ссылке
+_MAX_UNCOMPRESSED = 8 * 1024 * 1024
+
+
+def _decompress_limited(data: bytes) -> bytes:
+    obj = zlib.decompressobj()
+    out = obj.decompress(data, _MAX_UNCOMPRESSED)
+    if obj.unconsumed_tail:
+        raise zlib.error("превышен лимит распаковки")
+    return out
+
+
 def _maybe_uncompress(raw: bytes) -> bytes:
     # qCompress: 4 байта BE (размер) + zlib
     try:
-        return zlib.decompress(raw[4:])
+        return _decompress_limited(raw[4:])
     except zlib.error:
         pass
     try:
-        return zlib.decompress(raw)
+        return _decompress_limited(raw)
     except zlib.error:
         pass
     return raw

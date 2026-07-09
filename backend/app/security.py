@@ -15,16 +15,25 @@ def verify_password(password: str, password_hash: str) -> bool:
         return False
 
 
-def create_access_token(username: str, secret: str, ttl_minutes: int) -> str:
+def create_access_token(
+    username: str, secret: str, ttl_minutes: int, token_version: int = 0
+) -> str:
     now = datetime.now(timezone.utc)
-    payload = {"sub": username, "iat": now, "exp": now + timedelta(minutes=ttl_minutes)}
+    payload = {
+        "sub": username,
+        "ver": token_version,
+        "iat": now,
+        "exp": now + timedelta(minutes=ttl_minutes),
+    }
     return jwt.encode(payload, secret, algorithm="HS256")
 
 
-def decode_access_token(token: str, secret: str) -> str | None:
+def decode_access_token(token: str, secret: str) -> dict | None:
+    """Возвращает payload (sub/ver/…) при валидной подписи и сроке, иначе None."""
     try:
         payload = jwt.decode(token, secret, algorithms=["HS256"])
     except jwt.PyJWTError:
         return None
-    sub = payload.get("sub")
-    return sub if isinstance(sub, str) else None
+    if not isinstance(payload.get("sub"), str):
+        return None
+    return payload

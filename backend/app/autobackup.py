@@ -20,6 +20,17 @@ def backups_dir(data_dir: str) -> str:
     return os.path.join(data_dir, "backups")
 
 
+def ensure_backups_dir(data_dir: str) -> str:
+    """Создаёт каталог бэкапов с правами 0700 (в нём лежат секреты)."""
+    d = backups_dir(data_dir)
+    os.makedirs(d, exist_ok=True)
+    try:
+        os.chmod(d, 0o700)
+    except OSError:
+        pass
+    return d
+
+
 def is_backup_name(name: str) -> bool:
     return bool(_NAME_RE.match(name))
 
@@ -56,8 +67,7 @@ def _prune(d: str, keep: int) -> None:
 async def write_backup(
     session_factory: async_sessionmaker[AsyncSession], settings: Settings
 ) -> str:
-    d = backups_dir(settings.data_dir)
-    os.makedirs(d, exist_ok=True)
+    d = ensure_backups_dir(settings.data_dir)
     async with session_factory() as session:
         archive = await _build_archive(session, settings.data_dir, settings.version)
     stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")

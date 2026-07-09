@@ -25,6 +25,10 @@ class User(Base):
     password_hash: Mapped[str] = mapped_column(String(128))
     totp_secret: Mapped[str] = mapped_column(String(64), default="")
     totp_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    # последний использованный TOTP-счётчик (защита от повторного использования кода)
+    totp_last_counter: Mapped[int] = mapped_column(BigInteger, default=0)
+    # версия токена: смена пароля инкрементит её и инвалидирует старые JWT
+    token_version: Mapped[int] = mapped_column(Integer, default=0)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )

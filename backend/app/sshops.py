@@ -1,4 +1,6 @@
 import asyncio
+import os
+from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -98,7 +100,7 @@ KEY='{public_key}'
 if ! id '{ssh_user}' >/dev/null 2>&1; then
   useradd -m -s /bin/bash '{ssh_user}' 2>/dev/null || adduser -D '{ssh_user}' 2>/dev/null || true
 fi
-echo '{ssh_user} ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/{ssh_user} 2>/dev/null && chmod 440 /etc/sudoers.d/{ssh_user}
+echo '{ssh_user} ALL=(ALL) NOPASSWD:ALL' > "/etc/sudoers.d/{ssh_user}" 2>/dev/null && chmod 440 "/etc/sudoers.d/{ssh_user}"
 getent group docker >/dev/null 2>&1 && usermod -aG docker '{ssh_user}' 2>/dev/null || true
 HOME_DIR=$(getent passwd '{ssh_user}' | cut -d: -f6)
 [ -n "$HOME_DIR" ] || {{ echo "ACONTROL SETUP FAILED: не удалось создать пользователя {ssh_user}"; exit 1; }}
@@ -148,18 +150,93 @@ def _sh_quote(s: str) -> str:
     return "'" + s.replace("'", "'\\''") + "'"
 
 
-def connect(
+# --- TOFU-пиннинг host-ключей нод ---------------------------------------------
+# Ключ ноды запоминается при первом подключении (в data/ssh/known_hosts, рядом с
+# ключом панели), дальше сверяется. Несовпадение (MITM/подмена ноды) → ошибка.
+
+
+def _kh_path(key_path: Path) -> Path:
+    return Path(key_path).parent / "known_hosts"
+
+
+def _kh_host(host: str, port: int) -> str:
+    # OpenSSH-формат: для нестандартного порта — [host]:port
+    return host if port == 22 else f"[{host}]:{port}"
+
+
+def _host_known(kh: Path, host: str, port: int) -> bool:
+    if not kh.exists():
+        return False
+    token = _kh_host(host, port)
+    try:
+        for line in kh.read_text().splitlines():
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            if token in line.split()[0].split(","):
+                return True
+    except OSError:
+        return False
+    return False
+
+
+def _record_host_key(kh: Path, host: str, port: int, conn) -> None:
+    """Записывает host-ключ ноды в known_hosts (best-effort, не роняет коннект)."""
+    try:
+        if _host_known(kh, host, port):
+            return
+        key = conn.get_server_host_key()
+        if key is None:
+            return
+        pub = key.export_public_key().decode().split()
+        if len(pub) < 2:
+            return
+        kh.parent.mkdir(parents=True, exist_ok=True)
+        with open(kh, "a", encoding="utf-8") as fh:
+            fh.write(f"{_kh_host(host, port)} {pub[0]} {pub[1]}\n")
+        try:
+            os.chmod(kh, 0o600)
+        except OSError:
+            pass
+    except Exception:  # noqa: BLE001 — запись ключа не критична для операции
+        pass
+
+
+async def _tofu_connect(
+    host: str,
+    port: int,
+    username: str,
+    key_path: Path,
+    *,
+    password: str | None = None,
+    timeout: int = 10,
+):
+    kh = _kh_path(key_path)
+    common = dict(host=host, port=port, username=username, connect_timeout=timeout)
+    if password is not None:
+        common["password"] = password
+    else:
+        common["client_keys"] = [str(key_path)]
+    if _host_known(kh, host, port):
+        # ключ ноды известен — строго проверяем (несовпадение = ошибка)
+        return await asyncssh.connect(known_hosts=str(kh), **common)
+    # первый контакт — принимаем и запоминаем (TOFU)
+    conn = await asyncssh.connect(known_hosts=None, **common)
+    _record_host_key(kh, host, port, conn)
+    return conn
+
+
+@asynccontextmanager
+async def connect(
     host: str, port: int, username: str, key_path: Path, timeout: int = 10
 ):
-    """asyncssh-подключение панельным ключом (для использования в async with)."""
-    return asyncssh.connect(
-        host,
-        port=port,
-        username=username,
-        client_keys=[str(key_path)],
-        known_hosts=None,
-        connect_timeout=timeout,
-    )
+    """Подключение панельным ключом с TOFU-пиннингом (для async with)."""
+    conn = await _tofu_connect(host, port, username, key_path, timeout=timeout)
+    try:
+        yield conn
+    finally:
+        conn.close()
+        await conn.wait_closed()
 
 
 async def check_server(
@@ -167,13 +244,8 @@ async def check_server(
 ) -> CheckResult:
     try:
         async with asyncio.timeout(timeout * 2):
-            conn = await asyncssh.connect(
-                host,
-                port=port,
-                username=username,
-                client_keys=[str(key_path)],
-                known_hosts=None,
-                connect_timeout=timeout,
+            conn = await _tofu_connect(
+                host, port, username, key_path, timeout=timeout
             )
             async with conn:
                 run = await conn.run(CHECK_COMMAND, check=False)

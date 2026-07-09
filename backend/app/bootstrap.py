@@ -3,13 +3,18 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.config import Settings
 from app.models import User
-from app.security import hash_password, verify_password
+from app.security import hash_password
 
 
 async def ensure_admin(
     session_factory: async_sessionmaker[AsyncSession], settings: Settings
 ) -> None:
-    """Создаёт админа при первом старте; синхронизирует пароль с .env."""
+    """Заводит админа ТОЛЬКО при первом старте (когда пользователя ещё нет).
+
+    Пароль НЕ пересинхронизируется с .env на каждом запуске — иначе смена пароля
+    через UI откатывалась бы при рестарте. Пароль из .env — только начальный;
+    дальше меняется через POST /auth/password.
+    """
     async with session_factory() as session:
         user = await session.scalar(
             select(User).where(User.username == settings.admin_user)
@@ -21,7 +26,4 @@ async def ensure_admin(
                     password_hash=hash_password(settings.admin_password),
                 )
             )
-            await session.commit()
-        elif not verify_password(settings.admin_password, user.password_hash):
-            user.password_hash = hash_password(settings.admin_password)
             await session.commit()
