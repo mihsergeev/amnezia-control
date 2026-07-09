@@ -4,6 +4,13 @@ All notable changes to Amnezia Control are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.15.3] — 2026-07-09
+
+### Fixed
+- Fresh **XRay deploy now installs the latest xray-core** (fetched from GitHub)
+  instead of a pinned older version — no need to click "Update core" right after.
+  Falls back to a bundled version if GitHub is unreachable.
+
 ## [0.15.2] — 2026-07-09
 
 ### Fixed
@@ -60,6 +67,7 @@ Initial public release.
   scheduled auto-backups.
 - Dark / light theme and English / Russian UI.
 
+[0.15.3]: https://github.com/mihsergeev/amnezia-control/releases/tag/v0.15.3
 [0.15.2]: https://github.com/mihsergeev/amnezia-control/releases/tag/v0.15.2
 [0.15.1]: https://github.com/mihsergeev/amnezia-control/releases/tag/v0.15.1
 [0.15.0]: https://github.com/mihsergeev/amnezia-control/releases/tag/v0.15.0

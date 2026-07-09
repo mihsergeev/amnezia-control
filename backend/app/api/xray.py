@@ -154,7 +154,12 @@ async def deploy_xray(
     server_id: int, body: XrayDeployRequest, user: CurrentUser, session: SessionDep
 ) -> dict:
     server = await _get_or_404(server_id, session)
-    script = xray.build_deploy_script(body.port, body.site)
+    # ставим последнюю версию xray-core; если GitHub недоступен — закреплённую
+    try:
+        release = (await xray.latest_release())["tag"] or xray.XRAY_RELEASE
+    except (httpx.HTTPError, ValueError):
+        release = xray.XRAY_RELEASE
+    script = xray.build_deploy_script(body.port, body.site, release)
     try:
         async with _connect(server) as conn:
             await deploy.launch(conn, script)

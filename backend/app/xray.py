@@ -19,7 +19,7 @@ from dataclasses import dataclass
 import asyncssh
 import httpx
 
-XRAY_RELEASE = "v25.8.3"  # закреплённая версия xray-core для чистого деплоя
+XRAY_RELEASE = "v26.3.27"  # фолбэк-версия xray-core, если GitHub недоступен
 XRAY_DIR = "/opt/amnezia/xray"
 SERVER_JSON = f"{XRAY_DIR}/server.json"
 CLIENTS_TABLE = f"{XRAY_DIR}/clientsTable"
@@ -320,7 +320,7 @@ async def revoke_client(
 
 _XRAY_DOCKERFILE = """FROM alpine:3.15
 LABEL maintainer="AmneziaVPN"
-ARG XRAY_RELEASE="v25.8.3"
+ARG XRAY_RELEASE="v26.3.27"
 RUN apk add --no-cache curl unzip bash openssl netcat-openbsd dumb-init rng-tools xz
 RUN apk --update upgrade --no-cache
 RUN mkdir -p /opt/amnezia/xray
