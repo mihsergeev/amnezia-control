@@ -16,6 +16,8 @@
   <img src="https://img.shields.io/badge/PRs-welcome-brightgreen" alt="PRs welcome" />
 </p>
 
+<p align="center"><a href="CHANGELOG.md">Список изменений</a> · <a href="https://github.com/mihsergeev/amnezia-control/releases">Релизы</a></p>
+
 ![Дашборд «Обзор»](docs/screenshots/dashboard.png)
 
 Ноды управляются по обычному SSH (агент на них не ставится). Поддерживаются три протокола сразу: **AmneziaWG**, **OpenVPN поверх Cloak** и **XRay / REALITY**. Клиенты выдаются в формате AmneziaVPN `vpn://` (со сканируемым анимированным QR), а для WireGuard — ещё и обычным `.conf`.
