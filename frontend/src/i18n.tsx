@@ -221,6 +221,8 @@ const EN: Record<string, string> = {
   'Обновить': 'Refresh',
   'есть': 'available',
   'образ собран не панелью': 'image not built by the panel',
+  'образ собран не панелью — пересборка недоступна':
+    'image not built by the panel — rebuild unavailable',
   '· образ собран не панелью': '· image not built by the panel',
   'Установка XRay': 'Installing XRay',
   'Установка AmneziaWG': 'Installing AmneziaWG',

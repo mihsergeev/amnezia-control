@@ -41,6 +41,20 @@ def _connect(server: Server):
     )
 
 
+async def _guard_foreign_awg(conn) -> None:
+    """Не даём разворачивать/пересобирать AmneziaWG, если на ноде уже есть
+    контейнер, собранный не панелью (иначе создастся параллельный пустой
+    контейнер, а клиенты останутся на старом — как было в инциденте 10.07)."""
+    foreign = await deploy.foreign_awg_container(conn)
+    if foreign:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            f"На сервере есть контейнер AmneziaWG «{foreign}», собранный не "
+            "панелью. Пересборка создала бы параллельный пустой контейнер, а "
+            "текущие клиенты остались бы на старом. Операция отменена.",
+        )
+
+
 def _ssh_error(exc: Exception) -> HTTPException:
     if isinstance(exc, awg.AwgError):
         return HTTPException(status.HTTP_502_BAD_GATEWAY, str(exc))
@@ -262,7 +276,10 @@ async def deploy_awg(
     script = deploy.build_script("deploy", body.port, cfg)
     try:
         async with _connect(server) as conn:
+            await _guard_foreign_awg(conn)
             await deploy.launch(conn, script, tag="awg")
+    except HTTPException:
+        raise
     except Exception as exc:  # noqa: BLE001
         raise _ssh_error(exc) from exc
     await audit.record(
@@ -281,7 +298,10 @@ async def update_awg(
     script = deploy.build_script("update", 47180, cfg)
     try:
         async with _connect(server) as conn:
+            await _guard_foreign_awg(conn)
             await deploy.launch(conn, script, tag="awg")
+    except HTTPException:
+        raise
     except Exception as exc:  # noqa: BLE001
         raise _ssh_error(exc) from exc
     await audit.record(session, user.username, "awg_update", server.name)

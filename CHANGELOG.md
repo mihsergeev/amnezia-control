@@ -4,6 +4,18 @@ All notable changes to Amnezia Control are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.18.2] — 2026-07-10
+
+### Fixed
+- **AmneziaWG "Rebuild" on an externally-built image no longer spins up a
+  parallel empty container.** The panel deploys AmneziaWG as `amnezia-awg2`; on a
+  server whose original container is `amnezia-awg` (built outside the panel),
+  "Rebuild" created a *second*, empty container on a different port and the panel
+  then displayed that one — looking like all clients had vanished (they were
+  safe on the original). The rebuild button is now hidden for images not built by
+  the panel, and the deploy/update endpoints refuse (409) when a non-panel
+  AmneziaWG container is present.
+
 ## [0.18.1] — 2026-07-10
 
 ### Fixed
@@ -142,6 +154,7 @@ Initial public release.
   scheduled auto-backups.
 - Dark / light theme and English / Russian UI.
 
+[0.18.2]: https://github.com/mihsergeev/amnezia-control/releases/tag/v0.18.2
 [0.18.1]: https://github.com/mihsergeev/amnezia-control/releases/tag/v0.18.1
 [0.18.0]: https://github.com/mihsergeev/amnezia-control/releases/tag/v0.18.0
 [0.17.0]: https://github.com/mihsergeev/amnezia-control/releases/tag/v0.17.0

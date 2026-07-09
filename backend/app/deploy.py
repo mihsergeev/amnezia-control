@@ -205,6 +205,25 @@ async def launch(
     )
 
 
+async def foreign_awg_container(conn: asyncssh.SSHClientConnection) -> str | None:
+    """Имя AWG-контейнера, собранного НЕ панелью (не {CONTAINER}), если есть.
+
+    На таком сервере пересборка панелью создала бы ПАРАЛЛЕЛЬНЫЙ пустой контейнер
+    (конфиг оригинала живёт внутри его контейнера, панель его не переносит), а
+    клиенты остались бы на старом — поэтому deploy/update надо запрещать.
+    """
+    cmd = (
+        'D=$(docker info >/dev/null 2>&1 && echo docker || echo "sudo -n docker"); '
+        '$D ps --format "{{.Names}}" | grep -i "amnezia-awg" || true'
+    )
+    result = await conn.run(cmd, check=False)
+    for name in (result.stdout or "").split():
+        name = name.strip()
+        if name and name != CONTAINER:
+            return name
+    return None
+
+
 async def read_status(
     conn: asyncssh.SSHClientConnection, *, tag: str = "awg"
 ) -> dict:
