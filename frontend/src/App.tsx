@@ -150,33 +150,6 @@ function App() {
             {lang === 'ru' ? 'EN' : 'RU'}
           </button>
           {authed && (
-            <button
-              className="ghost icon-btn"
-              onClick={() => setAlertsOpen(true)}
-              title={t('Алерты')}
-            >
-              🔔
-            </button>
-          )}
-          {authed && (
-            <button
-              className="ghost icon-btn"
-              onClick={() => setTwoFaOpen(true)}
-              title={t('Двухфакторная аутентификация')}
-            >
-              🔒
-            </button>
-          )}
-          {authed && (
-            <button
-              className="ghost icon-btn"
-              onClick={() => setPwOpen(true)}
-              title={t('Сменить пароль')}
-            >
-              🔑
-            </button>
-          )}
-          {authed && (
             <>
               <input
                 ref={fileRef}
@@ -186,23 +159,32 @@ function App() {
                 onChange={onRestoreFile}
               />
               <Menu
-                label={backingUp ? t('Бэкап…') : t('Бэкап')}
+                className="ghost icon-btn"
+                caret={false}
+                title={t('Меню')}
+                label={<span className="menu-gear">⚙</span>}
                 items={[
-                  { label: t('Скачать бэкап'), onClick: backup },
+                  { label: t('Алерты'), onClick: () => setAlertsOpen(true) },
+                  {
+                    label: t('Двухфакторная аутентификация'),
+                    onClick: () => setTwoFaOpen(true),
+                  },
+                  { label: t('Сменить пароль'), onClick: () => setPwOpen(true) },
+                  { divider: true },
+                  {
+                    label: backingUp ? t('Бэкап…') : t('Скачать бэкап'),
+                    onClick: backup,
+                  },
                   { label: t('Авто-бэкапы…'), onClick: () => setBackupsOpen(true) },
                   {
                     label: t('Восстановить из файла…'),
-                    danger: true,
                     onClick: () => fileRef.current?.click(),
                   },
+                  { divider: true },
+                  { label: t('Выйти'), danger: true, onClick: logout },
                 ]}
               />
             </>
-          )}
-          {authed && (
-            <button className="ghost" onClick={logout}>
-              {t('Выйти')}
-            </button>
           )}
         </span>
       </header>

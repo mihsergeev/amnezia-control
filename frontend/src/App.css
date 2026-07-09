@@ -705,6 +705,19 @@ button.group-header:hover .group-name {
   padding: 0.5rem 0.7rem;
   font-size: 0.85rem;
   font-weight: 500;
+  white-space: nowrap;
+}
+
+.menu-divider {
+  height: 1px;
+  background: var(--border);
+  margin: 0.3rem 0.35rem;
+}
+
+.menu-gear {
+  font-size: 1.05rem;
+  line-height: 1;
+  display: inline-block;
 }
 
 .menu-pop .menu-item:hover {
