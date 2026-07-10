@@ -206,13 +206,17 @@ async def config_restore(
     server = await _get_or_404(server_id, session)
     try:
         async with _connect(server) as conn:
+            # снимок текущего состояния ДО отката — сам откат тоже обратим
+            await deploy.snapshot_config(conn, "xray")
             ok = await deploy.restore_snapshot(conn, "xray", body.id)
     except ValueError as exc:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
     except Exception as exc:  # noqa: BLE001
         raise _xray_error(exc) from exc
     if not ok:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Снимок не найден на ноде")
+        raise HTTPException(
+            status.HTTP_404_NOT_FOUND, "Снимок не найден или повреждён"
+        )
     await audit.record(
         session, user.username, "xray_config_restore", server.name, body.id
     )

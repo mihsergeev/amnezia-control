@@ -4,6 +4,28 @@ All notable changes to Amnezia Control are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.22.0] — 2026-07-10
+
+### Fixed (data-safety)
+- **OpenVPN (re)deploy could wipe every client.** The deploy checked only the
+  *host* for `ca.crt`; a server built by the Amnezia app keeps its PKI inside the
+  container, so a redeploy regenerated a new CA and invalidated every client
+  certificate — the same class as the AmneziaWG incidents, unfixed for OpenVPN.
+  Deploy now reads the PKI/config out of the *live* container onto the host
+  first, keeps the container's real published port, and removes any parallel
+  openvpn/cloak container instead of leaving a second one.
+- **Backup silently dropped 7 of 13 tables** — including client expiry dates
+  (`client_limits`), the alert Telegram token/webhook (`app_settings`), the audit
+  log, and the client-name cache. A restore looked successful while silently
+  losing all expiry (paid clients became permanent) and disabling alerting. The
+  backup now contains every table, and restore resets PostgreSQL id-sequences so
+  the first post-restore create no longer fails with a duplicate-key error.
+- **Snapshot rollback no longer reports false success.** `restore_snapshot`
+  printed `RESTORE_OK` unconditionally; a truncated/corrupt snapshot (or ENOSPC
+  mid-extract) "restored" with an error yet the API said success. It now checks
+  the `tar` exit code, and a snapshot of the current state is taken *before* a
+  rollback so the rollback itself can be undone.
+
 ## [0.21.2] — 2026-07-10
 
 ### Fixed
@@ -248,6 +270,7 @@ Initial public release.
   scheduled auto-backups.
 - Dark / light theme and English / Russian UI.
 
+[0.22.0]: https://github.com/mihsergeev/amnezia-control/releases/tag/v0.22.0
 [0.21.2]: https://github.com/mihsergeev/amnezia-control/releases/tag/v0.21.2
 [0.21.1]: https://github.com/mihsergeev/amnezia-control/releases/tag/v0.21.1
 [0.21.0]: https://github.com/mihsergeev/amnezia-control/releases/tag/v0.21.0

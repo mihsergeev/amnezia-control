@@ -324,11 +324,15 @@ async def restore_snapshot(
         raise ValueError("некорректный id снимка")
     spec = _SNAP_SPECS[tag]
     reload_cmd = spec["reload"].replace("%C", spec["container"])
+    # РАСПАКОВКА проверяется по коду возврата tar — раньше RESTORE_OK печатался
+    # безусловно, и битый/оборванный (ENOSPC) снимок «восстанавливался» с ошибкой,
+    # а API рапортовал успех. Теперь reload и RESTORE_OK — только если tar прошёл.
     cmd = (
         f'C={spec["container"]}; F={SNAP_ROOT}/{tag}/{snap_id}.tar.gz; '
         f'[ -f "$F" ] || {{ echo NO_SNAP; exit 0; }}; '
-        f'cat "$F" | sudo docker exec -i "$C" tar -xzf - -C / 2>/dev/null; '
-        f'{reload_cmd} >/dev/null 2>&1; echo RESTORE_OK'
+        f'if cat "$F" | sudo docker exec -i "$C" tar -xzf - -C /; then '
+        f'{reload_cmd} >/dev/null 2>&1; echo RESTORE_OK; '
+        f'else echo RESTORE_FAIL; fi'
     )
     out = await conn.run(cmd, check=False)
     return "RESTORE_OK" in (out.stdout or "")
@@ -393,6 +397,21 @@ async def awg_adoptable(
     )
     result = await conn.run(cmd, check=False)
     return "YES" in (result.stdout or "")
+
+
+async def detect_openvpn_container(
+    conn: asyncssh.SSHClientConnection,
+) -> str | None:
+    """Имя запущенного openvpn/cloak-контейнера (панельного amnezia-openvpn-cloak
+    или родного Amnezia с иным именем), если есть — чтобы снять с него снимок
+    перед перезаписью PKI."""
+    cmd = (
+        'D=$(docker info >/dev/null 2>&1 && echo docker || echo "sudo -n docker"); '
+        '$D ps --format "{{.Names}}" | grep -iE "openvpn|cloak" | head -1 || true'
+    )
+    result = await conn.run(cmd, check=False)
+    name = (result.stdout or "").strip()
+    return name or None
 
 
 async def read_status(

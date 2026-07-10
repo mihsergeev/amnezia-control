@@ -8,15 +8,22 @@ from datetime import date, datetime, timezone
 
 from fastapi import APIRouter, HTTPException, Request, status
 from fastapi.responses import Response
-from sqlalchemy import DateTime, delete, insert, select
+from sqlalchemy import DateTime, delete, insert, select, text
 
 from app.config import get_settings
 from app.deps import CurrentUser, SessionDep
 from app.models import (
+    AppSetting,
+    AuditLog,
     AwgConfig,
     AwgNote,
+    ClientLimit,
+    ClientName,
+    ClientTrafficSample,
+    NodeMetric,
     OvpnConfig,
     Server,
+    ServerStatus,
     TrafficSample,
     User,
 )
@@ -25,17 +32,34 @@ router = APIRouter(prefix="/backup", tags=["backup"])
 
 _MAX_RESTORE_BYTES = 100 * 1024 * 1024  # 100 МБ — бэкапы много меньше
 
-# порядок важен для восстановления (нет FK, но держим осмысленный порядок)
-_MODELS = [User, Server, AwgConfig, AwgNote, OvpnConfig, TrafficSample]
+# ВСЕ таблицы БД (нет FK, но держим осмысленный порядок). Раньше сюда не входили
+# client_limits (сроки авто-отзыва), app_settings (токен/чат/вебхук алертов),
+# audit_log и client_names — их потеря при restore была тихой и опасной.
+_MODELS = [
+    User,
+    Server,
+    AwgConfig,
+    AwgNote,
+    OvpnConfig,
+    ClientLimit,
+    AppSetting,
+    AuditLog,
+    ClientName,
+    ServerStatus,
+    NodeMetric,
+    TrafficSample,
+    ClientTrafficSample,
+]
 
 _RESTORE = """# Восстановление Amnezia Control
 
 Архив содержит полное состояние панели на момент бэкапа.
 
 ## Что внутри
-- `db.json` — все таблицы БД (пользователи, серверы, выданные конфиги,
-  заметки, метрики). Содержит СЕКРЕТЫ (хэш пароля админа, приватные ключи в
-  сохранённых awg/ovpn-конфигах) — храните архив в безопасном месте.
+- `db.json` — все таблицы БД (пользователи, серверы, выданные конфиги, заметки,
+  сроки действия клиентов, настройки алертов, журнал действий, метрики). Содержит
+  СЕКРЕТЫ (хэш пароля админа, приватные ключи в сохранённых awg/ovpn-конфигах,
+  токен Telegram) — храните архив в безопасном месте.
 - `data/` — рабочий каталог панели, включая SSH-ключ панели
   (`ssh/id_ed25519`). БЕЗ него восстановленная панель сгенерирует новый ключ и
   потеряет доступ ко всем нодам — ключ критичен.
@@ -232,6 +256,27 @@ async def restore_backup(
             if isinstance(row, dict):
                 await session.execute(insert(model).values(**_coerce_row(model, row)))
         restored[model.__tablename__] = len(rows)
+
+    # Postgres: строки вставлены с явными id, но identity-sequence не сдвинулась →
+    # следующий INSERT упал бы на duplicate key. Догоняем sequence до max(id).
+    # (На SQLite не нужно; таблицы с натуральным PK — server_status/app_settings/
+    # node_metrics — пропускаем, у них нет sequence на id.)
+    try:
+        dialect = session.bind.dialect.name  # type: ignore[union-attr]
+    except AttributeError:
+        dialect = ""
+    if dialect == "postgresql":
+        for model in _MODELS:
+            pk = list(model.__table__.primary_key.columns)
+            if len(pk) == 1 and pk[0].name == "id":
+                tbl = model.__tablename__
+                await session.execute(
+                    text(
+                        f"SELECT setval(pg_get_serial_sequence('{tbl}', 'id'), "
+                        f"COALESCE((SELECT MAX(id) FROM {tbl}), 1), "
+                        f"(SELECT COUNT(*) FROM {tbl}) > 0)"
+                    )
+                )
     await session.commit()
 
     # восстановление data/ (ssh-ключ и пр.), без postgres
