@@ -150,6 +150,9 @@ def test_build_script_adopt_detects_port_and_removes_parallel():
     assert 'docker ps -aq --filter "name=amnezia-awg"' in s
     # снос параллельного идёт ДО docker run нового контейнера
     assert s.index('--filter "name=amnezia-awg"') < s.index("docker run -d --name $CONT")
+    # legacy-раскладка: если awg0.conf нет, нормализуем wg0.conf в awg0.conf
+    assert 'cat "/opt/amnezia/awg/wg0.conf"' in s
+    assert 'sudo tee "$D/awg0.conf"' in s
 
 
 async def test_snapshot_helpers_all_protocols():

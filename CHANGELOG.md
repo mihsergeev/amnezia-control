@@ -4,6 +4,19 @@ All notable changes to Amnezia Control are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.21.2] — 2026-07-10
+
+### Fixed
+- **Legacy `wg0`-layout AmneziaWG servers are recognized and adoptable.** Some
+  servers the Amnezia app deployed keep their config in `wg0.conf` on interface
+  `wg0` (not the panel's `awg0.conf`/`awg0`) — they are still genuine AmneziaWG
+  (obfuscation params present), but the panel mislabeled them "not AmneziaWG" and
+  refused to manage them. Compatibility is now judged by the presence of the
+  AmneziaWG obfuscation params (`Jc`/`H1`…), not the file name: such a server can
+  now be taken under management (the panel normalizes `wg0.conf → awg0.conf`,
+  preserving the obfuscation, port and every client), while a genuine plain
+  WireGuard server (no obfuscation) is still correctly refused.
+
 ## [0.21.1] — 2026-07-10
 
 ### Fixed
@@ -235,6 +248,7 @@ Initial public release.
   scheduled auto-backups.
 - Dark / light theme and English / Russian UI.
 
+[0.21.2]: https://github.com/mihsergeev/amnezia-control/releases/tag/v0.21.2
 [0.21.1]: https://github.com/mihsergeev/amnezia-control/releases/tag/v0.21.1
 [0.21.0]: https://github.com/mihsergeev/amnezia-control/releases/tag/v0.21.0
 [0.20.1]: https://github.com/mihsergeev/amnezia-control/releases/tag/v0.20.1
