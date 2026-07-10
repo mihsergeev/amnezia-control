@@ -246,8 +246,11 @@ async def deploy_openvpn(
     script = openvpn.build_deploy_script(body.port, body.site, server.host)
     try:
         async with _connect(server) as conn:
-            # снимок конфига ДО (пере)развёртывания — для отката
-            await deploy.snapshot_config(conn, "openvpn")
+            # снимок конфига ДО (пере)развёртывания — для отката. Снимаем именно
+            # тот контейнер, что реально запущен (в т.ч. родной, с другим именем),
+            # иначе перед перезаписью PKI снимка бы не было.
+            src = await deploy.detect_openvpn_container(conn)
+            await deploy.snapshot_config(conn, "openvpn", container=src)
             await deploy.launch(conn, script, tag="openvpn")
     except Exception as exc:  # noqa: BLE001
         raise _ovpn_error(exc) from exc
@@ -290,13 +293,17 @@ async def config_restore(
     server = await _get_or_404(server_id, session)
     try:
         async with _connect(server) as conn:
+            # снимок текущего состояния ДО отката — сам откат тоже обратим
+            await deploy.snapshot_config(conn, "openvpn")
             ok = await deploy.restore_snapshot(conn, "openvpn", body.id)
     except ValueError as exc:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
     except Exception as exc:  # noqa: BLE001
         raise _ovpn_error(exc) from exc
     if not ok:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Снимок не найден на ноде")
+        raise HTTPException(
+            status.HTTP_404_NOT_FOUND, "Снимок не найден или повреждён"
+        )
     await audit.record(
         session, user.username, "openvpn_config_restore", server.name, body.id
     )

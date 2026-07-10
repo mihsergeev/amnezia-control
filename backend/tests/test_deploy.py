@@ -170,6 +170,8 @@ async def test_snapshot_helpers_all_protocols():
         assert await deploy.snapshot_config(C("NO_CONT\n"), tag) is None
         assert await deploy.restore_snapshot(C("RESTORE_OK\n"), tag, "20260710-023528") is True
         assert await deploy.restore_snapshot(C("NO_SNAP\n"), tag, "20260710-023528") is False
+        # битая/оборванная распаковка (tar!=0) больше не рапортует успех
+        assert await deploy.restore_snapshot(C("RESTORE_FAIL\n"), tag, "20260710-023528") is False
         with pytest.raises(ValueError):
             await deploy.restore_snapshot(C(), tag, "x; rm -rf /")
     snaps = await deploy.list_snapshots(

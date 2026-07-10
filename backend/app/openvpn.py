@@ -472,6 +472,25 @@ def build_deploy_script(port: int, site: str, server_ip: str = "") -> str:
         'sudo docker build -t "$IMG" "$BUILD" 2>&1 | tail -3 || fail build',
         "",
         'log "[4/6] конфиг (PKI + Cloak + shadowsocks)"',
+        # КРИТИЧНО: вытащить PKI/конфиг из ЖИВОГО контейнера на хост ДО guard.
+        # У родного Amnezia-openvpn конфиг лежит ВНУТРИ контейнера (не на хост-
+        # маунте) — иначе guard ниже сгенерил бы НОВЫЙ CA и все клиентские
+        # сертификаты стали бы невалидны (тот же класс, что инцидент de-hz).
+        'SRC=$(sudo docker ps --format "{{.Names}}" | grep -iE "openvpn|cloak" | head -1 || true)',
+        'if [ -n "$SRC" ]; then',
+        '  if ! sudo test -f "$D/openvpn/ca.crt"; then',
+        '    sudo docker exec "$SRC" tar -czf - -C / opt/amnezia/openvpn '
+        'opt/amnezia/cloak opt/amnezia/shadowsocks 2>/dev/null '
+        '| sudo tar -xzf - -C / 2>/dev/null '
+        '&& log "конфиг перечитан из контейнера $SRC" || true;',
+        '  fi',
+        # порт клиента может отличаться от переданного — берём опубликованный порт
+        # живого контейнера, иначе у клиентов (endpoint зашит) отвалится коннект
+        '  DPORT=$(sudo docker inspect "$SRC" --format '
+        '"{{range \\$p,\\$c := .NetworkSettings.Ports}}{{range \\$c}}{{.HostPort}} {{end}}{{end}}" '
+        '2>/dev/null | grep -o "[0-9]*" | head -1 || true); [ -n "$DPORT" ] && PORT=$DPORT;',
+        '  log "порт контейнера: $PORT"',
+        'fi',
         'if ! sudo test -f "$D/openvpn/ca.crt"; then',
         '  log "генерация нового конфига (новый сервер)"',
         '  sudo docker run --rm -e AMNEZIA_SITE="$SITE" -v "$D":/opt/amnezia '
@@ -514,6 +533,10 @@ def build_deploy_script(port: int, site: str, server_ip: str = "") -> str:
         'sudo firewall-cmd --reload >/dev/null 2>&1 || true; fi',
         "",
         'log "[6/6] контейнер"',
+        # сносим ЛЮБОЙ openvpn/cloak-контейнер (включая родной), иначе останется
+        # параллельный, а панель поднимет новый на том же порту (конфликт/дубль)
+        'OLD=$(sudo docker ps -aq --filter "name=openvpn" --filter "name=cloak" 2>/dev/null | sort -u); '
+        '[ -n "$OLD" ] && sudo docker rm -f $OLD >/dev/null 2>&1 || true',
         'sudo docker rm -f "$C" >/dev/null 2>&1 || true',
         'sudo docker run -d --name "$C" --restart always --privileged --cap-add=NET_ADMIN \\',
         '  -p "${PORT}":443/tcp -v "$D":/opt/amnezia "$IMG" >/dev/null || fail run',
