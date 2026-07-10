@@ -394,13 +394,19 @@ export function ClientsModal({
               {version.deployed && !version.update_available && (
                 <span className="version-ok"> {t('актуальна')}</span>
               )}
-              {!version.deployed && (
+              {version.foreign_container ? (
                 <span className="muted">
                   {' '}·{' '}
-                  {version.foreign_container
+                  {version.adoptable
                     ? t('образ собран не панелью')
-                    : t('базовый образ не считывается')}
+                    : t('внешний образ (не AmneziaWG) — перенос недоступен')}
                 </span>
+              ) : (
+                !version.deployed && (
+                  <span className="muted">
+                    {' '}· {t('базовый образ не считывается')}
+                  </span>
+                )
               )}
             </span>
             <div className="version-actions">
@@ -412,17 +418,21 @@ export function ClientsModal({
                 onRestored={load}
                 onUnauthorized={onUnauthorized}
               />
-              {/* Внешний контейнер amnezia-awg (собран клиентом) — предлагаем
-                  «Взять под управление»: панель перечитает конфиг из живого
-                  контейнера, сохранит порт/ключи и заменит его своим. В остальных
-                  случаях (панельный amnezia-awg2, в т.ч. без читаемого дайджеста)
-                  пересборка безопасна — конфиг переносится из живого контейнера. */}
-              {!version.deployed && version.foreign_container ? (
-                onRequestAdopt && (
-                  <button className="ghost" onClick={onRequestAdopt}>
-                    {t('Взять под управление')}
-                  </button>
-                )
+              {/* Внешний AmneziaWG-контейнер (собран клиентом, awg0.conf) —
+                  предлагаем «Взять под управление»: панель перечитает конфиг из
+                  живого контейнера, сохранит порт/ключи и заменит его своим.
+                  Несовместимый внешний образ (напр. plain-WireGuard) не трогаем —
+                  ни adopt, ни пересборка, иначе потеряли бы клиентов. Панельный
+                  контейнер (в т.ч. без читаемого дайджеста) пересобираем — конфиг
+                  переносится из живого контейнера. */}
+              {version.foreign_container ? (
+                version.adoptable
+                  ? onRequestAdopt && (
+                      <button className="ghost" onClick={onRequestAdopt}>
+                        {t('Взять под управление')}
+                      </button>
+                    )
+                  : null
               ) : (
                 <button className="ghost" onClick={() => onRequestUpdate('awg')}>
                   {version.deployed && version.update_available

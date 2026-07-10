@@ -105,10 +105,27 @@ async def test_foreign_awg_container_detection():
             return type("R", (), {"stdout": self.out})()
 
     # исходный (не панельный) контейнер обнаружен → deploy/update заблокируются
-    assert await deploy.foreign_awg_container(C("amnezia-awg\namnezia-awg2\n")) == "amnezia-awg"
+    assert await deploy.foreign_awg_container(C("amnezia-awg\namnezia-awg2\n")) == "amnezia-awg"  # noqa: E501
     # только панельный amnezia-awg2 → безопасно
     assert await deploy.foreign_awg_container(C("amnezia-awg2\n")) is None
     assert await deploy.foreign_awg_container(C("")) is None
+
+
+async def test_awg_adoptable_requires_awg0conf():
+    """Adopt разрешён только настоящему AmneziaWG (awg0.conf). Клиентский
+    plain-WireGuard (wg0.conf → команда test -f вернёт NO) — не переносим."""
+    class C:
+        def __init__(self, out):
+            self.out = out
+
+        async def run(self, cmd, input=None, check=False):  # noqa: A002
+            return type("R", (), {"stdout": self.out})()
+
+    assert await deploy.awg_adoptable(C("YES\n"), "amnezia-awg") is True
+    assert await deploy.awg_adoptable(C("NO\n"), "amnezia-awg") is False
+    # инъекция/мусор в имени контейнера отсекается без запуска команды
+    assert await deploy.awg_adoptable(C("YES\n"), "amnezia-awg; rm -rf /") is False
+    assert await deploy.awg_adoptable(C("YES\n"), "") is False
 
 
 def test_build_script_preserves_live_config_before_guard():

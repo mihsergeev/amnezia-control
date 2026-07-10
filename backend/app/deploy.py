@@ -172,9 +172,14 @@ def build_script(mode: str, port: int, cfg: dict[str, str]) -> str:
         "fi",
         # порт берём из самого конфига: у взятого под управление сервера порт
         # клиента может отличаться от переданного — сохраняем его, иначе клиенты
-        # перестанут подключаться (endpoint у них зашит на старый порт).
+        # перестанут подключаться (endpoint у них зашит на старый порт). Если в
+        # конфиге порта нет — берём опубликованный порт живого контейнера.
         'DPORT=$(sudo grep -iE "^ *ListenPort" "$D/awg0.conf" 2>/dev/null '
-        '| head -1 | tr -dc "0-9" || true); [ -n "$DPORT" ] && PORT=$DPORT',
+        '| head -1 | tr -dc "0-9" || true)',
+        'if [ -z "$DPORT" ] && [ -n "$SRC" ]; then DPORT=$(sudo docker inspect "$SRC" '
+        '--format "{{range \\$p,\\$c := .NetworkSettings.Ports}}{{\\$p}} {{end}}" '
+        '2>/dev/null | grep -o "[0-9]*" | head -1 || true); fi',
+        '[ -n "$DPORT" ] && PORT=$DPORT',
         'if command -v ufw >/dev/null 2>&1; then sudo ufw allow $PORT/udp >/dev/null 2>&1 || true; '
         'sudo ufw route allow proto udp from any to any port $PORT >/dev/null 2>&1 || true; fi',
         'log "порт контейнера: $PORT"',
@@ -352,6 +357,29 @@ async def foreign_awg_container(conn: asyncssh.SSHClientConnection) -> str | Non
         if name and name != CONTAINER:
             return name
     return None
+
+
+_CONT_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
+
+
+async def awg_adoptable(
+    conn: asyncssh.SSHClientConnection, container: str
+) -> bool:
+    """Можно ли безопасно взять контейнер под управление панелью.
+
+    Совместим только настоящий AmneziaWG с awg0.conf в /opt/amnezia/awg (панель
+    поднимает именно awg0). Клиентский plain-WireGuard хранит wg0.conf (другой
+    протокол/интерфейс/порт) — его перенос затёр бы конфиг и убил клиентов (как
+    было бы с uz: 37 клиентов на wg0.conf). Для таких adopt запрещён."""
+    if not container or not _CONT_NAME_RE.match(container):
+        return False
+    cmd = (
+        f'D=$(docker info >/dev/null 2>&1 && echo docker || echo "sudo -n docker"); '
+        f'$D exec {container} test -f /opt/amnezia/awg/awg0.conf '
+        f"&& echo YES || echo NO"
+    )
+    result = await conn.run(cmd, check=False)
+    return "YES" in (result.stdout or "")
 
 
 async def read_status(

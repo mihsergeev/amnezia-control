@@ -4,6 +4,17 @@ All notable changes to Amnezia Control are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.21.1] — 2026-07-10
+
+### Fixed
+- **Adopt now refuses containers that aren't panel-compatible AmneziaWG.** A
+  server built by the Amnezia app as *plain WireGuard* keeps its config in
+  `wg0.conf` (not `awg0.conf`); adopting it would have regenerated a blank
+  AmneziaWG config and lost every client. "Take under management" is now only
+  offered/allowed when the container really is AmneziaWG (`awg0.conf` present).
+  The adopt also falls back to the live container's published port if the config
+  has no readable `ListenPort`.
+
 ## [0.21.0] — 2026-07-10
 
 ### Added
@@ -224,6 +235,7 @@ Initial public release.
   scheduled auto-backups.
 - Dark / light theme and English / Russian UI.
 
+[0.21.1]: https://github.com/mihsergeev/amnezia-control/releases/tag/v0.21.1
 [0.21.0]: https://github.com/mihsergeev/amnezia-control/releases/tag/v0.21.0
 [0.20.1]: https://github.com/mihsergeev/amnezia-control/releases/tag/v0.20.1
 [0.20.0]: https://github.com/mihsergeev/amnezia-control/releases/tag/v0.20.0
