@@ -4,6 +4,25 @@ All notable changes to Amnezia Control are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.21.0] — 2026-07-10
+
+### Added
+- **Take a client-built AmneziaWG under panel management** ("Взять под
+  управление"). If a server's AmneziaWG container was built by the AmneziaVPN
+  app (not the panel), the client list now offers a one-click adopt: the panel
+  reads the current config out of the *live* container, keeps its listen port
+  and keys, and replaces it with its own container — so existing clients keep
+  working (same keys, same port) and version/update/rebuild become available. A
+  config snapshot is taken first, so it can be rolled back.
+
+### Fixed
+- **"Rebuild" is no longer hidden when the panel can't read the base-image
+  digest.** On some panel-built servers the base image isn't tagged, so the
+  panel couldn't tell its version and hid the rebuild button (showing "built
+  outside the panel"). Rebuild is offered again — it's safe: the config is
+  preserved out of the live container regardless of where it lives, and the
+  container's real listen port is kept (not reset to the default).
+
 ## [0.20.1] — 2026-07-10
 
 ### Fixed
@@ -205,6 +224,7 @@ Initial public release.
   scheduled auto-backups.
 - Dark / light theme and English / Russian UI.
 
+[0.21.0]: https://github.com/mihsergeev/amnezia-control/releases/tag/v0.21.0
 [0.20.1]: https://github.com/mihsergeev/amnezia-control/releases/tag/v0.20.1
 [0.20.0]: https://github.com/mihsergeev/amnezia-control/releases/tag/v0.20.0
 [0.19.0]: https://github.com/mihsergeev/amnezia-control/releases/tag/v0.19.0

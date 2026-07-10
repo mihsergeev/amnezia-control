@@ -124,7 +124,7 @@ export function ServersPage({ onUnauthorized }: Props) {
   const [importOpen, setImportOpen] = useState(false)
   const [deployFor, setDeployFor] = useState<{
     server: Server
-    mode: 'deploy' | 'update'
+    mode: 'deploy' | 'update' | 'adopt'
     protocol: 'awg' | 'xray' | 'openvpn'
   } | null>(null)
   const [fullAccess, setFullAccess] = useState<{
@@ -739,6 +739,21 @@ export function ServersPage({ onUnauthorized }: Props) {
               return
             setClientsFor(null)
             setDeployFor({ server: srv, mode: 'update', protocol })
+          }}
+          onRequestAdopt={() => {
+            const srv = clientsFor
+            if (!srv) return
+            if (
+              !window.confirm(
+                t(
+                  'Взять AmneziaWG на «{name}» под управление панели?\n\nПанель перечитает текущий конфиг, сохранит порт и ключи и заменит контейнер своим. Клиенты остаются рабочими, туннель кратко перезапустится. Перед этим снимается снимок для отката.',
+                  { name: srv.name },
+                ),
+              )
+            )
+              return
+            setClientsFor(null)
+            setDeployFor({ server: srv, mode: 'adopt', protocol: 'awg' })
           }}
         />
       )}

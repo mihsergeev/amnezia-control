@@ -215,6 +215,9 @@ class VersionOut(BaseModel):
     latest_version: str | None
     latest_updated: str
     update_available: bool
+    # имя AWG-контейнера, собранного НЕ панелью (amnezia-awg), если такой есть —
+    # тогда фронт предлагает «Взять под управление» вместо пересборки
+    foreign_container: str | None = None
 
 
 class ServerStat(BaseModel):

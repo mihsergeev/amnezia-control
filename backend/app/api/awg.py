@@ -312,6 +312,42 @@ async def update_awg(
     return {"started": True}
 
 
+@router.post("/adopt", status_code=status.HTTP_202_ACCEPTED)
+async def adopt_awg(
+    server_id: int, user: CurrentUser, session: SessionDep
+) -> dict:
+    """Берёт под управление панели AmneziaWG, собранный НЕ панелью.
+
+    Перечитывает конфиг из клиентского контейнера (amnezia-awg), сохраняет его
+    порт/ключи на хост-маунт и заменяет контейнер панельным (amnezia-awg2) — так,
+    что клиенты остаются рабочими (те же ключи и порт), а версия/обновление/
+    пересборка становятся доступны. Снимок конфига снимается ДО — для отката."""
+    server = await _get_or_404(server_id, session)
+    # cfg — запасной конфиг: используется только если из живого контейнера почему-то
+    # ничего не считалось (тогда сервер поднимется как новый). Порт возьмётся из
+    # реального awg0.conf внутри build_script.
+    cfg = deploy.generate_server_config(47180)
+    script = deploy.build_script("adopt", 47180, cfg)
+    try:
+        async with _connect(server) as conn:
+            foreign = await deploy.foreign_awg_container(conn)
+            if not foreign:
+                raise HTTPException(
+                    status.HTTP_409_CONFLICT,
+                    "Внешний контейнер AmneziaWG на сервере не найден — брать под "
+                    "управление нечего.",
+                )
+            # снимок клиентского контейнера ДО замены — страховка для отката
+            await deploy.snapshot_config(conn, "awg", container=foreign)
+            await deploy.launch(conn, script, tag="awg")
+    except HTTPException:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        raise _ssh_error(exc) from exc
+    await audit.record(session, user.username, "awg_adopt", server.name, foreign)
+    return {"started": True}
+
+
 @router.get("/config-backups", response_model=list[SnapshotOut])
 async def config_backups(
     server_id: int, _: CurrentUser, session: SessionDep
@@ -369,6 +405,7 @@ async def awg_version(
         async with _connect(server) as conn:
             current_digest = await deploy.node_base_digest(conn)
             awg_go = await deploy.node_awg_go_version(conn)
+            foreign = await deploy.foreign_awg_container(conn)
     except Exception as exc:  # noqa: BLE001
         raise _ssh_error(exc) from exc
     try:
@@ -387,6 +424,7 @@ async def awg_version(
         latest_version=hub["latest_version"],
         latest_updated=hub["latest_updated"],
         update_available=bool(current_digest) and current_digest != hub["latest_digest"],
+        foreign_container=foreign,
     )
 
 

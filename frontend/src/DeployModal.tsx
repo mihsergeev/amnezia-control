@@ -5,7 +5,7 @@ import { useI18n } from './i18n'
 type Props = {
   serverId: number
   serverName: string
-  mode: 'deploy' | 'update'
+  mode: 'deploy' | 'update' | 'adopt'
   protocol?: 'awg' | 'xray' | 'openvpn'
   onClose: () => void
   onDone: () => void
@@ -71,7 +71,9 @@ export function DeployModal({
         const path =
           mode === 'update'
             ? `/api/servers/${serverId}/${protocol}/update`
-            : `/api/servers/${serverId}/${protocol}/deploy`
+            : mode === 'adopt'
+              ? `/api/servers/${serverId}/${protocol}/adopt`
+              : `/api/servers/${serverId}/${protocol}/deploy`
         const deployBody =
           protocol === 'xray'
             ? JSON.stringify({ port: 443 })
@@ -103,7 +105,9 @@ export function DeployModal({
   const title =
     mode === 'update'
       ? t('Обновление {label}', { label })
-      : t('Установка {label}', { label })
+      : mode === 'adopt'
+        ? t('Взятие под управление · {label}', { label })
+        : t('Установка {label}', { label })
 
   return (
     <div className="modal-backdrop">
@@ -118,7 +122,9 @@ export function DeployModal({
         </div>
 
         <p className="muted small">
-          {mode === 'update'
+          {mode === 'adopt'
+            ? t('Панель перечитывает конфиг из текущего контейнера, сохраняет его порт и ключи и заменяет его своим образом. Клиенты остаются — туннель кратко перезапустится. Перед этим снят снимок для отката.')
+            : mode === 'update'
             ? t('Сервер тянет свежий базовый образ и пересобирает контейнер. Клиенты и ключи сохраняются.')
             : protocol === 'xray'
               ? t('Сервер собирает образ Xray-core (alpine) и запускает VLESS+REALITY на 443. Это займёт 1–3 минуты.')

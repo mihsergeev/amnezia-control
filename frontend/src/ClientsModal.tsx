@@ -26,6 +26,7 @@ type Props = {
   onClose: () => void
   onUnauthorized: () => void
   onRequestUpdate: (protocol: 'awg' | 'xray') => void
+  onRequestAdopt?: () => void
 }
 
 type SortKey = 'name' | 'handshake' | 'traffic'
@@ -38,6 +39,7 @@ export function ClientsModal({
   onClose,
   onUnauthorized,
   onRequestUpdate,
+  onRequestAdopt,
 }: Props) {
   const { t } = useI18n()
   const hasAwg = protocols.some((p) => p.key === 'awg')
@@ -394,7 +396,10 @@ export function ClientsModal({
               )}
               {!version.deployed && (
                 <span className="muted">
-                  {' '}· {t('образ собран не панелью — пересборка недоступна')}
+                  {' '}·{' '}
+                  {version.foreign_container
+                    ? t('образ собран не панелью')
+                    : t('базовый образ не считывается')}
                 </span>
               )}
             </span>
@@ -407,12 +412,22 @@ export function ClientsModal({
                 onRestored={load}
                 onUnauthorized={onUnauthorized}
               />
-              {/* Пересборка безопасна только для образа, собранного панелью
-                  (конфиг на хост-маунте). Для внешнего образа она создала бы
-                  ПАРАЛЛЕЛЬНЫЙ пустой контейнер — поэтому кнопку прячем. */}
-              {version.deployed && (
+              {/* Внешний контейнер amnezia-awg (собран клиентом) — предлагаем
+                  «Взять под управление»: панель перечитает конфиг из живого
+                  контейнера, сохранит порт/ключи и заменит его своим. В остальных
+                  случаях (панельный amnezia-awg2, в т.ч. без читаемого дайджеста)
+                  пересборка безопасна — конфиг переносится из живого контейнера. */}
+              {!version.deployed && version.foreign_container ? (
+                onRequestAdopt && (
+                  <button className="ghost" onClick={onRequestAdopt}>
+                    {t('Взять под управление')}
+                  </button>
+                )
+              ) : (
                 <button className="ghost" onClick={() => onRequestUpdate('awg')}>
-                  {version.update_available ? t('Обновить') : t('Переустановить')}
+                  {version.deployed && version.update_available
+                    ? t('Обновить')
+                    : t('Переустановить')}
                 </button>
               )}
             </div>
