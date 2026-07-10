@@ -4,6 +4,12 @@ All notable changes to Amnezia Control are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.20.1] — 2026-07-10
+
+### Fixed
+- **Login screen no longer shows the logo twice** — the small header logo is
+  hidden on the login page, leaving just the large one in the login card.
+
 ## [0.20.0] — 2026-07-10
 
 ### Added
@@ -199,6 +205,7 @@ Initial public release.
   scheduled auto-backups.
 - Dark / light theme and English / Russian UI.
 
+[0.20.1]: https://github.com/mihsergeev/amnezia-control/releases/tag/v0.20.1
 [0.20.0]: https://github.com/mihsergeev/amnezia-control/releases/tag/v0.20.0
 [0.19.0]: https://github.com/mihsergeev/amnezia-control/releases/tag/v0.19.0
 [0.18.5]: https://github.com/mihsergeev/amnezia-control/releases/tag/v0.18.5

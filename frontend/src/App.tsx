@@ -97,10 +97,13 @@ function App() {
   return (
     <main className="page">
       <header className="header">
-        <a className="brand" href="/" title={t('На главную')}>
-          <img src="/logo.png" className="brand-logo" alt="" />
-          <h1>Amnezia Control</h1>
-        </a>
+        {/* на экране входа лого уже есть в карточке — в шапке не дублируем */}
+        {authed && (
+          <a className="brand" href="/" title={t('На главную')}>
+            <img src="/logo.png" className="brand-logo" alt="" />
+            <h1>Amnezia Control</h1>
+          </a>
+        )}
         {authed && (
           <nav className="topnav">
             <button
