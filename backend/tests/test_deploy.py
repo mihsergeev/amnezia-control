@@ -113,12 +113,26 @@ async def test_foreign_awg_container_detection():
 
 def test_build_script_preserves_live_config_before_guard():
     """Регресс de-hz 10.07: пересборка должна вытаскивать конфиг из ЖИВОГО
-    контейнера на хост ДО guard, иначе guard сгенерит пустой и затрёт клиентов."""
+    контейнера на хост ДО guard, иначе guard сгенерит пустой и затрёт клиентов.
+    Источник — клиентский amnezia-awg (adopt) в приоритете, иначе amnezia-awg2."""
     s = deploy.build_script("update", 47180, deploy.generate_server_config(47180))
-    assert 'docker exec "$CONT" cat "/opt/amnezia/awg/$f"' in s
+    assert 'grep -ix "amnezia-awg"' in s  # приоритет клиентскому контейнеру
+    assert 'docker exec "$SRC" cat "/opt/amnezia/awg/$f"' in s
     assert 'base64 -d | sudo tee "$D/$f"' in s
     # preserve идёт ДО guard [ ! -f awg0.conf ]
-    assert s.index('docker exec "$CONT" cat') < s.index('if [ ! -f "$D/awg0.conf" ]')
+    assert s.index('docker exec "$SRC" cat') < s.index('if [ ! -f "$D/awg0.conf" ]')
+
+
+def test_build_script_adopt_detects_port_and_removes_parallel():
+    """Adopt: порт берётся из самого конфига (у клиента он может отличаться),
+    а перед созданием сносится ЛЮБОЙ amnezia-awg* — чтобы не остался
+    параллельный контейнер (инцидент uz)."""
+    s = deploy.build_script("adopt", 47180, deploy.generate_server_config(47180))
+    assert 'DPORT=$(sudo grep -iE "^ *ListenPort" "$D/awg0.conf"' in s
+    assert "[ -n \"$DPORT\" ] && PORT=$DPORT" in s
+    assert 'docker ps -aq --filter "name=amnezia-awg"' in s
+    # снос параллельного идёт ДО docker run нового контейнера
+    assert s.index('--filter "name=amnezia-awg"') < s.index("docker run -d --name $CONT")
 
 
 async def test_snapshot_helpers_all_protocols():

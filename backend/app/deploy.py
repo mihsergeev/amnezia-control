@@ -146,13 +146,19 @@ def build_script(mode: str, port: int, cfg: dict[str, str]) -> str:
         # затёр клиентов (инцидент de-hz 10.07). Читаем через docker exec, что
         # покрывает оба случая (внутри контейнера / на маунте). base64 —
         # побайтовое сохранение (важен завершающий \n у clientsTable).
-        'if sudo docker ps --format "{{.Names}}" | grep -qx "$CONT"; then',
+        # Источник конфига: клиентский amnezia-awg (взятие под управление) в
+        # приоритете, иначе панельный amnezia-awg2 (обычная пересборка). Читаем
+        # из ЖИВОГО контейнера — конфиг мог лежать ВНУТРИ него, не на хост-маунте.
+        'SRC=$(sudo docker ps --format "{{.Names}}" | grep -ix "amnezia-awg" || true)',
+        '[ -z "$SRC" ] && SRC=$(sudo docker ps --format "{{.Names}}" | grep -ix "amnezia-awg2" || true)',
+        'if [ -n "$SRC" ]; then',
         '  for f in awg0.conf clientsTable wireguard_server_private_key.key '
         'wireguard_server_public_key.key wireguard_psk.key; do',
-        '    B=$(sudo docker exec "$CONT" cat "/opt/amnezia/awg/$f" 2>/dev/null '
+        '    B=$(sudo docker exec "$SRC" cat "/opt/amnezia/awg/$f" 2>/dev/null '
         '| base64 -w0 2>/dev/null || true);',
         '    [ -n "$B" ] && echo "$B" | base64 -d | sudo tee "$D/$f" >/dev/null || true;',
         '  done',
+        '  log "конфиг перечитан из контейнера $SRC"',
         'fi',
         'if [ ! -f "$D/awg0.conf" ]; then',
         f'  echo {_b64(cfg["conf"])} | base64 -d | sudo tee "$D/awg0.conf" >/dev/null',
@@ -164,7 +170,18 @@ def build_script(mode: str, port: int, cfg: dict[str, str]) -> str:
         "else",
         '  log "конфиг уже есть — сохранён, клиенты не тронуты"',
         "fi",
-        "sudo docker rm -f $CONT >/dev/null 2>&1 || true",
+        # порт берём из самого конфига: у взятого под управление сервера порт
+        # клиента может отличаться от переданного — сохраняем его, иначе клиенты
+        # перестанут подключаться (endpoint у них зашит на старый порт).
+        'DPORT=$(sudo grep -iE "^ *ListenPort" "$D/awg0.conf" 2>/dev/null '
+        '| head -1 | tr -dc "0-9" || true); [ -n "$DPORT" ] && PORT=$DPORT',
+        'if command -v ufw >/dev/null 2>&1; then sudo ufw allow $PORT/udp >/dev/null 2>&1 || true; '
+        'sudo ufw route allow proto udp from any to any port $PORT >/dev/null 2>&1 || true; fi',
+        'log "порт контейнера: $PORT"',
+        # сносим ЛЮБОЙ amnezia-awg / amnezia-awg2 — иначе останется параллельный
+        # контейнер (клиентский), а панель показывала бы пустой новый (инцидент uz)
+        'IDS=$(sudo docker ps -aq --filter "name=amnezia-awg" 2>/dev/null || true); '
+        '[ -n "$IDS" ] && sudo docker rm -f $IDS >/dev/null 2>&1 || true',
         "sudo docker run -d --name $CONT --restart always --privileged \\",
         "  --cap-add NET_ADMIN --cap-add SYS_MODULE \\",
         "  --sysctl net.ipv4.conf.all.src_valid_mark=1 \\",
@@ -236,13 +253,20 @@ _SNAP_SPECS: dict[str, dict] = {
 
 
 async def snapshot_config(
-    conn: asyncssh.SSHClientConnection, tag: str, keep: int = 10
+    conn: asyncssh.SSHClientConnection,
+    tag: str,
+    keep: int = 10,
+    container: str | None = None,
 ) -> str | None:
     """Снимок конфига протокола (tar из ЖИВОГО контейнера) в
-    $HOME/.acontrol/snapshots/<tag>/<ts>.tar.gz. Возвращает id снимка или None."""
+    $HOME/.acontrol/snapshots/<tag>/<ts>.tar.gz. Возвращает id снимка или None.
+
+    container переопределяет контейнер из спецификации — нужно, чтобы снять
+    снимок клиентского amnezia-awg перед взятием его под управление панелью."""
     spec = _SNAP_SPECS[tag]
+    cont = container or spec["container"]
     cmd = (
-        f'C={spec["container"]}; R={SNAP_ROOT}/{tag}; '
+        f'C={cont}; R={SNAP_ROOT}/{tag}; '
         f'sudo docker ps --format "{{{{.Names}}}}" | grep -qx "$C" || {{ echo NO_CONT; exit 0; }}; '
         f'mkdir -p "$R"; TS=$(date +%Y%m%d-%H%M%S); F="$R/$TS.tar.gz"; '
         f'if sudo docker exec "$C" tar -czf - {spec["paths"]} 2>/dev/null > "$F" && [ -s "$F" ]; then '
