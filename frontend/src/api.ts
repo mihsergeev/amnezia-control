@@ -216,6 +216,7 @@ export type VersionInfo = {
   latest_updated: string
   update_available: boolean
   foreign_container?: string | null
+  adoptable?: boolean
 }
 
 // снимки конфига на ноде (для отката пересборки), для любого протокола

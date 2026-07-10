@@ -215,9 +215,12 @@ class VersionOut(BaseModel):
     latest_version: str | None
     latest_updated: str
     update_available: bool
-    # имя AWG-контейнера, собранного НЕ панелью (amnezia-awg), если такой есть —
-    # тогда фронт предлагает «Взять под управление» вместо пересборки
+    # имя AWG-контейнера, собранного НЕ панелью (amnezia-awg), если такой есть
     foreign_container: str | None = None
+    # можно ли его безопасно взять под управление (это настоящий AmneziaWG с
+    # awg0.conf). Если False (напр. plain-WireGuard на wg0.conf) — перенос
+    # запрещён, иначе затёрли бы конфиг и потеряли клиентов
+    adoptable: bool = False
 
 
 class ServerStat(BaseModel):

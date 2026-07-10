@@ -337,6 +337,16 @@ async def adopt_awg(
                     "Внешний контейнер AmneziaWG на сервере не найден — брать под "
                     "управление нечего.",
                 )
+            # ВАЖНО: переносим только настоящий AmneziaWG (awg0.conf). Клиентский
+            # plain-WireGuard (wg0.conf) несовместим — его перенос затёр бы конфиг
+            # и потерял клиентов. Такой контейнер не трогаем.
+            if not await deploy.awg_adoptable(conn, foreign):
+                raise HTTPException(
+                    status.HTTP_409_CONFLICT,
+                    f"Контейнер «{foreign}» не является AmneziaWG-совместимым "
+                    "(нет awg0.conf — вероятно, это обычный WireGuard). "
+                    "Автоперенос под управление невозможен без потери клиентов.",
+                )
             # снимок клиентского контейнера ДО замены — страховка для отката
             await deploy.snapshot_config(conn, "awg", container=foreign)
             await deploy.launch(conn, script, tag="awg")
@@ -406,6 +416,7 @@ async def awg_version(
             current_digest = await deploy.node_base_digest(conn)
             awg_go = await deploy.node_awg_go_version(conn)
             foreign = await deploy.foreign_awg_container(conn)
+            adoptable = bool(foreign) and await deploy.awg_adoptable(conn, foreign)
     except Exception as exc:  # noqa: BLE001
         raise _ssh_error(exc) from exc
     try:
@@ -425,6 +436,7 @@ async def awg_version(
         latest_updated=hub["latest_updated"],
         update_available=bool(current_digest) and current_digest != hub["latest_digest"],
         foreign_container=foreign,
+        adoptable=adoptable,
     )
 
 
