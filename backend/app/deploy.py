@@ -158,6 +158,15 @@ def build_script(mode: str, port: int, cfg: dict[str, str]) -> str:
         '| base64 -w0 2>/dev/null || true);',
         '    [ -n "$B" ] && echo "$B" | base64 -d | sudo tee "$D/$f" >/dev/null || true;',
         '  done',
+        # Старые сборки Amnezia держат конфиг в wg0.conf (интерфейс wg0), а не
+        # awg0.conf — это тот же AmneziaWG. Нормализуем имя в awg0.conf (панель
+        # поднимает awg0). Содержимое и обфускация сохраняются побайтово.
+        '  if ! sudo test -s "$D/awg0.conf"; then',
+        '    B=$(sudo docker exec "$SRC" cat "/opt/amnezia/awg/wg0.conf" 2>/dev/null '
+        '| base64 -w0 2>/dev/null || true);',
+        '    [ -n "$B" ] && echo "$B" | base64 -d | sudo tee "$D/awg0.conf" >/dev/null '
+        '&& log "wg0.conf нормализован в awg0.conf" || true;',
+        '  fi',
         '  log "конфиг перечитан из контейнера $SRC"',
         'fi',
         'if [ ! -f "$D/awg0.conf" ]; then',
@@ -238,7 +247,9 @@ _SNAP_SPECS: dict[str, dict] = {
         "table": "/opt/amnezia/awg/clientsTable",
         "reload": (
             "sudo docker exec %C sh -c "
-            "'awg-quick down /opt/amnezia/awg/awg0.conf >/dev/null 2>&1; "
+            "'[ -s /opt/amnezia/awg/awg0.conf ] || cp /opt/amnezia/awg/wg0.conf "
+            "/opt/amnezia/awg/awg0.conf 2>/dev/null; "
+            "awg-quick down /opt/amnezia/awg/awg0.conf >/dev/null 2>&1; "
             "awg-quick up /opt/amnezia/awg/awg0.conf'"
         ),
     },
@@ -367,16 +378,18 @@ async def awg_adoptable(
 ) -> bool:
     """Можно ли безопасно взять контейнер под управление панелью.
 
-    Совместим только настоящий AmneziaWG с awg0.conf в /opt/amnezia/awg (панель
-    поднимает именно awg0). Клиентский plain-WireGuard хранит wg0.conf (другой
-    протокол/интерфейс/порт) — его перенос затёр бы конфиг и убил клиентов (как
-    было бы с uz: 37 клиентов на wg0.conf). Для таких adopt запрещён."""
+    Переносим только настоящий AmneziaWG — его конфиг (awg0.conf ИЛИ старый
+    wg0.conf) содержит параметры обфускации (Jc/H1...). Обычный WireGuard их не
+    имеет: перенос в AmneziaWG-контейнер сломал бы клиентов (у них нет обфускации).
+    Поэтому признак совместимости — наличие Jc/H1 в конфиге, а не имя файла."""
     if not container or not _CONT_NAME_RE.match(container):
         return False
     cmd = (
-        f'D=$(docker info >/dev/null 2>&1 && echo docker || echo "sudo -n docker"); '
-        f'$D exec {container} test -f /opt/amnezia/awg/awg0.conf '
-        f"&& echo YES || echo NO"
+        'D=$(docker info >/dev/null 2>&1 && echo docker || echo "sudo -n docker"); '
+        "$D exec " + container + " sh -c '"
+        "for f in awg0.conf wg0.conf; do "
+        'grep -qiE "^(Jc|H1) *=" "/opt/amnezia/awg/$f" 2>/dev/null '
+        "&& { echo YES; exit 0; }; done; echo NO' 2>/dev/null || echo NO"
     )
     result = await conn.run(cmd, check=False)
     return "YES" in (result.stdout or "")
