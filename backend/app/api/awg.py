@@ -3,10 +3,10 @@ import httpx
 from fastapi import APIRouter, HTTPException, Request, status
 from sqlalchemy import delete, select
 
-from app import audit, awg, deploy, deploywatch, limits, sshops
+from app import audit, awg, deploy, deploywatch, limits, notes, sshops
 from app.config import get_settings
 from app.deps import CurrentUser, SessionDep
-from app.models import AwgConfig, AwgNote, ClientLimit, Server
+from app.models import AwgConfig, ClientLimit, Server
 from app.schemas import (
     AwgStateOut,
     ConfigTextResponse,
@@ -82,23 +82,11 @@ async def _store_config(session, server_id, public_key, name, config) -> None:
 
 
 async def _set_note(session, server_id, public_key, note) -> None:
-    await session.execute(
-        delete(AwgNote).where(
-            AwgNote.server_id == server_id, AwgNote.public_key == public_key
-        )
-    )
-    if note:
-        session.add(
-            AwgNote(server_id=server_id, public_key=public_key, note=note)
-        )
-    await session.commit()
+    await notes.set_note(session, server_id, "awg", public_key, note)
 
 
 async def _notes_map(session, server_id) -> dict[str, str]:
-    rows = await session.execute(
-        select(AwgNote.public_key, AwgNote.note).where(AwgNote.server_id == server_id)
-    )
-    return {pub: note for pub, note in rows.all()}
+    return await notes.notes_map(session, server_id, "awg")
 
 
 def _amnezia_link(config: str, server: Server) -> str:
@@ -473,12 +461,7 @@ async def revoke_client(
             AwgConfig.public_key == body.public_key,
         )
     )
-    await session.execute(
-        delete(AwgNote).where(
-            AwgNote.server_id == server_id,
-            AwgNote.public_key == body.public_key,
-        )
-    )
+    await notes.clear_note(session, server_id, "awg", body.public_key)
     await session.execute(
         delete(ClientLimit).where(
             ClientLimit.server_id == server_id,

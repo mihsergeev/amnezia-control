@@ -3,11 +3,12 @@ import httpx
 from fastapi import APIRouter, HTTPException, Request, status
 from sqlalchemy import delete
 
-from app import audit, awg, deploy, deploywatch, limits, sshops, xray
+from app import audit, awg, deploy, deploywatch, limits, notes, sshops, xray
 from app.config import get_settings
 from app.deps import CurrentUser, SessionDep
 from app.models import ClientLimit, Server
 from app.schemas import (
+    ClientNoteRequest,
     DeployStatusOut,
     SnapshotOut,
     SnapshotRestoreRequest,
@@ -67,12 +68,25 @@ async def get_xray(server_id: int, _: CurrentUser, session: SessionDep) -> XrayS
     except Exception as exc:  # noqa: BLE001
         raise _xray_error(exc) from exc
     lim = await limits.limits_map(session, server_id, "xray")
+    note_map = await notes.notes_map(session, server_id, "xray")
     return XrayStateOut(
         container=container,
         clients=[
-            c.__dict__ | {"expires_at": lim.get(c.client_id)} for c in clients
+            c.__dict__ | {
+                "expires_at": lim.get(c.client_id),
+                "note": note_map.get(c.client_id, ""),
+            }
+            for c in clients
         ],
     )
+
+
+@router.post("/note", status_code=status.HTTP_204_NO_CONTENT)
+async def set_note(
+    server_id: int, body: ClientNoteRequest, _: CurrentUser, session: SessionDep
+) -> None:
+    await _get_or_404(server_id, session)
+    await notes.set_note(session, server_id, "xray", body.client_id, body.note.strip())
 
 
 @router.post("/clients", response_model=XrayCreateResponse, status_code=201)
@@ -141,6 +155,7 @@ async def revoke_client(
     await audit.record(
         session, user.username, "xray_revoke", server.name, body.client_id
     )
+    await notes.clear_note(session, server_id, "xray", body.client_id)
     await session.execute(
         delete(ClientLimit).where(
             ClientLimit.server_id == server_id,
@@ -159,6 +174,7 @@ async def reissue_client(
     server = await _get_or_404(server_id, session)
     dns1, dns2 = _dns_pair()
     old_exp = (await limits.limits_map(session, server_id, "xray")).get(body.client_id)
+    old_note = (await notes.notes_map(session, server_id, "xray")).get(body.client_id, "")
     try:
         async with _connect(server) as conn:
             container = await xray.detect_container(conn)
@@ -177,15 +193,18 @@ async def reissue_client(
         raise
     except Exception as exc:  # noqa: BLE001
         raise _xray_error(exc) from exc
-    # переносим срок действия со старого UUID на новый
+    # переносим срок и заметку со старого UUID на новый
     await limits.drop_limit(session, server_id, "xray", body.client_id)
+    await notes.set_note(session, server_id, "xray", body.client_id, "")
+    if old_note:
+        await notes.set_note(session, server_id, "xray", client.client_id, old_note)
     if old_exp:
         await limits.set_limit(
             session, server_id, "xray", client.client_id, client.name, old_exp
         )
     await audit.record(session, user.username, "xray_reissue", server.name, client.name)
     return XrayCreateResponse(
-        client=XrayClientOut(**client.__dict__, expires_at=old_exp),
+        client=XrayClientOut(**client.__dict__, expires_at=old_exp, note=old_note),
         config_amnezia=link,
     )
 

@@ -2,11 +2,12 @@ import asyncssh
 from fastapi import APIRouter, HTTPException, Request, status
 from sqlalchemy import delete, select
 
-from app import audit, awg, deploy, deploywatch, limits, openvpn, sshops
+from app import audit, awg, deploy, deploywatch, limits, notes, openvpn, sshops
 from app.config import get_settings
 from app.deps import CurrentUser, SessionDep
 from app.models import ClientLimit, OvpnConfig, Server
 from app.schemas import (
+    ClientNoteRequest,
     DeployStatusOut,
     OvpnClientOut,
     OvpnConfigRequest,
@@ -79,6 +80,11 @@ async def get_openvpn(
         async with _connect(server) as conn:
             container = await openvpn.detect_container(conn)
             clients = await openvpn.read_clients(conn)
+            # онлайн + трафик из openvpn-status.log (best-effort)
+            try:
+                status_map = await openvpn.read_status_map(conn, container)
+            except Exception:  # noqa: BLE001 — статус-лог не критичен
+                status_map = {}
     except openvpn.OpenVpnError as exc:
         raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(exc)) from exc
     except (asyncssh.Error, OSError) as exc:
@@ -94,16 +100,32 @@ async def get_openvpn(
         ).all()
     )
     lim = await limits.limits_map(session, server_id, "openvpn")
-    return OvpnStateOut(
-        container=container,
-        clients=[
+    note_map = await notes.notes_map(session, server_id, "openvpn")
+    out_clients = []
+    for c in clients:
+        st = status_map.get(c.client_id)
+        out_clients.append(
             c.__dict__
             | {
                 "has_config": c.client_id in stored,
                 "expires_at": lim.get(c.client_id),
+                "note": note_map.get(c.client_id, ""),
+                "rx_bytes": st["rx"] if st else 0,
+                "tx_bytes": st["tx"] if st else 0,
+                "connected": bool(st),
+                "since": st["since"] if st else "",
             }
-            for c in clients
-        ],
+        )
+    return OvpnStateOut(container=container, clients=out_clients)
+
+
+@router.post("/note", status_code=status.HTTP_204_NO_CONTENT)
+async def set_note(
+    server_id: int, body: ClientNoteRequest, _: CurrentUser, session: SessionDep
+) -> None:
+    await _get_or_404(server_id, session)
+    await notes.set_note(
+        session, server_id, "openvpn", body.client_id, body.note.strip()
     )
 
 
@@ -145,6 +167,9 @@ async def reissue_client(
     old_exp = (await limits.limits_map(session, server_id, "openvpn")).get(
         body.client_id
     )
+    old_note = (await notes.notes_map(session, server_id, "openvpn")).get(
+        body.client_id, ""
+    )
     if "/" in body.client_id or ".." in body.client_id:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "некорректный clientId")
     try:
@@ -172,8 +197,11 @@ async def reissue_client(
         )
     )
     await _store_config(session, server_id, client.client_id, client.name, link)
-    # переносим срок действия со старого clientId на новый (id меняется при перевыпуске)
+    # переносим срок и заметку со старого clientId на новый (id меняется)
     await limits.drop_limit(session, server_id, "openvpn", body.client_id)
+    await notes.set_note(session, server_id, "openvpn", body.client_id, "")
+    if old_note:
+        await notes.set_note(session, server_id, "openvpn", client.client_id, old_note)
     if old_exp:
         await limits.set_limit(
             session, server_id, "openvpn", client.client_id, client.name, old_exp
@@ -183,7 +211,7 @@ async def reissue_client(
     )
     return OvpnCreateResponse(
         client=OvpnClientOut(
-            **client.__dict__, has_config=True, expires_at=old_exp
+            **client.__dict__, has_config=True, expires_at=old_exp, note=old_note
         ),
         config_amnezia=link,
     )
@@ -222,6 +250,7 @@ async def revoke_client(
     await audit.record(
         session, user.username, "openvpn_revoke", server.name, body.client_id
     )
+    await notes.clear_note(session, server_id, "openvpn", body.client_id)
     await session.execute(
         delete(OvpnConfig).where(
             OvpnConfig.server_id == server_id,

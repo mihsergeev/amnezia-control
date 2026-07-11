@@ -140,13 +140,16 @@ class AuditLog(Base):
 
 
 class AwgNote(Base):
-    """Панельная заметка к клиенту (работает и для клиентов, созданных вне панели)."""
+    """Панельная заметка к клиенту любого протокола (работает и для клиентов,
+    созданных вне панели). Имя таблицы историческое (awg_notes), но protocol
+    делает её общей для awg/openvpn/xray. public_key = client_id клиента."""
 
     __tablename__ = "awg_notes"
-    __table_args__ = (UniqueConstraint("server_id", "public_key"),)
+    __table_args__ = (UniqueConstraint("server_id", "protocol", "public_key"),)
 
     id: Mapped[int] = mapped_column(primary_key=True)
     server_id: Mapped[int] = mapped_column(Integer, index=True)
+    protocol: Mapped[str] = mapped_column(String(16), default="awg")
     public_key: Mapped[str] = mapped_column(String(64))
     note: Mapped[str] = mapped_column(Text, default="")
     updated_at: Mapped[datetime] = mapped_column(

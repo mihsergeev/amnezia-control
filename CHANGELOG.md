@@ -4,6 +4,17 @@ All notable changes to Amnezia Control are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.26.0] — 2026-07-12
+
+### Added (protocol parity)
+- **Per-client notes now work for XRay and OpenVPN too** (previously AmneziaWG
+  only) — the same inline ✎ editor, and the note is carried over on reissue. The
+  notes table is now shared across protocols.
+- **The OpenVPN client list shows online status and per-client traffic** (↓ / ↑),
+  read live from `openvpn-status.log` — just like AmneziaWG's handshake/traffic
+  columns. (The collector's status-log parsing was extracted into a shared,
+  now-tested helper.)
+
 ## [0.25.0] — 2026-07-12
 
 ### Added (protocol parity)
@@ -324,6 +335,7 @@ Initial public release.
   scheduled auto-backups.
 - Dark / light theme and English / Russian UI.
 
+[0.26.0]: https://github.com/mihsergeev/amnezia-control/releases/tag/v0.26.0
 [0.25.0]: https://github.com/mihsergeev/amnezia-control/releases/tag/v0.25.0
 [0.24.0]: https://github.com/mihsergeev/amnezia-control/releases/tag/v0.24.0
 [0.23.0]: https://github.com/mihsergeev/amnezia-control/releases/tag/v0.23.0
