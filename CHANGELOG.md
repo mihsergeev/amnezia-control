@@ -4,6 +4,21 @@ All notable changes to Amnezia Control are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.30.0] — 2026-07-12
+
+### Fixed (UX)
+- **Copy-to-clipboard now works over plain HTTP.** The panel is often opened at
+  `http://IP:8080`, where the browser Clipboard API is unavailable, so "Copy"
+  buttons silently did nothing. Added an `execCommand` fallback, so copying a
+  config, the setup script and the full-access link works everywhere.
+- **Backup download no longer fails silently** — an error is now shown, and a
+  transient error while downloading a saved backup no longer logs you out (only a
+  real 401 does).
+- **Modals close on Escape and on clicking outside** — across the whole panel
+  (clients, deploy log, backups, alerts, 2FA, password, import, per-client stats,
+  and the add/edit/delete/full-access/script dialogs). Nested dialogs close
+  top-first.
+
 ## [0.29.3] — 2026-07-12
 
 ### Fixed
@@ -398,6 +413,7 @@ Initial public release.
   scheduled auto-backups.
 - Dark / light theme and English / Russian UI.
 
+[0.30.0]: https://github.com/mihsergeev/amnezia-control/releases/tag/v0.30.0
 [0.29.3]: https://github.com/mihsergeev/amnezia-control/releases/tag/v0.29.3
 [0.29.2]: https://github.com/mihsergeev/amnezia-control/releases/tag/v0.29.2
 [0.29.1]: https://github.com/mihsergeev/amnezia-control/releases/tag/v0.29.1

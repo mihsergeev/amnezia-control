@@ -3,6 +3,7 @@ import { clientHistory, type ClientHistory } from './api'
 import { LineChart } from './LineChart'
 import { formatBytes } from './format'
 import { useI18n } from './i18n'
+import { useModalDismiss } from './useModalDismiss'
 
 type Props = {
   serverId: number
@@ -28,6 +29,7 @@ export function ClientStatsModal({
   onUnauthorized,
 }: Props) {
   const { t } = useI18n()
+  const dismiss = useModalDismiss(onClose)
   const [hours, setHours] = useState(24)
   const [data, setData] = useState<ClientHistory | null>(null)
   const [loading, setLoading] = useState(true)
@@ -44,7 +46,7 @@ export function ClientStatsModal({
     data?.points.map((p) => ({ t: Date.parse(p.ts), v: p.throughput })) ?? []
 
   return (
-    <div className="modal-backdrop">
+    <div className="modal-backdrop" onClick={dismiss}>
       <div className="card modal modal-wide" onClick={(e) => e.stopPropagation()}>
         <div className="clients-head">
           <h3>{t('Трафик клиента «{name}»', { name })}</h3>

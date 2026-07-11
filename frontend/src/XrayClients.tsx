@@ -16,6 +16,7 @@ import { Menu } from './Menu'
 import { NoteCell } from './NoteCell'
 import { ClientStatsModal } from './ClientStatsModal'
 import { RollbackMenu } from './RollbackMenu'
+import { copyText } from './clipboard'
 import { formatBytes } from './format'
 import { useI18n } from './i18n'
 
@@ -221,12 +222,7 @@ export function XrayClients({
 
   async function copyConfig() {
     if (!view) return
-    try {
-      await navigator.clipboard.writeText(view.amnezia)
-      setCopied(true)
-    } catch {
-      setCopied(false)
-    }
+    setCopied(await copyText(view.amnezia))
   }
 
   function downloadConfig() {

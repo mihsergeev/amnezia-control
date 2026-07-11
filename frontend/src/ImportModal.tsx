@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { api, ApiError, type ImportResult } from './api'
 import { useI18n } from './i18n'
+import { useModalDismiss } from './useModalDismiss'
 
 type Props = {
   onClose: () => void
@@ -12,6 +13,7 @@ type Tab = 'amnezia' | 'bulk'
 
 export function ImportModal({ onClose, onDone, onUnauthorized }: Props) {
   const { t } = useI18n()
+  const dismiss = useModalDismiss(onClose)
   const [tab, setTab] = useState<Tab>('amnezia')
   const [amneziaText, setAmneziaText] = useState('')
   const [bulkText, setBulkText] = useState('')
@@ -68,7 +70,7 @@ export function ImportModal({ onClose, onDone, onUnauthorized }: Props) {
   }
 
   return (
-    <div className="modal-backdrop">
+    <div className="modal-backdrop" onClick={dismiss}>
       <div className="card modal modal-wide" onClick={(e) => e.stopPropagation()}>
         <div className="clients-head">
           <h3>{t('Импорт серверов')}</h3>

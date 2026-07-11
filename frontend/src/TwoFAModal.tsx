@@ -8,6 +8,7 @@ import {
   type TwoFASetup,
 } from './api'
 import { useI18n } from './i18n'
+import { useModalDismiss } from './useModalDismiss'
 
 type Props = {
   onClose: () => void
@@ -16,6 +17,7 @@ type Props = {
 
 export function TwoFAModal({ onClose, onUnauthorized }: Props) {
   const { t } = useI18n()
+  const dismiss = useModalDismiss(onClose)
   const [enabled, setEnabled] = useState<boolean | null>(null)
   const [setup, setSetup] = useState<TwoFASetup | null>(null)
   const [qr, setQr] = useState<string | null>(null)
@@ -86,7 +88,7 @@ export function TwoFAModal({ onClose, onUnauthorized }: Props) {
   }
 
   return (
-    <div className="modal-backdrop">
+    <div className="modal-backdrop" onClick={dismiss}>
       <div className="card modal" onClick={(e) => e.stopPropagation()}>
         <div className="clients-head">
           <h3>{t('Двухфакторная аутентификация')}</h3>

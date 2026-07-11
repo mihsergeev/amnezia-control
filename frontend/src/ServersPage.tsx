@@ -19,6 +19,7 @@ import { ClientsModal } from './ClientsModal'
 import { ImportModal } from './ImportModal'
 import { DeployModal } from './DeployModal'
 import { Menu, type MenuItem } from './Menu'
+import { copyText } from './clipboard'
 import { formatBytes, formatUptime } from './format'
 import { useI18n } from './i18n'
 
@@ -141,6 +142,20 @@ export function ServersPage({ onUnauthorized }: Props) {
   const [scriptText, setScriptText] = useState('')
   const [copied, setCopied] = useState(false)
 
+  // Escape закрывает открытую инлайновую модалку страницы (компонентные —
+  // ClientsModal/DeployModal и т.п. — обрабатывают Escape сами)
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if (e.key !== 'Escape') return
+      if (fullAccess) setFullAccess(null)
+      else if (scriptFor) setScriptFor(null)
+      else if (deleteFor) setDeleteFor(null)
+      else if (formOpen) setFormOpen(false)
+    }
+    document.addEventListener('keydown', onKey)
+    return () => document.removeEventListener('keydown', onKey)
+  }, [fullAccess, scriptFor, deleteFor, formOpen])
+
   const handleError = useCallback(
     (err: unknown) => {
       if (err instanceof ApiError && err.status === 401) {
@@ -217,12 +232,7 @@ export function ServersPage({ onUnauthorized }: Props) {
   }
 
   async function copyScript() {
-    try {
-      await navigator.clipboard.writeText(scriptText)
-      setCopied(true)
-    } catch {
-      setCopied(false)
-    }
+    setCopied(await copyText(scriptText))
   }
 
   async function check(server: Server) {
@@ -779,7 +789,10 @@ export function ServersPage({ onUnauthorized }: Props) {
       )}
 
       {fullAccess && (
-        <div className="modal-backdrop">
+        <div
+          className="modal-backdrop"
+          onClick={(e) => e.target === e.currentTarget && setFullAccess(null)}
+        >
           <div className="card modal modal-wide" onClick={(e) => e.stopPropagation()}>
             <h3>{t('Полный доступ · {name}', { name: fullAccess.server.name })}</h3>
             <p className="muted small">
@@ -813,14 +826,7 @@ export function ServersPage({ onUnauthorized }: Props) {
                 {t('Скачать .txt')}
               </button>
               <button
-                onClick={async () => {
-                  try {
-                    await navigator.clipboard.writeText(fullAccess.config)
-                    setFaCopied(true)
-                  } catch {
-                    setFaCopied(false)
-                  }
-                }}
+                onClick={async () => setFaCopied(await copyText(fullAccess.config))}
               >
                 {faCopied ? t('Скопировано ✓') : t('Скопировать')}
               </button>
@@ -830,7 +836,10 @@ export function ServersPage({ onUnauthorized }: Props) {
       )}
 
       {deleteFor && (
-        <div className="modal-backdrop">
+        <div
+          className="modal-backdrop"
+          onClick={(e) => e.target === e.currentTarget && setDeleteFor(null)}
+        >
           <div className="card modal" onClick={(e) => e.stopPropagation()}>
             <h3>{t('Удалить сервер «{name}»?', { name: deleteFor.name })}</h3>
             <p className="muted small">
@@ -863,7 +872,10 @@ export function ServersPage({ onUnauthorized }: Props) {
       )}
 
       {scriptFor && (
-        <div className="modal-backdrop">
+        <div
+          className="modal-backdrop"
+          onClick={(e) => e.target === e.currentTarget && setScriptFor(null)}
+        >
           <div className="card modal modal-wide" onClick={(e) => e.stopPropagation()}>
             <h3>{t('Подготовка сервера «{name}»', { name: scriptFor.name })}</h3>
             <p className="muted small">

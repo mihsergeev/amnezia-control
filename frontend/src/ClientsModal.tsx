@@ -12,6 +12,7 @@ import {
   type Server,
   type VersionInfo,
 } from './api'
+import { copyText } from './clipboard'
 import { formatBytes, formatHandshake, isOnline } from './format'
 import { Menu } from './Menu'
 import { RollbackMenu } from './RollbackMenu'
@@ -21,6 +22,7 @@ import { AmneziaQr } from './AmneziaQr'
 import { ExpiryCell, ExpirySelect } from './Expiry'
 import { ClientStatsModal } from './ClientStatsModal'
 import { useI18n } from './i18n'
+import { useModalDismiss } from './useModalDismiss'
 
 type Props = {
   server: Server
@@ -44,6 +46,7 @@ export function ClientsModal({
   onRequestAdopt,
 }: Props) {
   const { t } = useI18n()
+  const dismiss = useModalDismiss(onClose)
   const hasAwg = protocols.some((p) => p.key === 'awg')
   const [proto, setProto] = useState<Protocol['key']>(
     protocols[0]?.key ?? 'awg',
@@ -297,12 +300,7 @@ export function ClientsModal({
 
   async function copyConfig() {
     if (!view) return
-    try {
-      await navigator.clipboard.writeText(currentText)
-      setCopied(true)
-    } catch {
-      setCopied(false)
-    }
+    setCopied(await copyText(currentText))
   }
 
   function downloadConfig() {
@@ -351,7 +349,7 @@ export function ClientsModal({
     sortKey === key ? (sortAsc ? ' ▲' : ' ▼') : ''
 
   return (
-    <div className="modal-backdrop">
+    <div className="modal-backdrop" onClick={dismiss}>
       <div
         className="card modal modal-wide modal-clients"
         onClick={(e) => e.stopPropagation()}
@@ -701,7 +699,10 @@ export function ClientsModal({
         )}
 
         {view && (
-          <div className="modal-backdrop">
+          <div
+            className="modal-backdrop"
+            onClick={(e) => e.target === e.currentTarget && setView(null)}
+          >
             <div className="card modal" onClick={(e) => e.stopPropagation()}>
               <h3>{t('Конфиг клиента «{name}»', { name: view.name })}</h3>
 

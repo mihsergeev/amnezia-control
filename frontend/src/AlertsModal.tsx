@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { getAlerts, putAlerts, testAlerts } from './api'
 import { useI18n } from './i18n'
+import { useModalDismiss } from './useModalDismiss'
 
 type Props = {
   onClose: () => void
@@ -9,6 +10,7 @@ type Props = {
 
 export function AlertsModal({ onClose, onUnauthorized }: Props) {
   const { t } = useI18n()
+  const dismiss = useModalDismiss(onClose)
   const [token, setToken] = useState('')
   const [chat, setChat] = useState('')
   const [webhook, setWebhook] = useState('')
@@ -67,7 +69,7 @@ export function AlertsModal({ onClose, onUnauthorized }: Props) {
   const canTest = Boolean((token && chat) || webhook)
 
   return (
-    <div className="modal-backdrop">
+    <div className="modal-backdrop" onClick={dismiss}>
       <div className="card modal" onClick={(e) => e.stopPropagation()}>
         <div className="clients-head">
           <h3>{t('Алерты о падении серверов')}</h3>
