@@ -4,6 +4,16 @@ All notable changes to Amnezia Control are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.29.1] — 2026-07-12
+
+### Fixed (security / data hygiene)
+- **Deleting a server now removes *all* of its panel-side data.** It previously
+  left behind `OvpnConfig` — which stores the client's `vpn://` link **including a
+  private key** — plus the client-name cache, node traffic history and
+  paused-client records. The cleanup now iterates every table with a `server_id`,
+  so a leaked secret can't linger after a server is removed, and any table added
+  in the future is covered automatically.
+
 ## [0.29.0] — 2026-07-12
 
 ### Added
@@ -369,6 +379,7 @@ Initial public release.
   scheduled auto-backups.
 - Dark / light theme and English / Russian UI.
 
+[0.29.1]: https://github.com/mihsergeev/amnezia-control/releases/tag/v0.29.1
 [0.29.0]: https://github.com/mihsergeev/amnezia-control/releases/tag/v0.29.0
 [0.28.0]: https://github.com/mihsergeev/amnezia-control/releases/tag/v0.28.0
 [0.27.0]: https://github.com/mihsergeev/amnezia-control/releases/tag/v0.27.0
