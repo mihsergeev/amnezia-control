@@ -3,7 +3,7 @@ import httpx
 from fastapi import APIRouter, HTTPException, Request, status
 from sqlalchemy import delete, select
 
-from app import audit, awg, deploy, deploywatch, limits, notes, sshops
+from app import audit, awg, deploy, deploywatch, limits, notes, pausestore, sshops
 from app.config import get_settings
 from app.deps import CurrentUser, SessionDep
 from app.models import AwgConfig, ClientLimit, Server
@@ -110,16 +110,31 @@ async def get_awg(server_id: int, _: CurrentUser, session: SessionDep) -> AwgSta
             )
         ).all()
     )
-    notes = await _notes_map(session, server_id)
+    notes_by_pk = await _notes_map(session, server_id)
     lim = await limits.limits_map(session, server_id, "awg")
+    paused = await pausestore.list_paused(session, server_id, "awg")
     clients = []
     for c in state.clients:
         item = c.__dict__ | {
             "has_config": c.public_key in stored,
-            "note": notes.get(c.public_key, ""),
+            "note": notes_by_pk.get(c.public_key, ""),
             "expires_at": lim.get(c.public_key),
+            "paused": False,
         }
         clients.append(item)
+    # клиенты на паузе: их нет в живом конфиге — показываем из хранилища
+    live = {c["public_key"] for c in clients}
+    for cid, p in paused.items():
+        if cid in live:
+            continue
+        ip = p["data"].get("ip", "")
+        clients.append({
+            "name": p["name"], "public_key": cid,
+            "address": f"{ip}/32" if ip else "",
+            "latest_handshake": None, "rx_bytes": 0, "tx_bytes": 0, "endpoint": "",
+            "has_config": cid in stored, "note": notes_by_pk.get(cid, ""),
+            "expires_at": lim.get(cid), "paused": True,
+        })
     return AwgStateOut(
         container=state.container,
         interface=state.interface,
@@ -436,6 +451,58 @@ async def awg_version(
     )
 
 
+@router.post("/pause", status_code=status.HTTP_204_NO_CONTENT)
+async def pause_client(
+    server_id: int, body: PublicKeyRequest, user: CurrentUser, session: SessionDep
+) -> None:
+    """Пауза: снимает пира с сервера (не сможет подключиться), но запоминает IP,
+    чтобы возобновить того же клиента без пересоздания."""
+    server = await _get_or_404(server_id, session)
+    try:
+        async with _connect(server) as conn:
+            state = await awg.read_state(conn, server.host)
+            target = next(
+                (c for c in state.clients if c.public_key == body.public_key), None
+            )
+            if target is None:
+                raise HTTPException(status.HTTP_404_NOT_FOUND, "Клиент не найден")
+            name = target.name
+            data = await awg.pause_client(conn, state, body.public_key)
+    except HTTPException:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        raise _ssh_error(exc) from exc
+    await pausestore.add(session, server_id, "awg", body.public_key, name, data)
+    await audit.record(
+        session, user.username, "awg_pause", server.name, name or body.public_key
+    )
+
+
+@router.post("/resume", status_code=status.HTTP_204_NO_CONTENT)
+async def resume_client(
+    server_id: int, body: PublicKeyRequest, user: CurrentUser, session: SessionDep
+) -> None:
+    """Возобновление: возвращает пира на сервер с прежними ключом/IP."""
+    server = await _get_or_404(server_id, session)
+    paused = await pausestore.list_paused(session, server_id, "awg")
+    rec = paused.get(body.public_key)
+    if rec is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Клиент не на паузе")
+    try:
+        async with _connect(server) as conn:
+            state = await awg.read_state(conn, server.host)
+            await awg.resume_client(
+                conn, state, body.public_key, rec["name"], rec["data"].get("ip", "")
+            )
+    except Exception as exc:  # noqa: BLE001
+        raise _ssh_error(exc) from exc
+    await pausestore.drop(session, server_id, "awg", body.public_key)
+    await session.commit()
+    await audit.record(
+        session, user.username, "awg_resume", server.name, rec["name"]
+    )
+
+
 @router.post("/revoke", status_code=status.HTTP_204_NO_CONTENT)
 async def revoke_client(
     server_id: int,
@@ -444,17 +511,21 @@ async def revoke_client(
     session: SessionDep,
 ) -> None:
     server = await _get_or_404(server_id, session)
-    try:
-        async with _connect(server) as conn:
-            state = await awg.read_state(conn, server.host)
-            await awg.revoke_client(
-                conn, state.container, state.interface, body.public_key
-            )
-    except Exception as exc:  # noqa: BLE001
-        raise _ssh_error(exc) from exc
+    # клиент на паузе уже снят с сервера — SSH-удаление не нужно, только чистим БД
+    is_paused = body.public_key in await pausestore.list_paused(session, server_id, "awg")
+    if not is_paused:
+        try:
+            async with _connect(server) as conn:
+                state = await awg.read_state(conn, server.host)
+                await awg.revoke_client(
+                    conn, state.container, state.interface, body.public_key
+                )
+        except Exception as exc:  # noqa: BLE001
+            raise _ssh_error(exc) from exc
     await audit.record(
         session, user.username, "awg_revoke", server.name, body.public_key
     )
+    await pausestore.drop(session, server_id, "awg", body.public_key)
     await session.execute(
         delete(AwgConfig).where(
             AwgConfig.server_id == server_id,

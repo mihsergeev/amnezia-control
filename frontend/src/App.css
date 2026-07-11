@@ -1012,6 +1012,17 @@ tr:hover .note-edit {
   color: #2ecc71;
 }
 
+.pause-badge {
+  margin-left: 0.4rem;
+  background: rgba(150, 150, 160, 0.18);
+  color: var(--muted, #8a8f98);
+  border-radius: 6px;
+  padding: 0.05rem 0.4rem;
+  font-size: 0.7rem;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
 .deploy-state {
   font-size: 0.95rem;
   font-weight: 600;

@@ -215,6 +215,25 @@ class ClientName(Base):
     )
 
 
+class PausedClient(Base):
+    """Клиент «на паузе»: снят с сервера (не может подключиться), но его данные
+    сохранены, чтобы возобновить без пересоздания. data — JSON с протокол-
+    специфичной нагрузкой для восстановления (IP у awg, dict клиента у xray)."""
+
+    __tablename__ = "paused_clients"
+    __table_args__ = (UniqueConstraint("server_id", "protocol", "client_id"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    server_id: Mapped[int] = mapped_column(Integer, index=True)
+    protocol: Mapped[str] = mapped_column(String(16))
+    client_id: Mapped[str] = mapped_column(String(64))
+    name: Mapped[str] = mapped_column(String(128), default="")
+    data: Mapped[str] = mapped_column(Text, default="")  # JSON restore payload
+    paused_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+
 class NodeMetric(Base):
     """Последний снимок ресурсов ноды (CPU/RAM/диск/аптайм) — для карточек и алертов."""
 

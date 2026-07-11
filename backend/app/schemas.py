@@ -112,6 +112,7 @@ class AwgClientOut(BaseModel):
     has_config: bool = False
     note: str = ""
     expires_at: datetime | None = None
+    paused: bool = False
 
 
 class AwgStateOut(BaseModel):
@@ -360,6 +361,7 @@ class XrayClientOut(BaseModel):
     # трафик из xray StatsService (0, если статистика не включена на сервере)
     rx_bytes: int = 0  # upload (uplink)
     tx_bytes: int = 0  # download (downlink)
+    paused: bool = False
 
 
 class XrayStateOut(BaseModel):
