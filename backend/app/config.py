@@ -7,7 +7,7 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="VPNPANEL_", env_file=".env")
 
     app_name: str = "Amnezia Control"
-    version: str = "0.23.0"
+    version: str = "0.24.0"
     debug: bool = False
 
     db_url: str = "sqlite+aiosqlite:///./data/panel.db"
@@ -35,6 +35,12 @@ class Settings(BaseSettings):
 
     # Авто-отзыв истёкших клиентов: интервал в секундах (0 = выключить)
     expiry_interval: int = 300
+    # За сколько дней до истечения слать предупреждающий алерт (0 = выключить)
+    expiry_warn_days: int = 3
+
+    # Сколько подряд пропущенных циклов сбора считать нодой «упавшей» перед
+    # алертом (антидребезг: одна транзиентная ошибка не поднимает ложную тревогу)
+    server_down_misses: int = 2
 
     # Алерты о падении серверов (Telegram / вебхук)
     alert_telegram_token: str = ""

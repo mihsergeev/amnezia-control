@@ -1,9 +1,9 @@
 import asyncssh
 import httpx
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, HTTPException, Request, status
 from sqlalchemy import delete
 
-from app import audit, awg, deploy, limits, sshops, xray
+from app import audit, awg, deploy, deploywatch, limits, sshops, xray
 from app.config import get_settings
 from app.deps import CurrentUser, SessionDep
 from app.models import ClientLimit, Server
@@ -153,7 +153,8 @@ async def revoke_client(
 
 @router.post("/deploy", status_code=status.HTTP_202_ACCEPTED)
 async def deploy_xray(
-    server_id: int, body: XrayDeployRequest, user: CurrentUser, session: SessionDep
+    server_id: int, body: XrayDeployRequest, user: CurrentUser, session: SessionDep,
+    request: Request,
 ) -> dict:
     server = await _get_or_404(server_id, session)
     # ставим последнюю версию xray-core; если GitHub недоступен — закреплённую
@@ -167,6 +168,7 @@ async def deploy_xray(
             await deploy.launch(conn, script, tag="xray")
     except Exception as exc:  # noqa: BLE001
         raise _xray_error(exc) from exc
+    deploywatch.spawn(request.app, server, "xray")
     await audit.record(
         session, user.username, "xray_deploy", server.name, f"port {body.port}"
     )
@@ -253,7 +255,7 @@ async def xray_version(
 
 @router.post("/update", status_code=status.HTTP_202_ACCEPTED)
 async def update_xray(
-    server_id: int, user: CurrentUser, session: SessionDep
+    server_id: int, user: CurrentUser, session: SessionDep, request: Request
 ) -> dict:
     server = await _get_or_404(server_id, session)
     try:
@@ -272,6 +274,7 @@ async def update_xray(
             await deploy.launch(conn, script, tag="xray")
     except Exception as exc:  # noqa: BLE001
         raise _xray_error(exc) from exc
+    deploywatch.spawn(request.app, server, "xray")
     await audit.record(
         session, user.username, "xray_update", server.name, latest["tag"]
     )

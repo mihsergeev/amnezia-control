@@ -1,9 +1,9 @@
 import asyncssh
 import httpx
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, HTTPException, Request, status
 from sqlalchemy import delete, select
 
-from app import audit, awg, deploy, limits, sshops
+from app import audit, awg, deploy, deploywatch, limits, sshops
 from app.config import get_settings
 from app.deps import CurrentUser, SessionDep
 from app.models import AwgConfig, AwgNote, ClientLimit, Server
@@ -271,7 +271,8 @@ async def reissue_client(
 
 @router.post("/deploy", status_code=status.HTTP_202_ACCEPTED)
 async def deploy_awg(
-    server_id: int, body: DeployRequest, user: CurrentUser, session: SessionDep
+    server_id: int, body: DeployRequest, user: CurrentUser, session: SessionDep,
+    request: Request,
 ) -> dict:
     server = await _get_or_404(server_id, session)
     cfg = deploy.generate_server_config(body.port)
@@ -284,6 +285,7 @@ async def deploy_awg(
         raise
     except Exception as exc:  # noqa: BLE001
         raise _ssh_error(exc) from exc
+    deploywatch.spawn(request.app, server, "awg")
     await audit.record(
         session, user.username, "awg_deploy", server.name, f"port {body.port}"
     )
@@ -292,7 +294,7 @@ async def deploy_awg(
 
 @router.post("/update", status_code=status.HTTP_202_ACCEPTED)
 async def update_awg(
-    server_id: int, user: CurrentUser, session: SessionDep
+    server_id: int, user: CurrentUser, session: SessionDep, request: Request
 ) -> dict:
     server = await _get_or_404(server_id, session)
     # config уже есть на ноде и сохраняется; cfg тут не используется
@@ -308,13 +310,14 @@ async def update_awg(
         raise
     except Exception as exc:  # noqa: BLE001
         raise _ssh_error(exc) from exc
+    deploywatch.spawn(request.app, server, "awg")
     await audit.record(session, user.username, "awg_update", server.name)
     return {"started": True}
 
 
 @router.post("/adopt", status_code=status.HTTP_202_ACCEPTED)
 async def adopt_awg(
-    server_id: int, user: CurrentUser, session: SessionDep
+    server_id: int, user: CurrentUser, session: SessionDep, request: Request
 ) -> dict:
     """Берёт под управление панели AmneziaWG, собранный НЕ панелью.
 
@@ -354,6 +357,7 @@ async def adopt_awg(
         raise
     except Exception as exc:  # noqa: BLE001
         raise _ssh_error(exc) from exc
+    deploywatch.spawn(request.app, server, "awg")
     await audit.record(session, user.username, "awg_adopt", server.name, foreign)
     return {"started": True}
 

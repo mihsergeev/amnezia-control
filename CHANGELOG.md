@@ -4,6 +4,24 @@ All notable changes to Amnezia Control are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.24.0] — 2026-07-12
+
+### Added (alerting coverage)
+- **Deploy/update/adopt failure now alerts you** even if you closed the log window
+  — a background watcher waits for the result and pings your Telegram/webhook on
+  `DEPLOY_ERROR`.
+- **Auto-backup failure (and recovery) now alerts.** A silently failing backup was
+  the worst kind — you'd find out only when you needed the backup.
+- **A client that expired but couldn't be revoked** (node unreachable) now alerts
+  once a day, instead of silently keeping access.
+- **"Client expires in ~N days" heads-up** before the auto-revoke, so you can renew
+  in time (`VPNPANEL_EXPIRY_WARN_DAYS`, default 3; 0 disables).
+
+### Changed
+- **Server-down alerts are debounced** — a node must miss several collection cycles
+  in a row before it's reported down (`VPNPANEL_SERVER_DOWN_MISSES`, default 2), so
+  a single transient blip no longer pages you. Recovery still alerts immediately.
+
 ## [0.23.0] — 2026-07-12
 
 ### Fixed (resilience)
@@ -293,6 +311,7 @@ Initial public release.
   scheduled auto-backups.
 - Dark / light theme and English / Russian UI.
 
+[0.24.0]: https://github.com/mihsergeev/amnezia-control/releases/tag/v0.24.0
 [0.23.0]: https://github.com/mihsergeev/amnezia-control/releases/tag/v0.23.0
 [0.22.0]: https://github.com/mihsergeev/amnezia-control/releases/tag/v0.22.0
 [0.21.2]: https://github.com/mihsergeev/amnezia-control/releases/tag/v0.21.2
