@@ -13,6 +13,7 @@ import {
   type VersionInfo,
 } from './api'
 import { formatBytes, formatHandshake, isOnline } from './format'
+import { Menu } from './Menu'
 import { RollbackMenu } from './RollbackMenu'
 import { OpenVpnClients } from './OpenVpnClients'
 import { XrayClients } from './XrayClients'
@@ -622,50 +623,65 @@ export function ClientsModal({
                               >
                                 {busy ? '…' : t('Возобновить')}
                               </button>
+                            ) : c.has_config ? (
+                              <button
+                                className="ghost"
+                                disabled={busy}
+                                onClick={() => viewConfig(c)}
+                              >
+                                {busy ? '…' : t('Конфиг')}
+                              </button>
                             ) : (
-                              <>
-                                {c.has_config && (
-                                  <button
-                                    className="ghost"
-                                    disabled={busy}
-                                    onClick={() => viewConfig(c)}
-                                  >
-                                    {t('Конфиг')}
-                                  </button>
-                                )}
-                                {/* перевыпуск доступен всем — ротация ключа */}
-                                <button
-                                  className="ghost"
-                                  disabled={busy}
-                                  onClick={() => reissue(c)}
-                                >
-                                  {busy ? '…' : t('Перевыпустить')}
-                                </button>
-                                <button
-                                  className="ghost"
-                                  disabled={busy}
-                                  onClick={() => setStatsFor(c)}
-                                  title={t('Трафик клиента')}
-                                >
-                                  {t('Стата')}
-                                </button>
-                                <button
-                                  className="ghost"
-                                  disabled={busy}
-                                  onClick={() => togglePause(c)}
-                                  title={t('Заморозить без удаления')}
-                                >
-                                  {t('Пауза')}
-                                </button>
-                              </>
+                              <button
+                                className="ghost"
+                                disabled={busy}
+                                onClick={() => reissue(c)}
+                              >
+                                {busy ? '…' : t('Перевыпустить')}
+                              </button>
                             )}
-                            <button
-                              className="ghost danger"
-                              disabled={busy}
-                              onClick={() => revoke(c)}
-                            >
-                              {t('Отозвать')}
-                            </button>
+                            <Menu
+                              fixed
+                              align="right"
+                              className="ghost icon-btn"
+                              caret={false}
+                              title={t('Ещё')}
+                              label="⋯"
+                              items={
+                                c.paused
+                                  ? [
+                                      {
+                                        label: t('Отозвать'),
+                                        danger: true,
+                                        onClick: () => revoke(c),
+                                      },
+                                    ]
+                                  : [
+                                      ...(c.has_config
+                                        ? [
+                                            {
+                                              label: t('Перевыпустить'),
+                                              onClick: () => reissue(c),
+                                            },
+                                          ]
+                                        : []),
+                                      {
+                                        label: t('Трафик клиента'),
+                                        onClick: () => setStatsFor(c),
+                                      },
+                                      {
+                                        label: t('Пауза'),
+                                        onClick: () => togglePause(c),
+                                      },
+                                      { divider: true },
+                                      {
+                                        label: t('Отозвать'),
+                                        danger: true,
+                                        onClick: () => revoke(c),
+                                      },
+                                    ]
+                              }
+                            />
                           </td>
                         </tr>
                       )

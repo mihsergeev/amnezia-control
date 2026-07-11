@@ -12,6 +12,7 @@ import {
 } from './api'
 import { ExpiryCell, ExpirySelect } from './Expiry'
 import { ClientStatsModal } from './ClientStatsModal'
+import { Menu } from './Menu'
 import { NoteCell } from './NoteCell'
 import { RollbackMenu } from './RollbackMenu'
 import { formatBytes } from './format'
@@ -345,52 +346,67 @@ export function OpenVpnClients({
                           >
                             {busy === c.client_id ? '…' : t('Возобновить')}
                           </button>
+                        ) : c.has_config ? (
+                          <button
+                            className="ghost"
+                            disabled={busy === c.client_id}
+                            onClick={() => viewConfig(c.client_id)}
+                          >
+                            {busy === c.client_id ? '…' : t('Конфиг')}
+                          </button>
                         ) : (
-                          <>
-                            {c.has_config && (
-                              <button
-                                className="ghost"
-                                disabled={busy === c.client_id}
-                                onClick={() => viewConfig(c.client_id)}
-                              >
-                                {busy === c.client_id ? '…' : t('Конфиг')}
-                              </button>
-                            )}
-                            <button
-                              className="ghost"
-                              disabled={busy === c.client_id}
-                              onClick={() => reissue(c.client_id, c.name)}
-                              title={t('Перевыпустить конфиг')}
-                            >
-                              {busy === c.client_id ? '…' : t('Перевыпустить')}
-                            </button>
-                            <button
-                              className="ghost"
-                              disabled={busy === c.client_id}
-                              onClick={() =>
-                                setStatsFor({ id: c.client_id, name: c.name })
-                              }
-                              title={t('Трафик клиента')}
-                            >
-                              {t('Стата')}
-                            </button>
-                            <button
-                              className="ghost"
-                              disabled={busy === c.client_id}
-                              onClick={() => togglePause(c)}
-                              title={t('Заморозить без удаления')}
-                            >
-                              {t('Пауза')}
-                            </button>
-                          </>
+                          <button
+                            className="ghost"
+                            disabled={busy === c.client_id}
+                            onClick={() => reissue(c.client_id, c.name)}
+                          >
+                            {busy === c.client_id ? '…' : t('Перевыпустить')}
+                          </button>
                         )}
-                        <button
-                          className="ghost danger"
-                          disabled={busy === c.client_id}
-                          onClick={() => revoke(c.client_id, c.name)}
-                        >
-                          {t('Отозвать')}
-                        </button>
+                        <Menu
+                          fixed
+                          align="right"
+                          className="ghost icon-btn"
+                          caret={false}
+                          title={t('Ещё')}
+                          label="⋯"
+                          items={
+                            c.paused
+                              ? [
+                                  {
+                                    label: t('Отозвать'),
+                                    danger: true,
+                                    onClick: () => revoke(c.client_id, c.name),
+                                  },
+                                ]
+                              : [
+                                  ...(c.has_config
+                                    ? [
+                                        {
+                                          label: t('Перевыпустить'),
+                                          onClick: () =>
+                                            reissue(c.client_id, c.name),
+                                        },
+                                      ]
+                                    : []),
+                                  {
+                                    label: t('Трафик клиента'),
+                                    onClick: () =>
+                                      setStatsFor({ id: c.client_id, name: c.name }),
+                                  },
+                                  {
+                                    label: t('Пауза'),
+                                    onClick: () => togglePause(c),
+                                  },
+                                  { divider: true },
+                                  {
+                                    label: t('Отозвать'),
+                                    danger: true,
+                                    onClick: () => revoke(c.client_id, c.name),
+                                  },
+                                ]
+                          }
+                        />
                       </td>
                     </tr>
                   ))}

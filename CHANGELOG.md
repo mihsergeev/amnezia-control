@@ -4,6 +4,17 @@ All notable changes to Amnezia Control are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.29.2] — 2026-07-12
+
+### Fixed
+- **Client action buttons no longer overflow the table.** After the Pause button
+  (and the traffic column) were added, the row of buttons became too wide and got
+  cut off behind a horizontal scrollbar. Each row now shows one primary button
+  plus a compact **"⋯" menu** with the rest (reissue, traffic, pause, revoke). The
+  menu uses fixed positioning so it isn't clipped by the scrolling client list,
+  and the clients dialog is now a bit wider and responsive (also fixes it
+  overflowing on narrow screens).
+
 ## [0.29.1] — 2026-07-12
 
 ### Fixed (security / data hygiene)
@@ -379,6 +390,7 @@ Initial public release.
   scheduled auto-backups.
 - Dark / light theme and English / Russian UI.
 
+[0.29.2]: https://github.com/mihsergeev/amnezia-control/releases/tag/v0.29.2
 [0.29.1]: https://github.com/mihsergeev/amnezia-control/releases/tag/v0.29.1
 [0.29.0]: https://github.com/mihsergeev/amnezia-control/releases/tag/v0.29.0
 [0.28.0]: https://github.com/mihsergeev/amnezia-control/releases/tag/v0.28.0
