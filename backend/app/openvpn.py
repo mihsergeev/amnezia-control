@@ -469,7 +469,10 @@ def build_deploy_script(port: int, site: str, server_ip: str = "") -> str:
         f'echo {gen_b64} | base64 -d | sudo tee "$BUILD/gen.sh" >/dev/null || fail genwrite',
         "",
         'log "[3/6] docker build"',
-        'sudo docker build -t "$IMG" "$BUILD" 2>&1 | tail -3 || fail build',
+        # `| tail` маскирует код build → проверяем PIPESTATUS, иначе битая сборка
+        # прошла бы к rm+run (снос рабочего контейнера ради несобравшегося образа)
+        'sudo docker build -t "$IMG" "$BUILD" 2>&1 | tail -3',
+        '[ ${PIPESTATUS[0]} -eq 0 ] || fail build',
         "",
         'log "[4/6] конфиг (PKI + Cloak + shadowsocks)"',
         # КРИТИЧНО: вытащить PKI/конфиг из ЖИВОГО контейнера на хост ДО guard.

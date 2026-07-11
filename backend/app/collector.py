@@ -100,28 +100,33 @@ async def _sample_server(
     server: Server, key_path, timeout: int, hostkey_changed: set[int]
 ) -> dict | None:
     try:
-        async with sshops.connect(
-            server.host, server.ssh_port, server.ssh_user, key_path, timeout
-        ) as conn:
-            agg = dict(_ZERO)
-            client_rows: list[dict] = []
-            for part in (_awg_part, _openvpn_part, _xray_part):
+        # ЖЁСТКИЙ таймаут на весь сбор с ноды: connect_timeout покрывает только
+        # TCP-хендшейк, а последующие docker exec/wg show могут зависнуть (I/O-
+        # сталл, зависший докер) и без таймаута заморозить весь gather — одна
+        # плохая нода парализовала бы мониторинг всех остальных.
+        async with asyncio.timeout(max(timeout * 4, 30)):
+            async with sshops.connect(
+                server.host, server.ssh_port, server.ssh_user, key_path, timeout
+            ) as conn:
+                agg = dict(_ZERO)
+                client_rows: list[dict] = []
+                for part in (_awg_part, _openvpn_part, _xray_part):
+                    try:
+                        totals, cl = await part(conn, server.host)
+                    except Exception:  # noqa: BLE001 — протокола нет / ошибка чтения
+                        continue
+                    for k in agg:
+                        agg[k] += totals[k]
+                    client_rows.extend(cl)
                 try:
-                    totals, cl = await part(conn, server.host)
-                except Exception:  # noqa: BLE001 — протокола нет / ошибка чтения
-                    continue
-                for k in agg:
-                    agg[k] += totals[k]
-                client_rows.extend(cl)
-            try:
-                res = await nodestat.read_resources(conn)
-            except Exception:  # noqa: BLE001 — ресурсы не критичны
-                res = None
+                    res = await nodestat.read_resources(conn)
+                except Exception:  # noqa: BLE001 — ресурсы не критичны
+                    res = None
     except sshops.HostKeyChangedError:
         # host-ключ ноды не совпал — сигналим наверх (возможен MITM/подмена)
         hostkey_changed.add(server.id)
         return None
-    except Exception:  # noqa: BLE001 — сервер офлайн, пропускаем
+    except Exception:  # noqa: BLE001 — сервер офлайн/завис, пропускаем
         return None
     return {
         "server_id": server.id,
@@ -179,6 +184,22 @@ async def collect_once(
 
     # алерты о падении/восстановлении: online = удалось снять метрики
     online_map = {s.id: r is not None for s, r in zip(servers, results)}
+    # отражаем живой online/offline прямо на карточке сервера, чтобы упавшая нода
+    # краснела без ручной «Проверки». last_check_info НЕ трогаем — там список
+    # контейнеров для вкладок протоколов (его пишет полноценная проверка).
+    if online_map:
+        try:
+            now = datetime.now(timezone.utc)
+            async with session_factory() as session:
+                rows = await session.scalars(
+                    select(Server).where(Server.id.in_(online_map))
+                )
+                for srv in rows:
+                    srv.last_check_ok = online_map[srv.id]
+                    srv.last_check_at = now
+                await session.commit()
+        except Exception:  # noqa: BLE001 — статус карточки не критичен
+            log.exception("ошибка обновления статуса серверов")
     if online_map:
         try:
             async with session_factory() as session:

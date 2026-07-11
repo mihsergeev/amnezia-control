@@ -16,6 +16,15 @@ log = logging.getLogger("acontrol.expiry")
 
 
 async def _revoke_ssh(server: Server, protocol: str, client_id: str, key_path, timeout):
+    # жёсткий таймаут: без него зависший docker exec на одной ноде застопорил бы
+    # весь последовательный проход expiry — остальные истёкшие не отозвались бы.
+    async with asyncio.timeout(max(timeout * 4, 30)):
+        await _revoke_ssh_inner(server, protocol, client_id, key_path, timeout)
+
+
+async def _revoke_ssh_inner(
+    server: Server, protocol: str, client_id: str, key_path, timeout
+):
     async with sshops.connect(
         server.host, server.ssh_port, server.ssh_user, key_path, timeout
     ) as conn:
