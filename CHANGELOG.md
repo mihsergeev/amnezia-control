@@ -4,6 +4,14 @@ All notable changes to Amnezia Control are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.29.3] — 2026-07-12
+
+### Fixed
+- **English translations for the strings added this session.** Pause/resume, "take
+  under management", XRay reissue and the related audit-log entries were showing in
+  Russian when the UI language was English. Added all missing keys to the EN
+  dictionary (verified: 0 untranslated `t()` strings and audit labels remain).
+
 ## [0.29.2] — 2026-07-12
 
 ### Fixed
@@ -390,6 +398,7 @@ Initial public release.
   scheduled auto-backups.
 - Dark / light theme and English / Russian UI.
 
+[0.29.3]: https://github.com/mihsergeev/amnezia-control/releases/tag/v0.29.3
 [0.29.2]: https://github.com/mihsergeev/amnezia-control/releases/tag/v0.29.2
 [0.29.1]: https://github.com/mihsergeev/amnezia-control/releases/tag/v0.29.1
 [0.29.0]: https://github.com/mihsergeev/amnezia-control/releases/tag/v0.29.0
