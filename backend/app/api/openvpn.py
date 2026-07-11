@@ -262,6 +262,29 @@ async def deploy_openvpn(
     return {"started": True}
 
 
+@router.post("/update", status_code=status.HTTP_202_ACCEPTED)
+async def update_openvpn(
+    server_id: int, user: CurrentUser, session: SessionDep, request: Request
+) -> dict:
+    """Пересборка образа OpenVPN/Cloak (свежий alpine + cloak). Порт и весь конфиг
+    (PKI/cloak/ss) сохраняются — build-скрипт перечитывает их из живого контейнера
+    и берёт его реальный порт, так что клиенты не рвутся."""
+    server = await _get_or_404(server_id, session)
+    # порт/сайт тут неважны: конфиг существует → gen пропускается, порт
+    # детектится из живого контейнера
+    script = openvpn.build_deploy_script(8443, "tile.openstreetmap.org", server.host)
+    try:
+        async with _connect(server) as conn:
+            src = await deploy.detect_openvpn_container(conn)
+            await deploy.snapshot_config(conn, "openvpn", container=src)
+            await deploy.launch(conn, script, tag="openvpn")
+    except Exception as exc:  # noqa: BLE001
+        raise _ovpn_error(exc) from exc
+    deploywatch.spawn(request.app, server, "openvpn")
+    await audit.record(session, user.username, "openvpn_update", server.name)
+    return {"started": True}
+
+
 @router.get("/deploy/status", response_model=DeployStatusOut)
 async def deploy_status(
     server_id: int, _: CurrentUser, session: SessionDep

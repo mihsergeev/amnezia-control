@@ -142,6 +142,31 @@ export function XrayClients({
     }
   }
 
+  async function reissue(clientId: string, name: string) {
+    if (
+      !window.confirm(
+        t('Перевыпустить конфиг для «{name}»? Старый UUID перестанет работать.', {
+          name,
+        }),
+      )
+    )
+      return
+    setBusy(clientId)
+    setError(null)
+    try {
+      const result = await api<XrayCreated>(
+        `/api/servers/${serverId}/xray/reissue`,
+        { method: 'POST', body: JSON.stringify({ client_id: clientId }) },
+      )
+      showConfig(result.client.name, result.config_amnezia)
+      await load()
+    } catch (err) {
+      handleError(err)
+    } finally {
+      setBusy(null)
+    }
+  }
+
   async function changeLimit(clientId: string, name: string, iso: string | null) {
     try {
       await setClientLimit(serverId, 'xray', clientId, name, iso)
@@ -290,6 +315,14 @@ export function XrayClients({
                           onClick={() => viewConfig(c.client_id)}
                         >
                           {busy === c.client_id ? '…' : t('Конфиг')}
+                        </button>
+                        <button
+                          className="ghost"
+                          disabled={busy === c.client_id}
+                          onClick={() => reissue(c.client_id, c.name)}
+                          title={t('Перевыпустить (сменить UUID)')}
+                        >
+                          {t('Перевыпустить')}
                         </button>
                         <button
                           className="ghost danger"

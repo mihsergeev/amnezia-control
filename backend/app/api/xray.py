@@ -151,6 +151,45 @@ async def revoke_client(
     await session.commit()
 
 
+@router.post("/reissue", response_model=XrayCreateResponse, status_code=201)
+async def reissue_client(
+    server_id: int, body: XrayRevokeRequest, user: CurrentUser, session: SessionDep
+) -> XrayCreateResponse:
+    """Перевыпуск: отзывает старый UUID и выдаёт новый с тем же именем/сроком."""
+    server = await _get_or_404(server_id, session)
+    dns1, dns2 = _dns_pair()
+    old_exp = (await limits.limits_map(session, server_id, "xray")).get(body.client_id)
+    try:
+        async with _connect(server) as conn:
+            container = await xray.detect_container(conn)
+            clients = await xray.read_clients(conn)
+            target = next(
+                (c for c in clients if c.client_id == body.client_id), None
+            )
+            if target is None:
+                raise HTTPException(status.HTTP_404_NOT_FOUND, "Клиент не найден")
+            name = target.name if target.name and target.name != "—" else "client"
+            await xray.revoke_client(conn, container, body.client_id)
+            client, link = await xray.issue_client(
+                conn, container, name, server.host, server.name, dns1, dns2,
+            )
+    except HTTPException:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        raise _xray_error(exc) from exc
+    # переносим срок действия со старого UUID на новый
+    await limits.drop_limit(session, server_id, "xray", body.client_id)
+    if old_exp:
+        await limits.set_limit(
+            session, server_id, "xray", client.client_id, client.name, old_exp
+        )
+    await audit.record(session, user.username, "xray_reissue", server.name, client.name)
+    return XrayCreateResponse(
+        client=XrayClientOut(**client.__dict__, expires_at=old_exp),
+        config_amnezia=link,
+    )
+
+
 @router.post("/deploy", status_code=status.HTTP_202_ACCEPTED)
 async def deploy_xray(
     server_id: int, body: XrayDeployRequest, user: CurrentUser, session: SessionDep,
