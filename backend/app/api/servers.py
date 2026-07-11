@@ -4,16 +4,9 @@ from sqlalchemy import select
 
 from app import audit, limits, server_ops, sshops
 from app.config import get_settings
+from app.db import Base
 from app.deps import CurrentUser, SessionDep
-from app.models import (
-    AwgConfig,
-    AwgNote,
-    ClientLimit,
-    ClientTrafficSample,
-    NodeMetric,
-    Server,
-    ServerStatus,
-)
+from app.models import Server
 from app.schemas import (
     BootstrapRequest,
     DeleteServerResult,
@@ -26,6 +19,21 @@ from app.schemas import (
 from app.sshkeys import ensure_panel_key, key_paths
 
 router = APIRouter(prefix="/servers", tags=["servers"])
+
+
+def _server_scoped_models() -> list:
+    """Все модели с колонкой server_id — «панельные хвосты» сервера, которые надо
+    удалить вместе с ним. Автоматически подхватывает новые таблицы, чтобы при
+    добавлении модели секреты/кэши не оставались сиротами (ранее так забыли
+    OvpnConfig с приватным ключом клиента)."""
+    models = []
+    for mapper in Base.registry.mappers:
+        model = mapper.class_
+        if model is Server:
+            continue
+        if "server_id" in model.__table__.columns:
+            models.append(model)
+    return models
 
 
 async def _get_or_404(server_id: int, session: SessionDep) -> Server:
@@ -100,23 +108,12 @@ async def delete_server(
                 f"(сервер недоступен?): {exc or type(exc).__name__}"
             )
 
-    # чистим панельные хвосты (на сам сервер не влияет)
-    await session.execute(sa_delete(AwgConfig).where(AwgConfig.server_id == server_id))
-    await session.execute(sa_delete(AwgNote).where(AwgNote.server_id == server_id))
-    await session.execute(
-        sa_delete(ClientLimit).where(ClientLimit.server_id == server_id)
-    )
-    await session.execute(
-        sa_delete(NodeMetric).where(NodeMetric.server_id == server_id)
-    )
-    await session.execute(
-        sa_delete(ServerStatus).where(ServerStatus.server_id == server_id)
-    )
-    await session.execute(
-        sa_delete(ClientTrafficSample).where(
-            ClientTrafficSample.server_id == server_id
+    # чистим ВСЕ панельные хвосты сервера (конфиги с секретами, заметки, сроки,
+    # паузы, кэши имён, метрики) — на сам сервер не влияет
+    for model in _server_scoped_models():
+        await session.execute(
+            sa_delete(model).where(model.server_id == server_id)
         )
-    )
     await session.delete(server)
     await session.commit()
     await audit.record(

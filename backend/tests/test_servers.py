@@ -53,6 +53,32 @@ async def test_crud_flow(client: httpx.AsyncClient, auth_headers) -> None:
     assert response.json() == []
 
 
+def test_delete_covers_all_server_scoped_tables() -> None:
+    """Удаление сервера должно чистить ВСЕ таблицы с server_id — иначе секреты
+    (OvpnConfig с приватным ключом клиента), паузы и кэши остаются сиротами."""
+    from app import models
+    from app.api.servers import _server_scoped_models
+
+    names = {m.__tablename__ for m in _server_scoped_models()}
+    # критично: конфиг с приватным ключом + пауза + кэш имён + история трафика
+    assert "ovpn_configs" in names
+    assert "paused_clients" in names
+    assert "client_names" in names
+    assert "traffic_samples" in names
+    # не-серверные таблицы НЕ трогаем
+    assert names.isdisjoint({"users", "servers", "app_settings", "audit_log"})
+    # ровно все модели с колонкой server_id (авто-сверка — новые таблицы попадут)
+    expected = {
+        m.__tablename__
+        for m in [
+            models.AwgConfig, models.AwgNote, models.OvpnConfig, models.TrafficSample,
+            models.ClientLimit, models.ClientName, models.ServerStatus,
+            models.ClientTrafficSample, models.NodeMetric, models.PausedClient,
+        ]
+    }
+    assert names == expected
+
+
 async def test_get_missing_returns_404(client: httpx.AsyncClient, auth_headers) -> None:
     response = await client.get("/api/servers/9999", headers=auth_headers)
     assert response.status_code == 404
