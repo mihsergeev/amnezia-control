@@ -331,6 +331,8 @@ export type XrayClient = {
   creation_date: string
   expires_at?: string | null
   note?: string
+  rx_bytes?: number
+  tx_bytes?: number
 }
 
 // Установить/снять срок действия клиента (протокол-независимо).

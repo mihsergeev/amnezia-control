@@ -4,6 +4,18 @@ All notable changes to Amnezia Control are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.27.0] — 2026-07-12
+
+### Added (protocol parity)
+- **XRay now has per-client traffic and a per-client traffic graph**, like
+  AmneziaWG and OpenVPN. The deploy config now enables XRay's `StatsService`
+  (a local-only API inbound + per-user policy), each client gets a stable stats
+  key, and the panel reads usage via `xray api statsquery`. Existing XRay servers
+  turn this on automatically the next time you **"Update core"** or issue/revoke a
+  client (the config self-heals). New deploys have it from the start. Verified on
+  a test node: xray starts with the stats config and the API returns live
+  counters.
+
 ## [0.26.0] — 2026-07-12
 
 ### Added (protocol parity)
@@ -335,6 +347,7 @@ Initial public release.
   scheduled auto-backups.
 - Dark / light theme and English / Russian UI.
 
+[0.27.0]: https://github.com/mihsergeev/amnezia-control/releases/tag/v0.27.0
 [0.26.0]: https://github.com/mihsergeev/amnezia-control/releases/tag/v0.26.0
 [0.25.0]: https://github.com/mihsergeev/amnezia-control/releases/tag/v0.25.0
 [0.24.0]: https://github.com/mihsergeev/amnezia-control/releases/tag/v0.24.0

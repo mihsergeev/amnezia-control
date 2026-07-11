@@ -11,7 +11,9 @@ import {
 } from './api'
 import { ExpiryCell, ExpirySelect } from './Expiry'
 import { NoteCell } from './NoteCell'
+import { ClientStatsModal } from './ClientStatsModal'
 import { RollbackMenu } from './RollbackMenu'
+import { formatBytes } from './format'
 import { useI18n } from './i18n'
 
 type Props = {
@@ -42,6 +44,9 @@ export function XrayClients({
   const [creating, setCreating] = useState(false)
 
   const [view, setView] = useState<ConfigView | null>(null)
+  const [statsFor, setStatsFor] = useState<{ id: string; name: string } | null>(
+    null,
+  )
   const [copied, setCopied] = useState(false)
 
   const handleError = useCallback(
@@ -301,6 +306,7 @@ export function XrayClients({
                   <tr>
                     <th>{t('Имя')}</th>
                     <th>{t('Создан')}</th>
+                    <th>{t('Трафик (↓ / ↑)')}</th>
                     <th>{t('Срок')}</th>
                     <th></th>
                   </tr>
@@ -316,6 +322,10 @@ export function XrayClients({
                         />
                       </td>
                       <td className="muted">{c.creation_date || '—'}</td>
+                      <td className="muted mono traffic-cell">
+                        <div>↓ {formatBytes(c.tx_bytes ?? 0)}</div>
+                        <div>↑ {formatBytes(c.rx_bytes ?? 0)}</div>
+                      </td>
                       <td>
                         <ExpiryCell
                           value={c.expires_at}
@@ -330,6 +340,14 @@ export function XrayClients({
                           onClick={() => viewConfig(c.client_id)}
                         >
                           {busy === c.client_id ? '…' : t('Конфиг')}
+                        </button>
+                        <button
+                          className="ghost"
+                          disabled={busy === c.client_id}
+                          onClick={() => setStatsFor({ id: c.client_id, name: c.name })}
+                          title={t('Трафик клиента')}
+                        >
+                          {t('Стата')}
                         </button>
                         <button
                           className="ghost"
@@ -383,6 +401,17 @@ export function XrayClients({
             </div>
           </div>
         </div>
+      )}
+
+      {statsFor && (
+        <ClientStatsModal
+          serverId={serverId}
+          protocol="xray"
+          clientId={statsFor.id}
+          name={statsFor.name}
+          onClose={() => setStatsFor(null)}
+          onUnauthorized={onUnauthorized}
+        />
       )}
     </>
   )

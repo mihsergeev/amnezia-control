@@ -25,6 +25,7 @@ SERVER_JSON = f"{XRAY_DIR}/server.json"
 CLIENTS_TABLE = f"{XRAY_DIR}/clientsTable"
 FLOW = "xtls-rprx-vision"
 CONTAINER_NAME = "amnezia-xray"
+STATS_API_PORT = 10085  # локальный gRPC-API xray (127.0.0.1) для чтения статистики
 _DOCKER = 'DOCKER=$(docker info >/dev/null 2>&1 && echo docker || echo "sudo -n docker"); '
 
 
@@ -106,6 +107,95 @@ def _client_list(server: dict) -> list:
         return server["inbounds"][0]["settings"]["clients"]
     except (KeyError, IndexError, TypeError):
         return []
+
+
+def ensure_stats_config(server: dict) -> bool:
+    """Идемпотентно включает StatsService + пер-юзер статистику в server.json.
+
+    Ключ статистики xray — email клиента, поэтому проставляем email = UUID всем
+    клиентам. Возвращает True, если конфиг изменился (нужен рестарт xray)."""
+    changed = False
+    if "stats" not in server:
+        server["stats"] = {}
+        changed = True
+    if (server.get("api") or {}).get("tag") != "api":
+        server["api"] = {"tag": "api", "services": ["StatsService"]}
+        changed = True
+    want_pol = {
+        "levels": {"0": {"statsUserUplink": True, "statsUserDownlink": True}},
+        "system": {"statsInboundUplink": True, "statsInboundDownlink": True},
+    }
+    if server.get("policy") != want_pol:
+        server["policy"] = want_pol
+        changed = True
+    inbounds = server.setdefault("inbounds", [])
+    if not any(isinstance(i, dict) and i.get("tag") == "api" for i in inbounds):
+        inbounds.append({
+            "listen": "127.0.0.1",
+            "port": STATS_API_PORT,
+            "protocol": "dokodemo-door",
+            "settings": {"address": "127.0.0.1"},
+            "tag": "api",
+        })
+        changed = True
+    routing = server.setdefault("routing", {})
+    rules = routing.setdefault("rules", [])
+    if not any(
+        isinstance(r, dict) and "api" in (r.get("inboundTag") or []) for r in rules
+    ):
+        rules.insert(
+            0,
+            {"type": "field", "inboundTag": ["api"], "outboundTag": "api"},
+        )
+        changed = True
+    # email = UUID у всех клиентов: ключ статистики xray — email, так маппинг
+    # stat→клиент детерминирован (Amnezia своих email не ставит)
+    for c in _client_list(server):
+        if isinstance(c, dict) and c.get("id") and c.get("email") != c["id"]:
+            c["email"] = c["id"]
+            changed = True
+    return changed
+
+
+async def enable_stats(conn, container) -> bool:
+    """Дописывает stats-конфиг в ЖИВОЙ server.json (без рестарта — вызывающий
+    пересоберёт/перезапустит). Нужно, чтобы «Обновить ядро» включало статистику
+    на уже существующих серверах (пересборка сохраняет конфиг как есть)."""
+    server = await _read_server(conn, container)
+    if ensure_stats_config(server):
+        await _write_server(conn, container, server)
+        return True
+    return False
+
+
+async def read_client_stats(conn, container) -> dict[str, dict]:
+    """{uuid: {"up": bytes, "down": bytes}} из StatsService. Пусто, если статистика
+    не включена/не читается (напр. сервер ещё не пересобран со stats-конфигом)."""
+    inner = (
+        f'xray api statsquery --server=127.0.0.1:{STATS_API_PORT} '
+        f'-pattern "user>>>" 2>/dev/null'
+    )
+    try:
+        out = await _run(conn, _docker_exec(container, inner))
+        data = json.loads(out)
+    except (XrayError, json.JSONDecodeError, ValueError):
+        return {}
+    res: dict[str, dict] = {}
+    for stat in data.get("stat") or []:
+        parts = (stat.get("name") or "").split(">>>")
+        if len(parts) != 4 or parts[0] != "user" or parts[2] != "traffic":
+            continue
+        uid, direction = parts[1], parts[3]
+        try:
+            val = int(stat.get("value", 0) or 0)
+        except (ValueError, TypeError):
+            val = 0
+        entry = res.setdefault(uid, {"up": 0, "down": 0})
+        if direction == "uplink":
+            entry["up"] = val
+        elif direction == "downlink":
+            entry["down"] = val
+    return res
 
 
 async def read_clients(conn: asyncssh.SSHClientConnection) -> list[XrayClient]:
@@ -274,7 +364,8 @@ async def issue_client(
     """Выдаёт клиента: новый UUID → clients[] + clientsTable → restart → vpn://."""
     cid = str(uuid.uuid4())
     server = await _read_server(conn, container)
-    _client_list(server).append({"id": cid, "flow": FLOW})
+    _client_list(server).append({"id": cid, "flow": FLOW, "email": cid})
+    ensure_stats_config(server)  # самолечение: включаем статистику, если ещё нет
     await _write_server(conn, container, server)
 
     date = (await _run(conn, 'date "+%a %b %e %H:%M:%S %Y"')).strip()
@@ -309,6 +400,7 @@ async def revoke_client(
     server["inbounds"][0]["settings"]["clients"] = [
         c for c in clients if not (isinstance(c, dict) and c.get("id") == client_id)
     ]
+    ensure_stats_config(server)  # самолечение статистики при любой правке клиентов
     await _write_server(conn, container, server)
 
     table = await _read_table(conn, container)
@@ -389,12 +481,15 @@ if ! sudo test -f "$D/server.json"; then
   sudo tee "$D/server.json" >/dev/null <<EOF
 {{
     "log": {{ "loglevel": "error" }},
+    "stats": {{}},
+    "api": {{ "tag": "api", "services": [ "StatsService" ] }},
+    "policy": {{ "levels": {{ "0": {{ "statsUserUplink": true, "statsUserDownlink": true }} }}, "system": {{ "statsInboundUplink": true, "statsInboundDownlink": true }} }},
     "inbounds": [
         {{
             "port": $XRAY_SERVER_PORT,
             "protocol": "vless",
             "settings": {{
-                "clients": [ {{ "id": "$UUID", "flow": "{FLOW}" }} ],
+                "clients": [ {{ "id": "$UUID", "flow": "{FLOW}", "email": "$UUID" }} ],
                 "decryption": "none"
             }},
             "streamSettings": {{
@@ -407,9 +502,17 @@ if ! sudo test -f "$D/server.json"; then
                     "shortIds": [ "$SID" ]
                 }}
             }}
+        }},
+        {{
+            "listen": "127.0.0.1",
+            "port": {STATS_API_PORT},
+            "protocol": "dokodemo-door",
+            "settings": {{ "address": "127.0.0.1" }},
+            "tag": "api"
         }}
     ],
-    "outbounds": [ {{ "protocol": "freedom" }} ]
+    "outbounds": [ {{ "protocol": "freedom" }} ],
+    "routing": {{ "rules": [ {{ "type": "field", "inboundTag": [ "api" ], "outboundTag": "api" }} ] }}
 }}
 EOF
   sudo test -f "$D/clientsTable" || echo "[]" | sudo tee "$D/clientsTable" >/dev/null

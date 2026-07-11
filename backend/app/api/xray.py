@@ -65,6 +65,10 @@ async def get_xray(server_id: int, _: CurrentUser, session: SessionDep) -> XrayS
         async with _connect(server) as conn:
             container = await xray.detect_container(conn)
             clients = await xray.read_clients(conn)
+            try:
+                stats = await xray.read_client_stats(conn, container)
+            except Exception:  # noqa: BLE001 — статистика не критична
+                stats = {}
     except Exception as exc:  # noqa: BLE001
         raise _xray_error(exc) from exc
     lim = await limits.limits_map(session, server_id, "xray")
@@ -75,6 +79,8 @@ async def get_xray(server_id: int, _: CurrentUser, session: SessionDep) -> XrayS
             c.__dict__ | {
                 "expires_at": lim.get(c.client_id),
                 "note": note_map.get(c.client_id, ""),
+                "rx_bytes": stats.get(c.client_id, {}).get("up", 0),
+                "tx_bytes": stats.get(c.client_id, {}).get("down", 0),
             }
             for c in clients
         ],
@@ -327,6 +333,9 @@ async def update_xray(
             container = await xray.detect_container(conn)
             bits = await xray.read_server_bits(conn, container)
             script = xray.build_deploy_script(bits["port"], bits["site"], latest["tag"])
+            # включаем статистику в живом конфиге ДО пересборки — иначе rebuild
+            # сохранил бы старый конфиг без stats (на существующих серверах)
+            await xray.enable_stats(conn, container)
             # снимок конфига ДО пересборки — для отката
             await deploy.snapshot_config(conn, "xray")
             await deploy.launch(conn, script, tag="xray")
