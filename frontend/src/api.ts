@@ -303,6 +303,11 @@ export type OvpnClient = {
   creation_date: string
   has_config: boolean
   expires_at?: string | null
+  note?: string
+  rx_bytes?: number
+  tx_bytes?: number
+  connected?: boolean
+  since?: string
 }
 
 export type OvpnState = {
@@ -325,6 +330,7 @@ export type XrayClient = {
   name: string
   creation_date: string
   expires_at?: string | null
+  note?: string
 }
 
 // Установить/снять срок действия клиента (протокол-независимо).

@@ -135,6 +135,42 @@ async def read_clients(conn: asyncssh.SSHClientConnection) -> list[OvpnClient]:
     return parse_clients(text)
 
 
+def parse_status_log(text: str) -> dict[str, dict]:
+    """openvpn-status.log (v1 CSV) → {common_name: {rx, tx, since}}.
+
+    common_name в статус-логе совпадает с clientId из clientsTable, так что по нему
+    доклеиваем к клиентам онлайн и трафик."""
+    out: dict[str, dict] = {}
+    in_list = False
+    for line in text.splitlines():
+        if line.startswith("Common Name"):
+            in_list = True
+            continue
+        if line.startswith(("ROUTING TABLE", "GLOBAL STATS", "END")):
+            in_list = False
+        if in_list and "," in line:
+            parts = line.split(",")
+            if len(parts) >= 4:
+                try:
+                    rx, tx = int(parts[2]), int(parts[3])
+                except ValueError:
+                    continue
+                out[parts[0]] = {
+                    "rx": rx, "tx": tx,
+                    "since": parts[4].strip() if len(parts) >= 5 else "",
+                }
+    return out
+
+
+async def read_status_map(
+    conn: asyncssh.SSHClientConnection, container: str
+) -> dict[str, dict]:
+    text = await _run(
+        conn, _docker_exec(container, "cat /openvpn-status.log 2>/dev/null")
+    )
+    return parse_status_log(text)
+
+
 def _docker_exec_i(container: str, inner: str) -> str:
     return _DOCKER + f"$DOCKER exec -i {shlex.quote(container)} sh -c {shlex.quote(inner)}"
 

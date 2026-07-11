@@ -26,6 +26,34 @@ def test_parse_clients_garbage() -> None:
     assert openvpn.parse_clients("[]") == []
 
 
+STATUS_LOG = """OpenVPN CLIENT LIST
+Updated,Thu May 14 12:00:00 2026
+Common Name,Real Address,Bytes Received,Bytes Sent,Connected Since
+abc123,10.0.0.2:5000,1048576,2097152,Thu May 14 11:00:00 2026
+def456,10.0.0.3:5001,500,700,Thu May 14 11:30:00 2026
+ROUTING TABLE
+10.8.0.2,abc123,10.0.0.2:5000,Thu May 14 12:00:00 2026
+GLOBAL STATS
+END
+"""
+
+
+def test_parse_status_log() -> None:
+    m = openvpn.parse_status_log(STATUS_LOG)
+    assert set(m) == {"abc123", "def456"}
+    assert m["abc123"] == {
+        "rx": 1048576, "tx": 2097152, "since": "Thu May 14 11:00:00 2026",
+    }
+    assert m["def456"]["rx"] == 500 and m["def456"]["tx"] == 700
+    # строки из ROUTING TABLE не считаются клиентами
+    assert "10.8.0.2" not in m
+
+
+def test_parse_status_log_empty() -> None:
+    assert openvpn.parse_status_log("") == {}
+    assert openvpn.parse_status_log("garbage\nno header") == {}
+
+
 def test_deploy_script_preserves_live_pki_before_guard() -> None:
     """Регресс: (пере)деплой OpenVPN должен вытащить PKI из ЖИВОГО контейнера на
     хост ДО guard `test -f ca.crt`, иначе guard сгенерил бы новый CA и все

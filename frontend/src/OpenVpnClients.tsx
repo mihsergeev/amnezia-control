@@ -10,7 +10,9 @@ import {
 } from './api'
 import { ExpiryCell, ExpirySelect } from './Expiry'
 import { ClientStatsModal } from './ClientStatsModal'
+import { NoteCell } from './NoteCell'
 import { RollbackMenu } from './RollbackMenu'
+import { formatBytes } from './format'
 import { useI18n } from './i18n'
 
 type Props = {
@@ -173,6 +175,18 @@ export function OpenVpnClients({
     }
   }
 
+  async function saveNote(clientId: string, note: string) {
+    try {
+      await api<void>(`/api/servers/${serverId}/openvpn/note`, {
+        method: 'POST',
+        body: JSON.stringify({ client_id: clientId, note }),
+      })
+      await load()
+    } catch (err) {
+      handleError(err)
+    }
+  }
+
   async function copyConfig() {
     if (!view) return
     try {
@@ -270,6 +284,7 @@ export function OpenVpnClients({
                   <tr>
                     <th>{t('Имя')}</th>
                     <th>{t('Создан')}</th>
+                    <th>{t('Трафик (↓ / ↑)')}</th>
                     <th>{t('Срок')}</th>
                     <th></th>
                   </tr>
@@ -278,11 +293,18 @@ export function OpenVpnClients({
                   {state.clients.map((c) => (
                     <tr key={c.client_id}>
                       <td className="name-cell">
-                        <span className="cname" title={c.name}>
-                          {c.name}
-                        </span>
+                        <NoteCell
+                          name={c.name}
+                          note={c.note || ''}
+                          online={!!c.connected}
+                          onSave={(note) => saveNote(c.client_id, note)}
+                        />
                       </td>
                       <td className="muted">{c.creation_date || '—'}</td>
+                      <td className="muted mono traffic-cell">
+                        <div>↓ {formatBytes(c.tx_bytes ?? 0)}</div>
+                        <div>↑ {formatBytes(c.rx_bytes ?? 0)}</div>
+                      </td>
                       <td>
                         <ExpiryCell
                           value={c.expires_at}
@@ -291,7 +313,7 @@ export function OpenVpnClients({
                         />
                       </td>
                       <td className="row-actions">
-                        {c.has_config ? (
+                        {c.has_config && (
                           <button
                             className="ghost"
                             disabled={busy === c.client_id}
@@ -299,16 +321,15 @@ export function OpenVpnClients({
                           >
                             {busy === c.client_id ? '…' : t('Конфиг')}
                           </button>
-                        ) : (
-                          <button
-                            className="ghost"
-                            disabled={busy === c.client_id}
-                            onClick={() => reissue(c.client_id, c.name)}
-                            title={t('Конфиг не сохранён в панели — перевыпустить')}
-                          >
-                            {busy === c.client_id ? '…' : t('Перевыпустить')}
-                          </button>
                         )}
+                        <button
+                          className="ghost"
+                          disabled={busy === c.client_id}
+                          onClick={() => reissue(c.client_id, c.name)}
+                          title={t('Перевыпустить конфиг')}
+                        >
+                          {busy === c.client_id ? '…' : t('Перевыпустить')}
+                        </button>
                         <button
                           className="ghost"
                           disabled={busy === c.client_id}

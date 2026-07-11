@@ -10,6 +10,7 @@ import {
   type XrayVersion,
 } from './api'
 import { ExpiryCell, ExpirySelect } from './Expiry'
+import { NoteCell } from './NoteCell'
 import { RollbackMenu } from './RollbackMenu'
 import { useI18n } from './i18n'
 
@@ -176,6 +177,18 @@ export function XrayClients({
     }
   }
 
+  async function saveNote(clientId: string, note: string) {
+    try {
+      await api<void>(`/api/servers/${serverId}/xray/note`, {
+        method: 'POST',
+        body: JSON.stringify({ client_id: clientId, note }),
+      })
+      await load()
+    } catch (err) {
+      handleError(err)
+    }
+  }
+
   async function copyConfig() {
     if (!view) return
     try {
@@ -296,9 +309,11 @@ export function XrayClients({
                   {state.clients.map((c) => (
                     <tr key={c.client_id}>
                       <td className="name-cell">
-                        <span className="cname" title={c.name}>
-                          {c.name}
-                        </span>
+                        <NoteCell
+                          name={c.name}
+                          note={c.note || ''}
+                          onSave={(note) => saveNote(c.client_id, note)}
+                        />
                       </td>
                       <td className="muted">{c.creation_date || '—'}</td>
                       <td>

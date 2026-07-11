@@ -295,12 +295,23 @@ class NodeMetricOut(BaseModel):
     ts: datetime
 
 
+class ClientNoteRequest(BaseModel):
+    client_id: str = Field(min_length=1)
+    note: str = Field(default="", max_length=512)
+
+
 class OvpnClientOut(BaseModel):
     client_id: str
     name: str
     creation_date: str
     has_config: bool = False
     expires_at: datetime | None = None
+    note: str = ""
+    # трафик/онлайн из openvpn-status.log (заполняется в get_openvpn)
+    rx_bytes: int = 0
+    tx_bytes: int = 0
+    connected: bool = False
+    since: str = ""  # когда подключился (строка из status-лога)
 
 
 class OvpnStateOut(BaseModel):
@@ -345,6 +356,7 @@ class XrayClientOut(BaseModel):
     name: str
     creation_date: str
     expires_at: datetime | None = None
+    note: str = ""
 
 
 class XrayStateOut(BaseModel):

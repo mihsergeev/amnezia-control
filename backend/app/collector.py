@@ -61,32 +61,17 @@ async def _openvpn_part(conn, host) -> tuple[dict, list[dict]]:
         for e in table
         if isinstance(e, dict)
     }
-    status = await openvpn._run(
-        conn, openvpn._docker_exec(container, "cat /openvpn-status.log 2>/dev/null")
-    )
+    status_map = await openvpn.read_status_map(conn, container)
     rx = tx = online = 0
     clients: list[dict] = []
-    in_list = False
-    for line in status.splitlines():
-        if line.startswith("Common Name"):
-            in_list = True
-            continue
-        if line.startswith(("ROUTING TABLE", "GLOBAL STATS", "END")):
-            in_list = False
-        if in_list and "," in line:
-            parts = line.split(",")
-            if len(parts) >= 4:
-                try:
-                    crx, ctx = int(parts[2]), int(parts[3])
-                except ValueError:
-                    continue
-                rx += crx
-                tx += ctx
-                online += 1
-                clients.append(
-                    {"protocol": "openvpn", "client_id": parts[0],
-                     "rx": crx, "tx": ctx, "name": ovpn_names.get(parts[0], "")}
-                )
+    for cid, st in status_map.items():
+        rx += st["rx"]
+        tx += st["tx"]
+        online += 1
+        clients.append(
+            {"protocol": "openvpn", "client_id": cid,
+             "rx": st["rx"], "tx": st["tx"], "name": ovpn_names.get(cid, "")}
+        )
     return {"rx": rx, "tx": tx, "total": total, "online": online}, clients
 
 
