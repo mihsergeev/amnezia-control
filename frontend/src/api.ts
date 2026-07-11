@@ -309,6 +309,7 @@ export type OvpnClient = {
   tx_bytes?: number
   connected?: boolean
   since?: string
+  paused?: boolean
 }
 
 export type OvpnState = {
@@ -340,7 +341,7 @@ export type XrayClient = {
 // Пауза/возобновление клиента (протокол-независимо).
 export async function pauseClient(
   serverId: number,
-  protocol: 'awg' | 'xray',
+  protocol: 'awg' | 'xray' | 'openvpn',
   clientId: string,
   resume: boolean,
 ): Promise<void> {

@@ -21,6 +21,7 @@ from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.x509.oid import NameOID
 
 OVPN_DIR = "/opt/amnezia/openvpn"
+CCD_DIR = f"{OVPN_DIR}/ccd"  # client-config-dir: файл ccd/<CN> с `disable` = пауза
 CLOAK_DIR = "/opt/amnezia/cloak"
 SS_DIR = "/opt/amnezia/shadowsocks"
 PKI = f"{OVPN_DIR}/pki"
@@ -355,6 +356,55 @@ async def revoke_client(
     await _write_table(conn, container, data)
 
 
+async def _restart_ovpn(conn, container) -> None:
+    await _run(conn, _DOCKER + f"$DOCKER restart {shlex.quote(container)} >/dev/null")
+    out = await _run(
+        conn,
+        _DOCKER + f"$DOCKER ps --format '{{{{.Names}}}}' | grep -Fx {shlex.quote(container)} || true",
+    )
+    if container not in out:
+        raise OpenVpnError("контейнер openvpn не поднялся после рестарта")
+
+
+async def _ensure_ccd(conn, container) -> None:
+    """Включает client-config-dir в server.conf (если ещё нет) и создаёт каталог
+    ccd. Нужен для паузы: файл ccd/<CN> с `disable` блокирует клиента."""
+    conf = await _run(
+        conn, _docker_exec(container, f"cat {OVPN_DIR}/server.conf 2>/dev/null")
+    )
+    await _run(conn, _docker_exec(container, f"mkdir -p {CCD_DIR}"))
+    if "client-config-dir" in conf:
+        return
+    new_conf = conf.rstrip("\n") + f"\nclient-config-dir {CCD_DIR}\n"
+    await conn.run(
+        _docker_exec_i(container, f"cat > {OVPN_DIR}/server.conf"),
+        input=new_conf, check=False,
+    )
+
+
+async def pause_client(conn, container, client_id: str) -> None:
+    """Пауза: ccd/<clientId> с `disable` — клиент не подключится. Сертификат цел,
+    resume просто удаляет файл. Рестарт применяет ccd и отключает подключённого."""
+    if not client_id or "/" in client_id or ".." in client_id:
+        raise OpenVpnError("некорректный clientId")
+    cid = shlex.quote(client_id)
+    await _ensure_ccd(conn, container)
+    await _run(
+        conn,
+        _docker_exec(container, f"printf 'disable\\n' > {CCD_DIR}/{cid}"),
+    )
+    await _restart_ovpn(conn, container)
+
+
+async def resume_client(conn, container, client_id: str) -> None:
+    """Возобновление: убирает ccd/<clientId> (disable) → клиент снова подключается."""
+    if not client_id or "/" in client_id or ".." in client_id:
+        raise OpenVpnError("некорректный clientId")
+    cid = shlex.quote(client_id)
+    await _run(conn, _docker_exec(container, f"rm -f {CCD_DIR}/{cid}"))
+    await _restart_ovpn(conn, container)
+
+
 # --- Разворачивание OpenVPN/Cloak на чистой ноде (build-on-target) ------------
 
 # Свой Alpine-образ: openvpn + easy-rsa + shadowsocks-rust(ssserver) + ck-server
@@ -414,12 +464,14 @@ group nobody
 persist-key
 persist-tun
 crl-verify /opt/amnezia/openvpn/crl.pem
+client-config-dir /opt/amnezia/openvpn/ccd
 status openvpn-status.log
 verb 1
 tls-server
 tls-version-min 1.2
 tls-auth /opt/amnezia/openvpn/ta.key 0
 EOF
+mkdir -p "$O/ccd"
 
 KP=$(ck-server -k)
 PUB=$(printf '%s' "$KP" | cut -d, -f1 | tr -d ' \\r\\n')
@@ -554,6 +606,8 @@ def build_deploy_script(port: int, site: str, server_ip: str = "") -> str:
         "killall -KILL openvpn 2>/dev/null",
         "killall -KILL ck-server 2>/dev/null",
         "killall -KILL ssserver 2>/dev/null",
+        # ccd-каталог обязан существовать, иначе openvpn с client-config-dir не стартует
+        "mkdir -p /opt/amnezia/openvpn/ccd",
         "if [ -f /opt/amnezia/openvpn/ca.crt ]; then "
         "(openvpn --config /opt/amnezia/openvpn/server.conf --daemon); fi",
         "if [ -f /opt/amnezia/shadowsocks/ss-config.json ]; then "

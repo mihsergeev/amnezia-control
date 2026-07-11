@@ -4,6 +4,17 @@ All notable changes to Amnezia Control are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.29.0] — 2026-07-12
+
+### Added
+- **Pause / resume now covers OpenVPN too** — the feature is complete across all
+  three protocols. OpenVPN is certificate-based, so instead of removing the client
+  it uses `client-config-dir`: pausing drops a `disable` file for the client's
+  certificate (the cert is **not** revoked), resuming removes it. New OpenVPN
+  deploys enable `client-config-dir`; existing servers get it automatically on the
+  first pause. Verified on a test node: openvpn starts and stays up with the
+  config, and the disable file is written correctly.
+
 ## [0.28.0] — 2026-07-12
 
 ### Added
@@ -358,6 +369,7 @@ Initial public release.
   scheduled auto-backups.
 - Dark / light theme and English / Russian UI.
 
+[0.29.0]: https://github.com/mihsergeev/amnezia-control/releases/tag/v0.29.0
 [0.28.0]: https://github.com/mihsergeev/amnezia-control/releases/tag/v0.28.0
 [0.27.0]: https://github.com/mihsergeev/amnezia-control/releases/tag/v0.27.0
 [0.26.0]: https://github.com/mihsergeev/amnezia-control/releases/tag/v0.26.0
