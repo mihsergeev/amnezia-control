@@ -311,6 +311,8 @@ const EN: Record<string, string> = {
   'Скачать': 'Download',
   'не удалось загрузить список': 'failed to load the list',
   'не удалось сделать бэкап': 'failed to create a backup',
+  'не удалось скачать копию': 'failed to download the backup',
+  'Не удалось скачать бэкап: {msg}': 'Failed to download backup: {msg}',
   'Восстановить панель из «{name}»?\n\nВСЕ текущие серверы, конфиги, заметки и SSH-ключ панели будут ЗАМЕНЕНЫ данными из архива. Действие необратимо.':
     'Restore the panel from “{name}”?\n\nALL current servers, configs, notes and the panel SSH key will be REPLACED with the archive data. This cannot be undone.',
   'Восстановлено записей: {n}. Страница перезагрузится.':

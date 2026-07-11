@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { downloadBackup, getToken, restoreBackup, setToken } from './api'
+import { ApiError, downloadBackup, getToken, restoreBackup, setToken } from './api'
 import { LoginPage } from './LoginPage'
 import { ServersPage } from './ServersPage'
 import { Dashboard } from './Dashboard'
@@ -46,8 +46,16 @@ function App() {
     setBackingUp(true)
     try {
       await downloadBackup()
-    } catch {
-      /* тихо — детали в сети */
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 401) {
+        logout()
+      } else {
+        window.alert(
+          t('Не удалось скачать бэкап: {msg}', {
+            msg: err instanceof Error ? err.message : t('неизвестно'),
+          }),
+        )
+      }
     } finally {
       setBackingUp(false)
     }

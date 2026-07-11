@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useState } from 'react'
-import { api, downloadSavedBackup, type BackupItem } from './api'
+import { ApiError, api, downloadSavedBackup, type BackupItem } from './api'
 import { formatBytes } from './format'
 import { useI18n } from './i18n'
+import { useModalDismiss } from './useModalDismiss'
 
 type Props = {
   onClose: () => void
@@ -13,6 +14,7 @@ export function BackupsModal({ onClose, onUnauthorized }: Props) {
   const [items, setItems] = useState<BackupItem[] | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const dismiss = useModalDismiss(onClose)
 
   const load = useCallback(async () => {
     try {
@@ -44,8 +46,9 @@ export function BackupsModal({ onClose, onUnauthorized }: Props) {
   async function download(name: string) {
     try {
       await downloadSavedBackup(name)
-    } catch {
-      onUnauthorized()
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 401) onUnauthorized()
+      else setError(t('не удалось скачать копию'))
     }
   }
 
@@ -58,7 +61,7 @@ export function BackupsModal({ onClose, onUnauthorized }: Props) {
   }
 
   return (
-    <div className="modal-backdrop">
+    <div className="modal-backdrop" onClick={dismiss}>
       <div className="card modal modal-wide" onClick={(e) => e.stopPropagation()}>
         <div className="clients-head">
           <h3>{t('Авто-бэкапы БД')}</h3>

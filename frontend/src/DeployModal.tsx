@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { api, ApiError, type DeployStatus } from './api'
 import { useI18n } from './i18n'
+import { useModalDismiss } from './useModalDismiss'
 
 type Props = {
   serverId: number
@@ -22,6 +23,7 @@ export function DeployModal({
   onUnauthorized,
 }: Props) {
   const { t } = useI18n()
+  const dismiss = useModalDismiss(onClose)
   const label =
     protocol === 'xray'
       ? 'XRay'
@@ -110,7 +112,7 @@ export function DeployModal({
         : t('Установка {label}', { label })
 
   return (
-    <div className="modal-backdrop">
+    <div className="modal-backdrop" onClick={dismiss}>
       <div className="card modal modal-wide" onClick={(e) => e.stopPropagation()}>
         <div className="clients-head">
           <h3>

@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { ApiError, changePassword } from './api'
 import { useI18n } from './i18n'
+import { useModalDismiss } from './useModalDismiss'
 
 type Props = {
   onClose: () => void
@@ -9,6 +10,7 @@ type Props = {
 
 export function PasswordModal({ onClose, onUnauthorized }: Props) {
   const { t } = useI18n()
+  const dismiss = useModalDismiss(onClose)
   const [current, setCurrent] = useState('')
   const [next, setNext] = useState('')
   const [confirm, setConfirm] = useState('')
@@ -39,7 +41,7 @@ export function PasswordModal({ onClose, onUnauthorized }: Props) {
   }
 
   return (
-    <div className="modal-backdrop">
+    <div className="modal-backdrop" onClick={dismiss}>
       <div className="card modal" onClick={(e) => e.stopPropagation()}>
         <div className="clients-head">
           <h3>{t('Сменить пароль')}</h3>
