@@ -1078,13 +1078,16 @@ tr:hover .note-edit {
 
 .row-actions {
   display: flex;
-  gap: 0.5rem;
+  flex-wrap: wrap;
+  gap: 0.3rem;
   justify-content: flex-end;
+  align-items: center;
 }
 
 .row-actions button {
-  padding: 0.3rem 0.7rem;
-  font-size: 0.8rem;
+  padding: 0.24rem 0.5rem;
+  font-size: 0.78rem;
+  white-space: nowrap;
 }
 
 .qr-wrap {
@@ -1145,11 +1148,11 @@ tr:hover .note-edit {
 }
 
 .modal-wide {
-  width: 720px;
+  width: min(720px, 94vw);
 }
 
 .modal-clients {
-  width: 900px;
+  width: min(1040px, 95vw);
 }
 
 .modal h3 {
