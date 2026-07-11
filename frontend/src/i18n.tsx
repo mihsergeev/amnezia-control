@@ -54,6 +54,27 @@ const EN: Record<string, string> = {
     'Roll back the config on “{name}” to the {ts} snapshot ({n} clients)? The current config will be replaced.',
   'Пересобрать образ на «{name}»? Текущие клиенты и ключи сохраняются.':
     'Rebuild the image on “{name}”? Current clients and keys are preserved.',
+
+  // --- пауза клиента / adopt / xray-перевыпуск ---
+  'Пауза': 'Pause',
+  'Возобновить': 'Resume',
+  '⏸ пауза': '⏸ paused',
+  'Вернуть клиента на сервер': 'Return the client to the server',
+  'Поставить «{name}» на паузу? Клиент не сможет подключиться, но его можно вернуть без пересоздания.':
+    'Pause “{name}”? The client will not be able to connect, but you can resume it later without recreating it.',
+  'Взять под управление': 'Take under management',
+  'Взятие под управление · {label}': 'Take under management · {label}',
+  'внешний образ (не AmneziaWG) — перенос недоступен':
+    'external image (not AmneziaWG) — cannot be taken over',
+  'базовый образ не считывается': 'base image cannot be read',
+  'Панель перечитывает конфиг из текущего контейнера, сохраняет его порт и ключи и заменяет его своим образом. Клиенты остаются — туннель кратко перезапустится. Перед этим снят снимок для отката.':
+    'The panel re-reads the config from the current container, keeps its port and keys, and replaces it with its own image. Clients stay — the tunnel restarts briefly. A snapshot is taken first for rollback.',
+  'Взять AmneziaWG на «{name}» под управление панели?\n\nПанель перечитает текущий конфиг, сохранит порт и ключи и заменит контейнер своим. Клиенты остаются рабочими, туннель кратко перезапустится. Перед этим снимается снимок для отката.':
+    'Take AmneziaWG on “{name}” under panel management?\n\nThe panel will re-read the current config, keep the port and keys, and replace the container with its own. Clients keep working, the tunnel restarts briefly. A snapshot is taken first for rollback.',
+  'Пересобрать образ (свежий alpine + cloak); клиенты и PKI сохраняются)':
+    'Rebuild the image (fresh alpine + cloak); clients and PKI are preserved)',
+  'Перевыпустить конфиг для «{name}»? Старый UUID перестанет работать.':
+    'Reissue the config for “{name}”? The old UUID will stop working.',
   'Текущий пароль': 'Current password',
   'Новый пароль (мин. 8 символов)': 'New password (min. 8 characters)',
   'Повторите новый пароль': 'Repeat new password',
@@ -309,11 +330,21 @@ const EN: Record<string, string> = {
   'Перевыпущен AmneziaWG': 'AmneziaWG reissued',
   'Развёрнут AmneziaWG': 'AmneziaWG deployed',
   'Обновлён AmneziaWG': 'AmneziaWG updated',
+  'AmneziaWG взят под управление': 'AmneziaWG taken under management',
+  'AmneziaWG на паузе': 'AmneziaWG paused',
+  'AmneziaWG возобновлён': 'AmneziaWG resumed',
   'Выдан OpenVPN': 'OpenVPN issued',
   'Отозван OpenVPN': 'OpenVPN revoked',
   'Перевыпущен OpenVPN': 'OpenVPN reissued',
+  'Развёрнут OpenVPN/Cloak': 'OpenVPN/Cloak deployed',
+  'Пересобран OpenVPN/Cloak': 'OpenVPN/Cloak rebuilt',
+  'OpenVPN на паузе': 'OpenVPN paused',
+  'OpenVPN возобновлён': 'OpenVPN resumed',
   'Выдан XRay': 'XRay issued',
   'Отозван XRay': 'XRay revoked',
+  'Перевыпущен XRay': 'XRay reissued',
+  'XRay на паузе': 'XRay paused',
+  'XRay возобновлён': 'XRay resumed',
   'Развёрнут XRay': 'XRay deployed',
   'Обновлён XRay': 'XRay updated',
   'Добавлен сервер': 'Server added',
