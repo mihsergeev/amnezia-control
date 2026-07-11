@@ -1,8 +1,8 @@
 import asyncssh
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, HTTPException, Request, status
 from sqlalchemy import delete, select
 
-from app import audit, awg, deploy, limits, openvpn, sshops
+from app import audit, awg, deploy, deploywatch, limits, openvpn, sshops
 from app.config import get_settings
 from app.deps import CurrentUser, SessionDep
 from app.models import ClientLimit, OvpnConfig, Server
@@ -240,7 +240,8 @@ async def revoke_client(
 
 @router.post("/deploy", status_code=status.HTTP_202_ACCEPTED)
 async def deploy_openvpn(
-    server_id: int, body: OvpnDeployRequest, user: CurrentUser, session: SessionDep
+    server_id: int, body: OvpnDeployRequest, user: CurrentUser, session: SessionDep,
+    request: Request,
 ) -> dict:
     server = await _get_or_404(server_id, session)
     script = openvpn.build_deploy_script(body.port, body.site, server.host)
@@ -254,6 +255,7 @@ async def deploy_openvpn(
             await deploy.launch(conn, script, tag="openvpn")
     except Exception as exc:  # noqa: BLE001
         raise _ovpn_error(exc) from exc
+    deploywatch.spawn(request.app, server, "openvpn")
     await audit.record(
         session, user.username, "openvpn_deploy", server.name, f"port {body.port}"
     )

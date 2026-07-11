@@ -5,6 +5,14 @@ from app import alerts, config, settings_store
 from app.db import Base, create_engine_and_factory
 
 
+@pytest.fixture(autouse=True)
+def _reset_down_streak():
+    """Антидребезг падений держит стрик в памяти модуля — чистим между тестами."""
+    alerts._down_streak.clear()
+    yield
+    alerts._down_streak.clear()
+
+
 @pytest.fixture
 async def session(tmp_path, monkeypatch):
     db_path = (tmp_path / "al.db").as_posix()
@@ -34,12 +42,36 @@ async def test_reconcile_alerts_on_transition(session, monkeypatch):
     # первое наблюдение — только фиксируем статус, без алерта
     assert await alerts.reconcile(session, settings, {1: True}, names) == []
     assert sent == []
-    # упал — алерт
+    # антидребезг: одиночный офлайн (по умолчанию нужно 2 подряд) НЕ алертит
+    assert await alerts.reconcile(session, settings, {1: False}, names) == []
+    assert sent == []
+    # второй подряд офлайн — теперь падение
     assert await alerts.reconcile(session, settings, {1: False}, names) == [(1, False)]
     assert len(sent) == 1 and "недоступен" in sent[0]
-    # восстановился — алерт
+    # восстановился — алерт сразу (без задержки)
     assert await alerts.reconcile(session, settings, {1: True}, names) == [(1, True)]
     assert len(sent) == 2 and "онлайн" in sent[1]
+
+
+async def test_reconcile_debounces_transient_offline(session, monkeypatch):
+    """Транзиентный офлайн между онлайнами не поднимает ложную тревогу."""
+    settings = config.get_settings()
+    await settings_store.set_alert_config(session, "TOKEN", "123", "")
+    sent: list[str] = []
+
+    async def fake_send(cfg, text):
+        sent.append(text)
+        return []
+
+    monkeypatch.setattr(alerts, "send_alert", fake_send)
+
+    names = {1: "n1"}
+    await alerts.reconcile(session, settings, {1: True}, names)
+    assert await alerts.reconcile(session, settings, {1: False}, names) == []  # 1 пропуск
+    assert await alerts.reconcile(session, settings, {1: True}, names) == []   # снова онлайн
+    # стрик сбросился — одиночный офлайн опять не алертит
+    assert await alerts.reconcile(session, settings, {1: False}, names) == []
+    assert sent == []
 
 
 async def test_reconcile_no_alert_when_unconfigured(session, monkeypatch):
@@ -55,7 +87,8 @@ async def test_reconcile_no_alert_when_unconfigured(session, monkeypatch):
 
     names = {1: "n1"}
     await alerts.reconcile(session, settings, {1: True}, names)
-    # переход есть, но каналы не настроены → send не вызывается
+    # переход (после 2 пропусков) есть, но каналы не настроены → send не вызывается
+    await alerts.reconcile(session, settings, {1: False}, names)
     assert await alerts.reconcile(session, settings, {1: False}, names) == [(1, False)]
     assert sent == []
 

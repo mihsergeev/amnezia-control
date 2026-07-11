@@ -8,10 +8,15 @@ from datetime import datetime, timezone
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from app import alerts
 from app.api.backup import _build_archive
 from app.config import Settings
 
 log = logging.getLogger("acontrol.autobackup")
+
+# состояние прошлого авто-бэкапа — чтобы алертить только на переходах
+# (упал / снова ок), а не каждый цикл
+_last_backup_ok = True
 
 _NAME_RE = re.compile(r"^acontrol-backup-\d{8}-\d{6}\.tar\.gz$")
 
@@ -85,10 +90,24 @@ async def backup_loop(
         log.info("авто-бэкап выключен (backup_interval_hours=0)")
         return
     await asyncio.sleep(30)  # не блокируем старт
+    global _last_backup_ok
     while True:
         try:
             path = await write_backup(session_factory, settings)
             log.info("авто-бэкап записан: %s", path)
-        except Exception:  # noqa: BLE001 — цикл не должен падать
+            if not _last_backup_ok:
+                _last_backup_ok = True
+                await alerts.maybe_alert(
+                    session_factory, settings,
+                    "✅ Amnezia Control: авто-бэкап снова проходит.",
+                )
+        except Exception as exc:  # noqa: BLE001 — цикл не должен падать
             log.exception("ошибка авто-бэкапа")
+            if _last_backup_ok:
+                _last_backup_ok = False
+                await alerts.maybe_alert(
+                    session_factory, settings,
+                    f"❌ Amnezia Control: авто-бэкап НЕ создан — {type(exc).__name__}: "
+                    f"{exc}. Проверьте место на диске и логи backend.",
+                )
         await asyncio.sleep(settings.backup_interval_hours * 3600)
