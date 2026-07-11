@@ -2,7 +2,7 @@ import asyncssh
 from fastapi import APIRouter, HTTPException, Request, status
 from sqlalchemy import delete, select
 
-from app import audit, awg, deploy, deploywatch, limits, notes, openvpn, sshops
+from app import audit, awg, deploy, deploywatch, limits, notes, openvpn, pausestore, sshops
 from app.config import get_settings
 from app.deps import CurrentUser, SessionDep
 from app.models import ClientLimit, OvpnConfig, Server
@@ -101,6 +101,7 @@ async def get_openvpn(
     )
     lim = await limits.limits_map(session, server_id, "openvpn")
     note_map = await notes.notes_map(session, server_id, "openvpn")
+    paused = await pausestore.list_paused(session, server_id, "openvpn")
     out_clients = []
     for c in clients:
         st = status_map.get(c.client_id)
@@ -114,6 +115,7 @@ async def get_openvpn(
                 "tx_bytes": st["tx"] if st else 0,
                 "connected": bool(st),
                 "since": st["since"] if st else "",
+                "paused": c.client_id in paused,
             }
         )
     return OvpnStateOut(container=container, clients=out_clients)
@@ -236,6 +238,53 @@ async def get_client_config(
     return OvpnConfigResponse(config_amnezia=row.config_amnezia, name=row.name)
 
 
+@router.post("/pause", status_code=status.HTTP_204_NO_CONTENT)
+async def pause_client(
+    server_id: int, body: OvpnRevokeRequest, user: CurrentUser, session: SessionDep
+) -> None:
+    """Пауза OpenVPN: файл ccd/<clientId> с `disable` (сертификат не трогаем),
+    клиент не сможет подключиться. Resume убирает файл."""
+    server = await _get_or_404(server_id, session)
+    name = ""
+    try:
+        async with _connect(server) as conn:
+            container = await openvpn.detect_container(conn)
+            clients = await openvpn.read_clients(conn)
+            match = next(
+                (c for c in clients if c.client_id == body.client_id), None
+            )
+            name = match.name if match else ""
+            await openvpn.pause_client(conn, container, body.client_id)
+    except Exception as exc:  # noqa: BLE001
+        raise _ovpn_error(exc) from exc
+    await pausestore.add(session, server_id, "openvpn", body.client_id, name, {})
+    await audit.record(
+        session, user.username, "openvpn_pause", server.name, name or body.client_id
+    )
+
+
+@router.post("/resume", status_code=status.HTTP_204_NO_CONTENT)
+async def resume_client(
+    server_id: int, body: OvpnRevokeRequest, user: CurrentUser, session: SessionDep
+) -> None:
+    server = await _get_or_404(server_id, session)
+    if body.client_id not in await pausestore.list_paused(
+        session, server_id, "openvpn"
+    ):
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Клиент не на паузе")
+    try:
+        async with _connect(server) as conn:
+            container = await openvpn.detect_container(conn)
+            await openvpn.resume_client(conn, container, body.client_id)
+    except Exception as exc:  # noqa: BLE001
+        raise _ovpn_error(exc) from exc
+    await pausestore.drop(session, server_id, "openvpn", body.client_id)
+    await session.commit()
+    await audit.record(
+        session, user.username, "openvpn_resume", server.name, body.client_id
+    )
+
+
 @router.post("/revoke", status_code=status.HTTP_204_NO_CONTENT)
 async def revoke_client(
     server_id: int, body: OvpnRevokeRequest, user: CurrentUser, session: SessionDep
@@ -251,6 +300,7 @@ async def revoke_client(
         session, user.username, "openvpn_revoke", server.name, body.client_id
     )
     await notes.clear_note(session, server_id, "openvpn", body.client_id)
+    await pausestore.drop(session, server_id, "openvpn", body.client_id)
     await session.execute(
         delete(OvpnConfig).where(
             OvpnConfig.server_id == server_id,

@@ -313,6 +313,7 @@ class OvpnClientOut(BaseModel):
     tx_bytes: int = 0
     connected: bool = False
     since: str = ""  # когда подключился (строка из status-лога)
+    paused: bool = False
 
 
 class OvpnStateOut(BaseModel):
