@@ -25,7 +25,7 @@ type Props = {
   protocols: Protocol[]
   onClose: () => void
   onUnauthorized: () => void
-  onRequestUpdate: (protocol: 'awg' | 'xray') => void
+  onRequestUpdate: (protocol: 'awg' | 'xray' | 'openvpn') => void
   onRequestAdopt?: () => void
 }
 
@@ -358,6 +358,7 @@ export function ClientsModal({
             serverId={server.id}
             serverName={server.name}
             onUnauthorized={onUnauthorized}
+            onRequestUpdate={() => onRequestUpdate('openvpn')}
           />
         )}
 
@@ -581,7 +582,7 @@ export function ClientsModal({
                             />
                           </td>
                           <td className="row-actions">
-                            {c.has_config ? (
+                            {c.has_config && (
                               <button
                                 className="ghost"
                                 disabled={busy}
@@ -589,15 +590,16 @@ export function ClientsModal({
                               >
                                 {t('Конфиг')}
                               </button>
-                            ) : (
-                              <button
-                                className="ghost"
-                                disabled={busy}
-                                onClick={() => reissue(c)}
-                              >
-                                {busy ? '…' : t('Перевыпустить')}
-                              </button>
                             )}
+                            {/* перевыпуск доступен всем (в т.ч. созданным
+                                панелью) — ротация ключа без пересоздания вручную */}
+                            <button
+                              className="ghost"
+                              disabled={busy}
+                              onClick={() => reissue(c)}
+                            >
+                              {busy ? '…' : t('Перевыпустить')}
+                            </button>
                             <button
                               className="ghost"
                               disabled={busy}

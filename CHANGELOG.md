@@ -4,6 +4,19 @@ All notable changes to Amnezia Control are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.25.0] — 2026-07-12
+
+### Added (protocol parity)
+- **OpenVPN/Cloak can now be rebuilt from the UI** ("Переустановить") — previously
+  it could only be *deployed* (never rebuilt/updated once installed). The rebuild
+  preserves the PKI, the container's real port and every client (verified
+  end-to-end: the CA is byte-identical after a rebuild).
+- **XRay clients can be reissued** — rotate the UUID while keeping the same name and
+  expiry, like AmneziaWG and OpenVPN already could.
+- **AmneziaWG "Reissue" now works for panel-created clients too**, not only for
+  clients created outside the panel — so you can rotate any client's key from the
+  UI without deleting and recreating it.
+
 ## [0.24.0] — 2026-07-12
 
 ### Added (alerting coverage)
@@ -311,6 +324,7 @@ Initial public release.
   scheduled auto-backups.
 - Dark / light theme and English / Russian UI.
 
+[0.25.0]: https://github.com/mihsergeev/amnezia-control/releases/tag/v0.25.0
 [0.24.0]: https://github.com/mihsergeev/amnezia-control/releases/tag/v0.24.0
 [0.23.0]: https://github.com/mihsergeev/amnezia-control/releases/tag/v0.23.0
 [0.22.0]: https://github.com/mihsergeev/amnezia-control/releases/tag/v0.22.0

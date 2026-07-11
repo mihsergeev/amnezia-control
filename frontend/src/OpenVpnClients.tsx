@@ -17,11 +17,17 @@ type Props = {
   serverId: number
   serverName: string
   onUnauthorized: () => void
+  onRequestUpdate?: () => void
 }
 
 type ConfigView = { name: string; amnezia: string }
 
-export function OpenVpnClients({ serverId, serverName, onUnauthorized }: Props) {
+export function OpenVpnClients({
+  serverId,
+  serverName,
+  onUnauthorized,
+  onRequestUpdate,
+}: Props) {
   const { t } = useI18n()
   const [state, setState] = useState<OvpnState | null>(null)
   const [loading, setLoading] = useState(true)
@@ -234,7 +240,7 @@ export function OpenVpnClients({ serverId, serverName, onUnauthorized }: Props) 
               >
                 {t('+ Выдать конфиг')}
               </button>
-              <span style={{ marginLeft: 'auto' }}>
+              <span style={{ marginLeft: 'auto', display: 'inline-flex', gap: 8 }}>
                 <RollbackMenu
                   serverId={serverId}
                   serverName={serverName}
@@ -242,6 +248,15 @@ export function OpenVpnClients({ serverId, serverName, onUnauthorized }: Props) 
                   onRestored={load}
                   onUnauthorized={onUnauthorized}
                 />
+                {onRequestUpdate && (
+                  <button
+                    className="ghost"
+                    onClick={onRequestUpdate}
+                    title={t('Пересобрать образ (свежий alpine + cloak); клиенты и PKI сохраняются)')}
+                  >
+                    {t('Переустановить')}
+                  </button>
+                )}
               </span>
             </div>
           )}
