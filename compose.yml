@@ -1,7 +1,16 @@
+# ротация docker-логов: без max-size json-file-логи растут без предела и панель
+# может забить собственный диск (коллектор/expiry/бэкап пишут каждый цикл)
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "5"
+
 services:
   db:
     image: postgres:17-alpine
     restart: unless-stopped
+    logging: *default-logging
     security_opt:
       - no-new-privileges:true
     environment:
@@ -21,6 +30,7 @@ services:
   backend:
     build: ./backend
     restart: unless-stopped
+    logging: *default-logging
     security_opt:
       - no-new-privileges:true
     environment:
@@ -45,14 +55,24 @@ services:
         condition: service_healthy
     networks:
       - internal
+    healthcheck:
+      # /api/health теперь проверяет и БД → 503 при мёртвом Postgres, healthcheck
+      # переведёт контейнер в unhealthy (restart:unless-stopped перезапустит)
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=3)\""]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 40s
 
   frontend:
     build: ./frontend
     restart: unless-stopped
+    logging: *default-logging
     security_opt:
       - no-new-privileges:true
     depends_on:
-      - backend
+      backend:
+        condition: service_healthy
     # Panel is served on the host at ACONTROL_BIND (default 127.0.0.1:8080).
     # Put a reverse proxy with HTTPS in front, or use compose.caddy.yml.
     ports:

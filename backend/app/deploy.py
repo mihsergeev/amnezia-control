@@ -137,7 +137,11 @@ def build_script(mode: str, port: int, cfg: dict[str, str]) -> str:
         "",
         f'log "[4/6] базовый образ {BASE_IMAGE} + сборка"',
         f'sudo docker pull {BASE_IMAGE} 2>&1 | tail -1',
-        'sudo docker build -t $IMG "$BUILD" 2>&1 | tail -3',
+        # `| tail` маскирует код возврата build → без проверки PIPESTATUS битая
+        # сборка прошла бы дальше к rm+run (снос рабочего контейнера ради
+        # несобравшегося образа). Прерываемся ДО удаления контейнера.
+        'sudo docker build -t $IMG "$BUILD" 2>&1 | tail -3; '
+        '[ ${PIPESTATUS[0]} -eq 0 ] || { echo DEPLOY_ERROR; exit 1; }',
         "",
         'log "[5/6] конфиг + контейнер"',
         # КРИТИЧНО: перед пересборкой вытаскиваем текущий конфиг из ЖИВОГО

@@ -364,7 +364,8 @@ sudo mkdir -p "$BUILD" "$D" || fail mkdir
 echo {dockerfile_b64} | base64 -d | sudo tee "$BUILD/Dockerfile" >/dev/null || fail dockerfile
 
 log "[3/5] docker build (xray {xray_release})"
-sudo docker build --build-arg XRAY_RELEASE={xray_release} -t "$IMG" "$BUILD" 2>&1 | tail -3 || fail build
+sudo docker build --build-arg XRAY_RELEASE={xray_release} -t "$IMG" "$BUILD" 2>&1 | tail -3
+[ ${{PIPESTATUS[0]}} -eq 0 ] || fail build
 
 log "[4/5] конфиг"
 # перед пересборкой вытаскиваем конфиг из ЖИВОГО контейнера на хост-маунт

@@ -4,6 +4,29 @@ All notable changes to Amnezia Control are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.23.0] — 2026-07-12
+
+### Fixed (resilience)
+- **One hung node no longer freezes monitoring/auto-revoke for all of them.** The
+  metrics collector and the expiry auto-revoke now wrap the whole per-node work in
+  a hard timeout — previously only the TCP handshake was bounded, so a stalled
+  `docker exec`/`wg show` on a single node blocked the entire cycle.
+- **Server cards show live online/offline** without a manual "Check". The collector
+  now updates each server's status every cycle (the protocol tabs / last check
+  details are preserved), so a node that goes down turns red on its own.
+- **A failed image build no longer takes the VPN down.** `docker build … | tail`
+  masked the build's exit code, so a broken build proceeded to remove and re-run
+  the container anyway. All three deploys (AmneziaWG/XRay/OpenVPN) now check the
+  build result and abort *before* touching the running container.
+
+### Added / Changed (ops)
+- **`/api/health` now checks the database** (returns 503 if it can't reach it), and
+  the backend has a Docker healthcheck so a dead DB actually restarts the backend
+  instead of the panel reporting healthy. The frontend now waits for the backend to
+  be healthy before starting.
+- **Docker log rotation** (`max-size`/`max-file`) on all services, so the panel
+  can't fill its own disk with unbounded container logs.
+
 ## [0.22.0] — 2026-07-10
 
 ### Fixed (data-safety)
@@ -270,6 +293,7 @@ Initial public release.
   scheduled auto-backups.
 - Dark / light theme and English / Russian UI.
 
+[0.23.0]: https://github.com/mihsergeev/amnezia-control/releases/tag/v0.23.0
 [0.22.0]: https://github.com/mihsergeev/amnezia-control/releases/tag/v0.22.0
 [0.21.2]: https://github.com/mihsergeev/amnezia-control/releases/tag/v0.21.2
 [0.21.1]: https://github.com/mihsergeev/amnezia-control/releases/tag/v0.21.1
