@@ -386,6 +386,61 @@ async def issue_client(
     return XrayClient(client_id=cid, name=name, creation_date=date), link
 
 
+async def pause_client(
+    conn: asyncssh.SSHClientConnection, container: str, client_id: str
+) -> dict:
+    """Ставит на паузу: убирает UUID из clients[] (как revoke), но возвращает его
+    dict {id, flow, email} — чтобы resume вернул того же клиента (тот же UUID →
+    клиентский конфиг не меняется)."""
+    if not client_id:
+        raise XrayError("некорректный clientId")
+    server = await _read_server(conn, container)
+    entry = next(
+        (c for c in _client_list(server)
+         if isinstance(c, dict) and c.get("id") == client_id),
+        None,
+    )
+    if entry is None:
+        raise XrayError("Клиент не найден")
+    server["inbounds"][0]["settings"]["clients"] = [
+        c for c in _client_list(server)
+        if not (isinstance(c, dict) and c.get("id") == client_id)
+    ]
+    ensure_stats_config(server)
+    await _write_server(conn, container, server)
+    table = await _read_table(conn, container)
+    await _write_table(
+        conn, container, [e for e in table if e.get("clientId") != client_id]
+    )
+    await _restart(conn, container)
+    return entry
+
+
+async def resume_client(
+    conn: asyncssh.SSHClientConnection, container: str,
+    client_entry: dict, name: str,
+) -> None:
+    """Возобновляет клиента: возвращает его dict в clients[] + clientsTable."""
+    cid = client_entry.get("id")
+    if not cid:
+        raise XrayError("некорректные данные паузы")
+    server = await _read_server(conn, container)
+    if not any(
+        isinstance(c, dict) and c.get("id") == cid for c in _client_list(server)
+    ):
+        _client_list(server).append(client_entry)
+    ensure_stats_config(server)
+    await _write_server(conn, container, server)
+    date = (await _run(conn, 'date "+%a %b %e %H:%M:%S %Y"')).strip()
+    table = await _read_table(conn, container)
+    if not any(e.get("clientId") == cid for e in table):
+        table.append(
+            {"clientId": cid, "userData": {"clientName": name, "creationDate": date}}
+        )
+    await _write_table(conn, container, table)
+    await _restart(conn, container)
+
+
 async def revoke_client(
     conn: asyncssh.SSHClientConnection, container: str, client_id: str
 ) -> None:

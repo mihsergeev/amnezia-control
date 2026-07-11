@@ -4,6 +4,17 @@ All notable changes to Amnezia Control are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.28.0] — 2026-07-12
+
+### Added
+- **Pause / resume a client without revoking** (AmneziaWG and XRay). "Pause" takes
+  the client off the server so they can't connect, but remembers their
+  credentials; "Resume" puts them back with the **same key and IP** (AmneziaWG) or
+  the same UUID (XRay) — the client's existing config just works again, no
+  reissue. Paused clients stay in the list with a ⏸ badge. Useful to freeze a
+  client for a while (non-payment, travel) without losing their config.
+  (OpenVPN pause is next — it's certificate-based and needs a different mechanism.)
+
 ## [0.27.0] — 2026-07-12
 
 ### Added (protocol parity)
@@ -347,6 +358,7 @@ Initial public release.
   scheduled auto-backups.
 - Dark / light theme and English / Russian UI.
 
+[0.28.0]: https://github.com/mihsergeev/amnezia-control/releases/tag/v0.28.0
 [0.27.0]: https://github.com/mihsergeev/amnezia-control/releases/tag/v0.27.0
 [0.26.0]: https://github.com/mihsergeev/amnezia-control/releases/tag/v0.26.0
 [0.25.0]: https://github.com/mihsergeev/amnezia-control/releases/tag/v0.25.0

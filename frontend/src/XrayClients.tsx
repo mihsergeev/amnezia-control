@@ -3,7 +3,9 @@ import { AmneziaQr } from './AmneziaQr'
 import {
   api,
   ApiError,
+  pauseClient,
   setClientLimit,
+  type XrayClient,
   type XrayConfig,
   type XrayCreated,
   type XrayState,
@@ -182,6 +184,28 @@ export function XrayClients({
     }
   }
 
+  async function togglePause(c: XrayClient) {
+    const resume = !!c.paused
+    if (
+      !resume &&
+      !window.confirm(
+        t('Поставить «{name}» на паузу? Клиент не сможет подключиться, но его можно вернуть без пересоздания.', {
+          name: c.name,
+        }),
+      )
+    )
+      return
+    setBusy(c.client_id)
+    try {
+      await pauseClient(serverId, 'xray', c.client_id, resume)
+      await load()
+    } catch (err) {
+      handleError(err)
+    } finally {
+      setBusy(null)
+    }
+  }
+
   async function saveNote(clientId: string, note: string) {
     try {
       await api<void>(`/api/servers/${serverId}/xray/note`, {
@@ -316,7 +340,7 @@ export function XrayClients({
                     <tr key={c.client_id}>
                       <td className="name-cell">
                         <NoteCell
-                          name={c.name}
+                          name={c.paused ? `${c.name} ⏸` : c.name}
                           note={c.note || ''}
                           onSave={(note) => saveNote(c.client_id, note)}
                         />
@@ -334,29 +358,51 @@ export function XrayClients({
                         />
                       </td>
                       <td className="row-actions">
-                        <button
-                          className="ghost"
-                          disabled={busy === c.client_id}
-                          onClick={() => viewConfig(c.client_id)}
-                        >
-                          {busy === c.client_id ? '…' : t('Конфиг')}
-                        </button>
-                        <button
-                          className="ghost"
-                          disabled={busy === c.client_id}
-                          onClick={() => setStatsFor({ id: c.client_id, name: c.name })}
-                          title={t('Трафик клиента')}
-                        >
-                          {t('Стата')}
-                        </button>
-                        <button
-                          className="ghost"
-                          disabled={busy === c.client_id}
-                          onClick={() => reissue(c.client_id, c.name)}
-                          title={t('Перевыпустить (сменить UUID)')}
-                        >
-                          {t('Перевыпустить')}
-                        </button>
+                        {c.paused ? (
+                          <button
+                            disabled={busy === c.client_id}
+                            onClick={() => togglePause(c)}
+                            title={t('Вернуть клиента на сервер')}
+                          >
+                            {busy === c.client_id ? '…' : t('Возобновить')}
+                          </button>
+                        ) : (
+                          <>
+                            <button
+                              className="ghost"
+                              disabled={busy === c.client_id}
+                              onClick={() => viewConfig(c.client_id)}
+                            >
+                              {busy === c.client_id ? '…' : t('Конфиг')}
+                            </button>
+                            <button
+                              className="ghost"
+                              disabled={busy === c.client_id}
+                              onClick={() =>
+                                setStatsFor({ id: c.client_id, name: c.name })
+                              }
+                              title={t('Трафик клиента')}
+                            >
+                              {t('Стата')}
+                            </button>
+                            <button
+                              className="ghost"
+                              disabled={busy === c.client_id}
+                              onClick={() => reissue(c.client_id, c.name)}
+                              title={t('Перевыпустить (сменить UUID)')}
+                            >
+                              {t('Перевыпустить')}
+                            </button>
+                            <button
+                              className="ghost"
+                              disabled={busy === c.client_id}
+                              onClick={() => togglePause(c)}
+                              title={t('Заморозить без удаления')}
+                            >
+                              {t('Пауза')}
+                            </button>
+                          </>
+                        )}
                         <button
                           className="ghost danger"
                           disabled={busy === c.client_id}

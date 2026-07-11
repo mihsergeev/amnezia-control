@@ -3,6 +3,7 @@ import QRCode from 'qrcode'
 import {
   api,
   ApiError,
+  pauseClient,
   setClientLimit,
   type AwgClient,
   type AwgState,
@@ -233,6 +234,28 @@ export function ClientsModal({
         { method: 'POST', body: JSON.stringify({ public_key: client.public_key }) },
       )
       showConfig(result.client.name, result.config, result.config_amnezia)
+      await load()
+    } catch (err) {
+      handleError(err)
+    } finally {
+      setBusyKey(null)
+    }
+  }
+
+  async function togglePause(client: AwgClient) {
+    const resume = !!client.paused
+    if (
+      !resume &&
+      !window.confirm(
+        t('Поставить «{name}» на паузу? Клиент не сможет подключиться, но его можно вернуть без пересоздания.', {
+          name: client.name,
+        }),
+      )
+    )
+      return
+    setBusyKey(client.public_key)
+    try {
+      await pauseClient(server.id, 'awg', client.public_key, resume)
       await load()
     } catch (err) {
       handleError(err)
@@ -523,14 +546,23 @@ export function ClientsModal({
                             <div className="client-row-name">
                               <span
                                 className={`dot ${
-                                  isOnline(c.latest_handshake)
-                                    ? 'dot-ok'
-                                    : 'dot-unknown'
+                                  c.paused
+                                    ? 'dot-unknown'
+                                    : isOnline(c.latest_handshake)
+                                      ? 'dot-ok'
+                                      : 'dot-unknown'
                                 }`}
                               />
-                              <span className="cname" title={c.name}>
+                              <span
+                                className="cname"
+                                title={c.name}
+                                style={c.paused ? { opacity: 0.6 } : undefined}
+                              >
                                 {c.name}
                               </span>
+                              {c.paused && (
+                                <span className="pause-badge">{t('⏸ пауза')}</span>
+                              )}
                               {!editing && (
                                 <button
                                   className="note-edit"
@@ -582,32 +614,51 @@ export function ClientsModal({
                             />
                           </td>
                           <td className="row-actions">
-                            {c.has_config && (
+                            {c.paused ? (
                               <button
-                                className="ghost"
                                 disabled={busy}
-                                onClick={() => viewConfig(c)}
+                                onClick={() => togglePause(c)}
+                                title={t('Вернуть клиента на сервер')}
                               >
-                                {t('Конфиг')}
+                                {busy ? '…' : t('Возобновить')}
                               </button>
+                            ) : (
+                              <>
+                                {c.has_config && (
+                                  <button
+                                    className="ghost"
+                                    disabled={busy}
+                                    onClick={() => viewConfig(c)}
+                                  >
+                                    {t('Конфиг')}
+                                  </button>
+                                )}
+                                {/* перевыпуск доступен всем — ротация ключа */}
+                                <button
+                                  className="ghost"
+                                  disabled={busy}
+                                  onClick={() => reissue(c)}
+                                >
+                                  {busy ? '…' : t('Перевыпустить')}
+                                </button>
+                                <button
+                                  className="ghost"
+                                  disabled={busy}
+                                  onClick={() => setStatsFor(c)}
+                                  title={t('Трафик клиента')}
+                                >
+                                  {t('Стата')}
+                                </button>
+                                <button
+                                  className="ghost"
+                                  disabled={busy}
+                                  onClick={() => togglePause(c)}
+                                  title={t('Заморозить без удаления')}
+                                >
+                                  {t('Пауза')}
+                                </button>
+                              </>
                             )}
-                            {/* перевыпуск доступен всем (в т.ч. созданным
-                                панелью) — ротация ключа без пересоздания вручную */}
-                            <button
-                              className="ghost"
-                              disabled={busy}
-                              onClick={() => reissue(c)}
-                            >
-                              {busy ? '…' : t('Перевыпустить')}
-                            </button>
-                            <button
-                              className="ghost"
-                              disabled={busy}
-                              onClick={() => setStatsFor(c)}
-                              title={t('Трафик клиента')}
-                            >
-                              {t('Стата')}
-                            </button>
                             <button
                               className="ghost danger"
                               disabled={busy}

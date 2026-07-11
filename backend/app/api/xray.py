@@ -3,7 +3,7 @@ import httpx
 from fastapi import APIRouter, HTTPException, Request, status
 from sqlalchemy import delete
 
-from app import audit, awg, deploy, deploywatch, limits, notes, sshops, xray
+from app import audit, awg, deploy, deploywatch, limits, notes, pausestore, sshops, xray
 from app.config import get_settings
 from app.deps import CurrentUser, SessionDep
 from app.models import ClientLimit, Server
@@ -73,18 +73,27 @@ async def get_xray(server_id: int, _: CurrentUser, session: SessionDep) -> XrayS
         raise _xray_error(exc) from exc
     lim = await limits.limits_map(session, server_id, "xray")
     note_map = await notes.notes_map(session, server_id, "xray")
-    return XrayStateOut(
-        container=container,
-        clients=[
-            c.__dict__ | {
-                "expires_at": lim.get(c.client_id),
-                "note": note_map.get(c.client_id, ""),
-                "rx_bytes": stats.get(c.client_id, {}).get("up", 0),
-                "tx_bytes": stats.get(c.client_id, {}).get("down", 0),
-            }
-            for c in clients
-        ],
-    )
+    paused = await pausestore.list_paused(session, server_id, "xray")
+    out = [
+        c.__dict__ | {
+            "expires_at": lim.get(c.client_id),
+            "note": note_map.get(c.client_id, ""),
+            "rx_bytes": stats.get(c.client_id, {}).get("up", 0),
+            "tx_bytes": stats.get(c.client_id, {}).get("down", 0),
+            "paused": False,
+        }
+        for c in clients
+    ]
+    live = {c["client_id"] for c in out}
+    for cid, p in paused.items():
+        if cid in live:
+            continue
+        out.append({
+            "client_id": cid, "name": p["name"], "creation_date": "",
+            "expires_at": lim.get(cid), "note": note_map.get(cid, ""),
+            "rx_bytes": 0, "tx_bytes": 0, "paused": True,
+        })
+    return XrayStateOut(container=container, clients=out)
 
 
 @router.post("/note", status_code=status.HTTP_204_NO_CONTENT)
@@ -147,17 +156,76 @@ async def get_client_config(
     return XrayConfigResponse(config_amnezia=link, name=match.name)
 
 
+@router.post("/pause", status_code=status.HTTP_204_NO_CONTENT)
+async def pause_client(
+    server_id: int, body: XrayRevokeRequest, user: CurrentUser, session: SessionDep
+) -> None:
+    """Пауза: убирает UUID с сервера (не сможет подключиться), запоминает его dict
+    для возобновления без смены UUID."""
+    server = await _get_or_404(server_id, session)
+    name = ""
+    try:
+        async with _connect(server) as conn:
+            container = await xray.detect_container(conn)
+            clients = await xray.read_clients(conn)
+            match = next(
+                (c for c in clients if c.client_id == body.client_id), None
+            )
+            if match is None:
+                raise HTTPException(status.HTTP_404_NOT_FOUND, "Клиент не найден")
+            name = match.name
+            entry = await xray.pause_client(conn, container, body.client_id)
+    except HTTPException:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        raise _xray_error(exc) from exc
+    await pausestore.add(
+        session, server_id, "xray", body.client_id, name, {"entry": entry}
+    )
+    await audit.record(
+        session, user.username, "xray_pause", server.name, name or body.client_id
+    )
+
+
+@router.post("/resume", status_code=status.HTTP_204_NO_CONTENT)
+async def resume_client(
+    server_id: int, body: XrayRevokeRequest, user: CurrentUser, session: SessionDep
+) -> None:
+    """Возобновление: возвращает клиента (тот же UUID) на сервер."""
+    server = await _get_or_404(server_id, session)
+    rec = (await pausestore.list_paused(session, server_id, "xray")).get(body.client_id)
+    if rec is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Клиент не на паузе")
+    entry = rec["data"].get("entry") or {"id": body.client_id, "flow": xray.FLOW}
+    try:
+        async with _connect(server) as conn:
+            container = await xray.detect_container(conn)
+            await xray.resume_client(conn, container, entry, rec["name"])
+    except Exception as exc:  # noqa: BLE001
+        raise _xray_error(exc) from exc
+    await pausestore.drop(session, server_id, "xray", body.client_id)
+    await session.commit()
+    await audit.record(
+        session, user.username, "xray_resume", server.name, rec["name"]
+    )
+
+
 @router.post("/revoke", status_code=status.HTTP_204_NO_CONTENT)
 async def revoke_client(
     server_id: int, body: XrayRevokeRequest, user: CurrentUser, session: SessionDep
 ) -> None:
     server = await _get_or_404(server_id, session)
-    try:
-        async with _connect(server) as conn:
-            container = await xray.detect_container(conn)
-            await xray.revoke_client(conn, container, body.client_id)
-    except Exception as exc:  # noqa: BLE001
-        raise _xray_error(exc) from exc
+    is_paused = body.client_id in await pausestore.list_paused(
+        session, server_id, "xray"
+    )
+    if not is_paused:
+        try:
+            async with _connect(server) as conn:
+                container = await xray.detect_container(conn)
+                await xray.revoke_client(conn, container, body.client_id)
+        except Exception as exc:  # noqa: BLE001
+            raise _xray_error(exc) from exc
+    await pausestore.drop(session, server_id, "xray", body.client_id)
     await audit.record(
         session, user.username, "xray_revoke", server.name, body.client_id
     )

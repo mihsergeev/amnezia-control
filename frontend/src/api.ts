@@ -167,6 +167,7 @@ export type AwgClient = {
   has_config: boolean
   note: string
   expires_at?: string | null
+  paused?: boolean
 }
 
 export type AwgState = {
@@ -333,6 +334,21 @@ export type XrayClient = {
   note?: string
   rx_bytes?: number
   tx_bytes?: number
+  paused?: boolean
+}
+
+// Пауза/возобновление клиента (протокол-независимо).
+export async function pauseClient(
+  serverId: number,
+  protocol: 'awg' | 'xray',
+  clientId: string,
+  resume: boolean,
+): Promise<void> {
+  const idKey = protocol === 'awg' ? 'public_key' : 'client_id'
+  await api<void>(
+    `/api/servers/${serverId}/${protocol}/${resume ? 'resume' : 'pause'}`,
+    { method: 'POST', body: JSON.stringify({ [idKey]: clientId }) },
+  )
 }
 
 // Установить/снять срок действия клиента (протокол-независимо).

@@ -481,6 +481,39 @@ async def _append_to_table(conn, state, pub, name, ip) -> None:
     await _write_table(conn, state.container, data)
 
 
+async def pause_client(
+    conn: asyncssh.SSHClientConnection, state: "AwgState", public_key: str
+) -> dict:
+    """Ставит клиента на паузу: снимает пира (как revoke), но возвращает его IP —
+    чтобы resume вернул того же пира с тем же адресом (клиентский конфиг не
+    меняется). PSK общий (в wireguard_psk.key), перечитывается при resume."""
+    target = next(
+        (c for c in state.clients if c.public_key == public_key), None
+    )
+    if target is None:
+        raise AwgError("Клиент не найден")
+    ip = target.address.split("/")[0] if target.address else ""
+    await revoke_client(conn, state.container, state.interface, public_key)
+    return {"ip": ip}
+
+
+async def resume_client(
+    conn: asyncssh.SSHClientConnection, state: "AwgState",
+    public_key: str, name: str, ip: str,
+) -> None:
+    """Возобновляет клиента: возвращает пира с прежним pubkey/IP/PSK."""
+    ip = _safe_ip(ip)
+    inner = (
+        f'PSK=$(cat {AWG_DIR}/wireguard_psk.key); '
+        f"wg set {state.interface} peer {shlex.quote(public_key)} "
+        f"preshared-key {AWG_DIR}/wireguard_psk.key allowed-ips {ip}/32 && "
+        f"printf '\\n[Peer]\\nPublicKey = %s\\nPresharedKey = %s\\nAllowedIPs = %s/32\\n' "
+        f'{shlex.quote(public_key)} "$PSK" {ip} >> {AWG_DIR}/{state.interface}.conf'
+    )
+    await _run(conn, _docker_exec(state.container, inner))
+    await _append_to_table(conn, state, public_key, name, ip)
+
+
 async def revoke_client(
     conn: asyncssh.SSHClientConnection, container: str, interface: str, public_key: str
 ) -> None:
