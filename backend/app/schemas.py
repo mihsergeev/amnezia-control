@@ -357,6 +357,9 @@ class XrayClientOut(BaseModel):
     creation_date: str
     expires_at: datetime | None = None
     note: str = ""
+    # трафик из xray StatsService (0, если статистика не включена на сервере)
+    rx_bytes: int = 0  # upload (uplink)
+    tx_bytes: int = 0  # download (downlink)
 
 
 class XrayStateOut(BaseModel):

@@ -76,9 +76,23 @@ async def _openvpn_part(conn, host) -> tuple[dict, list[dict]]:
 
 
 async def _xray_part(conn, host) -> tuple[dict, list[dict]]:
-    # у xray нет stats API в дефолтном конфиге — считаем только число клиентов
+    # трафик по клиентам — из xray StatsService (если включён на сервере)
+    container = await xray.detect_container(conn)
     clients = await xray.read_clients(conn)
-    return {"rx": 0, "tx": 0, "total": len(clients), "online": 0}, []
+    stats = await xray.read_client_stats(conn, container)
+    names = {c.client_id: c.name for c in clients}
+    rows: list[dict] = []
+    rx = tx = 0
+    for uid, st in stats.items():
+        if uid not in names:  # дефолтный UUID / уже отозванные — пропускаем
+            continue
+        rx += st["up"]
+        tx += st["down"]
+        rows.append(
+            {"protocol": "xray", "client_id": uid,
+             "rx": st["up"], "tx": st["down"], "name": names.get(uid, "")}
+        )
+    return {"rx": rx, "tx": tx, "total": len(clients), "online": 0}, rows
 
 
 async def _sample_server(
