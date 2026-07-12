@@ -7,7 +7,7 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="VPNPANEL_", env_file=".env")
 
     app_name: str = "Amnezia Control"
-    version: str = "0.36.1"
+    version: str = "0.37.0"
     debug: bool = False
 
     db_url: str = "sqlite+aiosqlite:///./data/panel.db"
@@ -32,6 +32,10 @@ class Settings(BaseSettings):
     # Авто-бэкап БД: интервал в часах (0 = выключить), сколько копий хранить
     backup_interval_hours: int = 24
     backup_keep: int = 14
+    # история трафика (client_traffic_samples/traffic_samples) — сотни МБ и
+    # некритична (регенерируется). По умолчанию НЕ кладём в бэкап: тогда архив
+    # весит килобайты и его удобно скачивать/хранить офсайт. Включить = полный дамп.
+    backup_include_traffic: bool = False
 
     # Авто-отзыв истёкших клиентов: интервал в секундах (0 = выключить)
     expiry_interval: int = 300

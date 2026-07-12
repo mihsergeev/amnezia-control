@@ -51,6 +51,9 @@ _MODELS = [
     ClientTrafficSample,
 ]
 
+# история трафика — объёмная и некритичная; в «лёгком» бэкапе её пропускаем
+_TRAFFIC_MODELS = (TrafficSample, ClientTrafficSample)
+
 _RESTORE = """# Восстановление Amnezia Control
 
 Архив содержит полное состояние панели на момент бэкапа.
@@ -105,9 +108,43 @@ def _skip_data_dir(name: str) -> bool:
     )
 
 
-async def _build_archive(session, data_dir: str, version: str) -> bytes:
+def verify_archive(archive: bytes) -> list[str]:
+    """Self-тест бэкапа: архив открывается, MANIFEST/db.json парсятся, число строк
+    сходится с манифестом (ловит обрыв записи/битый файл), а критичные данные —
+    админ и приватный ssh-ключ панели — на месте. Возвращает список проблем;
+    пустой список = бэкап целый и восстановимый."""
+    try:
+        with tarfile.open(fileobj=io.BytesIO(archive), mode="r:gz") as tar:
+            names = set(tar.getnames())
+            mf = tar.extractfile("MANIFEST.json")
+            dbf = tar.extractfile("db.json")
+            if mf is None or dbf is None:
+                return ["в архиве нет MANIFEST.json или db.json"]
+            manifest = json.loads(mf.read())
+            dump = json.loads(dbf.read())
+    except (tarfile.TarError, OSError, KeyError, json.JSONDecodeError, ValueError) as exc:
+        return [f"архив не открывается/не парсится: {exc}"]
+
+    errors: list[str] = []
+    for tbl, cnt in manifest.get("tables", {}).items():
+        actual = len(dump.get(tbl, []))
+        if actual != cnt:
+            errors.append(f"{tbl}: манифест {cnt} ≠ db.json {actual} (обрыв записи?)")
+    if not dump.get("users"):
+        errors.append("нет админа (таблица users пуста) — после restore не войти")
+    if not any(n.endswith("ssh/id_ed25519") for n in names):
+        errors.append("нет приватного ssh-ключа панели (data/ssh/id_ed25519)")
+    return errors
+
+
+async def _build_archive(
+    session, data_dir: str, version: str, include_traffic: bool = False
+) -> bytes:
     dump: dict[str, list] = {}
     for model in _MODELS:
+        # лёгкий бэкап: историю трафика (сотни МБ) не тащим — она некритична
+        if model in _TRAFFIC_MODELS and not include_traffic:
+            continue
         rows = (await session.scalars(select(model))).all()
         dump[model.__tablename__] = [_dump_row(r) for r in rows]
 
@@ -115,6 +152,7 @@ async def _build_archive(session, data_dir: str, version: str) -> bytes:
         "app": "Amnezia Control",
         "version": version,
         "created_at": datetime.now(timezone.utc).isoformat(),
+        "include_traffic": include_traffic,
         "tables": {name: len(rows) for name, rows in dump.items()},
     }
 
@@ -147,7 +185,9 @@ async def _build_archive(session, data_dir: str, version: str) -> bytes:
 @router.get("")
 async def download_backup(_: CurrentUser, session: SessionDep) -> Response:
     settings = get_settings()
-    archive = await _build_archive(session, settings.data_dir, settings.version)
+    archive = await _build_archive(
+        session, settings.data_dir, settings.version, settings.backup_include_traffic
+    )
     stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
     filename = f"acontrol-backup-{stamp}.tar.gz"
     return Response(
@@ -188,7 +228,9 @@ async def backup_now(_: CurrentUser, session: SessionDep) -> dict:
 
     settings = get_settings()
     d = autobackup.ensure_backups_dir(settings.data_dir)
-    archive = await _build_archive(session, settings.data_dir, settings.version)
+    archive = await _build_archive(
+        session, settings.data_dir, settings.version, settings.backup_include_traffic
+    )
     stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
     path = os.path.join(d, f"acontrol-backup-{stamp}.tar.gz")
     with open(path, "wb") as fh:
@@ -255,11 +297,14 @@ async def restore_backup(
             status.HTTP_400_BAD_REQUEST, "в архиве нет валидного db.json"
         ) from exc
 
-    # восстановление таблиц: очистка + вставка (в обратном порядке чистим — FK нет)
+    # восстанавливаем ТОЛЬКО таблицы, присутствующие в db.json. Отсутствующие
+    # (напр. история трафика в лёгком бэкапе) не трогаем — иначе restore затёр бы
+    # их существующие строки пустотой.
+    present = [m for m in _MODELS if m.__tablename__ in dump]
     restored: dict[str, int] = {}
-    for model in reversed(_MODELS):
+    for model in reversed(present):  # чистим в обратном порядке (FK нет)
         await session.execute(delete(model))
-    for model in _MODELS:
+    for model in present:
         rows = dump.get(model.__tablename__, [])
         for row in rows:
             if isinstance(row, dict):
@@ -275,7 +320,7 @@ async def restore_backup(
     except AttributeError:
         dialect = ""
     if dialect == "postgresql":
-        for model in _MODELS:
+        for model in present:
             pk = list(model.__table__.primary_key.columns)
             if len(pk) == 1 and pk[0].name == "id":
                 tbl = model.__tablename__

@@ -4,6 +4,21 @@ All notable changes to Amnezia Control are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.37.0] — 2026-07-12
+
+### Changed (backup — lighter + self-tested)
+- **Backups no longer carry traffic history by default, so they're tiny.** The
+  `client_traffic_samples`/`traffic_samples` tables were ~99% of the archive
+  (hundreds of MB) and are non-critical (they regenerate). A backup is now a few
+  KB — practical to download from the ⚙ menu as your off-site copy. Set
+  `ACONTROL_BACKUP_INCLUDE_TRAFFIC=1` to include the history. Restore only touches
+  tables present in the archive, so restoring a light backup never wipes traffic.
+- **Every auto-backup is self-tested right after it's written** (re-read from
+  disk): the archive must open, `db.json`/manifest must parse, row counts must
+  match the manifest, and the admin user + panel SSH key must be present. If the
+  self-test fails, you get an alert — a backup you can't restore no longer passes
+  silently.
+
 ## [0.36.1] — 2026-07-12
 
 ### Fixed (UX)

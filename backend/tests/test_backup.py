@@ -9,7 +9,49 @@ import tarfile
 
 import httpx
 
-from app.api.backup import _skip_data_dir
+from app.api.backup import _skip_data_dir, verify_archive
+
+
+def _mk_archive(manifest_tables, dump, with_key=True):
+    """Синтетический бэкап-архив для тестов verify_archive."""
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w:gz") as tar:
+        def add(n, d):
+            info = tarfile.TarInfo(n)
+            info.size = len(d)
+            tar.addfile(info, io.BytesIO(d))
+        add("MANIFEST.json", json.dumps({"tables": manifest_tables}).encode())
+        add("db.json", json.dumps(dump).encode())
+        if with_key:
+            add("data/ssh/id_ed25519", b"FAKE-KEY")
+    return buf.getvalue()
+
+
+def test_verify_archive_ok():
+    ok = _mk_archive({"users": 1, "servers": 0}, {"users": [{"id": 1}], "servers": []})
+    assert verify_archive(ok) == []
+
+
+def test_verify_archive_catches_problems():
+    # битый/оборванный файл
+    assert verify_archive(b"not a tar.gz")
+    # число строк не сходится с манифестом (обрыв записи)
+    bad = _mk_archive({"users": 5}, {"users": [{"id": 1}]})
+    assert any("users" in e for e in verify_archive(bad))
+    # нет админа — после restore не войти
+    assert any("админ" in e for e in verify_archive(_mk_archive({"users": 0}, {"users": []})))
+    # нет приватного ssh-ключа панели
+    nok = _mk_archive({"users": 1}, {"users": [{"id": 1}]}, with_key=False)
+    assert any("ssh" in e for e in verify_archive(nok))
+
+
+async def test_light_backup_omits_traffic_history(client, auth_headers):
+    """По умолчанию бэкап лёгкий: историю трафика не тащим, конфиг-таблицы — да."""
+    await _make_state(client, auth_headers)
+    dump = _read_db_json((await client.get("/api/backup", headers=auth_headers)).content)
+    assert "client_traffic_samples" not in dump
+    assert "traffic_samples" not in dump
+    assert dump["servers"] and "app_settings" in dump  # конфиг на месте
 
 
 def test_skip_data_dir_excludes_postgres_and_rollback_variants():
