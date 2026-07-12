@@ -9,6 +9,7 @@ from app.api import (
     audit,
     auth,
     awg,
+    awg_legacy,
     backup,
     fullaccess,
     health,
@@ -82,6 +83,7 @@ def create_app() -> FastAPI:
     app.include_router(auth.router, prefix="/api")
     app.include_router(servers.router, prefix="/api")
     app.include_router(awg.router, prefix="/api")
+    app.include_router(awg_legacy.router, prefix="/api")
     app.include_router(openvpn.router, prefix="/api")
     app.include_router(xray.router, prefix="/api")
     app.include_router(importer.router, prefix="/api")
