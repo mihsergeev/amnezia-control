@@ -336,6 +336,7 @@ const EN: Record<string, string> = {
   'Выдан AmneziaWG': 'AmneziaWG issued',
   'Отозван AmneziaWG': 'AmneziaWG revoked',
   'Перевыпущен AmneziaWG': 'AmneziaWG reissued',
+  'AmneziaWG Legacy': 'AmneziaWG Legacy',
   'Выдан AmneziaWG Legacy': 'AmneziaWG Legacy issued',
   'Отозван AmneziaWG Legacy': 'AmneziaWG Legacy revoked',
   'Перевыпущен AmneziaWG Legacy': 'AmneziaWG Legacy reissued',

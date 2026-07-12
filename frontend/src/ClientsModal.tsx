@@ -47,10 +47,14 @@ export function ClientsModal({
 }: Props) {
   const { t } = useI18n()
   const dismiss = useModalDismiss(onClose)
-  const hasAwg = protocols.some((p) => p.key === 'awg')
-  const [proto, setProto] = useState<Protocol['key']>(
+  // 'awglegacy' — старый AmneziaWG (wg0) рядом с новым; путь /awg-legacy
+  const [proto, setProto] = useState<Protocol['key'] | 'awglegacy'>(
     protocols[0]?.key ?? 'awg',
   )
+  // есть ли отдельный legacy-контейнер (узнаём из awg-состояния) — держим стабильно
+  const [hasLegacy, setHasLegacy] = useState(false)
+  const isAwg = proto === 'awg' || proto === 'awglegacy'
+  const awgBase = proto === 'awglegacy' ? 'awg-legacy' : 'awg'
   const [state, setState] = useState<AwgState | null>(null)
   const [version, setVersion] = useState<VersionInfo | null>(null)
   const [loading, setLoading] = useState(true)
@@ -90,22 +94,28 @@ export function ClientsModal({
   const load = useCallback(async () => {
     setLoading(true)
     try {
-      setState(await api<AwgState>(`/api/servers/${server.id}/awg`))
+      const s = await api<AwgState>(`/api/servers/${server.id}/${awgBase}`)
+      setState(s)
+      // legacy показываем отдельной вкладкой, узнав о нём из awg-состояния
+      if (s.legacy_container) setHasLegacy(true)
       setError(null)
     } catch (err) {
       handleError(err)
     } finally {
       setLoading(false)
     }
-  }, [server.id, handleError])
+  }, [server.id, awgBase, handleError])
 
   useEffect(() => {
-    if (!hasAwg) return
+    if (!isAwg) return
     void load()
-    api<VersionInfo>(`/api/servers/${server.id}/awg/version`)
-      .then(setVersion)
-      .catch(() => setVersion(null))
-  }, [load, server.id, hasAwg])
+    // версия/обновление — только у нового AmneziaWG; legacy панель не пересобирает
+    if (proto === 'awg') {
+      api<VersionInfo>(`/api/servers/${server.id}/awg/version`)
+        .then(setVersion)
+        .catch(() => setVersion(null))
+    }
+  }, [load, server.id, isAwg, proto])
 
   function showConfig(name: string, config: string, amnezia: string) {
     setView({ name, config, amnezia })
@@ -151,7 +161,7 @@ export function ClientsModal({
     setError(null)
     try {
       const result = await api<CreatedClient>(
-        `/api/servers/${server.id}/awg/clients`,
+        `/api/servers/${server.id}/${awgBase}/clients`,
         {
           method: 'POST',
           body: JSON.stringify({
@@ -191,7 +201,7 @@ export function ClientsModal({
     setEditKey(null)
     if (value === (client.note || '')) return
     try {
-      await api<void>(`/api/servers/${server.id}/awg/note`, {
+      await api<void>(`/api/servers/${server.id}/${awgBase}/note`, {
         method: 'POST',
         body: JSON.stringify({ public_key: client.public_key, note: value }),
       })
@@ -209,7 +219,7 @@ export function ClientsModal({
         config: string
         config_amnezia: string
         name: string
-      }>(`/api/servers/${server.id}/awg/config`, {
+      }>(`/api/servers/${server.id}/${awgBase}/config`, {
         method: 'POST',
         body: JSON.stringify({ public_key: client.public_key }),
       })
@@ -234,7 +244,7 @@ export function ClientsModal({
     setError(null)
     try {
       const result = await api<CreatedClient>(
-        `/api/servers/${server.id}/awg/reissue`,
+        `/api/servers/${server.id}/${awgBase}/reissue`,
         { method: 'POST', body: JSON.stringify({ public_key: client.public_key }) },
       )
       showConfig(result.client.name, result.config, result.config_amnezia)
@@ -259,7 +269,7 @@ export function ClientsModal({
       return
     setBusyKey(client.public_key)
     try {
-      await pauseClient(server.id, 'awg', client.public_key, resume)
+      await pauseClient(server.id, awgBase, client.public_key, resume)
       await load()
     } catch (err) {
       handleError(err)
@@ -277,7 +287,7 @@ export function ClientsModal({
       return
     setBusyKey(client.public_key)
     try {
-      await api<void>(`/api/servers/${server.id}/awg/revoke`, {
+      await api<void>(`/api/servers/${server.id}/${awgBase}/revoke`, {
         method: 'POST',
         body: JSON.stringify({ public_key: client.public_key }),
       })
@@ -361,7 +371,7 @@ export function ClientsModal({
           </button>
         </div>
 
-        {protocols.length > 1 && (
+        {(protocols.length > 1 || hasLegacy) && (
           <div className="tabs">
             {protocols.map((p) => (
               <button
@@ -372,6 +382,14 @@ export function ClientsModal({
                 {p.label}
               </button>
             ))}
+            {hasLegacy && (
+              <button
+                className={proto === 'awglegacy' ? 'tab tab-active' : 'tab'}
+                onClick={() => setProto('awglegacy')}
+              >
+                {t('AmneziaWG Legacy')}
+              </button>
+            )}
           </div>
         )}
 
@@ -393,7 +411,7 @@ export function ClientsModal({
           />
         )}
 
-        {proto === 'awg' && (
+        {isAwg && (
           <>
         {state && (
           <div className="awg-summary muted small">
@@ -402,7 +420,7 @@ export function ClientsModal({
           </div>
         )}
 
-        {version && (
+        {proto === 'awg' && version && (
           <div className="version-line">
             <span className="muted small">
               AmneziaWG:{' '}

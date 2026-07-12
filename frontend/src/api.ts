@@ -178,6 +178,7 @@ export type AwgState = {
   endpoint: string
   address: string
   clients: AwgClient[]
+  legacy_container?: string | null
 }
 
 export type CreatedClient = {
@@ -341,11 +342,11 @@ export type XrayClient = {
 // Пауза/возобновление клиента (протокол-независимо).
 export async function pauseClient(
   serverId: number,
-  protocol: 'awg' | 'xray' | 'openvpn',
+  protocol: 'awg' | 'awg-legacy' | 'xray' | 'openvpn',
   clientId: string,
   resume: boolean,
 ): Promise<void> {
-  const idKey = protocol === 'awg' ? 'public_key' : 'client_id'
+  const idKey = protocol.startsWith('awg') ? 'public_key' : 'client_id'
   await api<void>(
     `/api/servers/${serverId}/${protocol}/${resume ? 'resume' : 'pause'}`,
     { method: 'POST', body: JSON.stringify({ [idKey]: clientId }) },
