@@ -1,11 +1,11 @@
 import asyncssh
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, HTTPException, Request, status
 
-from app import audit, awg, fullaccess, sshops
+from app import audit, awg, fullaccess, sshops, stepup
 from app.config import get_settings
 from app.deps import CurrentUser, SessionDep
 from app.models import Server
-from app.schemas import FullAccessOut
+from app.schemas import FullAccessOut, StepUpRequest
 from app.sshkeys import ensure_panel_key, key_paths
 
 router = APIRouter(prefix="/servers/{server_id}/fullaccess", tags=["fullaccess"])
@@ -30,11 +30,25 @@ def _connect(server: Server):
 
 @router.post("", response_model=FullAccessOut)
 async def export_full_access(
-    server_id: int, user: CurrentUser, session: SessionDep
+    server_id: int,
+    body: StepUpRequest,
+    user: CurrentUser,
+    session: SessionDep,
+    request: Request,
 ) -> FullAccessOut:
     """Генерит full-access vpn:// для десктоп-клиента: ставит выделенный
-    SSH-ключ на ноду и вкладывает его приватную часть в конфиг."""
+    SSH-ключ на ноду и вкладывает его приватную часть в конфиг. Ссылка содержит
+    root-эквивалентный ключ, поэтому требует ПОВТОРНОГО ввода пароля (степ-ап)."""
     server = await _get_or_404(server_id, session)
+    try:
+        stepup.verify(user, body.password, request)
+    except HTTPException as exc:
+        if exc.status_code == status.HTTP_403_FORBIDDEN:
+            await audit.record(
+                session, user.username, "fullaccess_denied", server.name,
+                "неверный пароль",
+            )
+        raise
     dns1, dns2 = awg.dns_pair(get_settings().awg_client_dns)
     private_key, pubkey = fullaccess.generate_keypair()
     try:

@@ -4,6 +4,17 @@ All notable changes to Amnezia Control are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.31.0] — 2026-07-12
+
+### Added (security)
+- **Exporting a server's "full access" link now requires re-entering your panel
+  password** (step-up auth). That link embeds a root-equivalent SSH key, so it
+  shouldn't be one click away from a hijacked session. Wrong-password attempts are
+  rate-limited and a denial is written to the audit log.
+- **The password-change endpoint is now rate-limited** — repeated wrong
+  current-password attempts are throttled (shared lockout with the step-up), so a
+  stolen session can't brute-force the password to escalate.
+
 ## [0.30.1] — 2026-07-12
 
 ### Fixed (UX)
@@ -424,6 +435,7 @@ Initial public release.
   scheduled auto-backups.
 - Dark / light theme and English / Russian UI.
 
+[0.31.0]: https://github.com/mihsergeev/amnezia-control/releases/tag/v0.31.0
 [0.30.1]: https://github.com/mihsergeev/amnezia-control/releases/tag/v0.30.1
 [0.30.0]: https://github.com/mihsergeev/amnezia-control/releases/tag/v0.30.0
 [0.29.3]: https://github.com/mihsergeev/amnezia-control/releases/tag/v0.29.3
