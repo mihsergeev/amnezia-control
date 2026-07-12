@@ -21,6 +21,13 @@ export function ImportModal({ onClose, onDone, onUnauthorized }: Props) {
   const [error, setError] = useState<string | null>(null)
   const [results, setResults] = useState<ImportResult[] | null>(null)
 
+  function importMore() {
+    setResults(null)
+    setError(null)
+    setAmneziaText('')
+    setBulkText('')
+  }
+
   function handleError(err: unknown) {
     if (err instanceof ApiError && err.status === 401) {
       onUnauthorized()
@@ -79,93 +86,99 @@ export function ImportModal({ onClose, onDone, onUnauthorized }: Props) {
           </button>
         </div>
 
-        <div className="tabs">
-          <button
-            className={tab === 'amnezia' ? 'tab tab-active' : 'tab'}
-            onClick={() => {
-              setTab('amnezia')
-              setResults(null)
-            }}
-          >
-            {t('Из Amnezia (vpn://)')}
-          </button>
-          <button
-            className={tab === 'bulk' ? 'tab tab-active' : 'tab'}
-            onClick={() => {
-              setTab('bulk')
-              setResults(null)
-            }}
-          >
-            {t('Списком')}
-          </button>
-        </div>
-
         {error && <p className="form-error">{error}</p>}
 
-        {tab === 'amnezia' ? (
+        {results ? (
+          // После импорта форма скрывается: показываем только результат и явный
+          // primary «Готово» (закрыть) вместо оставшейся кнопки «Импортировать».
           <>
-            <p className="muted small">
-              {t('В клиенте Amnezia: на сервере «Поделиться» → ')}
-              <b>{t('Полный доступ')}</b>
-              {t(' → скопируйте ссылку ')}
-              <span className="mono">vpn://…</span>
-              {t(
-                ' и вставьте сюда (можно несколько, по одной в строке). Панель извлечёт адрес и SSH-доступ и сама настроит сервер.',
-              )}
-            </p>
-            <textarea
-              className="import-area"
-              placeholder="vpn://..."
-              value={amneziaText}
-              onChange={(e) => setAmneziaText(e.target.value)}
-              rows={5}
-            />
+            <div className="import-results">
+              <h4>{t('Результат')}</h4>
+              {results.map((r, i) => (
+                <div key={i} className="import-row">
+                  <span className={`dot ${r.ok ? 'dot-ok' : 'dot-fail'}`} />
+                  <span className="import-host mono">{r.host}</span>
+                  <span className={r.ok ? 'muted small' : 'form-error'}>
+                    {r.message}
+                  </span>
+                </div>
+              ))}
+            </div>
             <div className="modal-actions">
-              <button onClick={runAmnezia} disabled={busy || !amneziaText.trim()}>
-                {busy ? t('Импорт…') : t('Импортировать')}
+              <button className="ghost" onClick={importMore}>
+                {t('Импортировать ещё')}
               </button>
+              <button onClick={onClose}>{t('Готово')}</button>
             </div>
           </>
         ) : (
           <>
-            <p className="muted small">
-              {t('По одной строке на сервер: ')}
-              <span className="mono">{t('хост[:порт] пользователь пароль')}</span>
-              {t(
-                '. Пароль нужен для автонастройки; без него сервер добавится, но ключ поставите скриптом. Пример:',
-              )}
-            </p>
-            <pre className="script-box">
-              203.0.113.10 root MyPass123{'\n'}198.51.100.7:2222 acontrol Pass456
-            </pre>
-            <textarea
-              className="import-area"
-              placeholder={t('хост[:порт] пользователь пароль')}
-              value={bulkText}
-              onChange={(e) => setBulkText(e.target.value)}
-              rows={5}
-            />
-            <div className="modal-actions">
-              <button onClick={runBulk} disabled={busy || !bulkText.trim()}>
-                {busy ? t('Импорт…') : t('Импортировать')}
+            <div className="tabs">
+              <button
+                className={tab === 'amnezia' ? 'tab tab-active' : 'tab'}
+                onClick={() => setTab('amnezia')}
+              >
+                {t('Из Amnezia (vpn://)')}
+              </button>
+              <button
+                className={tab === 'bulk' ? 'tab tab-active' : 'tab'}
+                onClick={() => setTab('bulk')}
+              >
+                {t('Списком')}
               </button>
             </div>
-          </>
-        )}
 
-        {results && (
-          <div className="import-results">
-            <h4>{t('Результат')}</h4>
-            {results.map((r, i) => (
-              <div key={i} className="import-row">
-                <span className={`dot ${r.ok ? 'dot-ok' : 'dot-fail'}`} />
-                <span className="import-host mono">{r.host}</span>
-                <span className={r.ok ? 'muted small' : 'form-error'}>
-                  {r.message}
-                </span>
-              </div>
-            ))}
-          </div>
+            {tab === 'amnezia' ? (
+              <>
+                <p className="muted small">
+                  {t('В клиенте Amnezia: на сервере «Поделиться» → ')}
+                  <b>{t('Полный доступ')}</b>
+                  {t(' → скопируйте ссылку ')}
+                  <span className="mono">vpn://…</span>
+                  {t(
+                    ' и вставьте сюда (можно несколько, по одной в строке). Панель извлечёт адрес и SSH-доступ и сама настроит сервер.',
+                  )}
+                </p>
+                <textarea
+                  className="import-area"
+                  placeholder="vpn://..."
+                  value={amneziaText}
+                  onChange={(e) => setAmneziaText(e.target.value)}
+                  rows={5}
+                />
+                <div className="modal-actions">
+                  <button onClick={runAmnezia} disabled={busy || !amneziaText.trim()}>
+                    {busy ? t('Импорт…') : t('Импортировать')}
+                  </button>
+                </div>
+              </>
+            ) : (
+              <>
+                <p className="muted small">
+                  {t('По одной строке на сервер: ')}
+                  <span className="mono">{t('хост[:порт] пользователь пароль')}</span>
+                  {t(
+                    '. Пароль нужен для автонастройки; без него сервер добавится, но ключ поставите скриптом. Пример:',
+                  )}
+                </p>
+                <pre className="script-box">
+                  203.0.113.10 root MyPass123{'\n'}198.51.100.7:2222 acontrol Pass456
+                </pre>
+                <textarea
+                  className="import-area"
+                  placeholder={t('хост[:порт] пользователь пароль')}
+                  value={bulkText}
+                  onChange={(e) => setBulkText(e.target.value)}
+                  rows={5}
+                />
+                <div className="modal-actions">
+                  <button onClick={runBulk} disabled={busy || !bulkText.trim()}>
+                    {busy ? t('Импорт…') : t('Импортировать')}
+                  </button>
+                </div>
+              </>
+            )}
+          </>
         )}
       </div>
     </div>
