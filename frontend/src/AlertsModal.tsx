@@ -13,6 +13,7 @@ export function AlertsModal({ onClose, onUnauthorized }: Props) {
   const dismiss = useModalDismiss(onClose)
   const [token, setToken] = useState('')
   const [chat, setChat] = useState('')
+  const [apiUrl, setApiUrl] = useState('')
   const [webhook, setWebhook] = useState('')
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
@@ -25,6 +26,7 @@ export function AlertsModal({ onClose, onUnauthorized }: Props) {
       .then((c) => {
         setToken(c.telegram_token)
         setChat(c.telegram_chat)
+        setApiUrl(c.telegram_api)
         setWebhook(c.webhook)
       })
       .catch(() => onUnauthorized())
@@ -39,6 +41,7 @@ export function AlertsModal({ onClose, onUnauthorized }: Props) {
       await putAlerts({
         telegram_token: token,
         telegram_chat: chat,
+        telegram_api: apiUrl,
         webhook,
       })
       setMsg(t('Сохранено.'))
@@ -55,7 +58,9 @@ export function AlertsModal({ onClose, onUnauthorized }: Props) {
     setMsg(null)
     try {
       // сначала сохраняем, чтобы тест шёл по текущим полям
-      await putAlerts({ telegram_token: token, telegram_chat: chat, webhook })
+      await putAlerts({
+        telegram_token: token, telegram_chat: chat, telegram_api: apiUrl, webhook,
+      })
       const r = await testAlerts()
       if (r.sent) setMsg(t('Тестовый алерт отправлен — проверьте канал.'))
       else setError(t('Не отправлено: {err}', { err: r.errors.join('; ') }))
@@ -109,6 +114,19 @@ export function AlertsModal({ onClose, onUnauthorized }: Props) {
                   onChange={(e) => setChat(e.target.value)}
                   placeholder="123456789"
                 />
+              </label>
+              <label className="field">
+                <span>{t('Адрес Bot API')}</span>
+                <input
+                  value={apiUrl}
+                  onChange={(e) => setApiUrl(e.target.value)}
+                  placeholder="https://api.telegram.org"
+                />
+                <span className="muted small">
+                  {t(
+                    'Оставьте пустым для api.telegram.org. Укажите зеркало/прокси, если Telegram заблокирован в регионе сервера (напр. https://api-tg.example.com).',
+                  )}
+                </span>
               </label>
             </div>
 

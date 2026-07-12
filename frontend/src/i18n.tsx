@@ -217,6 +217,9 @@ const EN: Record<string, string> = {
   'Создайте бота через @BotFather, вставьте его токен и chat_id (свой ID узнаете у @userinfobot).':
     'Create a bot via @BotFather, paste its token and chat_id (get your ID from @userinfobot).',
   'Токен бота': 'Bot token',
+  'Адрес Bot API': 'Bot API address',
+  'Оставьте пустым для api.telegram.org. Укажите зеркало/прокси, если Telegram заблокирован в регионе сервера (напр. https://api-tg.example.com).':
+    'Leave empty for api.telegram.org. Set a mirror/proxy if Telegram is blocked in the server’s region (e.g. https://api-tg.example.com).',
   'Вебхук': 'Webhook',
   'POST с JSON {"text": "…"} на указанный URL (Slack, Mattermost, свой сервис).':
     'POST with JSON {"text": "…"} to the given URL (Slack, Mattermost, your own service).',
