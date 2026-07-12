@@ -4,6 +4,17 @@ All notable changes to Amnezia Control are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.30.1] — 2026-07-12
+
+### Fixed (UX)
+- **Focus stays inside an open dialog.** Tab (and Shift+Tab) now cycle within the
+  modal instead of falling through to the page behind it; focus moves into the
+  dialog when it opens and returns to where it was when it closes.
+- **Mobile layout.** Wide client tables now scroll horizontally *inside their
+  card* instead of stretching the whole page sideways (the root cause was a
+  flex child that wouldn't shrink). The header also adapts on narrow screens —
+  logo only, the nav drops to its own row — and the clients dialog is responsive.
+
 ## [0.30.0] — 2026-07-12
 
 ### Fixed (UX)
@@ -413,6 +424,7 @@ Initial public release.
   scheduled auto-backups.
 - Dark / light theme and English / Russian UI.
 
+[0.30.1]: https://github.com/mihsergeev/amnezia-control/releases/tag/v0.30.1
 [0.30.0]: https://github.com/mihsergeev/amnezia-control/releases/tag/v0.30.0
 [0.29.3]: https://github.com/mihsergeev/amnezia-control/releases/tag/v0.29.3
 [0.29.2]: https://github.com/mihsergeev/amnezia-control/releases/tag/v0.29.2
