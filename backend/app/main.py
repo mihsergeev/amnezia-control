@@ -23,6 +23,7 @@ from app.autobackup import backup_loop
 from app.bootstrap import ensure_admin
 from app.collector import collector_loop
 from app.expiry import expiry_loop
+from app.heartbeat import heartbeat_loop
 from app.config import get_settings
 from app.db import create_engine_and_factory
 from app.sshkeys import ensure_panel_key
@@ -60,10 +61,12 @@ def create_app() -> FastAPI:
         task = asyncio.create_task(collector_loop(session_factory, settings))
         backup_task = asyncio.create_task(backup_loop(session_factory, settings))
         expiry_task = asyncio.create_task(expiry_loop(session_factory, settings))
+        hb_task = asyncio.create_task(heartbeat_loop(session_factory, settings))
         yield
         task.cancel()
         backup_task.cancel()
         expiry_task.cancel()
+        hb_task.cancel()
         await engine.dispose()
 
     # доки/схему API отдаём только в debug — в проде не раскрываем поверхность API
