@@ -4,6 +4,22 @@ All notable changes to Amnezia Control are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.38.0] — 2026-07-12
+
+### Added (self-monitoring — dead-man's-switch)
+- **The panel can no longer die silently.** A watchman can't watch itself, so the
+  panel now writes a heartbeat every minute to `data/heartbeat` (timestamp +
+  alert-channel health + the Telegram/webhook creds), and a tiny host-side cron
+  (`ops/panel-watchdog.sh`, runs outside Docker) reads it and **independently**
+  alerts you if:
+  - the heartbeat goes stale (>10 min) — the container/DB is dead or hung, or
+  - `alerts_ok=0` — the panel's own alert channel self-test failed (Telegram
+    unreachable / bad token), so normal alerts wouldn't get through either.
+  The watchdog sends via the creds from the heartbeat (so it works even when the
+  panel and DB are down) and only alerts on state changes — no noise. The panel
+  self-tests the alert channel with a Telegram `getMe` through the configured API
+  base each cycle. Install steps are documented at the top of the watchdog script.
+
 ## [0.37.0] — 2026-07-12
 
 ### Changed (backup — lighter + self-tested)
