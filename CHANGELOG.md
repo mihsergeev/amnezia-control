@@ -4,6 +4,16 @@ All notable changes to Amnezia Control are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.36.1] — 2026-07-12
+
+### Fixed (UX)
+- **Modals no longer close when you click just outside them.** Clicking the
+  backdrop used to dismiss the dialog, which fired accidentally on a near-miss
+  click and was easy to trigger by mistake (even mid-drag). Dialogs now close only
+  via their Close/Cancel button or Escape. Applies to every modal (clients,
+  alerts, import, deploy, backups, 2FA, password, full-access, delete-confirm,
+  setup-script, config view, client stats).
+
 ## [0.36.0] — 2026-07-12
 
 ### Added (alerts)

@@ -1,4 +1,4 @@
-import { useEffect, useRef, type MouseEvent } from 'react'
+import { useEffect, useRef } from 'react'
 
 // стек открытых модалок (их onClose): Escape закрывает ВЕРХНЮЮ (последнюю),
 // чтобы во вложенных окнах не закрывались сразу оба
@@ -87,14 +87,14 @@ function push(close: () => void): () => void {
   }
 }
 
-/** Закрытие модалки по Escape (верхнюю в стеке) + клик по фону (вне карточки),
- * плюс перевод фокуса внутрь при открытии и возврат при закрытии. Tab-замок —
- * глобальный (работает для любой .modal-backdrop). Возвращает onClick для фона. */
+/** Закрытие модалки по Escape (верхнюю в стеке), перевод фокуса внутрь при
+ * открытии и возврат при закрытии. Tab-замок — глобальный (для любой
+ * .modal-backdrop). Клик по фону НЕ закрывает окно — это раздражало при промахе
+ * мимо активной карточки; закрытие только по кнопке «Закрыть» и Escape.
+ * Возвращает no-op onClick для фона (сигнатура сохранена для совместимости). */
 export function useModalDismiss(onClose: () => void) {
   const ref = useRef(onClose)
   ref.current = onClose
   useEffect(() => push(() => ref.current()), [])
-  return (e: MouseEvent) => {
-    if (e.target === e.currentTarget) ref.current()
-  }
+  return () => {}
 }

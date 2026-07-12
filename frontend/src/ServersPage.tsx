@@ -839,10 +839,7 @@ export function ServersPage({ onUnauthorized }: Props) {
       )}
 
       {fullAccess && (
-        <div
-          className="modal-backdrop"
-          onClick={(e) => e.target === e.currentTarget && setFullAccess(null)}
-        >
+        <div className="modal-backdrop">
           <div className="card modal modal-wide" onClick={(e) => e.stopPropagation()}>
             <h3>{t('Полный доступ · {name}', { name: fullAccess.server.name })}</h3>
             <p className="muted small">
@@ -886,10 +883,7 @@ export function ServersPage({ onUnauthorized }: Props) {
       )}
 
       {deleteFor && (
-        <div
-          className="modal-backdrop"
-          onClick={(e) => e.target === e.currentTarget && setDeleteFor(null)}
-        >
+        <div className="modal-backdrop">
           <div className="card modal" onClick={(e) => e.stopPropagation()}>
             <h3>{t('Удалить сервер «{name}»?', { name: deleteFor.name })}</h3>
             <p className="muted small">
@@ -922,10 +916,7 @@ export function ServersPage({ onUnauthorized }: Props) {
       )}
 
       {scriptFor && (
-        <div
-          className="modal-backdrop"
-          onClick={(e) => e.target === e.currentTarget && setScriptFor(null)}
-        >
+        <div className="modal-backdrop">
           <div className="card modal modal-wide" onClick={(e) => e.stopPropagation()}>
             <h3>{t('Подготовка сервера «{name}»', { name: scriptFor.name })}</h3>
             <p className="muted small">
