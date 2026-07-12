@@ -4,6 +4,22 @@ All notable changes to Amnezia Control are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.31.1] — 2026-07-12
+
+### Fixed
+- **Client IP behind the reverse proxy.** The panel runs behind caddy → nginx, so
+  the backend saw the proxy's internal Docker address (172.20.0.x) instead of the
+  real user. That wrong address was written to the audit log ("logged in from
+  172.20.0.4"), used as the security-alert IP, and — worst — used as the
+  **rate-limit key**, so every client shared one bucket. The real client is now
+  taken from `X-Forwarded-For` (first public address from the right, internal
+  proxies skipped, so a spoofed header can't win).
+- **Backups no longer swallow the Postgres rollback directory.** The archive
+  excluded `postgres`/`pgdata`/`backups`, but a post-upgrade rollback dir like
+  `postgres.v17` slipped through, bloating a download by hundreds of MB of raw
+  cluster files. Exclusion now matches any `postgres*`/`pgdata*` directory (and
+  restore skips them symmetrically).
+
 ## [0.31.0] — 2026-07-12
 
 ### Infrastructure

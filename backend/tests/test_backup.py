@@ -9,6 +9,17 @@ import tarfile
 
 import httpx
 
+from app.api.backup import _skip_data_dir
+
+
+def test_skip_data_dir_excludes_postgres_and_rollback_variants():
+    # сырые файлы кластера и откатные каталоги после апгрейда — НЕ в бэкап
+    for d in ("postgres", "postgres.v17", "postgres.bak", "pgdata", "backups"):
+        assert _skip_data_dir(d), d
+    # полезная нагрузка (ssh-ключи и пр.) — остаётся
+    for d in ("ssh", "keys", "config"):
+        assert not _skip_data_dir(d), d
+
 
 async def _make_state(client: httpx.AsyncClient, h: dict) -> int:
     """Создаёт сервер + срок клиента + настройки алертов. Возвращает id сервера."""
