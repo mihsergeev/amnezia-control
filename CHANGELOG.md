@@ -4,6 +4,16 @@ All notable changes to Amnezia Control are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.35.0] — 2026-07-12
+
+### Added (two AmneziaWG protocols per server — UI)
+- **The clients dialog now shows a separate "AmneziaWG Legacy" tab** whenever a
+  legacy AmneziaWG (wg0) runs alongside the new one. Selecting it lists the legacy
+  clients and supports issue / reissue / revoke / pause / resume / config download
+  against `/awg-legacy`. The legacy tab intentionally has **no** version/update/
+  adopt controls — the panel never rebuilds the legacy engine.
+- Completes the two-protocol feature started in 0.34.0.
+
 ## [0.34.0] — 2026-07-12
 
 ### Added (two AmneziaWG protocols per server — backend)
