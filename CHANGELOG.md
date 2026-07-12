@@ -4,6 +4,15 @@ All notable changes to Amnezia Control are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.31.2] — 2026-07-12
+
+### Fixed
+- **Import dialog now has a clear "done" state.** After importing servers the form
+  (and the "Import" button) collapse to just the result list plus a primary
+  **Done** button (and a "Import more" reset), so it's obvious the import finished
+  and the dialog can be closed — previously the "Import" button lingered and the
+  end state was ambiguous.
+
 ## [0.31.1] — 2026-07-12
 
 ### Fixed

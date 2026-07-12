@@ -286,6 +286,7 @@ const EN: Record<string, string> = {
   'Из Amnezia (vpn://)': 'From Amnezia (vpn://)',
   'Списком': 'As a list',
   'Импортировать': 'Import',
+  'Импортировать ещё': 'Import more',
   'Импорт…': 'Importing…',
   'Результат': 'Result',
   'хост[:порт] пользователь пароль': 'host[:port] user password',
