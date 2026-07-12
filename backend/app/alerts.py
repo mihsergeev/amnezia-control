@@ -30,7 +30,10 @@ async def send_alert(cfg: dict, text: str) -> list[str]:
     errors: list[str] = []
     token, chat = cfg.get("telegram_token"), cfg.get("telegram_chat")
     if token and chat:
-        url = f"https://api.telegram.org/bot{token}/sendMessage"
+        # базовый адрес Bot API настраиваемый: для регионов, где api.telegram.org
+        # заблокирован, можно указать зеркало/прокси (напр. https://api-tg.example.com)
+        base = (cfg.get("telegram_api") or "https://api.telegram.org").rstrip("/")
+        url = f"{base}/bot{token}/sendMessage"
         try:
             async with httpx.AsyncClient(timeout=10) as http:
                 r = await http.post(

@@ -23,7 +23,8 @@ async def put_alerts(
     body: AlertConfigIn, user: CurrentUser, session: SessionDep
 ) -> AlertConfigOut:
     await settings_store.set_alert_config(
-        session, body.telegram_token, body.telegram_chat, body.webhook
+        session, body.telegram_token, body.telegram_chat, body.webhook,
+        telegram_api=body.telegram_api,
     )
     cfg = await settings_store.get_alert_config(session, get_settings())
     channels = []

@@ -398,6 +398,7 @@ export type XrayVersion = {
 export type AlertConfig = {
   telegram_token: string
   telegram_chat: string
+  telegram_api: string
   webhook: string
   enabled: boolean
 }
@@ -409,6 +410,7 @@ export function getAlerts(): Promise<AlertConfig> {
 export function putAlerts(cfg: {
   telegram_token: string
   telegram_chat: string
+  telegram_api: string
   webhook: string
 }): Promise<AlertConfig> {
   return api<AlertConfig>('/api/alerts', {

@@ -4,6 +4,14 @@ All notable changes to Amnezia Control are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.36.0] — 2026-07-12
+
+### Added (alerts)
+- **The Telegram Bot API address is now configurable** in the alert settings
+  (defaults to `https://api.telegram.org`). Point it at a mirror/reverse proxy
+  (e.g. `https://api-tg.example.com`) when Telegram is blocked in the server's
+  region, so alerts still get through. Empty = the default.
+
 ## [0.35.2] — 2026-07-12
 
 ### Added (UI)

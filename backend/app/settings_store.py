@@ -33,6 +33,9 @@ async def get_alert_config(session: AsyncSession, settings: Settings) -> dict:
     return {
         "telegram_token": data.get("telegram_token") or settings.alert_telegram_token,
         "telegram_chat": data.get("telegram_chat") or settings.alert_telegram_chat,
+        # адрес Telegram Bot API: пусто = дефолт api.telegram.org (см. alerts.py).
+        # Можно указать зеркало/прокси для регионов, где телега заблокирована.
+        "telegram_api": data.get("telegram_api") or "",
         "webhook": data.get("webhook") or settings.alert_webhook,
     }
 
@@ -42,6 +45,7 @@ async def set_alert_config(
     telegram_token: str,
     telegram_chat: str,
     webhook: str,
+    telegram_api: str = "",
 ) -> None:
     await _set_raw(
         session,
@@ -50,6 +54,7 @@ async def set_alert_config(
             {
                 "telegram_token": telegram_token.strip(),
                 "telegram_chat": telegram_chat.strip(),
+                "telegram_api": telegram_api.strip().rstrip("/"),
                 "webhook": webhook.strip(),
             }
         ),

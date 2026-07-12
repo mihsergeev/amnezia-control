@@ -422,6 +422,7 @@ class FullAccessOut(BaseModel):
 class AlertConfigOut(BaseModel):
     telegram_token: str
     telegram_chat: str
+    telegram_api: str = ""
     webhook: str
     enabled: bool
 
@@ -429,6 +430,7 @@ class AlertConfigOut(BaseModel):
 class AlertConfigIn(BaseModel):
     telegram_token: str = Field(default="", max_length=256)
     telegram_chat: str = Field(default="", max_length=64)
+    telegram_api: str = Field(default="", max_length=256)
     webhook: str = Field(default="", max_length=512)
 
 
