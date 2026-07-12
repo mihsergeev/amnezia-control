@@ -424,6 +424,12 @@ export function ServersPage({ onUnauthorized }: Props) {
           const protocols = protocolsFromContainers(info?.amnezia_containers ?? [])
           const online = s.last_check_ok === true
           const moreItems: MenuItem[] = []
+          // «Проверить» — редкое действие, прячем в меню (было отдельной кнопкой)
+          moreItems.push({
+            label: checkingId === s.id ? t('Проверка…') : t('Проверить'),
+            disabled: checkingId === s.id,
+            onClick: () => check(s),
+          })
           if (online && protocols.length === 0) {
             moreItems.push({
               label: t('Развернуть AmneziaWG'),
@@ -502,13 +508,6 @@ export function ServersPage({ onUnauthorized }: Props) {
                     {t('Клиенты')}
                   </button>
                 )}
-                <button
-                  className="ghost"
-                  onClick={() => check(s)}
-                  disabled={checkingId === s.id}
-                >
-                  {checkingId === s.id ? t('Проверка…') : t('Проверить')}
-                </button>
                 <Menu label={t('Ещё')} items={moreItems} />
               </div>
             </div>
@@ -517,9 +516,6 @@ export function ServersPage({ onUnauthorized }: Props) {
 
             <div className="server-meta">
               <span className="mono host">{s.host}</span>
-              <span className="chip">
-                SSH {s.ssh_user}@{s.host}:{s.ssh_port}
-              </span>
               {protocols.map((p) => (
                 <span key={p.key} className="proto-badge">
                   {p.label}

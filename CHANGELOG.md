@@ -4,6 +4,14 @@ All notable changes to Amnezia Control are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.35.1] — 2026-07-12
+
+### Changed (UI)
+- **Server cards are less cluttered.** The SSH connection line
+  (`SSH user@host:port`) is gone from the card — it's rarely needed and still
+  lives in the server's Edit form. The **Check** button moved into the "More" (⋯)
+  menu, since checks are run only occasionally.
+
 ## [0.35.0] — 2026-07-12
 
 ### Added (two AmneziaWG protocols per server — UI)
