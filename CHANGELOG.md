@@ -4,6 +4,21 @@ All notable changes to Amnezia Control are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.34.0] — 2026-07-12
+
+### Added (two AmneziaWG protocols per server — backend)
+- **A server can now run both AmneziaWG "new" (awg0) and "Legacy" (wg0) side by
+  side, managed as separate protocols.** The panel detects the two by their
+  runtime config (awg0.conf vs wg0.conf), not by container name (Amnezia and the
+  panel both use `amnezia-awg2`). The AWG state now reports a `legacy_container`
+  when a legacy AmneziaWG runs alongside the new one.
+- **New read-only-ish `/awg-legacy` API** for the legacy protocol: list clients,
+  issue / reissue / revoke / pause / resume, download configs — but **no rebuild
+  or version control** (the panel never touches the legacy container's engine, per
+  design). Legacy client metadata is stored under `protocol="awglegacy"`.
+- Validated on a live server (tw-kz) with 29 legacy + 7 new clients.
+- UI (a second "AmneziaWG Legacy" tab) lands next.
+
 ## [0.33.0] — 2026-07-12
 
 ### Added (data-safety — pre-op backup)

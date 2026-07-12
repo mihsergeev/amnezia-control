@@ -99,9 +99,14 @@ async def get_awg(server_id: int, _: CurrentUser, session: SessionDep) -> AwgSta
     server = await _get_or_404(server_id, session)
     try:
         async with _connect(server) as conn:
-            state = await awg.read_state(conn, server.host)
+            conts = await awg.detect_awg_containers(conn)
+            main_cont = conts["new"] or conts["legacy"]
+            state = await awg.read_state(conn, server.host, container=main_cont)
     except Exception as exc:  # noqa: BLE001
         raise _ssh_error(exc) from exc
+    # legacy показываем отдельной секцией только если он ЕСТЬ РЯДОМ с новым;
+    # legacy-only сервер остаётся обычной AWG-секцией (обратная совместимость)
+    legacy_container = conts["legacy"] if conts["new"] else None
 
     stored = set(
         (
@@ -143,6 +148,7 @@ async def get_awg(server_id: int, _: CurrentUser, session: SessionDep) -> AwgSta
         endpoint=state.endpoint,
         address=state.address,
         clients=clients,
+        legacy_container=legacy_container,
     )
 
 

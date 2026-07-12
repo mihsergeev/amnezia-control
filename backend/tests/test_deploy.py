@@ -122,6 +122,27 @@ async def test_foreign_awg_container_detection():
     assert await deploy.foreign_awg_container(C("")) is None
 
 
+async def test_detect_awg_containers_splits_new_and_legacy():
+    """Детектор делит awg-контейнеры на new (awg0) и legacy (wg0) по рантайм-конфигу."""
+    from app import awg
+
+    class C:
+        def __init__(self, out):
+            self.out = out
+
+        async def run(self, cmd, input=None, check=False):  # noqa: A002
+            return type("R", (), {"stdout": self.out, "stderr": "", "exit_status": 0})()
+
+    res = await awg.detect_awg_containers(C("amnezia-awg2 new\namnezia-awg legacy\n"))
+    assert res == {"new": "amnezia-awg2", "legacy": "amnezia-awg"}
+    # только новый
+    res2 = await awg.detect_awg_containers(C("amnezia-awg2 new\n"))
+    assert res2 == {"new": "amnezia-awg2", "legacy": None}
+    # только legacy
+    res3 = await awg.detect_awg_containers(C("amnezia-awg legacy\n"))
+    assert res3 == {"new": None, "legacy": "amnezia-awg"}
+
+
 async def test_snapshot_all_awg_backs_up_every_container():
     """Пре-оп бэкап: snapshot_all снимает КАЖДЫЙ awg-контейнер (и legacy, и awg2),
     чтобы любую операцию можно было откатить (регресс ru-be 12.07 — awg2 снесли

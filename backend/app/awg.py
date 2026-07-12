@@ -281,6 +281,13 @@ def _safe_ip(ip: str) -> str:
 
 
 async def detect_container(conn: asyncssh.SSHClientConnection) -> str:
+    """Основной awg-контейнер: предпочитаем «новый» (awg0), иначе legacy (wg0),
+    иначе любой awg-контейнер по имени (свежий, ещё без конфига)."""
+    conts = await detect_awg_containers(conn)
+    if conts["new"]:
+        return conts["new"]
+    if conts["legacy"]:
+        return conts["legacy"]
     cmd = _DOCKER + "$DOCKER ps --format '{{.Names}}' | grep -m1 amnezia-awg"
     out = (await _run(conn, cmd)).strip()
     if not out:
@@ -288,10 +295,35 @@ async def detect_container(conn: asyncssh.SSHClientConnection) -> str:
     return out.splitlines()[0].strip()
 
 
+async def detect_awg_containers(
+    conn: asyncssh.SSHClientConnection,
+) -> dict[str, str | None]:
+    """Разделяет awg-контейнеры ноды на «новый» (AmneziaWG, awg0.conf) и «legacy»
+    (старый AmneziaWG, только wg0.conf). Возвращает {"new": имя|None, "legacy": имя|None}.
+    Различаем по РАНТАЙМ-конфигу внутри контейнера, а не по имени — имена
+    (amnezia-awg2) у Amnezia и панели совпадают."""
+    cmd = _DOCKER + (
+        "for c in $($DOCKER ps --format '{{.Names}}' | grep -iE 'amnezia-awg|acontrol-awg'); do "
+        "if $DOCKER exec \"$c\" test -f /opt/amnezia/awg/awg0.conf 2>/dev/null; then echo \"$c new\"; "
+        "elif $DOCKER exec \"$c\" test -f /opt/amnezia/awg/wg0.conf 2>/dev/null; then echo \"$c legacy\"; fi; "
+        "done"
+    )
+    out = await _run(conn, cmd)
+    result: dict[str, str | None] = {"new": None, "legacy": None}
+    for line in out.splitlines():
+        parts = line.split()
+        if len(parts) == 2 and parts[1] in result and result[parts[1]] is None:
+            result[parts[1]] = parts[0]
+    return result
+
+
 async def read_state(
-    conn: asyncssh.SSHClientConnection, endpoint_host: str
+    conn: asyncssh.SSHClientConnection,
+    endpoint_host: str,
+    container: str | None = None,
 ) -> AwgState:
-    container = await detect_container(conn)
+    if container is None:
+        container = await detect_container(conn)
     iface_path = (
         await _run(conn, _docker_exec(container, f"ls {AWG_DIR}/*.conf 2>/dev/null | head -1"))
     ).strip()

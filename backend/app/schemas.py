@@ -128,6 +128,9 @@ class AwgStateOut(BaseModel):
     endpoint: str
     address: str
     clients: list[AwgClientOut]
+    # имя отдельного legacy-контейнера (старый AmneziaWG на wg0), если он есть
+    # РЯДОМ с новым — тогда фронт покажет вторую секцию «AmneziaWG Legacy»
+    legacy_container: str | None = None
 
 
 class CreateClientRequest(BaseModel):
