@@ -4,6 +4,14 @@ All notable changes to Amnezia Control are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.35.2] — 2026-07-12
+
+### Added (UI)
+- **Server cards now show a green "AmneziaWG Legacy" badge** when a legacy
+  AmneziaWG runs alongside the new one (both `amnezia-awg` and `amnezia-awg2`
+  containers present), so the second protocol is visible at a glance. The same
+  detection drives the "AmneziaWG Legacy" tab in the clients dialog.
+
 ## [0.35.1] — 2026-07-12
 
 ### Changed (UI)
