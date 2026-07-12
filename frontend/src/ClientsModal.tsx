@@ -704,10 +704,7 @@ export function ClientsModal({
         )}
 
         {view && (
-          <div
-            className="modal-backdrop"
-            onClick={(e) => e.target === e.currentTarget && setView(null)}
-          >
+          <div className="modal-backdrop">
             <div className="card modal" onClick={(e) => e.stopPropagation()}>
               <h3>{t('Конфиг клиента «{name}»', { name: view.name })}</h3>
 
