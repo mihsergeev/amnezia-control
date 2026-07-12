@@ -2,6 +2,7 @@ from fastapi import APIRouter, HTTPException, Request, status
 from sqlalchemy import select
 
 from app import alerts, audit, ratelimit, totp
+from app.clientip import client_ip
 from app.config import get_settings
 from app.deps import CurrentUser, SessionDep
 from app.models import User
@@ -24,7 +25,7 @@ _DUMMY_HASH = hash_password("no-such-user-timing-guard")
 
 
 def _client_key(request: Request) -> str:
-    return request.client.host if request.client else "unknown"
+    return client_ip(request)
 
 
 async def _record_failure(session, settings, key: str, username: str, action: str) -> None:

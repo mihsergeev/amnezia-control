@@ -5,13 +5,13 @@
 from fastapi import HTTPException, Request, status
 
 from app import ratelimit
+from app.clientip import client_ip
 from app.models import User
 from app.security import verify_password
 
 
 def _key(request: Request) -> str:
-    ip = request.client.host if request.client else "unknown"
-    return f"stepup:{ip}"
+    return f"stepup:{client_ip(request)}"
 
 
 def verify(user: User, password: str, request: Request) -> None:

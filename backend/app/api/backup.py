@@ -95,6 +95,16 @@ def _add_bytes(tar: tarfile.TarFile, name: str, data: bytes) -> None:
     tar.addfile(info, io.BytesIO(data))
 
 
+def _skip_data_dir(name: str) -> bool:
+    """Каталоги внутри ./data, которые НЕ кладём в бэкап: сырые файлы кластера
+    Postgres (postgres, pgdata и откатные postgres.v17 и т.п.) и сами бэкапы."""
+    return (
+        name == "backups"
+        or name.startswith("postgres")
+        or name.startswith("pgdata")
+    )
+
+
 async def _build_archive(session, data_dir: str, version: str) -> bytes:
     dump: dict[str, list] = {}
     for model in _MODELS:
@@ -118,12 +128,11 @@ async def _build_archive(session, data_dir: str, version: str) -> bytes:
         )
         # data-каталог панели (ssh-ключи и пр.). ВАЖНО: исключаем postgres —
         # его бинд-маунт лежит внутри ./data, но БД уже сохранена в db.json,
-        # а сырые файлы кластера огромны и не нужны.
+        # а сырые файлы кластера огромны и не нужны. Префиксом ловим и откатные
+        # каталоги вроде postgres.v17 (остаются после мажорного апгрейда).
         if os.path.isdir(data_dir):
             for root, dirs, files in os.walk(data_dir):
-                dirs[:] = [
-                    d for d in dirs if d not in ("postgres", "pgdata", "backups")
-                ]
+                dirs[:] = [d for d in dirs if not _skip_data_dir(d)]
                 for fn in files:
                     full = os.path.join(root, fn)
                     rel = os.path.relpath(full, data_dir).replace(os.sep, "/")
@@ -286,7 +295,7 @@ async def restore_backup(
         if not (m.isfile() and m.name.startswith("data/")):
             continue
         rel = m.name[len("data/"):]
-        if not rel or ".." in rel or rel.startswith(("postgres/", "pgdata/")):
+        if not rel or ".." in rel or _skip_data_dir(rel.split("/", 1)[0]):
             continue
         # КРИТИЧНО: отвергаем абсолютные пути ("data//etc/x" → rel="/etc/x", где
         # os.path.join отбрасывает base) и любой выход за пределы data_dir
