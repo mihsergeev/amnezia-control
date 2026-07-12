@@ -67,6 +67,8 @@ services:
       VPNPANEL_DISK_ALERT_PERCENT: ${ACONTROL_DISK_ALERT_PERCENT:-90}
       VPNPANEL_BACKUP_INTERVAL_HOURS: ${ACONTROL_BACKUP_INTERVAL_HOURS:-24}
       VPNPANEL_BACKUP_KEEP: ${ACONTROL_BACKUP_KEEP:-14}
+      # 1 = класть историю трафика в бэкап (сотни МБ); по умолчанию 0 — лёгкий бэкап
+      VPNPANEL_BACKUP_INCLUDE_TRAFFIC: ${ACONTROL_BACKUP_INCLUDE_TRAFFIC:-0}
     volumes:
       - ./data:/data
     depends_on:

@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app import alerts
-from app.api.backup import _build_archive
+from app.api.backup import _build_archive, verify_archive
 from app.config import Settings
 
 log = logging.getLogger("acontrol.autobackup")
@@ -71,16 +71,22 @@ def _prune(d: str, keep: int) -> None:
 
 async def write_backup(
     session_factory: async_sessionmaker[AsyncSession], settings: Settings
-) -> str:
+) -> tuple[str, list[str]]:
+    """Пишет бэкап и тут же прогоняет self-тест (перечитав с диска — ловит обрыв
+    записи). Возвращает (путь, список проблем); пустой список = бэкап целый."""
     d = ensure_backups_dir(settings.data_dir)
     async with session_factory() as session:
-        archive = await _build_archive(session, settings.data_dir, settings.version)
+        archive = await _build_archive(
+            session, settings.data_dir, settings.version, settings.backup_include_traffic
+        )
     stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
     path = os.path.join(d, f"acontrol-backup-{stamp}.tar.gz")
     with open(path, "wb") as fh:
         fh.write(archive)
     _prune(d, settings.backup_keep)
-    return path
+    with open(path, "rb") as fh:  # перечитываем с диска, не из памяти
+        problems = verify_archive(fh.read())
+    return path, problems
 
 
 async def backup_loop(
@@ -92,22 +98,35 @@ async def backup_loop(
     await asyncio.sleep(30)  # не блокируем старт
     global _last_backup_ok
     while True:
+        problems: list[str] = []
+        exc: Exception | None = None
         try:
-            path = await write_backup(session_factory, settings)
-            log.info("авто-бэкап записан: %s", path)
+            path, problems = await write_backup(session_factory, settings)
+        except Exception as e:  # noqa: BLE001 — цикл не должен падать
+            exc = e
+            log.exception("ошибка авто-бэкапа")
+        ok = exc is None and not problems
+        if ok:
+            log.info("авто-бэкап записан, self-тест пройден: %s", path)
             if not _last_backup_ok:
                 _last_backup_ok = True
                 await alerts.maybe_alert(
                     session_factory, settings,
-                    "✅ Amnezia Control: авто-бэкап снова проходит.",
+                    "✅ Amnezia Control: авто-бэкап снова проходит (и self-тест ок).",
                 )
-        except Exception as exc:  # noqa: BLE001 — цикл не должен падать
-            log.exception("ошибка авто-бэкапа")
-            if _last_backup_ok:
-                _last_backup_ok = False
-                await alerts.maybe_alert(
-                    session_factory, settings,
+        elif _last_backup_ok:  # переход ok → проблема: алертим один раз
+            _last_backup_ok = False
+            if exc is not None:
+                msg = (
                     f"❌ Amnezia Control: авто-бэкап НЕ создан — {type(exc).__name__}: "
-                    f"{exc}. Проверьте место на диске и логи backend.",
+                    f"{exc}. Проверьте место на диске и логи backend."
                 )
+            else:
+                msg = (
+                    "⚠️ Amnezia Control: бэкап создан, но self-тест НЕ пройден — "
+                    + "; ".join(problems)
+                    + ". Копия может быть непригодна для восстановления."
+                )
+            log.error("проблема с бэкапом: %s", msg)
+            await alerts.maybe_alert(session_factory, settings, msg)
         await asyncio.sleep(settings.backup_interval_hours * 3600)
