@@ -13,6 +13,23 @@ services:
     logging: *default-logging
     security_opt:
       - no-new-privileges:true
+    # Тюнинг под небольшую БД панели на облачном сервере (SSD). Значения
+    # переопределяются переменными ACONTROL_PG_* в .env, если нужно под другой хост.
+    command:
+      - postgres
+      - -c
+      - shared_buffers=${ACONTROL_PG_SHARED_BUFFERS:-256MB}
+      - -c
+      - effective_cache_size=${ACONTROL_PG_EFFECTIVE_CACHE:-1536MB}
+      - -c
+      - work_mem=${ACONTROL_PG_WORK_MEM:-16MB}
+      - -c
+      - maintenance_work_mem=${ACONTROL_PG_MAINT_MEM:-128MB}
+      # SSD/облачное хранилище: индексные сканы дешевле, чем при дефолте 4 (HDD)
+      - -c
+      - random_page_cost=1.1
+      - -c
+      - effective_io_concurrency=200
     environment:
       POSTGRES_DB: acontrol
       POSTGRES_USER: acontrol
