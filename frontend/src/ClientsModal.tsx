@@ -47,12 +47,10 @@ export function ClientsModal({
 }: Props) {
   const { t } = useI18n()
   const dismiss = useModalDismiss(onClose)
-  // 'awglegacy' — старый AmneziaWG (wg0) рядом с новым; путь /awg-legacy
-  const [proto, setProto] = useState<Protocol['key'] | 'awglegacy'>(
+  const [proto, setProto] = useState<Protocol['key']>(
     protocols[0]?.key ?? 'awg',
   )
-  // есть ли отдельный legacy-контейнер (узнаём из awg-состояния) — держим стабильно
-  const [hasLegacy, setHasLegacy] = useState(false)
+  // 'awglegacy' — старый AmneziaWG (wg0) рядом с новым; путь /awg-legacy
   const isAwg = proto === 'awg' || proto === 'awglegacy'
   const awgBase = proto === 'awglegacy' ? 'awg-legacy' : 'awg'
   const [state, setState] = useState<AwgState | null>(null)
@@ -94,10 +92,7 @@ export function ClientsModal({
   const load = useCallback(async () => {
     setLoading(true)
     try {
-      const s = await api<AwgState>(`/api/servers/${server.id}/${awgBase}`)
-      setState(s)
-      // legacy показываем отдельной вкладкой, узнав о нём из awg-состояния
-      if (s.legacy_container) setHasLegacy(true)
+      setState(await api<AwgState>(`/api/servers/${server.id}/${awgBase}`))
       setError(null)
     } catch (err) {
       handleError(err)
@@ -371,7 +366,7 @@ export function ClientsModal({
           </button>
         </div>
 
-        {(protocols.length > 1 || hasLegacy) && (
+        {protocols.length > 1 && (
           <div className="tabs">
             {protocols.map((p) => (
               <button
@@ -382,14 +377,6 @@ export function ClientsModal({
                 {p.label}
               </button>
             ))}
-            {hasLegacy && (
-              <button
-                className={proto === 'awglegacy' ? 'tab tab-active' : 'tab'}
-                onClick={() => setProto('awglegacy')}
-              >
-                {t('AmneziaWG Legacy')}
-              </button>
-            )}
           </div>
         )}
 

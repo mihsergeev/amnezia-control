@@ -477,13 +477,21 @@ export function disable2FA(otp: string): Promise<TwoFAStatus> {
   })
 }
 
-export type Protocol = { key: 'awg' | 'openvpn' | 'xray'; label: string }
+export type Protocol = {
+  key: 'awg' | 'awglegacy' | 'openvpn' | 'xray'
+  label: string
+}
 
 // какие протоколы есть на сервере (по именам контейнеров amnezia-*)
 export function protocolsFromContainers(containers: string[]): Protocol[] {
   const found: Protocol[] = []
   const has = (re: RegExp) => containers.some((c) => re.test(c))
   if (has(/^amnezia-awg/)) found.push({ key: 'awg', label: 'AmneziaWG' })
+  // старый AmneziaWG (wg0) рядом с новым: у Amnezia legacy=amnezia-awg, new=
+  // amnezia-awg2 — если есть ОБА контейнера, второй протокол это legacy
+  if (containers.includes('amnezia-awg') && has(/^amnezia-awg2/)) {
+    found.push({ key: 'awglegacy', label: 'AmneziaWG Legacy' })
+  }
   if (has(/^amnezia-openvpn/))
     found.push({ key: 'openvpn', label: 'OpenVPN/Cloak' })
   if (has(/^amnezia-xray/)) found.push({ key: 'xray', label: 'XRay/REALITY' })
