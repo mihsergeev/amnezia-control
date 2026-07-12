@@ -6,6 +6,14 @@ All notable changes to Amnezia Control are documented here. The format is based 
 
 ## [0.31.0] — 2026-07-12
 
+### Infrastructure
+- **Default PostgreSQL bumped to 18** (from 17). Note for existing installs:
+  PostgreSQL 18's Docker image stores data in a **version subdirectory**, so the
+  volume mount moved from `/var/lib/postgresql/data` to `/var/lib/postgresql`, and
+  a major-version data directory is **not** read in place. Upgrade by dumping from
+  17 (`pg_dump`) and restoring into a fresh 18 (or keep pinning
+  `postgres:17-alpine`). Minor 17.x → 18.x is a major upgrade — take a backup first.
+
 ### Added (security)
 - **Exporting a server's "full access" link now requires re-entering your panel
   password** (step-up auth). That link embeds a root-equivalent SSH key, so it
