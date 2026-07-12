@@ -4,6 +4,17 @@ All notable changes to Amnezia Control are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.33.0] — 2026-07-12
+
+### Added (data-safety — pre-op backup)
+- **Every container-level operation now snapshots first, so it can be rolled back.**
+  New `snapshot_all` takes a config snapshot of *every* protocol container on the
+  node before deploy / rebuild / adopt / config-restore — for AmneziaWG that means
+  **both** `amnezia-awg` (legacy) and `amnezia-awg2` are backed up, not just one.
+  Snapshots land in "config backups" and are restorable from the UI. Snapshot
+  timestamps are now collision-proof (a burst of snapshots in the same second no
+  longer overwrites each other). XRay deploy also snapshots first now (it didn't).
+
 ## [0.32.0] — 2026-07-12
 
 ### Fixed (data-safety — AmneziaWG adopt)

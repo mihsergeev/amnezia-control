@@ -297,6 +297,8 @@ async def deploy_xray(
     script = xray.build_deploy_script(body.port, body.site, release)
     try:
         async with _connect(server) as conn:
+            # пре-оп бэкап: если разворачиваем поверх существующего — снимем конфиг
+            await deploy.snapshot_all(conn, "xray")
             await deploy.launch(conn, script, tag="xray")
     except Exception as exc:  # noqa: BLE001
         raise _xray_error(exc) from exc
