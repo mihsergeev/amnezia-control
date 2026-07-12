@@ -135,6 +135,9 @@ export function ServersPage({ onUnauthorized }: Props) {
   } | null>(null)
   const [faBusyId, setFaBusyId] = useState<number | null>(null)
   const [faCopied, setFaCopied] = useState(false)
+  // степ-ап: сервер, для которого запрашиваем повторный пароль перед выдачей ключа
+  const [faStepUp, setFaStepUp] = useState<Server | null>(null)
+  const [faPassword, setFaPassword] = useState('')
   const [scriptFor, setScriptFor] = useState<Server | null>(null)
   const [deleteFor, setDeleteFor] = useState<Server | null>(null)
   const [deleteRemoveKey, setDeleteRemoveKey] = useState(false)
@@ -147,14 +150,15 @@ export function ServersPage({ onUnauthorized }: Props) {
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
       if (e.key !== 'Escape') return
-      if (fullAccess) setFullAccess(null)
+      if (faStepUp) setFaStepUp(null)
+      else if (fullAccess) setFullAccess(null)
       else if (scriptFor) setScriptFor(null)
       else if (deleteFor) setDeleteFor(null)
       else if (formOpen) setFormOpen(false)
     }
     document.addEventListener('keydown', onKey)
     return () => document.removeEventListener('keydown', onKey)
-  }, [fullAccess, scriptFor, deleteFor, formOpen])
+  }, [faStepUp, fullAccess, scriptFor, deleteFor, formOpen])
 
   const handleError = useCallback(
     (err: unknown) => {
@@ -250,18 +254,20 @@ export function ServersPage({ onUnauthorized }: Props) {
     }
   }
 
-  async function exportFullAccess(server: Server) {
+  async function exportFullAccess(server: Server, password: string) {
     setFaBusyId(server.id)
     setError(null)
     try {
       const r = await api<{ config: string; ssh_user: string }>(
         `/api/servers/${server.id}/fullaccess`,
-        { method: 'POST' },
+        { method: 'POST', body: JSON.stringify({ password }) },
       )
+      setFaStepUp(null) // закрываем степ-ап только при успехе
+      setFaPassword('')
       setFaCopied(false)
       setFullAccess({ server, config: r.config, user: r.ssh_user })
     } catch (err) {
-      handleError(err)
+      handleError(err) // на неверный пароль (403) окно остаётся, показываем ошибку
     } finally {
       setFaBusyId(null)
     }
@@ -441,7 +447,11 @@ export function ServersPage({ onUnauthorized }: Props) {
               label:
                 faBusyId === s.id ? t('Генерация…') : t('Полный доступ'),
               disabled: faBusyId === s.id,
-              onClick: () => exportFullAccess(s),
+              onClick: () => {
+                setError(null)
+                setFaPassword('')
+                setFaStepUp(s)
+              },
             })
           }
           if (!online) {
@@ -786,6 +796,50 @@ export function ServersPage({ onUnauthorized }: Props) {
           onDone={() => check(deployFor.server)}
           onUnauthorized={onUnauthorized}
         />
+      )}
+
+      {faStepUp && (
+        <div className="modal-backdrop">
+          <form
+            className="card modal"
+            onClick={(e) => e.stopPropagation()}
+            onSubmit={(e) => {
+              e.preventDefault()
+              if (faStepUp) void exportFullAccess(faStepUp, faPassword)
+            }}
+          >
+            <h3>{t('Подтвердите пароль')}</h3>
+            <p className="muted small">
+              {t(
+                'Ссылка «Полного доступа» содержит SSH-ключ управления сервером (по сути root). Введите пароль от панели, чтобы продолжить.',
+              )}
+            </p>
+            {error && <p className="form-error">{error}</p>}
+            <input
+              type="password"
+              autoFocus
+              autoComplete="current-password"
+              placeholder={t('Пароль')}
+              value={faPassword}
+              onChange={(e) => setFaPassword(e.target.value)}
+            />
+            <div className="modal-actions">
+              <button
+                type="button"
+                className="ghost"
+                onClick={() => setFaStepUp(null)}
+              >
+                {t('Отмена')}
+              </button>
+              <button
+                type="submit"
+                disabled={!faPassword || faBusyId === faStepUp.id}
+              >
+                {faBusyId === faStepUp.id ? t('Генерация…') : t('Подтвердить')}
+              </button>
+            </div>
+          </form>
+        </div>
       )}
 
       {fullAccess && (

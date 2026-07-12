@@ -42,6 +42,7 @@ const LABELS: Record<string, string> = {
   server_create: 'Добавлен сервер',
   server_delete: 'Удалён сервер',
   fullaccess_export: 'Экспорт полного доступа',
+  fullaccess_denied: 'Экспорт полного доступа отклонён',
   restore: 'Восстановление из бэкапа',
   login_ok: 'Вход выполнен',
   login_fail: 'Неудачный вход',

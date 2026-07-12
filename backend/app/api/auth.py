@@ -89,8 +89,17 @@ async def change_password(
     body: PasswordChangeRequest, request: Request, user: CurrentUser, session: SessionDep
 ) -> TokenResponse:
     """Смена пароля из UI: проверяет текущий, инвалидирует все старые токены."""
+    # антибрутфорс текущего пароля (общий степ-ап-ключ с экспортом полного доступа)
+    step_key = f"stepup:{_client_key(request)}"
+    if ratelimit.is_locked(step_key):
+        raise HTTPException(
+            status.HTTP_429_TOO_MANY_REQUESTS,
+            "Слишком много неверных попыток — подождите немного.",
+        )
     if not verify_password(body.current_password, user.password_hash):
+        ratelimit.record_failure(step_key)
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Неверный текущий пароль")
+    ratelimit.clear(step_key)
     user.password_hash = hash_password(body.new_password)
     user.token_version += 1  # все ранее выданные токены становятся недействительны
     await session.commit()
