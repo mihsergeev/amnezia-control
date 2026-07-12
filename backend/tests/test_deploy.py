@@ -104,10 +104,21 @@ async def test_foreign_awg_container_detection():
         async def run(self, cmd, input=None, check=False):  # noqa: A002
             return type("R", (), {"stdout": self.out})()
 
-    # исходный (не панельный) контейнер обнаружен → deploy/update заблокируются
-    assert await deploy.foreign_awg_container(C("amnezia-awg\namnezia-awg2\n")) == "amnezia-awg"  # noqa: E501
-    # только панельный amnezia-awg2 → безопасно
-    assert await deploy.foreign_awg_container(C("amnezia-awg2\n")) is None
+    # свой определяем по ОБРАЗУ (acontrol-awg), не по имени: формат "name\timage".
+    # чужой legacy рядом с панельным awg2 → чужой обнаружен, awg2 (acontrol-awg) нет
+    assert await deploy.foreign_awg_container(
+        C("amnezia-awg\tamneziavpn/amnezia-wg\namnezia-awg2\tacontrol-awg:latest\n")
+    ) == "amnezia-awg"
+    # КРИТИЧНО: чужой amnezia-awg2 (образ Amnezia) — тоже чужой, хоть имя как у панели
+    assert await deploy.foreign_awg_container(
+        C("amnezia-awg2\tamneziavpn/amneziawg-go:latest\n")
+    ) == "amnezia-awg2"
+    # два протокола сразу → оба чужие
+    assert await deploy.foreign_awg_containers(
+        C("amnezia-awg\tamneziavpn/amnezia-wg\namnezia-awg2\tamneziavpn/amneziawg-go\n")
+    ) == ["amnezia-awg", "amnezia-awg2"]
+    # только панельный (образ acontrol-awg) → безопасно, чужих нет
+    assert await deploy.foreign_awg_container(C("amnezia-awg2\tacontrol-awg\n")) is None
     assert await deploy.foreign_awg_container(C("")) is None
 
 
@@ -140,16 +151,20 @@ def test_build_script_preserves_live_config_before_guard():
     assert s.index('docker exec "$SRC" cat') < s.index('if [ ! -f "$D/awg0.conf" ]')
 
 
-def test_build_script_adopt_detects_port_and_removes_parallel():
+def test_build_script_adopt_detects_port_and_removes_only_target():
     """Adopt: порт берётся из самого конфига (у клиента он может отличаться),
-    а перед созданием сносится ЛЮБОЙ amnezia-awg* — чтобы не остался
-    параллельный контейнер (инцидент uz)."""
+    а перед созданием сносится ТОЛЬКО контейнер на целевом порту и свой прежний
+    ($CONT) — НЕ любой amnezia-awg*, иначе убьётся сосед-протокол на другом порту
+    (инцидент ru-be 12.07). Порт-совпадение сохраняет и фикс инцидента uz."""
     s = deploy.build_script("adopt", 47180, deploy.generate_server_config(47180))
     assert 'DPORT=$(sudo grep -iE "^ *ListenPort" "$D/awg0.conf"' in s
     assert "[ -n \"$DPORT\" ] && PORT=$DPORT" in s
-    assert 'docker ps -aq --filter "name=amnezia-awg"' in s
-    # снос параллельного идёт ДО docker run нового контейнера
-    assert s.index('--filter "name=amnezia-awg"') < s.index("docker run -d --name $CONT")
+    # снос по порту + своему имени, а НЕ по подстроке name=amnezia-awg
+    assert '--filter "publish=$PORT"' in s
+    assert '--filter "name=^${CONT}$"' in s
+    assert 'docker ps -aq --filter "name=amnezia-awg"' not in s  # больше не сносим всё
+    # снос идёт ДО docker run нового контейнера
+    assert s.index('--filter "publish=$PORT"') < s.index("docker run -d --name $CONT")
     # legacy-раскладка: если awg0.conf нет, нормализуем wg0.conf в awg0.conf
     assert 'cat "/opt/amnezia/awg/wg0.conf"' in s
     assert 'sudo tee "$D/awg0.conf"' in s

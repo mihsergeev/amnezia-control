@@ -196,10 +196,15 @@ def build_script(mode: str, port: int, cfg: dict[str, str]) -> str:
         'if command -v ufw >/dev/null 2>&1; then sudo ufw allow $PORT/udp >/dev/null 2>&1 || true; '
         'sudo ufw route allow proto udp from any to any port $PORT >/dev/null 2>&1 || true; fi',
         'log "порт контейнера: $PORT"',
-        # сносим ЛЮБОЙ amnezia-awg / amnezia-awg2 — иначе останется параллельный
-        # контейнер (клиентский), а панель показывала бы пустой новый (инцидент uz)
-        'IDS=$(sudo docker ps -aq --filter "name=amnezia-awg" 2>/dev/null || true); '
-        '[ -n "$IDS" ] && sudo docker rm -f $IDS >/dev/null 2>&1 || true',
+        # Сносим ТОЛЬКО контейнер на целевом порту (его и заменяем) и свой прежний
+        # ($CONT). AWG-контейнеры на ДРУГИХ портах (второй протокол, напр. legacy
+        # рядом с awg2) НЕ трогаем — их снос убил бы клиентов (инцидент ru-be 12.07).
+        # Порт-совпадение сохраняет и фикс инцидента uz (клиентский контейнер на том
+        # же порту, что разворачивает панель, всё так же удаляется).
+        'RM="$(sudo docker ps -aq --filter "name=^${CONT}$" 2>/dev/null; '
+        'sudo docker ps -aq --filter "publish=$PORT" 2>/dev/null)"; '
+        'RM=$(printf "%s\\n" "$RM" | sort -u | grep . || true); '
+        '[ -n "$RM" ] && sudo docker rm -f $RM >/dev/null 2>&1 || true',
         "sudo docker run -d --name $CONT --restart always --privileged \\",
         "  --cap-add NET_ADMIN --cap-add SYS_MODULE \\",
         "  --sysctl net.ipv4.conf.all.src_valid_mark=1 \\",
@@ -359,23 +364,48 @@ async def launch(
     )
 
 
-async def foreign_awg_container(conn: asyncssh.SSHClientConnection) -> str | None:
-    """Имя AWG-контейнера, собранного НЕ панелью (не {CONTAINER}), если есть.
+def _parse_foreign_awg(stdout: str) -> list[str]:
+    """Из вывода `docker ps --format {{.Names}}\\t{{.Image}}` — имена ЧУЖИХ (не
+    панельных) AWG-контейнеров. Свой определяем по ОБРАЗУ ({IMAGE}), а НЕ по имени:
+    у Amnezia активный «новый» протокол называется amnezia-awg2 — как и панельный
+    CONTAINER. Определение по имени принимало чужой awg2 за свой, поэтому его конфиг
+    не снимался в снимок, а deploy сносил его без страховки (инцидент ru-be 12.07:
+    снесли и legacy, и awg2, сохранив конфиг только одного)."""
+    foreign: list[str] = []
+    for line in stdout.splitlines():
+        parts = line.split("\t")
+        if len(parts) < 2:
+            continue
+        name, image = parts[0].strip(), parts[1].strip()
+        if not name:
+            continue
+        # свой контейнер — образ acontrol-awg (с любым тегом); всё прочее чужое
+        if image.split(":", 1)[0] != IMAGE:
+            foreign.append(name)
+    return foreign
+
+
+async def foreign_awg_containers(
+    conn: asyncssh.SSHClientConnection,
+) -> list[str]:
+    """Имена ВСЕХ AWG-контейнеров на ноде, собранных НЕ панелью (образ != {IMAGE}).
 
     На таком сервере пересборка панелью создала бы ПАРАЛЛЕЛЬНЫЙ пустой контейнер
     (конфиг оригинала живёт внутри его контейнера, панель его не переносит), а
-    клиенты остались бы на старом — поэтому deploy/update надо запрещать.
-    """
+    клиенты остались бы на старом — поэтому deploy/update надо запрещать, а при
+    adopt — снять снимок КАЖДОГО из них до замены."""
     cmd = (
         'D=$(docker info >/dev/null 2>&1 && echo docker || echo "sudo -n docker"); '
-        '$D ps --format "{{.Names}}" | grep -i "amnezia-awg" || true'
+        '$D ps --format "{{.Names}}\t{{.Image}}" | grep -iE "amnezia-awg|acontrol-awg" || true'
     )
     result = await conn.run(cmd, check=False)
-    for name in (result.stdout or "").split():
-        name = name.strip()
-        if name and name != CONTAINER:
-            return name
-    return None
+    return _parse_foreign_awg(result.stdout or "")
+
+
+async def foreign_awg_container(conn: asyncssh.SSHClientConnection) -> str | None:
+    """Первый чужой AWG-контейнер, если есть (одиночный случай)."""
+    names = await foreign_awg_containers(conn)
+    return names[0] if names else None
 
 
 _CONT_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")

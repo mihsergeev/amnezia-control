@@ -336,13 +336,31 @@ async def adopt_awg(
     script = deploy.build_script("adopt", 47180, cfg)
     try:
         async with _connect(server) as conn:
-            foreign = await deploy.foreign_awg_container(conn)
-            if not foreign:
+            foreign_list = await deploy.foreign_awg_containers(conn)
+            if not foreign_list:
                 raise HTTPException(
                     status.HTTP_409_CONFLICT,
                     "Внешний контейнер AmneziaWG на сервере не найден — брать под "
                     "управление нечего.",
                 )
+            # СТРАХОВКА: снимок КАЖДОГО чужого awg-контейнера ДО любых изменений —
+            # чтобы второй протокол (напр. legacy рядом с awg2) не пропал без снимка,
+            # как в инциденте ru-be 12.07. Снимки идут в config-backups (откат).
+            for cont in foreign_list:
+                await deploy.snapshot_config(conn, "awg", container=cont)
+            # Панель пока управляет ОДНИМ awg-контейнером на сервер. Если их два
+            # (legacy + awg2) — не берём молча один, снеся второй: отказываем, но
+            # оба уже в снимках. Пользователь убирает лишний в Amnezia и повторяет.
+            if len(foreign_list) > 1:
+                raise HTTPException(
+                    status.HTTP_409_CONFLICT,
+                    "На сервере несколько контейнеров AmneziaWG "
+                    f"({', '.join(foreign_list)}) — вероятно, Legacy и awg2 сразу. "
+                    "Панель управляет одним и не станет забирать один, останавливая "
+                    "другой. Конфиги обоих сохранены в «Бэкапы конфига». Оставьте "
+                    "один протокол на сервере и повторите взятие под управление.",
+                )
+            foreign = foreign_list[0]
             # ВАЖНО: переносим только настоящий AmneziaWG (awg0.conf). Клиентский
             # plain-WireGuard (wg0.conf) несовместим — его перенос затёр бы конфиг
             # и потерял клиентов. Такой контейнер не трогаем.
@@ -353,8 +371,6 @@ async def adopt_awg(
                     "(нет awg0.conf — вероятно, это обычный WireGuard). "
                     "Автоперенос под управление невозможен без потери клиентов.",
                 )
-            # снимок клиентского контейнера ДО замены — страховка для отката
-            await deploy.snapshot_config(conn, "awg", container=foreign)
             await deploy.launch(conn, script, tag="awg")
     except HTTPException:
         raise

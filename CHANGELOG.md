@@ -4,6 +4,26 @@ All notable changes to Amnezia Control are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.32.0] — 2026-07-12
+
+### Fixed (data-safety — AmneziaWG adopt)
+- **Adopting a server that runs two AmneziaWG protocols no longer destroys one of
+  them.** Amnezia names its newer AWG container `amnezia-awg2` — the same name the
+  panel uses for its own container — so the panel mistook an active foreign
+  `amnezia-awg2` for its own: it snapshotted only the *other* container and then
+  `docker rm -f`'d the whole `amnezia-awg*` family, wiping the un-snapshotted one
+  (a server with both AmneziaWG **Legacy** and **awg2** lost awg2). Now:
+  - The panel's own container is identified by **image** (`acontrol-awg`), not by
+    name, so a foreign `amnezia-awg2` is correctly seen as foreign.
+  - On adopt, **every** foreign AWG container is snapshotted to "config backups"
+    *before* anything is touched — nothing is removed without a recovery point.
+  - If a server has **two** AWG containers, adopt now **refuses** (409) with both
+    configs safely snapshotted, instead of silently taking one and killing the
+    other. (Managing two AWG protocols on one server is a follow-up.)
+  - The deploy script removes only the container on the **target port** and the
+    panel's own container — an AWG sibling on a *different* port (a second
+    protocol) is left running instead of being force-removed.
+
 ## [0.31.2] — 2026-07-12
 
 ### Fixed
