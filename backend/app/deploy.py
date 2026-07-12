@@ -293,7 +293,11 @@ async def snapshot_config(
     cmd = (
         f'C={cont}; R={SNAP_ROOT}/{tag}; '
         f'sudo docker ps --format "{{{{.Names}}}}" | grep -qx "$C" || {{ echo NO_CONT; exit 0; }}; '
-        f'mkdir -p "$R"; TS=$(date +%Y%m%d-%H%M%S); F="$R/$TS.tar.gz"; '
+        # TS уникален посекундно; при снимке нескольких контейнеров подряд
+        # (пре-оп бэкап) ждём смены секунды, иначе второй снимок затёр бы первый.
+        f'mkdir -p "$R"; TS=$(date +%Y%m%d-%H%M%S); '
+        f'while [ -e "$R/$TS.tar.gz" ]; do sleep 1; TS=$(date +%Y%m%d-%H%M%S); done; '
+        f'F="$R/$TS.tar.gz"; '
         f'if sudo docker exec "$C" tar -czf - {spec["paths"]} 2>/dev/null > "$F" && [ -s "$F" ]; then '
         f'n=$(sudo docker exec "$C" grep -c "clientId" "{spec["table"]}" 2>/dev/null || echo 0); '
         f'echo "$n" > "$R/$TS.n"; echo "SNAP $TS"; else rm -f "$F"; fi; '
@@ -406,6 +410,39 @@ async def foreign_awg_container(conn: asyncssh.SSHClientConnection) -> str | Non
     """Первый чужой AWG-контейнер, если есть (одиночный случай)."""
     names = await foreign_awg_containers(conn)
     return names[0] if names else None
+
+
+async def all_awg_containers(conn: asyncssh.SSHClientConnection) -> list[str]:
+    """Имена ВСЕХ awg-контейнеров на ноде — и панельных, и чужих. Для пре-оп
+    бэкапа (снимок каждого перед операцией)."""
+    cmd = (
+        'D=$(docker info >/dev/null 2>&1 && echo docker || echo "sudo -n docker"); '
+        '$D ps --format "{{.Names}}\t{{.Image}}" | grep -iE "amnezia-awg|acontrol-awg" || true'
+    )
+    result = await conn.run(cmd, check=False)
+    names: list[str] = []
+    for line in (result.stdout or "").splitlines():
+        name = line.split("\t")[0].strip()
+        if name:
+            names.append(name)
+    return names
+
+
+async def snapshot_all(conn: asyncssh.SSHClientConnection, tag: str) -> int:
+    """Пре-оп бэкап: снимок КАЖДОГО контейнера протокола ДО мутирующей операции —
+    чтобы её можно было откатить (config-restore/ручная пересборка). Для awg
+    снимает и legacy (amnezia-awg), и awg2, и панельный контейнер; для остальных —
+    контейнер из спецификации. Возвращает число сделанных снимков."""
+    if tag == "awg":
+        conts = await all_awg_containers(conn)
+    else:
+        spec = _SNAP_SPECS.get(tag)
+        conts = [spec["container"]] if spec else []
+    made = 0
+    for cont in conts:
+        if await snapshot_config(conn, tag, container=cont):
+            made += 1
+    return made
 
 
 _CONT_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")

@@ -122,6 +122,29 @@ async def test_foreign_awg_container_detection():
     assert await deploy.foreign_awg_container(C("")) is None
 
 
+async def test_snapshot_all_awg_backs_up_every_container():
+    """Пре-оп бэкап: snapshot_all снимает КАЖДЫЙ awg-контейнер (и legacy, и awg2),
+    чтобы любую операцию можно было откатить (регресс ru-be 12.07 — awg2 снесли
+    без снимка)."""
+    calls = []
+
+    class C:
+        async def run(self, cmd, input=None, check=False):  # noqa: A002
+            calls.append(cmd)
+            if 'ps --format' in cmd and 'grep -iE "amnezia-awg' in cmd:
+                return type("R", (), {
+                    "stdout": "amnezia-awg\tamneziavpn/amnezia-wg\n"
+                              "amnezia-awg2\tamneziavpn/amneziawg-go\n"
+                })()
+            return type("R", (), {"stdout": "SNAP 20260712-130000\n"})()
+
+    made = await deploy.snapshot_all(C(), "awg")
+    assert made == 2  # сняты оба контейнера
+    snaps = [c for c in calls if "tar -czf" in c]
+    assert any("C=amnezia-awg;" in c for c in snaps)   # legacy
+    assert any("C=amnezia-awg2;" in c for c in snaps)  # awg2
+
+
 async def test_awg_adoptable_requires_awg0conf():
     """Adopt разрешён только настоящему AmneziaWG (awg0.conf). Клиентский
     plain-WireGuard (wg0.conf → команда test -f вернёт NO) — не переносим."""

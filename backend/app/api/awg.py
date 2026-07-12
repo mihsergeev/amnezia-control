@@ -283,6 +283,9 @@ async def deploy_awg(
     try:
         async with _connect(server) as conn:
             await _guard_foreign_awg(conn)
+            # пре-оп бэкап: если разворачиваем поверх существующего панельного
+            # контейнера — снимем его конфиг до пересоздания
+            await deploy.snapshot_all(conn, "awg")
             await deploy.launch(conn, script, tag="awg")
     except HTTPException:
         raise
@@ -306,8 +309,8 @@ async def update_awg(
     try:
         async with _connect(server) as conn:
             await _guard_foreign_awg(conn)
-            # снимок текущего конфига ДО пересборки — для отката, если что-то пойдёт не так
-            await deploy.snapshot_config(conn, "awg")
+            # пре-оп бэкап: снимок КАЖДОГО awg-контейнера ДО пересборки — для отката
+            await deploy.snapshot_all(conn, "awg")
             await deploy.launch(conn, script, tag="awg")
     except HTTPException:
         raise
@@ -403,8 +406,8 @@ async def config_restore(
     server = await _get_or_404(server_id, session)
     try:
         async with _connect(server) as conn:
-            # снимок текущего состояния ДО отката — сам откат тоже обратим
-            await deploy.snapshot_config(conn, "awg")
+            # пре-оп бэкап: снимок текущего состояния ДО отката — сам откат тоже обратим
+            await deploy.snapshot_all(conn, "awg")
             ok = await deploy.restore_snapshot(conn, "awg", body.id)
     except ValueError as exc:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
