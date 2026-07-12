@@ -747,6 +747,41 @@ button.group-header:hover .group-name {
   }
 }
 
+/* мобильная шапка: логотип меньше, навигация переносится на свою строку */
+@media (max-width: 680px) {
+  .page {
+    padding: 1rem 0.75rem;
+  }
+  .header {
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    margin-bottom: 1.2rem;
+  }
+  .brand-logo {
+    width: 40px;
+    height: 40px;
+  }
+  /* на узком экране оставляем только лого — бренд-текст съедает место, из-за
+     чего иконки справа (версия/тема/язык/меню) уезжали за край */
+  .brand h1 {
+    display: none;
+  }
+  /* версию прячем — она не критична и освобождает место для иконок */
+  .header-right .source-link {
+    display: none;
+  }
+  .topnav {
+    order: 3;
+    width: 100%;
+    margin-left: 0;
+    justify-content: center;
+    overflow-x: auto;
+  }
+  .header-right {
+    gap: 0.4rem;
+  }
+}
+
 /* ---------- автонастройка в форме ---------- */
 
 .bootstrap-block {
@@ -1045,6 +1080,15 @@ tr:hover .note-edit {
 
 .add-row input {
   flex: 1;
+}
+
+/* широкие таблицы скроллятся горизонтально ВНУТРИ карточки, а не ломают
+   страницу/модалку на узких экранах. min-width:0 обязателен: без него флекс-
+   ребёнок (карточка клиентов внутри модалки) не даёт таблице сжаться и она
+   распирает всё окно. */
+.table-card {
+  overflow-x: auto;
+  min-width: 0;
 }
 
 .table-card table {
