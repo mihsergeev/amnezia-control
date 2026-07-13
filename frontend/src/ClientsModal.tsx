@@ -403,9 +403,19 @@ export function ClientsModal({
         {isAwg && (
           <>
         {state && (
-          <div className="awg-summary muted small">
-            {state.interface} · endpoint <span className="mono">{state.endpoint}</span> ·
-            {' '}{t('подсеть')} <span className="mono">{state.address}</span>
+          <div className="info-chips">
+            <span className="info-chip">
+              <span className="info-label">{t('интерфейс')}</span>
+              <span className="mono">{state.interface}</span>
+            </span>
+            <span className="info-chip">
+              <span className="info-label">endpoint</span>
+              <span className="mono">{state.endpoint}</span>
+            </span>
+            <span className="info-chip">
+              <span className="info-label">{t('подсеть')}</span>
+              <span className="mono">{state.address}</span>
+            </span>
           </div>
         )}
 

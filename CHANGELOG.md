@@ -4,6 +4,14 @@ All notable changes to Amnezia Control are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.38.4] — 2026-07-12
+
+### Changed (UI)
+- **The clients dialog header is less dull.** The flat "iface · endpoint · subnet"
+  muted line is now a row of labelled info chips, and the version/adopt line sits
+  in its own subtle boxed strip — the area between the tabs and the client list
+  reads as structured info instead of grey text.
+
 ## [0.38.3] — 2026-07-12
 
 ### Changed (UI)

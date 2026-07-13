@@ -439,6 +439,7 @@ const EN: Record<string, string> = {
   'После создания панель покажет скрипт для ручного запуска на сервере.':
     'After creation, the panel shows a script to run manually on the server.',
   'подсеть': 'subnet',
+  'интерфейс': 'interface',
   'Ошибка': 'Error',
 
   // --- общее / мелочи ---

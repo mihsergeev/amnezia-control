@@ -1009,9 +1009,31 @@ tr:hover .note-edit {
   color: var(--text);
 }
 
-.awg-summary {
-  padding-bottom: 0.4rem;
-  border-bottom: 1px solid var(--border);
+/* сводка протокола — аккуратные чипы «метка + значение» вместо серой строки */
+.info-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+  align-items: center;
+  margin-bottom: 0.7rem;
+}
+
+.info-chip {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.4rem;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0.28rem 0.6rem;
+  font-size: 0.82rem;
+}
+
+.info-label {
+  color: var(--text-muted);
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
 }
 
 .version-line {
@@ -1019,6 +1041,11 @@ tr:hover .note-edit {
   align-items: center;
   justify-content: space-between;
   gap: 0.6rem;
+  padding: 0.5rem 0.7rem;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  margin-bottom: 0.2rem;
 }
 
 .version-line button {
