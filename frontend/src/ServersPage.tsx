@@ -521,8 +521,6 @@ export function ServersPage({ onUnauthorized }: Props) {
               </div>
             </div>
 
-            {s.note && <div className="muted small server-note">{s.note}</div>}
-
             <div className="server-meta">
               {countryFlag(s.country) && (
                 <span className="server-flag" title={s.country}>
@@ -539,6 +537,8 @@ export function ServersPage({ onUnauthorized }: Props) {
                 <span className="muted small">{t('· docker недоступен')}</span>
               )}
             </div>
+
+            {s.note && <div className="muted small server-note">{s.note}</div>}
 
             {online && metrics[s.id] && <ResourceLine m={metrics[s.id]} />}
 
