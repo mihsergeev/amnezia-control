@@ -62,17 +62,17 @@
 
 | Клиенты | Алерты о падении | Двухфакторная аутентификация |
 |---|---|---|
-| ![Клиенты](docs/screenshots/ru/clients.png) | ![Алерты](docs/screenshots/alerts.png) | ![2FA](docs/screenshots/two-factor.png) |
+| ![Клиенты](docs/screenshots/ru/clients.png) | ![Алерты](docs/screenshots/ru/alerts.png) | ![2FA](docs/screenshots/ru/two-factor.png) |
 
 | Разворачивание протокола | Журнал действий | Импорт серверов |
 |---|---|---|
-| ![Деплой](docs/screenshots/deploy.png) | ![Журнал](docs/screenshots/audit.png) | ![Импорт](docs/screenshots/import.png) |
+| ![Деплой](docs/screenshots/ru/deploy.png) | ![Журнал](docs/screenshots/ru/audit.png) | ![Импорт](docs/screenshots/ru/import.png) |
 
 **Выдача клиентского конфига** — анимированный QR ровно в том формате, который сканирует приложение AmneziaVPN, плюс обычный `.conf` для приложений AmneziaWG / WireGuard:
 
 | AmneziaWG `.conf` | Приложение AmneziaVPN (`vpn://`) |
 |---|---|
-| ![Конфиг .conf](docs/screenshots/issue-conf.png) | ![Конфиг vpn://](docs/screenshots/issue-vpn.png) |
+| ![Конфиг .conf](docs/screenshots/ru/issue-conf.png) | ![Конфиг vpn://](docs/screenshots/ru/issue-vpn.png) |
 
 ---
 
