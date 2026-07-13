@@ -4,6 +4,15 @@ All notable changes to Amnezia Control are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.39.0] — 2026-07-12
+
+### Added (UI)
+- **Country flag per server.** The panel geolocates each server's IP (once, via
+  ipwho.is, cached in a new `country` column) and shows the country flag next to
+  the address, so it's obvious where a VPN exits. Flags render even on Windows
+  (which drops flag emojis) via a bundled ~78 KB Twemoji flags web font.
+- **Bigger, less cramped server cards** — larger name and address, more padding.
+
 ## [0.38.4] — 2026-07-12
 
 ### Changed (UI)

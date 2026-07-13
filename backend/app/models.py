@@ -44,6 +44,8 @@ class Server(Base):
     ssh_user: Mapped[str] = mapped_column(String(64), default="root")
     note: Mapped[str] = mapped_column(Text, default="")
     group_name: Mapped[str] = mapped_column(String(64), default="")
+    # ISO 3166-1 alpha-2 (для флажка на карточке); заполняется коллектором по IP
+    country: Mapped[str] = mapped_column(String(2), default="")
     last_check_ok: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
     last_check_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True

@@ -40,6 +40,15 @@ type Props = {
   onUnauthorized: () => void
 }
 
+// ISO-код страны → эмодзи-флаг (KZ → 🇰🇿) через regional indicator symbols
+function countryFlag(code: string): string {
+  const cc = (code || '').toUpperCase()
+  if (!/^[A-Z]{2}$/.test(cc)) return ''
+  return String.fromCodePoint(
+    ...[...cc].map((c) => 0x1f1e6 + c.charCodeAt(0) - 65),
+  )
+}
+
 function StatusDot({ server }: { server: Server }) {
   const { t } = useI18n()
   const cls =
@@ -515,6 +524,11 @@ export function ServersPage({ onUnauthorized }: Props) {
             {s.note && <div className="muted small server-note">{s.note}</div>}
 
             <div className="server-meta">
+              {countryFlag(s.country) && (
+                <span className="server-flag" title={s.country}>
+                  {countryFlag(s.country)}
+                </span>
+              )}
               <span className="mono host">{s.host}</span>
               {protocols.map((p) => (
                 <span key={p.key} className="proto-badge">

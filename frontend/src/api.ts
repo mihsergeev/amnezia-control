@@ -118,6 +118,7 @@ export type Server = {
   ssh_user: string
   note: string
   group_name: string
+  country: string
   last_check_ok: boolean | null
   last_check_at: string | null
   last_check_info: string
