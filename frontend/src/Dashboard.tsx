@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
   api,
   ApiError,
@@ -14,6 +14,33 @@ const PROTO_LABEL: Record<TopClient['protocol'], string> = {
   awg: 'AmneziaWG',
   openvpn: 'OpenVPN',
   xray: 'XRay',
+}
+
+type Sort = { key: string; dir: 'asc' | 'desc' }
+
+// Заголовок-столбец с сортировкой: клик переключает направление
+function SortTh({
+  label,
+  col,
+  sort,
+  onSort,
+  numeric,
+}: {
+  label: string
+  col: string
+  sort: Sort | null
+  onSort: (col: string, numeric: boolean) => void
+  numeric?: boolean
+}) {
+  const active = sort?.key === col
+  return (
+    <th className="sortable" onClick={() => onSort(col, !!numeric)}>
+      {label}
+      <span className="sort-ind">
+        {active ? (sort!.dir === 'asc' ? ' ▲' : ' ▼') : ''}
+      </span>
+    </th>
+  )
 }
 
 type Props = {
@@ -107,6 +134,59 @@ export function Dashboard({ onUnauthorized }: Props) {
 
   const interval = history?.interval_seconds ?? 300
 
+  // --- сортировка таблиц ---
+  const [srvSort, setSrvSort] = useState<Sort | null>(null)
+  const [topSort, setTopSort] = useState<Sort | null>(null)
+  const makeToggle =
+    (setter: (s: Sort | null) => void, cur: Sort | null) =>
+    (col: string, numeric: boolean) =>
+      setter(
+        cur && cur.key === col
+          ? { key: col, dir: cur.dir === 'asc' ? 'desc' : 'asc' }
+          : { key: col, dir: numeric ? 'desc' : 'asc' }, // числа: сначала по убыв.
+      )
+  const cmp = <T,>(arr: T[], sort: Sort | null, val: (x: T, k: string) => number | string) => {
+    if (!sort) return arr
+    const m = sort.dir === 'asc' ? 1 : -1
+    return [...arr].sort((a, b) => {
+      const x = val(a, sort.key)
+      const y = val(b, sort.key)
+      if (typeof x === 'string' || typeof y === 'string') {
+        return String(x).localeCompare(String(y), 'ru') * m
+      }
+      return (x < y ? -1 : x > y ? 1 : 0) * m
+    })
+  }
+
+  const serversSorted = useMemo(
+    () =>
+      cmp(overview?.per_server ?? [], srvSort, (s, k) =>
+        k === 'name'
+          ? s.name
+          : k === 'status'
+            ? (s.online ? 1 : 0)
+            : k === 'clients'
+              ? s.clients_online
+              : s.tx_total + s.rx_total,
+      ),
+    [overview, srvSort],
+  )
+  const topSorted = useMemo(
+    () =>
+      cmp(top, topSort, (c, k) =>
+        k === 'name'
+          ? c.name
+          : k === 'server'
+            ? c.server_name
+            : k === 'proto'
+              ? c.protocol
+              : k === 'down'
+                ? c.tx
+                : c.total,
+      ),
+    [top, topSort],
+  )
+
   return (
     <section>
       <div className="page-head">
@@ -166,7 +246,14 @@ export function Dashboard({ onUnauthorized }: Props) {
               <div className="stat-value small-value">
                 ↑ {formatBytes(overview.rx_total)}
               </div>
-              <div className="stat-label">{t('суммарный трафик')}</div>
+              <div
+                className="stat-label"
+                title={t(
+                  'Сумма счётчиков всех нод с момента их последнего запуска (сбрасывается при рестарте контейнера) — равна сумме столбца «Трафик» ниже',
+                )}
+              >
+                {t('суммарный трафик')} · {t('с запуска нод')}
+              </div>
             </div>
           </div>
 
@@ -204,14 +291,21 @@ export function Dashboard({ onUnauthorized }: Props) {
             <table>
               <thead>
                 <tr>
-                  <th>{t('Сервер')}</th>
-                  <th>{t('Статус')}</th>
-                  <th>{t('Клиенты')}</th>
-                  <th>{t('Трафик (↓ / ↑)')}</th>
+                  {(() => {
+                    const onSort = makeToggle(setSrvSort, srvSort)
+                    return (
+                      <>
+                        <SortTh label={t('Сервер')} col="name" sort={srvSort} onSort={onSort} />
+                        <SortTh label={t('Статус')} col="status" sort={srvSort} onSort={onSort} numeric />
+                        <SortTh label={t('Клиенты')} col="clients" sort={srvSort} onSort={onSort} numeric />
+                        <SortTh label={t('Трафик (↓ / ↑)')} col="traffic" sort={srvSort} onSort={onSort} numeric />
+                      </>
+                    )
+                  })()}
                 </tr>
               </thead>
               <tbody>
-                {overview.per_server.map((s) => (
+                {serversSorted.map((s) => (
                   <tr key={s.id}>
                     <td>{s.name}</td>
                     <td>
@@ -242,15 +336,22 @@ export function Dashboard({ onUnauthorized }: Props) {
               <table>
                 <thead>
                   <tr>
-                    <th>{t('Клиент')}</th>
-                    <th>{t('Сервер')}</th>
-                    <th>{t('Протокол')}</th>
-                    <th>{t('Трафик (↓ / ↑)')}</th>
-                    <th>{t('Всего')}</th>
+                    {(() => {
+                      const onSort = makeToggle(setTopSort, topSort)
+                      return (
+                        <>
+                          <SortTh label={t('Клиент')} col="name" sort={topSort} onSort={onSort} />
+                          <SortTh label={t('Сервер')} col="server" sort={topSort} onSort={onSort} />
+                          <SortTh label={t('Протокол')} col="proto" sort={topSort} onSort={onSort} />
+                          <SortTh label={t('Трафик (↓ / ↑)')} col="down" sort={topSort} onSort={onSort} numeric />
+                          <SortTh label={t('Всего')} col="total" sort={topSort} onSort={onSort} numeric />
+                        </>
+                      )
+                    })()}
                   </tr>
                 </thead>
                 <tbody>
-                  {top.map((c) => (
+                  {topSorted.map((c) => (
                     <tr key={`${c.server_id}-${c.protocol}-${c.client_id}`}>
                       <td>
                         <span className="cname" title={c.name}>

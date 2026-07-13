@@ -1094,6 +1094,11 @@ tr:hover .note-edit {
   color: var(--text);
 }
 
+.sort-ind {
+  color: #3563e9;
+  font-size: 0.75em;
+}
+
 /* сводка протокола — аккуратные чипы «метка + значение» вместо серой строки */
 .info-chips {
   display: flex;
