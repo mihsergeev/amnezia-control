@@ -7,7 +7,7 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="VPNPANEL_", env_file=".env")
 
     app_name: str = "Amnezia Control"
-    version: str = "0.40.1"
+    version: str = "0.40.2"
     debug: bool = False
 
     db_url: str = "sqlite+aiosqlite:///./data/panel.db"

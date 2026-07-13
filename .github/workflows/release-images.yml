@@ -1,0 +1,58 @@
+name: Publish images
+
+# Собирает и публикует multi-arch (amd64 + arm64) образы backend и frontend в
+# GitHub Container Registry при выпуске релиза. Так пользователи ставят панель из
+# готовых версионированных образов (docker compose pull) без локальной сборки.
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  images:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - name: backend
+            context: ./backend
+          - name: frontend
+            context: ./frontend
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Image metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository_owner }}/amnezia-control-${{ matrix.name }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=latest
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ matrix.context }}
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max

@@ -63,7 +63,9 @@ export function Dashboard({ onUnauthorized }: Props) {
   const [custom, setCustom] = useState<Custom>(null)
 
   const presetLabel = useCallback(
-    (h: number) => (h < 24 ? `${h} ${t('ч')}` : `${h / 24} ${t('дн')}`),
+    // 24 ч показываем именно как «24 ч» (а не «1 дн») — это дефолтный вид и так
+    // читается естественнее в ряду 3ч…12ч…24ч…7д
+    (h: number) => (h <= 24 ? `${h} ${t('ч')}` : `${h / 24} ${t('дн')}`),
     [t],
   )
   const humanInterval = useCallback(
