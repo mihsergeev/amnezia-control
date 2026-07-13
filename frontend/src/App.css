@@ -99,8 +99,10 @@
 }
 
 .stat-value.small-value {
-  font-size: 1.15rem;
+  font-size: 1.5rem;
+  font-weight: 700;
   font-family: Consolas, 'Cascadia Mono', monospace;
+  line-height: 1.25;
 }
 
 .stat-total {

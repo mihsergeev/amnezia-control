@@ -4,6 +4,15 @@ All notable changes to Amnezia Control are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.39.3] — 2026-07-12
+
+### Changed (UI — Overview page)
+- **Charts got a gradient fill** (colour fading to transparent under the line)
+  instead of the old flat translucent area — they look far less dull.
+- **The "total traffic" stat tile** value was much smaller than the other two
+  tiles (mono 1.15rem vs 1.9rem), which read as misaligned; bumped it to 1.5rem
+  bold so the three tiles balance.
+
 ## [0.39.2] — 2026-07-12
 
 ### Changed (UI)

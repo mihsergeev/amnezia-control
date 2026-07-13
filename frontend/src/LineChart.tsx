@@ -46,8 +46,16 @@ export function LineChart({
   const fmtTime = (ms: number) =>
     new Date(ms).toLocaleTimeString('ru', { hour: '2-digit', minute: '2-digit' })
 
+  const gradId = `lc-grad-${color.replace(/[^a-z0-9]/gi, '')}`
+
   return (
     <svg className="linechart" viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none">
+      <defs>
+        <linearGradient id={gradId} x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stopColor={color} stopOpacity="0.32" />
+          <stop offset="100%" stopColor={color} stopOpacity="0" />
+        </linearGradient>
+      </defs>
       {/* горизонтальные направляющие */}
       {[0.25, 0.5, 0.75].map((f) => (
         <line
@@ -59,7 +67,7 @@ export function LineChart({
           className="chart-grid"
         />
       ))}
-      {area && <polygon points={areaPath} fill={color} fillOpacity="0.12" />}
+      {area && <polygon points={areaPath} fill={`url(#${gradId})`} />}
       <polyline
         points={line}
         fill="none"
