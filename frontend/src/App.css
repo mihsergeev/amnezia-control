@@ -160,6 +160,72 @@
   justify-content: center;
 }
 
+/* выделение периода мышью (drag-zoom, как в Grafana) */
+.chart-overlay {
+  cursor: crosshair;
+}
+
+.chart-select-rect {
+  fill: #3563e9;
+  fill-opacity: 0.16;
+  stroke: #3563e9;
+  stroke-opacity: 0.55;
+  stroke-width: 1;
+}
+
+.chart-title {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.chart-hint {
+  margin-left: auto;
+  font-weight: 400;
+  opacity: 0.7;
+}
+
+/* панель выбора диапазона на «Обзоре» */
+.range-tabs {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  flex-wrap: wrap;
+}
+
+.range-tab {
+  padding: 0.32rem 0.7rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-card);
+  color: var(--text-muted);
+  font-size: 0.85rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.12s, color 0.12s, border-color 0.12s;
+}
+
+.range-tab:hover {
+  background: var(--hover);
+  color: var(--text);
+}
+
+.range-tab.active {
+  background: #3563e9;
+  border-color: #3563e9;
+  color: #fff;
+}
+
+.range-tab.range-reset {
+  color: var(--text-muted);
+  border-style: dashed;
+}
+
+.range-tab.range-reset:hover {
+  color: var(--text);
+}
+
 .card {
   background: var(--bg-card);
   border: 1px solid var(--border);

@@ -188,17 +188,28 @@ async def history(
     _: CurrentUser,
     session: SessionDep,
     server_id: int | None = None,
-    hours: int = Query(default=24, ge=1, le=720),
+    hours: int = Query(default=24, ge=1, le=2160),  # до 90 дней
+    from_ms: int | None = Query(default=None),  # произвольное окно (drag-zoom)
+    to_ms: int | None = Query(default=None),
 ) -> HistoryOut:
     settings = get_settings()
-    cutoff = datetime.now(timezone.utc) - timedelta(hours=hours)
+    now = datetime.now(timezone.utc)
+    if from_ms is not None and to_ms is not None and to_ms > from_ms:
+        start = datetime.fromtimestamp(from_ms / 1000, timezone.utc)
+        end = datetime.fromtimestamp(to_ms / 1000, timezone.utc)
+    else:
+        end = now
+        start = now - timedelta(hours=hours)
+    range_seconds = max((end - start).total_seconds(), 1)
+    # шаг бакета подбираем под ширину окна, чтобы точек было ~несколько сотен
+    step = stats_calc.pick_bucket_seconds(range_seconds, settings.stats_interval)
     query = (
         select(TrafficSample)
-        .where(TrafficSample.ts >= cutoff)
+        .where(TrafficSample.ts >= start, TrafficSample.ts <= end)
         .order_by(TrafficSample.ts)
     )
     if server_id is not None:
         query = query.where(TrafficSample.server_id == server_id)
     samples = list(await session.scalars(query))
-    points = stats_calc.aggregate_history(samples, settings.stats_interval)
-    return HistoryOut(interval_seconds=settings.stats_interval, points=points)
+    points = stats_calc.aggregate_history(samples, step)
+    return HistoryOut(interval_seconds=step, points=points)
