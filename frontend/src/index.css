@@ -8,6 +8,7 @@
   --hover: rgba(255, 255, 255, 0.06);
   --card-hover: #191d28;
   --border-strong: #333c50;
+  --row-zebra: rgba(255, 255, 255, 0.025); /* чередование строк таблиц */
 
   color-scheme: dark;
   font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
@@ -23,6 +24,7 @@
   --hover: rgba(20, 30, 60, 0.05);
   --card-hover: #f3f6fb;
   --border-strong: #a6b1c2;
+  --row-zebra: rgba(20, 30, 60, 0.028); /* чередование строк таблиц */
 
   /* мягкие тени, чтобы белые карточки отделялись от фона */
   --shadow-card: 0 1px 2px rgba(20, 28, 46, 0.05), 0 2px 6px rgba(20, 28, 46, 0.07);

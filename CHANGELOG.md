@@ -4,6 +4,13 @@ All notable changes to Amnezia Control are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.38.3] — 2026-07-12
+
+### Changed (UI)
+- **Client/data tables are easier to read.** Rows were blending into the flat dark
+  background; added zebra striping, a hover highlight, more row padding, and a
+  slightly stronger header divider so rows are cleanly separated at a glance.
+
 ## [0.38.2] — 2026-07-12
 
 ### Changed (UX)

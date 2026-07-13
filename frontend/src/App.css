@@ -1099,7 +1099,7 @@ tr:hover .note-edit {
 .table-card th,
 .table-card td {
   text-align: left;
-  padding: 0.55rem 0.6rem;
+  padding: 0.72rem 0.75rem;
   font-size: 0.9rem;
 }
 
@@ -1109,11 +1109,21 @@ tr:hover .note-edit {
   font-size: 0.75rem;
   text-transform: uppercase;
   letter-spacing: 0.04em;
-  border-bottom: 1px solid var(--border);
+  border-bottom: 1px solid var(--border-strong);
 }
 
+/* зебра + hover, чтобы строки не сливались на плоском тёмном фоне */
 .table-card tbody tr {
   border-bottom: 1px solid var(--border);
+  transition: background 0.12s ease;
+}
+
+.table-card tbody tr:nth-child(even) {
+  background: var(--row-zebra);
+}
+
+.table-card tbody tr:hover {
+  background: var(--hover);
 }
 
 .table-card tbody tr:last-child {
