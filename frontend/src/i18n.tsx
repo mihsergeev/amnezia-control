@@ -385,6 +385,9 @@ const EN: Record<string, string> = {
   'серверов онлайн': 'servers online',
   'клиентов онлайн': 'clients online',
   'суммарный трафик': 'total traffic',
+  'с запуска нод': 'since node start',
+  'Сумма счётчиков всех нод с момента их последнего запуска (сбрасывается при рестарте контейнера) — равна сумме столбца «Трафик» ниже':
+    'Sum of every node’s counters since it last started (resets on container restart) — equals the sum of the “Traffic” column below',
   'Клиентов онлайн за 24 ч': 'Clients online (24h)',
   'Трафик за 24 ч': 'Traffic (24h)',
   'Трафик': 'Traffic',
