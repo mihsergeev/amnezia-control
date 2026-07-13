@@ -1429,17 +1429,63 @@ body {
 /* --- ресурсы ноды на карточке сервера --- */
 .server-res {
   display: flex;
+  align-items: center;
+  justify-content: space-between;
   flex-wrap: wrap;
-  gap: 0.35rem 0.9rem;
-  margin-top: 0.55rem;
-  padding-top: 0.5rem;
+  gap: 0.5rem 0.9rem;
+  margin-top: 0.5rem;
+  padding-top: 0.75rem;
   border-top: 1px solid var(--border);
-  font-size: 0.8rem;
 }
 
-.res-item {
+/* аптайм слева — крупнее, со значком */
+.uptime {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  font-size: 1rem;
   color: var(--text);
   white-space: nowrap;
+}
+
+.uptime svg {
+  color: var(--text-muted);
+}
+
+/* метрики справа — чипы со значками (как инфо-чипы в модалке клиента) */
+.res-metrics {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin-left: auto;
+}
+
+.res-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0.32rem 0.6rem;
+  font-size: 0.84rem;
+  white-space: nowrap;
+}
+
+.res-chip svg {
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+
+.res-label {
+  color: var(--text-muted);
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.res-chip b {
+  font-weight: 600;
 }
 
 .res-sub {
@@ -1447,13 +1493,21 @@ body {
   font-weight: 400;
 }
 
+/* предупреждение/критично — подсвечиваем рамку и значение чипа */
 .res-warn {
   color: #e0a030;
 }
 
+.res-chip.res-warn {
+  border-color: rgba(224, 160, 48, 0.4);
+}
+
 .res-crit {
   color: #e74c3c;
-  font-weight: 600;
+}
+
+.res-chip.res-crit {
+  border-color: rgba(231, 76, 60, 0.5);
 }
 
 .stat-totals {

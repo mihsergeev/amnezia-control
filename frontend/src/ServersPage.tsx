@@ -70,6 +70,44 @@ function pct(used: number, total: number): number {
   return total > 0 ? Math.round((used / total) * 100) : 0
 }
 
+const svg = {
+  width: 15,
+  height: 15,
+  viewBox: '0 0 24 24',
+  fill: 'none',
+  stroke: 'currentColor',
+  strokeWidth: 2,
+  strokeLinecap: 'round',
+  strokeLinejoin: 'round',
+} as const
+
+const IconClock = (
+  <svg {...svg}>
+    <circle cx="12" cy="12" r="9" />
+    <path d="M12 7v5l3 2" />
+  </svg>
+)
+const IconCpu = (
+  <svg {...svg}>
+    <rect width="16" height="16" x="4" y="4" rx="2" />
+    <rect width="6" height="6" x="9" y="9" rx="1" />
+    <path d="M15 2v2M15 20v2M2 15h2M2 9h2M20 15h2M20 9h2M9 2v2M9 20v2" />
+  </svg>
+)
+const IconRam = (
+  <svg {...svg}>
+    <rect x="2" y="8" width="20" height="9" rx="1.5" />
+    <path d="M6 8V6M10 8V6M14 8V6M18 8V6M6 17v2M18 17v2" />
+  </svg>
+)
+const IconDisk = (
+  <svg {...svg}>
+    <ellipse cx="12" cy="6" rx="8" ry="3" />
+    <path d="M4 6v12c0 1.66 3.58 3 8 3s8-1.34 8-3V6" />
+    <path d="M4 12c0 1.66 3.58 3 8 3s8-1.34 8-3" />
+  </svg>
+)
+
 function ResourceLine({ m }: { m: NodeMetric }) {
   const { t } = useI18n()
   const memPct = pct(m.mem_used, m.mem_total)
@@ -83,27 +121,33 @@ function ResourceLine({ m }: { m: NodeMetric }) {
         : ''
   return (
     <div className="server-res">
-      <span className={`res-item ${loadCls}`} title={t('Средняя загрузка (1 мин) / ядер')}>
-        CPU {m.load1.toFixed(2)}
-        {m.cpu_count > 0 && <span className="res-sub">/{m.cpu_count}</span>}
+      <span className="uptime" title={t('Аптайм')}>
+        {IconClock} {formatUptime(m.uptime_seconds)}
       </span>
-      <span className="res-item" title={t('Память')}>
-        RAM {memPct}%
-        <span className="res-sub">
-          {' '}
-          {formatBytes(m.mem_used)}/{formatBytes(m.mem_total)}
+      <div className="res-metrics">
+        <span className={`res-chip ${loadCls}`} title={t('Средняя загрузка (1 мин) / ядер')}>
+          {IconCpu}
+          <span className="res-label">CPU</span>
+          <b>{m.load1.toFixed(2)}</b>
+          {m.cpu_count > 0 && <span className="res-sub">/{m.cpu_count}</span>}
         </span>
-      </span>
-      <span className={`res-item ${diskCls}`} title={t('Диск /')}>
-        {t('Диск')} {diskPct}%
-        <span className="res-sub">
-          {' '}
-          {formatBytes(m.disk_used)}/{formatBytes(m.disk_total)}
+        <span className="res-chip" title={t('Память')}>
+          {IconRam}
+          <span className="res-label">RAM</span>
+          <b>{memPct}%</b>
+          <span className="res-sub">
+            {formatBytes(m.mem_used)}/{formatBytes(m.mem_total)}
+          </span>
         </span>
-      </span>
-      <span className="res-item res-sub" title={t('Аптайм')}>
-        ↑ {formatUptime(m.uptime_seconds)}
-      </span>
+        <span className={`res-chip ${diskCls}`} title={t('Диск /')}>
+          {IconDisk}
+          <span className="res-label">{t('Диск')}</span>
+          <b>{diskPct}%</b>
+          <span className="res-sub">
+            {formatBytes(m.disk_used)}/{formatBytes(m.disk_total)}
+          </span>
+        </span>
+      </div>
     </div>
   )
 }
