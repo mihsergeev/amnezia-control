@@ -477,11 +477,11 @@ button.group-header:hover .group-name {
 .server-card {
   background: var(--bg-card);
   border: 1px solid var(--border);
-  border-radius: 12px;
-  padding: 0.9rem 1.1rem;
+  border-radius: 14px;
+  padding: 1.15rem 1.4rem;
   display: flex;
   flex-direction: column;
-  gap: 0.45rem;
+  gap: 0.6rem;
 }
 
 .server-top {
@@ -513,7 +513,7 @@ button.group-header:hover .group-name {
 }
 
 .server-name {
-  font-size: 1.05rem;
+  font-size: 1.22rem;
   font-weight: 600;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -530,8 +530,16 @@ button.group-header:hover .group-name {
 }
 
 .server-meta .host {
-  font-size: 0.95rem;
+  font-size: 1.05rem;
   color: var(--text);
+}
+
+/* флажок страны рядом с адресом */
+.server-flag {
+  font-family: 'Twemoji Country Flags', 'Segoe UI Emoji', sans-serif;
+  font-size: 1.15rem;
+  line-height: 1;
+  margin-right: 0.05rem;
 }
 
 .chip {

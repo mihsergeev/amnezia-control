@@ -79,6 +79,7 @@ class ServerOut(BaseModel):
     ssh_user: str
     note: str
     group_name: str
+    country: str = ""
     last_check_ok: bool | None
     last_check_at: datetime | None
     last_check_info: str

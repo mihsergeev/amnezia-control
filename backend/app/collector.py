@@ -7,7 +7,7 @@ from datetime import datetime, timedelta, timezone
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app import alerts, audit, awg, nodestat, openvpn, settings_store, sshops, xray
+from app import alerts, audit, awg, geo, nodestat, openvpn, settings_store, sshops, xray
 from app.config import Settings
 from app.models import (
     ClientName,
@@ -181,6 +181,17 @@ async def collect_once(
         except Exception:  # noqa: BLE001 — кэш имён не критичен
             log.exception("ошибка сохранения имён клиентов")
 
+    # страна по IP (для флажка на карточке) — разово для серверов без country
+    need_geo = [s for s in servers if not (s.country or "")]
+    geo_map: dict[int, str] = {}
+    if need_geo:
+        codes = await asyncio.gather(
+            *[geo.country_code(s.host) for s in need_geo], return_exceptions=True
+        )
+        geo_map = {
+            s.id: c for s, c in zip(need_geo, codes) if isinstance(c, str) and c
+        }
+
     # алерты о падении/восстановлении: online = удалось снять метрики
     online_map = {s.id: r is not None for s, r in zip(servers, results)}
     # отражаем живой online/offline прямо на карточке сервера, чтобы упавшая нода
@@ -196,6 +207,8 @@ async def collect_once(
                 for srv in rows:
                     srv.last_check_ok = online_map[srv.id]
                     srv.last_check_at = now
+                    if geo_map.get(srv.id):
+                        srv.country = geo_map[srv.id]
                 await session.commit()
         except Exception:  # noqa: BLE001 — статус карточки не критичен
             log.exception("ошибка обновления статуса серверов")
