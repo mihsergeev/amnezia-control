@@ -4,6 +4,13 @@ All notable changes to Amnezia Control are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.38.2] — 2026-07-12
+
+### Changed (UX)
+- **Wider content on large screens.** The main column max-width went from 1080px
+  to 1440px, so the panel uses more of a big/4K display instead of a narrow strip
+  (still capped so lines stay readable).
+
 ## [0.38.1] — 2026-07-12
 
 ### Changed (UX)
