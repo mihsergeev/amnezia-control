@@ -20,6 +20,11 @@ type Props = {
   onUnauthorized: () => void
 }
 
+// Пресеты диапазона (в часах): от 3 часов до 90 дней
+const PRESETS = [3, 6, 12, 24, 24 * 7, 24 * 30, 24 * 90]
+
+type Custom = { from: number; to: number } | null
+
 export function Dashboard({ onUnauthorized }: Props) {
   const { t } = useI18n()
   const [overview, setOverview] = useState<Overview | null>(null)
@@ -27,6 +32,31 @@ export function Dashboard({ onUnauthorized }: Props) {
   const [top, setTop] = useState<TopClient[]>([])
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
+  const [hours, setHours] = useState(24)
+  const [custom, setCustom] = useState<Custom>(null)
+
+  const presetLabel = useCallback(
+    (h: number) => (h < 24 ? `${h} ${t('ч')}` : `${h / 24} ${t('дн')}`),
+    [t],
+  )
+  const humanInterval = useCallback(
+    (sec: number) => {
+      if (sec < 3600) return `${Math.round(sec / 60)} ${t('мин')}`
+      if (sec < 86400) return `${Math.round(sec / 3600)} ${t('ч')}`
+      return `${Math.round(sec / 86400)} ${t('дн')}`
+    },
+    [t],
+  )
+  const fmtDT = (ms: number) =>
+    new Date(ms).toLocaleString('ru', {
+      day: '2-digit',
+      month: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+    })
+  const rangeLabel = custom
+    ? `${fmtDT(custom.from)} – ${fmtDT(custom.to)}`
+    : presetLabel(hours)
 
   const handleError = useCallback(
     (err: unknown) => {
@@ -40,10 +70,13 @@ export function Dashboard({ onUnauthorized }: Props) {
   )
 
   const load = useCallback(async () => {
+    const q = custom
+      ? `from_ms=${custom.from}&to_ms=${custom.to}`
+      : `hours=${hours}`
     try {
       const [ov, hist, tc] = await Promise.all([
         api<Overview>('/api/stats/overview'),
-        api<History>('/api/stats/history?hours=24'),
+        api<History>(`/api/stats/history?${q}`),
         api<TopClient[]>('/api/stats/top-clients?limit=10'),
       ])
       setOverview(ov)
@@ -55,13 +88,17 @@ export function Dashboard({ onUnauthorized }: Props) {
     } finally {
       setLoading(false)
     }
-  }, [handleError])
+  }, [handleError, hours, custom])
 
   useEffect(() => {
     void load()
     const id = window.setInterval(() => void load(), 30000)
     return () => window.clearInterval(id)
   }, [load])
+
+  const zoomTo = useCallback((from: number, to: number) => {
+    setCustom({ from, to })
+  }, [])
 
   const throughputPoints =
     history?.points.map((p) => ({ t: Date.parse(p.ts), v: p.throughput })) ?? []
@@ -74,9 +111,32 @@ export function Dashboard({ onUnauthorized }: Props) {
     <section>
       <div className="page-head">
         <h2>{t('Обзор')}</h2>
-        <button className="ghost" onClick={() => void load()}>
-          {t('Обновить')}
-        </button>
+        <div className="range-tabs">
+          {PRESETS.map((h) => (
+            <button
+              key={h}
+              className={`range-tab${!custom && hours === h ? ' active' : ''}`}
+              onClick={() => {
+                setCustom(null)
+                setHours(h)
+              }}
+            >
+              {presetLabel(h)}
+            </button>
+          ))}
+          {custom && (
+            <button
+              className="range-tab range-reset"
+              onClick={() => setCustom(null)}
+              title={t('Сбросить приближение')}
+            >
+              ✕ {t('зум')}
+            </button>
+          )}
+          <button className="ghost" onClick={() => void load()}>
+            {t('Обновить')}
+          </button>
+        </div>
       </div>
 
       {error && <p className="form-error">{error}</p>}
@@ -112,26 +172,31 @@ export function Dashboard({ onUnauthorized }: Props) {
 
           <div className="chart-block card">
             <div className="chart-title">
-              {t('Трафик за 24 ч')}{' '}
+              {t('Трафик')} · {rangeLabel}{' '}
               <span className="muted small">
-                {t('(за каждый интервал ~{min} мин)', {
-                  min: Math.round(interval / 60),
-                })}
+                {t('интервал')} ~{humanInterval(interval)}
+              </span>
+              <span className="chart-hint muted small">
+                {t('выделите период мышью для приближения')}
               </span>
             </div>
             <LineChart
               points={throughputPoints}
               color="#3563e9"
               format={(v) => formatBytes(v)}
+              onSelectRange={zoomTo}
             />
           </div>
 
           <div className="chart-block card">
-            <div className="chart-title">{t('Клиентов онлайн за 24 ч')}</div>
+            <div className="chart-title">
+              {t('Клиентов онлайн')} · {rangeLabel}
+            </div>
             <LineChart
               points={onlinePoints}
               color="#2ecc71"
               format={(v) => String(Math.round(v))}
+              onSelectRange={zoomTo}
             />
           </div>
 

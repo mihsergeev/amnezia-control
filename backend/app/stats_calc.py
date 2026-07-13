@@ -3,6 +3,28 @@
 from collections import defaultdict
 from datetime import datetime, timezone
 
+# «Красивая» лесенка шагов бакета в секундах: 5м, 10м, 15м, 30м, 1ч, 2ч, 3ч,
+# 6ч, 12ч, 1д, 2д, 3д, 7д. По ней выбираем укрупнение так, чтобы на любой
+# диапазон (от 3 часов до 90 дней) выходило ~несколько сотен точек — иначе
+# 90 дней при 5-минутном шаге дали бы ~26 000 точек в одном polyline.
+_NICE_STEPS = (
+    300, 600, 900, 1800,
+    3600, 7200, 10800, 21600, 43200,
+    86400, 172800, 259200, 604800,
+)
+
+
+def pick_bucket_seconds(
+    range_seconds: float, base_interval: int, max_points: int = 350
+) -> int:
+    """Наименьший «красивый» шаг ≥ интервала сбора, при котором точек ≤ max_points."""
+    base = max(base_interval, 1)
+    min_step = max(base, range_seconds / max_points if max_points else base)
+    for step in _NICE_STEPS:
+        if step >= min_step:
+            return step
+    return _NICE_STEPS[-1]
+
 
 def build_overview(servers: list, latest_by_id: dict) -> dict:
     """servers: [(id, name)], latest_by_id: {id: sample} (только свежие снимки)."""

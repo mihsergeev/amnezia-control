@@ -9,6 +9,8 @@ type Props = {
   color?: string
   format?: (v: number) => string
   area?: boolean
+  // Выделение периода мышью (как в Grafana): вызывается с [from, to] в мс
+  onSelectRange?: (fromMs: number, toMs: number) => void
 }
 
 const PAD_L = 8
@@ -25,10 +27,14 @@ export function LineChart({
   color = '#3563e9',
   format = (v) => String(Math.round(v)),
   area = true,
+  onSelectRange,
 }: Props) {
   const { t } = useI18n()
   const ref = useRef<HTMLDivElement>(null)
+  const svgRef = useRef<SVGSVGElement>(null)
   const [w, setW] = useState(0)
+  const drag = useRef<{ a: number; b: number } | null>(null)
+  const [sel, setSel] = useState<{ a: number; b: number } | null>(null)
 
   useLayoutEffect(() => {
     const el = ref.current
@@ -70,10 +76,45 @@ export function LineChart({
   const gradId = `lc-grad-${color.replace(/[^a-z0-9]/gi, '')}`
   const last = points[points.length - 1]
 
+  // --- выделение периода мышью → callback c [from, to] в мс ---
+  const plotW = Math.max(W - PAD_L - PAD_R, 1)
+  const relX = (clientX: number) => {
+    const r = svgRef.current?.getBoundingClientRect()
+    return r ? clientX - r.left : 0
+  }
+  const pxToTime = (px: number) => {
+    const clamped = Math.max(PAD_L, Math.min(W - PAD_R, px))
+    return tMin + ((clamped - PAD_L) / plotW) * tSpan
+  }
+  const onDown = (e: React.PointerEvent) => {
+    if (!onSelectRange) return
+    const px = relX(e.clientX)
+    drag.current = { a: px, b: px }
+    setSel({ a: px, b: px })
+    e.currentTarget.setPointerCapture(e.pointerId)
+  }
+  const onMove = (e: React.PointerEvent) => {
+    if (!drag.current) return
+    const next = { a: drag.current.a, b: relX(e.clientX) }
+    drag.current = next
+    setSel(next)
+  }
+  const onUp = () => {
+    const d = drag.current
+    drag.current = null
+    setSel(null)
+    if (!d || !onSelectRange) return
+    if (Math.abs(d.b - d.a) < 6) return // слишком короткое движение — это клик
+    const t0 = pxToTime(Math.min(d.a, d.b))
+    const t1 = pxToTime(Math.max(d.a, d.b))
+    if (t1 - t0 < 1000) return
+    onSelectRange(Math.round(t0), Math.round(t1))
+  }
+
   return (
     <div className="linechart" ref={ref} style={{ height }}>
       {W > 0 && (
-        <svg width={W} height={H} viewBox={`0 0 ${W} ${H}`}>
+        <svg ref={svgRef} width={W} height={H} viewBox={`0 0 ${W} ${H}`}>
           <defs>
             <linearGradient id={gradId} x1="0" y1="0" x2="0" y2="1">
               <stop offset="0%" stopColor={color} stopOpacity="0.28" />
@@ -115,6 +156,28 @@ export function LineChart({
           <text x={W - PAD_R} y={H - 5} className="chart-label" textAnchor="end">
             {fmtTime(tMax)}
           </text>
+          {sel && Math.abs(sel.b - sel.a) > 1 && (
+            <rect
+              className="chart-select-rect"
+              x={Math.min(sel.a, sel.b)}
+              y={PAD_T}
+              width={Math.abs(sel.b - sel.a)}
+              height={H - PAD_T - PAD_B}
+            />
+          )}
+          {onSelectRange && (
+            <rect
+              className="chart-overlay"
+              x={PAD_L}
+              y={PAD_T}
+              width={plotW}
+              height={H - PAD_T - PAD_B}
+              fill="transparent"
+              onPointerDown={onDown}
+              onPointerMove={onMove}
+              onPointerUp={onUp}
+            />
+          )}
         </svg>
       )}
     </div>

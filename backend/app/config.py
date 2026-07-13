@@ -7,7 +7,7 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="VPNPANEL_", env_file=".env")
 
     app_name: str = "Amnezia Control"
-    version: str = "0.39.4"
+    version: str = "0.40.0"
     debug: bool = False
 
     db_url: str = "sqlite+aiosqlite:///./data/panel.db"
@@ -23,9 +23,11 @@ class Settings(BaseSettings):
     # DNS в выдаваемых клиентских конфигах AmneziaWG
     awg_client_dns: str = "1.1.1.1, 1.0.0.1"
 
-    # Сбор метрик: интервал в секундах (0 = выключить), хранение снимков в днях
+    # Сбор метрик: интервал в секундах (0 = выключить), хранение снимков в днях.
+    # Держим 90 дней: столько же — максимальный диапазон графиков на «Обзоре»
+    # (общих снимков ~1 строка/сервер/интервал — сотни тысяч строк, копейки).
     stats_interval: int = 300
-    stats_retention_days: int = 30
+    stats_retention_days: int = 90
     # Хранение пер-клиентских снимков трафика (их много) — короче общего
     client_stats_retention_days: int = 14
 

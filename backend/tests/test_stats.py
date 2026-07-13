@@ -62,6 +62,25 @@ def test_aggregate_history_empty() -> None:
     assert stats_calc.aggregate_history([], interval=300) == []
 
 
+def test_pick_bucket_seconds_scales_with_range() -> None:
+    base = 300
+    # короткие окна: шаг = интервалу сбора (5 мин), без укрупнения
+    assert stats_calc.pick_bucket_seconds(3 * 3600, base) == 300
+    assert stats_calc.pick_bucket_seconds(24 * 3600, base) == 300
+    # неделя укрупняется до получаса, месяц — до 3 часов
+    assert stats_calc.pick_bucket_seconds(7 * 86400, base) == 1800
+    assert stats_calc.pick_bucket_seconds(30 * 86400, base) == 10800
+    # 90 дней — до 12 часов; при этом точек ≤ 350
+    step = stats_calc.pick_bucket_seconds(90 * 86400, base)
+    assert step == 43200
+    assert (90 * 86400) / step <= 350
+
+
+def test_pick_bucket_seconds_never_below_interval() -> None:
+    # даже узкое окно не даёт бакет мельче интервала сбора
+    assert stats_calc.pick_bucket_seconds(60, base_interval=600) == 600
+
+
 def _csmp(ts, rx, tx):
     return SimpleNamespace(ts=ts, rx=rx, tx=tx)
 
