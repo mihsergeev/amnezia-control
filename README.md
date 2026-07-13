@@ -18,9 +18,24 @@
 
 <p align="center"><a href="CHANGELOG.md">Changelog</a> · <a href="https://github.com/mihsergeev/amnezia-control/releases">Releases</a></p>
 
-![Overview dashboard](docs/screenshots/dashboard.png)
+![Amnezia Control demo](docs/demo.gif)
 
 Nodes are managed over plain SSH (no agent installed on them). Three protocols are supported side by side: **AmneziaWG**, **OpenVPN over Cloak**, and **XRay / REALITY**. Clients are issued in the AmneziaVPN `vpn://` format (with a scannable animated QR) and, for WireGuard, as a plain `.conf`.
+
+## Why Amnezia Control
+
+The AmneziaVPN desktop client is great for personal use. Amnezia Control is for when you run **several nodes for a team** and doing it by hand stops scaling.
+
+| Capability | Desktop AmneziaVPN | Amnezia Control |
+|---|:---:|:---:|
+| Manage a whole server fleet | Partial | ✅ |
+| Clients from a single interface | ❌ | ✅ |
+| Auto-expiring access | ❌ | ✅ |
+| Traffic & node-health monitoring | ❌ | ✅ |
+| Telegram & webhook alerts | ❌ | ✅ |
+| Audit log & panel 2FA | ❌ | ✅ |
+
+> Independent open-source project — not affiliated with or endorsed by AmneziaVPN.
 
 ---
 
@@ -55,6 +70,8 @@ Nodes are managed over plain SSH (no agent installed on them). Three protocols a
 ---
 
 ## Screenshots
+
+![Overview dashboard](docs/screenshots/dashboard.png)
 
 | Servers (dark) | Servers (light) |
 |---|---|
@@ -97,14 +114,22 @@ The panel holds its own SSH keypair and connects to each node as an unprivileged
 
 ## Quick start
 
+**Prebuilt images (fastest)** — multi-arch (amd64/arm64) images are published to GHCR on every release, so no local build:
+
 ```bash
 git clone https://github.com/mihsergeev/amnezia-control.git acontrol && cd acontrol
 cp .env.example .env
 # edit .env — set ADMIN_PASSWORD, DB_PASSWORD, JWT_SECRET, PANEL_IP
+docker compose pull && docker compose up -d
+```
+
+**Build from source** — same, but build the images yourself:
+
+```bash
 docker compose up -d --build
 ```
 
-This is **standalone**: the panel is published on the host at `ACONTROL_BIND` (default `127.0.0.1:8080`). Open it at http://127.0.0.1:8080, or set `ACONTROL_BIND=0.0.0.0:8080` to expose it on all interfaces. Generate the JWT secret with `openssl rand -hex 32`.
+This is **standalone**: the panel is published on the host at `ACONTROL_BIND` (default `127.0.0.1:8080`). Open it at http://127.0.0.1:8080, or set `ACONTROL_BIND=0.0.0.0:8080` to expose it on all interfaces. Generate the JWT secret with `openssl rand -hex 32`. Pin a version with `ACONTROL_VERSION=` in `.env` (default `latest`).
 
 ### HTTPS / reverse proxy
 
