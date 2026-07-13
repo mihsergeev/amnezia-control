@@ -18,7 +18,7 @@
 
 <p align="center"><a href="CHANGELOG.md">Список изменений</a> · <a href="https://github.com/mihsergeev/amnezia-control/releases">Релизы</a></p>
 
-![Дашборд «Обзор»](docs/screenshots/dashboard.png)
+![Дашборд «Обзор»](docs/screenshots/ru/dashboard.png)
 
 Ноды управляются по обычному SSH (агент на них не ставится). Поддерживаются три протокола сразу: **AmneziaWG**, **OpenVPN поверх Cloak** и **XRay / REALITY**. Клиенты выдаются в формате AmneziaVPN `vpn://` (со сканируемым анимированным QR), а для WireGuard — ещё и обычным `.conf`.
 
@@ -58,11 +58,11 @@
 
 | Серверы (тёмная) | Серверы (светлая) |
 |---|---|
-| ![Серверы](docs/screenshots/servers-dark.png) | ![Серверы светлая](docs/screenshots/servers-light.png) |
+| ![Серверы](docs/screenshots/ru/servers-dark.png) | ![Серверы светлая](docs/screenshots/ru/servers-light.png) |
 
 | Клиенты | Алерты о падении | Двухфакторная аутентификация |
 |---|---|---|
-| ![Клиенты](docs/screenshots/clients.png) | ![Алерты](docs/screenshots/alerts.png) | ![2FA](docs/screenshots/two-factor.png) |
+| ![Клиенты](docs/screenshots/ru/clients.png) | ![Алерты](docs/screenshots/alerts.png) | ![2FA](docs/screenshots/two-factor.png) |
 
 | Разворачивание протокола | Журнал действий | Импорт серверов |
 |---|---|---|
