@@ -4,6 +4,13 @@ All notable changes to Amnezia Control are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.38.1] — 2026-07-12
+
+### Changed (UX)
+- **The client config dialog opens on the "For the AmneziaVPN app" (vpn://) tab by
+  default**, with the AmneziaWG `.conf` tab second — the app link is what's needed
+  most often, so it's no longer a second click away.
+
 ## [0.38.0] — 2026-07-12
 
 ### Added (self-monitoring — dead-man's-switch)
