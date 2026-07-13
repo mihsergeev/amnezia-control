@@ -4,6 +4,14 @@ All notable changes to Amnezia Control are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.39.2] — 2026-07-12
+
+### Changed (UI)
+- **Server metrics redesigned.** Uptime now sits on the left (bigger, with a clock
+  icon), and CPU / RAM / Disk moved to the right as boxed chips with icons and
+  labels (like the info chips in the clients dialog) — far more readable than the
+  old flat inline line. Warn/critical still tints the value and chip border.
+
 ## [0.39.1] — 2026-07-12
 
 ### Changed (UI)
