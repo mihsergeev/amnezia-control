@@ -509,11 +509,12 @@ button.group-header:hover .group-name {
 }
 
 .server-note {
-  margin-top: -0.15rem;
+  margin-top: -0.1rem;
+  color: var(--text-muted);
 }
 
 .server-name {
-  font-size: 1.22rem;
+  font-size: 1.42rem;
   font-weight: 600;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -537,9 +538,9 @@ button.group-header:hover .group-name {
 /* флажок страны рядом с адресом */
 .server-flag {
   font-family: 'Twemoji Country Flags', 'Segoe UI Emoji', sans-serif;
-  font-size: 1.15rem;
+  font-size: 1.45rem;
   line-height: 1;
-  margin-right: 0.05rem;
+  margin-right: 0.1rem;
 }
 
 .chip {

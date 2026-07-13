@@ -4,6 +4,12 @@ All notable changes to Amnezia Control are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.39.1] — 2026-07-12
+
+### Changed (UI)
+- **Server cards, round 2:** bigger server name and country flag, and the note
+  moved below the address line (was above it) for a cleaner top-to-bottom read.
+
 ## [0.39.0] — 2026-07-12
 
 ### Added (UI)
