@@ -4,6 +4,15 @@ All notable changes to Amnezia Control are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.39.4] — 2026-07-12
+
+### Fixed (UI — charts)
+- **Chart text is no longer stretched.** The charts used `preserveAspectRatio=
+  "none"` on a narrow (640-unit) viewBox, so the whole SVG — including the axis
+  labels — was squashed horizontally to fill the width, which looked cheap. Charts
+  now measure their real pixel width (ResizeObserver) and draw in true pixel
+  coordinates, so labels and the line are crisp. Added a dot at the latest value.
+
 ## [0.39.3] — 2026-07-12
 
 ### Changed (UI — Overview page)
