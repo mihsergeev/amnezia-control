@@ -4,6 +4,17 @@ All notable changes to Amnezia Control are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.40.2] — 2026-07-14
+
+### Added
+- **Готовые Docker-образы в GHCR.** На каждый релиз публикуются multi-arch
+  (amd64/arm64) образы backend и frontend — установка `docker compose pull`
+  без локальной сборки. Версия закрепляется через `ACONTROL_VERSION` в `.env`.
+
+### Fixed
+- Дефолтная вкладка диапазона на «Обзоре» подписана «24 ч», а не «1 дн»
+  (граница пресета была `< 24`, из-за чего 24 ч показывались как 1 день).
+
 ## [0.40.1] — 2026-07-13
 
 ### Added (UI — «Обзор»)

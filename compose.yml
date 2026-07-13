@@ -47,6 +47,9 @@ services:
       retries: 12
 
   backend:
+    # Готовый образ из GHCR (docker compose pull); build остаётся для сборки из
+    # исходников (docker compose up --build). ACONTROL_VERSION задаётся в .env.
+    image: ghcr.io/mihsergeev/amnezia-control-backend:${ACONTROL_VERSION:-latest}
     build: ./backend
     restart: unless-stopped
     logging: *default-logging
@@ -86,6 +89,7 @@ services:
       start_period: 40s
 
   frontend:
+    image: ghcr.io/mihsergeev/amnezia-control-frontend:${ACONTROL_VERSION:-latest}
     build: ./frontend
     restart: unless-stopped
     logging: *default-logging
