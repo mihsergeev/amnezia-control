@@ -66,7 +66,9 @@ export function ClientsModal({
 
   const [statsFor, setStatsFor] = useState<AwgClient | null>(null)
   const [view, setView] = useState<ConfigView | null>(null)
-  const [cfgFormat, setCfgFormat] = useState<CfgFormat>('conf')
+  // по умолчанию открываем формат «Для приложения AmneziaVPN» (vpn://) — он нужен
+  // чаще; .conf вторичен (для WireGuard/AmneziaWG-приложений)
+  const [cfgFormat, setCfgFormat] = useState<CfgFormat>('amnezia')
   const [qr, setQr] = useState<string | null>(null)
   const [copied, setCopied] = useState(false)
 
@@ -114,7 +116,7 @@ export function ClientsModal({
 
   function showConfig(name: string, config: string, amnezia: string) {
     setView({ name, config, amnezia })
-    setCfgFormat('conf')
+    setCfgFormat('amnezia')
     setCopied(false)
   }
 
@@ -710,15 +712,6 @@ export function ClientsModal({
 
               <div className="tabs">
                 <button
-                  className={cfgFormat === 'conf' ? 'tab tab-active' : 'tab'}
-                  onClick={() => {
-                    setCfgFormat('conf')
-                    setCopied(false)
-                  }}
-                >
-                  {t('AmneziaWG (.conf)')}
-                </button>
-                <button
                   className={cfgFormat === 'amnezia' ? 'tab tab-active' : 'tab'}
                   onClick={() => {
                     setCfgFormat('amnezia')
@@ -726,6 +719,15 @@ export function ClientsModal({
                   }}
                 >
                   {t('Для приложения AmneziaVPN')}
+                </button>
+                <button
+                  className={cfgFormat === 'conf' ? 'tab tab-active' : 'tab'}
+                  onClick={() => {
+                    setCfgFormat('conf')
+                    setCopied(false)
+                  }}
+                >
+                  {t('AmneziaWG (.conf)')}
                 </button>
               </div>
 
