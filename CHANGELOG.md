@@ -4,6 +4,13 @@ All notable changes to Amnezia Control are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.41.1] — 2026-07-14
+
+### Changed (UI — Servers)
+- **Clearer group headers.** Folder headers are now a bolder, brighter title with
+  a divider line under them and more space between groups, so groups no longer
+  blend into the stream of cards.
+
 ## [0.41.0] — 2026-07-14
 
 ### Added (UI — Servers)
