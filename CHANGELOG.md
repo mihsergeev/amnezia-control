@@ -7,50 +7,52 @@ All notable changes to Amnezia Control are documented here. The format is based 
 ## [0.40.3] — 2026-07-14
 
 ### Fixed
-- После успешного деплоя протокола панель сразу перечитывает статус ноды.
-  Раньше карточка держала доеплойный снимок (docker недоступен, без бейджа
-  протокола) до ручного «Проверить» или следующего цикла сбора — выглядело так,
-  будто деплой не сработал, хотя контейнер уже поднят.
+- After a protocol deploy succeeds, the panel re-checks the node right away.
+  Previously the server card kept its pre-deploy snapshot (docker unavailable,
+  no protocol badge) until a manual "Check" or the next collection cycle, so a
+  just-deployed node looked like the deploy had failed even though the container
+  was already up.
 
 ## [0.40.2] — 2026-07-14
 
 ### Added
-- **Готовые Docker-образы в GHCR.** На каждый релиз публикуются multi-arch
-  (amd64/arm64) образы backend и frontend — установка `docker compose pull`
-  без локальной сборки. Версия закрепляется через `ACONTROL_VERSION` в `.env`.
+- **Prebuilt Docker images on GHCR.** Every release publishes multi-arch
+  (amd64/arm64) backend and frontend images, so you can install with
+  `docker compose pull` instead of building locally. Pin a version via
+  `ACONTROL_VERSION` in `.env`.
 
 ### Fixed
-- Дефолтная вкладка диапазона на «Обзоре» подписана «24 ч», а не «1 дн»
-  (граница пресета была `< 24`, из-за чего 24 ч показывались как 1 день).
+- The default range tab on the Overview reads "24 h" instead of "1 d" (the
+  preset boundary was `< 24`, so 24 hours fell into the days branch).
 
 ## [0.40.1] — 2026-07-13
 
-### Added (UI — «Обзор»)
-- **Сортировка таблиц.** Клик по заголовку столбца сортирует таблицу «серверов»
-  (имя / статус / клиенты / трафик) и «Топ клиентов по трафику» (клиент / сервер
-  / протокол / трафик / всего); повторный клик меняет направление.
+### Added (UI — Overview)
+- **Sortable tables.** Click a column header to sort the servers table (name /
+  status / clients / traffic) and the "Top clients by traffic" table (client /
+  server / protocol / traffic / total); click again to flip the direction.
 
 ### Changed
-- Карточка «суммарный трафик» подписана «с запуска нод» + подсказка: это сумма
-  счётчиков всех нод с момента их последнего запуска (сбрасывается при рестарте
-  контейнера), а не за фиксированный период — совпадает с суммой столбца
-  «Трафик» в таблице ниже.
+- The "total traffic" tile is now labelled "since node start" with a tooltip:
+  it sums every node's counters since it last started (reset on container
+  restart), not a fixed period — it equals the sum of the "Traffic" column in
+  the table below.
 
 ## [0.40.0] — 2026-07-13
 
-### Added (UI — графики «Обзора»)
-- **Выбор диапазона времени.** Кнопки-пресеты 3ч / 6ч / 12ч / 24ч / 7д / 30д /
-  90д вместо жёстко зашитых «за 24 ч». Заголовок и подпись интервала —
-  динамические.
-- **Приближение периода мышью (drag-zoom), как в Grafana.** Выделите участок на
-  любом из графиков — оба приблизятся к этому окну; кнопка «✕ зум» сбрасывает.
+### Added (UI — Overview charts)
+- **Time-range picker.** Preset buttons 3h / 6h / 12h / 24h / 7d / 30d / 90d
+  instead of a hard-wired "last 24h". The title and interval label are dynamic.
+- **Drag-to-zoom, Grafana-style.** Select a span on either chart and both zoom
+  to that window; the "✕ zoom" button resets.
 
 ### Changed
-- Бэкенд `/api/stats/history` принимает произвольное окно (`from_ms`/`to_ms`) и
-  сам подбирает «красивый» шаг бакета под ширину диапазона (5 мин … 12 ч) так,
-  чтобы даже 90 дней укладывались в ~несколько сотен точек, а не десятки тысяч.
-- Хранение снимков трафика увеличено с 30 до 90 дней (совпадает с максимальным
-  диапазоном графиков; это ~1 строка на сервер за интервал — объём копеечный).
+- The backend `/api/stats/history` accepts an arbitrary window
+  (`from_ms`/`to_ms`) and picks a "nice" bucket step sized to the range
+  (5 min … 12 h), so even 90 days fits in a few hundred points instead of tens
+  of thousands.
+- Traffic-sample retention raised from 30 to 90 days (matches the max chart
+  range; that's ~1 row per server per interval — negligible).
 
 ## [0.39.4] — 2026-07-12
 
@@ -390,7 +392,7 @@ All notable changes to Amnezia Control are documented here. The format is based 
 ## [0.25.0] — 2026-07-12
 
 ### Added (protocol parity)
-- **OpenVPN/Cloak can now be rebuilt from the UI** ("Переустановить") — previously
+- **OpenVPN/Cloak can now be rebuilt from the UI** ("Reinstall") — previously
   it could only be *deployed* (never rebuilt/updated once installed). The rebuild
   preserves the PKI, the container's real port and every client (verified
   end-to-end: the CA is byte-identical after a rebuild).
@@ -490,8 +492,8 @@ All notable changes to Amnezia Control are documented here. The format is based 
 ## [0.21.0] — 2026-07-10
 
 ### Added
-- **Take a client-built AmneziaWG under panel management** ("Взять под
-  управление"). If a server's AmneziaWG container was built by the AmneziaVPN
+- **Take a client-built AmneziaWG under panel management** ("Take under
+  management"). If a server's AmneziaWG container was built by the AmneziaVPN
   app (not the panel), the client list now offers a one-click adopt: the panel
   reads the current config out of the *live* container, keeps its listen port
   and keys, and replaces it with its own container — so existing clients keep
