@@ -4,6 +4,15 @@ All notable changes to Amnezia Control are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.41.0] — 2026-07-14
+
+### Added (UI — Servers)
+- **Drag-and-drop ordering.** Grab the ⠿ handle on a server card to reorder it
+  within its group or move it into another group, and drag a group header to
+  reorder whole groups — so your most-used servers and groups sit at the top.
+  The order is persisted (new `position` column) and restored on reload; group
+  order follows the servers' positions. New servers land at the end.
+
 ## [0.40.3] — 2026-07-14
 
 ### Fixed

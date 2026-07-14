@@ -118,6 +118,7 @@ export type Server = {
   ssh_user: string
   note: string
   group_name: string
+  position: number
   country: string
   last_check_ok: boolean | null
   last_check_at: string | null
@@ -141,6 +142,17 @@ export function parseCheckInfo(server: Server): CheckInfo | null {
   } catch {
     return null
   }
+}
+
+// Сохранить ручной порядок карточек (drag-and-drop): плоский список в порядке
+// отображения, каждый с (возможно новой) группой.
+export function reorderServers(
+  order: { id: number; group_name: string }[],
+): Promise<void> {
+  return api<void>('/api/servers/order', {
+    method: 'POST',
+    body: JSON.stringify({ order }),
+  })
 }
 
 export type ServerForm = {

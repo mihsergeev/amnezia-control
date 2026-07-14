@@ -79,6 +79,37 @@ def test_delete_covers_all_server_scoped_tables() -> None:
     assert names == expected
 
 
+async def test_reorder_sets_position_and_group(
+    client: httpx.AsyncClient, auth_headers
+) -> None:
+    ids = []
+    for i in range(3):
+        r = await client.post(
+            "/api/servers",
+            json={"name": f"srv-{i}", "host": f"203.0.113.{i}", "ssh_user": "acontrol"},
+            headers=auth_headers,
+        )
+        ids.append(r.json()["id"])
+    # новый порядок: третий, первый, второй; двоим задаём группу
+    order = [
+        {"id": ids[2], "group_name": "prod"},
+        {"id": ids[0], "group_name": "prod"},
+        {"id": ids[1], "group_name": ""},
+    ]
+    r = await client.post(
+        "/api/servers/order", json={"order": order}, headers=auth_headers
+    )
+    assert r.status_code == 204
+
+    servers = (await client.get("/api/servers", headers=auth_headers)).json()
+    # список приходит в порядке position
+    assert [s["id"] for s in servers] == [ids[2], ids[0], ids[1]]
+    by_id = {s["id"]: s for s in servers}
+    assert by_id[ids[2]]["position"] == 0 and by_id[ids[2]]["group_name"] == "prod"
+    assert by_id[ids[0]]["position"] == 1
+    assert by_id[ids[1]]["position"] == 2 and by_id[ids[1]]["group_name"] == ""
+
+
 async def test_get_missing_returns_404(client: httpx.AsyncClient, auth_headers) -> None:
     response = await client.get("/api/servers/9999", headers=auth_headers)
     assert response.status_code == 404

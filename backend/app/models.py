@@ -44,6 +44,9 @@ class Server(Base):
     ssh_user: Mapped[str] = mapped_column(String(64), default="root")
     note: Mapped[str] = mapped_column(Text, default="")
     group_name: Mapped[str] = mapped_column(String(64), default="")
+    # ручной порядок карточек (drag-and-drop); в пределах группы и порядок групп
+    # выводятся из позиции: группы сортируются по минимальной позиции участника
+    position: Mapped[int] = mapped_column(Integer, default=0)
     # ISO 3166-1 alpha-2 (для флажка на карточке); заполняется коллектором по IP
     country: Mapped[str] = mapped_column(String(2), default="")
     last_check_ok: Mapped[bool | None] = mapped_column(Boolean, nullable=True)

@@ -560,6 +560,34 @@ button.group-header:hover .group-name {
   gap: 0.6rem;
 }
 
+/* drag-and-drop: ручка + индикатор вставки (перетаскивание карточек/групп) */
+.drag-handle {
+  cursor: grab;
+  color: var(--text-muted);
+  font-size: 1.05rem;
+  line-height: 1;
+  padding: 0 0.15rem;
+  flex-shrink: 0;
+  opacity: 0.55;
+  user-select: none;
+  transition: opacity 0.12s, color 0.12s;
+}
+.drag-handle:hover {
+  opacity: 1;
+  color: var(--text);
+}
+.drag-handle:active {
+  cursor: grabbing;
+}
+.server-card.drag-over {
+  box-shadow: inset 0 3px 0 #3563e9;
+  border-color: #3563e98c;
+}
+button.group-header.drag-over {
+  background: #3563e91f;
+  box-shadow: inset 0 0 0 1px #3563e980;
+}
+
 .server-top {
   display: flex;
   align-items: center;
