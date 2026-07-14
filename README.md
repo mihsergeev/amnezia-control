@@ -114,6 +114,8 @@ The panel holds its own SSH keypair and connects to each node as an unprivileged
 
 ## Quick start
 
+> **Requires** Docker Engine + the Compose plugin. On a fresh server: `curl -fsSL https://get.docker.com | sh`.
+
 **Prebuilt images (fastest)** — multi-arch (amd64/arm64) images are published to GHCR on every release, so no local build:
 
 ```bash
@@ -133,9 +135,27 @@ This is **standalone**: the panel is published on the host at `ACONTROL_BIND` (d
 
 ### HTTPS / reverse proxy
 
-The panel serves plain HTTP — **put a reverse proxy with TLS in front** (nginx, Caddy, Traefik, …) pointing at `ACONTROL_BIND`. It's a login-protected control panel, so don't expose it over plain HTTP on the internet.
+The panel serves plain HTTP — **put a reverse proxy with TLS in front**. It's a login-protected control panel, so don't expose it over plain HTTP on the internet.
 
-**Optional — caddy-docker-proxy.** If (and only if) you run [caddy-docker-proxy](https://github.com/lucaslorentz/caddy-docker-proxy) — the *label-reading* proxy — an override joins its network and configures TLS + an IP allow-list via labels:
+**HTTPS in one step (recommended) — bundled Caddy + a free [sslip.io](https://sslip.io) domain.** No domain of your own needed: sslip.io turns your server's IP into a hostname (dashes for dots — `203.0.113.10` → `203-0-113-10.sslip.io`), and a bundled Caddy fetches a real Let's Encrypt certificate for it automatically.
+
+```bash
+# in .env — use YOUR server's public IP with dashes:
+#   ACONTROL_DOMAIN=203-0-113-10.sslip.io
+#   ACONTROL_ALLOW_IPS=          # empty = open to everyone (login + 2FA guard it)
+docker compose -f compose.yml -f compose.tls.yml up -d
+```
+
+Open `https://<your-ip-dashed>.sslip.io`. Ports **80 and 443 must be reachable** (Let's Encrypt validates over them). To **lock it to specific IPs** (everyone else gets 403), set an allow-list — no whitelist needed to just get going:
+
+```bash
+# in .env:
+ACONTROL_ALLOW_IPS=203.0.113.10 198.51.100.0/24
+```
+
+(or put `COMPOSE_FILE=compose.yml:compose.tls.yml` in `.env` and just run `docker compose up -d`).
+
+**Advanced — existing caddy-docker-proxy.** If you already run [caddy-docker-proxy](https://github.com/lucaslorentz/caddy-docker-proxy) — the *label-reading* proxy — an override joins its network and configures TLS + an IP allow-list via labels:
 
 ```bash
 # in .env: set ACONTROL_DOMAIN, ACONTROL_ALLOW_IPS, and

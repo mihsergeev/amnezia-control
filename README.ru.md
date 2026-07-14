@@ -114,6 +114,8 @@
 
 ## Быстрый старт
 
+> **Нужен** Docker Engine + плагин Compose. На чистом сервере: `curl -fsSL https://get.docker.com | sh`.
+
 **Готовые образы (быстрее всего)** — multi-arch (amd64/arm64) образы публикуются в GHCR на каждый релиз, локальная сборка не нужна:
 
 ```bash
@@ -133,9 +135,27 @@ docker compose up -d --build
 
 ### HTTPS / реверс-прокси
 
-Панель отдаёт обычный HTTP — **поставьте перед ней реверс-прокси с TLS** (nginx, Caddy, Traefik, …), проксирующий на `ACONTROL_BIND`. Это админ-панель под логином, не выставляйте её в интернет по голому HTTP.
+Панель отдаёт обычный HTTP — **поставьте перед ней реверс-прокси с TLS**. Это админ-панель под логином, не выставляйте её в интернет по голому HTTP.
 
-**Опционально — caddy-docker-proxy.** Только если у вас именно [caddy-docker-proxy](https://github.com/lucaslorentz/caddy-docker-proxy) (прокси, читающий docker-**метки**), override подключается к его сети и настраивает TLS + IP-whitelist через метки:
+**HTTPS в один шаг (рекомендуется) — встроенный Caddy + бесплатный домен [sslip.io](https://sslip.io).** Свой домен не нужен: sslip.io превращает IP сервера в имя хоста (точки → дефисы: `203.0.113.10` → `203-0-113-10.sslip.io`), а встроенный Caddy сам получает для него настоящий сертификат Let's Encrypt.
+
+```bash
+# в .env — подставьте ПУБЛИЧНЫЙ IP своего сервера через дефисы:
+#   ACONTROL_DOMAIN=203-0-113-10.sslip.io
+#   ACONTROL_ALLOW_IPS=          # пусто = открыто всем (защита на логине + 2FA)
+docker compose -f compose.yml -f compose.tls.yml up -d
+```
+
+Откройте `https://<ip-через-дефисы>.sslip.io`. **Порты 80 и 443 должны быть доступны** (по ним валидируется Let's Encrypt). Чтобы **ограничить доступ по IP** (остальным — 403), задайте вайтлист — но для «просто поднять» он не нужен:
+
+```bash
+# в .env:
+ACONTROL_ALLOW_IPS=203.0.113.10 198.51.100.0/24
+```
+
+(либо впишите `COMPOSE_FILE=compose.yml:compose.tls.yml` в `.env` и запускайте просто `docker compose up -d`).
+
+**Продвинуто — уже развёрнутый caddy-docker-proxy.** Если у вас именно [caddy-docker-proxy](https://github.com/lucaslorentz/caddy-docker-proxy) (прокси, читающий docker-**метки**), override подключается к его сети и настраивает TLS + IP-whitelist через метки:
 
 ```bash
 # в .env: задайте ACONTROL_DOMAIN, ACONTROL_ALLOW_IPS и
