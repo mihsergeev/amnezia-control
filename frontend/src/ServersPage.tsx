@@ -620,8 +620,8 @@ export function ServersPage({ onUnauthorized }: Props) {
           return (
           <div
             className={`server-card${canOpenClients ? ' card-clickable' : ''}${
-              dropHint === `srv-${s.id}` ? ' drag-over' : ''
-            }`}
+              s.last_check_ok === false ? ' server-down' : ''
+            }${dropHint === `srv-${s.id}` ? ' drag-over' : ''}`}
             key={s.id}
             role={canOpenClients ? 'button' : undefined}
             tabIndex={canOpenClients ? 0 : undefined}
@@ -680,6 +680,17 @@ export function ServersPage({ onUnauthorized }: Props) {
                 {canOpenClients && (
                   <button className="primary-ghost" onClick={() => setClientsFor(s)}>
                     {t('Клиенты')}
+                  </button>
+                )}
+                {/* сервер недоступен/не проверялся — даём «Проверить» прямо на
+                    карточке (для онлайна оно остаётся в меню «Ещё») */}
+                {!online && (
+                  <button
+                    className="ghost"
+                    onClick={() => void check(s)}
+                    disabled={checkingId === s.id}
+                  >
+                    {checkingId === s.id ? t('Проверка…') : t('Проверить')}
                   </button>
                 )}
                 <Menu label={t('Ещё')} items={moreItems} />
