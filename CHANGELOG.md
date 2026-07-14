@@ -4,6 +4,18 @@ All notable changes to Amnezia Control are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.42.0] — 2026-07-14
+
+### Fixed
+- **AmneziaWG deploys now generate the AmneziaWG 2.0 obfuscation set.** New
+  deploys add `S3`/`S4` and the `I1`–`I5` CPS junk-packet parameters, so the
+  AmneziaVPN app recognizes issued clients as **AmneziaWG** instead of
+  **AmneziaWG Legacy**. Previously only the 1.0/legacy params (`Jc`/`Jmin`/`Jmax`
+  /`S1`/`S2`/`H1`–`H4`) were generated. CPS tags (`<b>`/`<r>`/`<rd>`/`<rc>`/`<t>`)
+  were validated end-to-end against `amneziawg-go 0.0.20250522`.
+  Existing servers keep their current config — **redeploy** one (fresh keys, so
+  re-issue its clients) to move it to 2.0.
+
 ## [0.41.2] — 2026-07-14
 
 ### Changed (UI — Servers)

@@ -67,7 +67,37 @@ def _b64(text: str) -> str:
     return base64.b64encode(text.encode()).decode()
 
 
-def generate_awg_params() -> dict[str, int]:
+# порядок параметров obfuscation в awg0.conf (AmneziaWG 2.0)
+_AWG_CONF_ORDER = [
+    "Jc", "Jmin", "Jmax",
+    "S1", "S2", "S3", "S4",
+    "H1", "H2", "H3", "H4",
+    "I1", "I2", "I3", "I4", "I5",
+]
+
+
+def _cps_packet() -> str:
+    """Один CPS-джанк-пакет (Custom Protocol Signature) из валидных тегов awg 2.0.
+    Проверено на amneziawg-go 0.0.20250522: допустимы <b 0xHEX> (статичные байты),
+    <r N> (случайные байты), <rd N> (случайные цифры), <rc N> (случайные символы),
+    <t> (таймштамп). Тег <c> НЕ поддерживается («Invalid argument»)."""
+    parts: list[str] = []
+    if random.random() < 0.5:
+        parts.append(f"<b 0x{secrets.token_hex(random.randint(4, 14))}>")
+    if random.random() < 0.35:
+        parts.append("<t>")
+    if random.random() < 0.3:
+        parts.append(f"<rd {random.randint(8, 24)}>")
+    if random.random() < 0.3:
+        parts.append(f"<rc {random.randint(8, 24)}>")
+    parts.append(f"<r {random.randint(24, 160)}>")  # всегда есть случайные байты
+    random.shuffle(parts)
+    return "".join(parts)
+
+
+def generate_awg_params() -> dict[str, object]:
+    """Параметры обфускации AmneziaWG 2.0. Наличие I1 переводит клиента в режим
+    2.0 — иначе приложение AmneziaVPN метит конфиг как «AmneziaWG Legacy»."""
     jc = random.randint(3, 10)
     jmin = random.randint(4, 12)
     jmax = random.randint(jmin + 50, jmin + 900)
@@ -80,9 +110,15 @@ def generate_awg_params() -> dict[str, int]:
     while len(hs) < 4:
         hs.add(random.randint(5, 2**31 - 1))
     h1, h2, h3, h4 = sorted(hs)
+    # 2.0: S3 — джанк cookie-пакета (0..64), S4 — джанк transport-пакета (0..32)
+    s3 = random.randint(0, 64)
+    s4 = random.randint(0, 32)
     return {
-        "Jc": jc, "Jmin": jmin, "Jmax": jmax, "S1": s1, "S2": s2,
+        "Jc": jc, "Jmin": jmin, "Jmax": jmax,
+        "S1": s1, "S2": s2, "S3": s3, "S4": s4,
         "H1": h1, "H2": h2, "H3": h3, "H4": h4,
+        "I1": _cps_packet(), "I2": _cps_packet(), "I3": _cps_packet(),
+        "I4": _cps_packet(), "I5": _cps_packet(),
     }
 
 
@@ -95,8 +131,7 @@ def generate_server_config(port: int) -> dict[str, str]:
         f"PrivateKey = {priv}\n"
         f"Address = {SUBNET}\n"
         f"ListenPort = {port}\n"
-        + "".join(f"{k} = {p[k]}\n" for k in
-                  ["Jc", "Jmin", "Jmax", "S1", "S2", "H1", "H2", "H3", "H4"])
+        + "".join(f"{k} = {p[k]}\n" for k in _AWG_CONF_ORDER)
     )
     return {"priv": priv, "pub": pub, "psk": psk, "conf": conf}
 
