@@ -24,18 +24,22 @@ Nodes are managed over plain SSH (no agent installed on them). Three protocols a
 
 ## Why Amnezia Control
 
-The AmneziaVPN desktop client is great for personal use. Amnezia Control is for when you run **several nodes for a team** and doing it by hand stops scaling.
+The [AmneziaVPN desktop client](https://amnezia.org) is great for personal use — set up a server, connect, share access. Amnezia Control is for when you run **several nodes for a team** and doing it by hand stops scaling.
 
 | Capability | Desktop AmneziaVPN | Amnezia Control |
 |---|:---:|:---:|
 | Manage a whole server fleet | Partial | ✅ |
+| Import existing servers (`vpn://` or bulk) | ❌ | ✅ |
 | Clients from a single interface | ❌ | ✅ |
 | Auto-expiring access | ❌ | ✅ |
+| Pause & resume a client (keep the slot) | ❌ | ✅ |
 | Traffic & node-health monitoring | ❌ | ✅ |
 | Telegram & webhook alerts | ❌ | ✅ |
+| Config snapshots & one-click rollback | ❌ | ✅ |
+| Scheduled backups & restore | ❌ | ✅ |
 | Audit log & panel 2FA | ❌ | ✅ |
 
-> Independent open-source project — not affiliated with or endorsed by AmneziaVPN.
+> Independent open-source project — not affiliated with or endorsed by [AmneziaVPN](https://github.com/amnezia-vpn/amnezia-client).
 
 ---
 
