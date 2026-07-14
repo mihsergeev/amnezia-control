@@ -1,0 +1,17 @@
+# Edge TLS for Amnezia Control (used by compose.tls.yml).
+# ACONTROL_DOMAIN / ACONTROL_ALLOW_IPS come from the environment.
+#
+# Automatic HTTPS: Caddy obtains and renews a Let's Encrypt certificate for
+# {$ACONTROL_DOMAIN} as long as ports 80/443 are reachable and DNS points here
+# (a free sslip.io name like 203-0-113-10.sslip.io does exactly that).
+#
+# IP allow-list: ACONTROL_ALLOW_IPS defaults to "0.0.0.0/0 ::/0" (all), so
+# "not remote_ip <all>" matches nobody → open to everyone. Set it to a
+# space-separated list of IPs/CIDRs in .env to restrict access.
+
+{$ACONTROL_DOMAIN} {
+	@denied not remote_ip {$ACONTROL_ALLOW_IPS}
+	respond @denied "Forbidden" 403
+
+	reverse_proxy frontend:80
+}

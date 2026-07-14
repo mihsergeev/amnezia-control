@@ -1,0 +1,44 @@
+# Self-contained edge TLS with Caddy — automatic HTTPS (Let's Encrypt) for
+# ACONTROL_DOMAIN, no external proxy needed. Pairs perfectly with a free
+# sslip.io domain (e.g. 203-0-113-10.sslip.io resolves to 203.0.113.10), so you
+# get real HTTPS without owning a domain.
+#
+#   docker compose -f compose.yml -f compose.tls.yml up -d          # prebuilt
+#   docker compose -f compose.yml -f compose.tls.yml up -d --build  # from source
+#
+# or set COMPOSE_FILE=compose.yml:compose.tls.yml in .env, then just
+# `docker compose up -d`.
+#
+# Set ACONTROL_DOMAIN in .env. Leave ACONTROL_ALLOW_IPS empty to open the panel
+# to everyone (rely on login + 2FA), or list IPs/CIDRs to restrict access.
+services:
+  frontend:
+    # Caddy fronts it on 80/443 over the internal network — drop the base
+    # compose's published host port (avoids a port conflict).
+    ports: !reset []
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+    security_opt:
+      - no-new-privileges:true
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      ACONTROL_DOMAIN: ${ACONTROL_DOMAIN}
+      # empty → default matches all IPs, so "not in all" denies no one = open
+      ACONTROL_ALLOW_IPS: ${ACONTROL_ALLOW_IPS:-0.0.0.0/0 ::/0}
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./data/caddy/data:/data
+      - ./data/caddy/config:/config
+    depends_on:
+      - frontend
+    networks:
+      - internal
