@@ -4,6 +4,14 @@ All notable changes to Amnezia Control are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.40.3] — 2026-07-14
+
+### Fixed
+- После успешного деплоя протокола панель сразу перечитывает статус ноды.
+  Раньше карточка держала доеплойный снимок (docker недоступен, без бейджа
+  протокола) до ручного «Проверить» или следующего цикла сбора — выглядело так,
+  будто деплой не сработал, хотя контейнер уже поднят.
+
 ## [0.40.2] — 2026-07-14
 
 ### Added

@@ -7,8 +7,9 @@
 import asyncio
 import logging
 
-from app import alerts, deploy, sshops
+from app import alerts, deploy, server_ops, sshops
 from app.config import get_settings
+from app.models import Server
 from app.sshkeys import key_paths
 
 log = logging.getLogger("acontrol.deploywatch")
@@ -22,7 +23,7 @@ _MAX_POLLS = 18  # ~6 минут — с запасом на сборку обр�
 
 async def _watch(
     host: str, port: int, user: str, tag: str, label: str,
-    session_factory, settings,
+    server_id: int, session_factory, settings,
 ) -> None:
     key_path, _pub = key_paths(settings.data_dir)
     for _ in range(_MAX_POLLS):
@@ -36,6 +37,19 @@ async def _watch(
             continue
         state = st.get("state")
         if state == "done":
+            # После успешного деплоя перечитываем статус ноды, иначе карточка
+            # держит доеплойный снимок (docker=false, без протокола) и пугает
+            # надписью «docker недоступен», хотя контейнер уже поднят.
+            try:
+                async with session_factory() as session:
+                    server = await session.get(Server, server_id)
+                    if server is not None:
+                        await server_ops.run_check(session, server, settings)
+            except Exception:  # noqa: BLE001 — best-effort, деплой уже успешен
+                log.warning(
+                    "post-deploy re-check failed for server %s", server_id,
+                    exc_info=True,
+                )
             return
         if state == "error":
             await alerts.maybe_alert(
@@ -54,7 +68,7 @@ def spawn(app, server, tag: str) -> None:
     task = asyncio.create_task(
         _watch(
             server.host, server.ssh_port, server.ssh_user, tag, server.name,
-            factory, get_settings(),
+            server.id, factory, get_settings(),
         )
     )
     _tasks.add(task)
