@@ -592,6 +592,15 @@ button.group-header:hover .group-name {
   box-shadow: inset 0 3px 0 #3563e9;
   border-color: #3563e98c;
 }
+
+/* сервер недоступен (last_check_ok === false) — красноватая заливка + рамка */
+.server-card.server-down {
+  border-color: #e74c3c66;
+  background: linear-gradient(0deg, #e74c3c14, #e74c3c14), var(--bg-card);
+}
+.server-card.server-down:hover {
+  border-color: #e74c3c99;
+}
 button.group-header.drag-over {
   background: #3563e91f;
   box-shadow: inset 0 0 0 1px #3563e980;

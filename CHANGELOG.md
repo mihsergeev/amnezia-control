@@ -4,6 +4,13 @@ All notable changes to Amnezia Control are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.41.2] — 2026-07-14
+
+### Changed (UI — Servers)
+- **Unreachable servers stand out.** A server that failed its last check now has
+  a red-tinted card and a **Check** button right on it (online servers keep Check
+  in the "More" menu), so you can spot a down node and re-probe it at a glance.
+
 ## [0.41.1] — 2026-07-14
 
 ### Changed (UI — Servers)
