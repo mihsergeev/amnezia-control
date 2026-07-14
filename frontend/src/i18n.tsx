@@ -191,6 +191,9 @@ const EN: Record<string, string> = {
   'Открыть клиентов': 'Open clients',
   'Исходный код (AGPL-3.0)': 'Source code (AGPL-3.0)',
   'Без группы': 'Ungrouped',
+  'Перетащить': 'Drag to reorder',
+  'Перетащить группу': 'Drag to reorder group',
+  'Не удалось сохранить порядок': 'Could not save the order',
   'Группа (папка)': 'Group (folder)',
   'необязательно — компания, локация…': 'optional — company, location…',
 

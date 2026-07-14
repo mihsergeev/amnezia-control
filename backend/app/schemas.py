@@ -69,6 +69,17 @@ class ServerUpdate(BaseModel):
     group_name: str | None = Field(default=None, max_length=64)
 
 
+class OrderItem(BaseModel):
+    id: int
+    group_name: str = Field(default="", max_length=64)
+
+
+class ReorderRequest(BaseModel):
+    # плоский список карточек в желаемом порядке отображения; позиция = индекс,
+    # порядок групп выводится из непрерывных блоков (drag-and-drop)
+    order: list[OrderItem]
+
+
 class ServerOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -79,6 +90,7 @@ class ServerOut(BaseModel):
     ssh_user: str
     note: str
     group_name: str
+    position: int = 0
     country: str = ""
     last_check_ok: bool | None
     last_check_at: datetime | None

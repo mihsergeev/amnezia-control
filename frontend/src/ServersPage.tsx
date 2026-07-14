@@ -2,6 +2,7 @@ import {
   useCallback,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type FormEvent,
 } from 'react'
@@ -10,6 +11,7 @@ import {
   ApiError,
   parseCheckInfo,
   protocolsFromContainers,
+  reorderServers,
   type NodeMetric,
   type PanelConfig,
   type Server,
@@ -419,22 +421,111 @@ export function ServersPage({ onUnauthorized }: Props) {
     })
   }
 
-  // серверы, сгруппированные по group_name; без группы — в конце
+  // серверы, сгруппированные по group_name; порядок карточек и групп — ручной
+  // (position, drag-and-drop). Группа выводится по первому появлению в
+  // отсортированном списке (= по минимальной позиции участника), пустая — в конце.
   const groupList = useMemo(() => {
+    const sorted = [...servers].sort(
+      (a, b) => a.position - b.position || a.id - b.id,
+    )
     const map = new Map<string, Server[]>()
-    for (const s of servers) {
+    for (const s of sorted) {
       const g = s.group_name || ''
       const arr = map.get(g)
       if (arr) arr.push(s)
       else map.set(g, [s])
     }
-    const names = [...map.keys()].sort((a, b) => {
-      if (a === '') return 1
-      if (b === '') return -1
-      return a.localeCompare(b, 'ru', { numeric: true, sensitivity: 'base' })
-    })
+    const names = [...map.keys()].filter((n) => n !== '')
+    if (map.has('')) names.push('')
     return names.map((name) => ({ name, servers: map.get(name)! }))
   }, [servers])
+
+  // --- drag-and-drop: перетаскивание карточек и групп ---
+  const dragServer = useRef<number | null>(null)
+  const dragGroup = useRef<string | null>(null)
+  const [dropHint, setDropHint] = useState<string | null>(null)
+
+  const applyOrder = useCallback(
+    (flat: Server[]) => {
+      const next = flat.map((s, i) => ({ ...s, position: i }))
+      setServers(next) // оптимистично
+      void reorderServers(
+        next.map((s) => ({ id: s.id, group_name: s.group_name })),
+      ).catch(() => {
+        setError(t('Не удалось сохранить порядок'))
+        void load()
+      })
+    },
+    [load, t],
+  )
+
+  const flatServers = useCallback(
+    () => groupList.flatMap((g) => g.servers),
+    [groupList],
+  )
+
+  // бросили сервер перед другим сервером (в т.ч. в другую группу)
+  const dropOnServer = useCallback(
+    (targetId: number) => {
+      const srcId = dragServer.current
+      dragServer.current = null
+      setDropHint(null)
+      if (srcId == null || srcId === targetId) return
+      const flat = flatServers()
+      const src = flat.find((s) => s.id === srcId)
+      const target = flat.find((s) => s.id === targetId)
+      if (!src || !target) return
+      const moved = { ...src, group_name: target.group_name }
+      const without = flat.filter((s) => s.id !== srcId)
+      const idx = without.findIndex((s) => s.id === targetId)
+      without.splice(idx, 0, moved)
+      applyOrder(without)
+    },
+    [applyOrder, flatServers],
+  )
+
+  // бросили сервер на заголовок группы → в конец этой группы
+  const dropServerOnGroup = useCallback(
+    (groupName: string) => {
+      const srcId = dragServer.current
+      dragServer.current = null
+      setDropHint(null)
+      if (srcId == null) return
+      const flat = flatServers()
+      const src = flat.find((s) => s.id === srcId)
+      if (!src) return
+      const moved = { ...src, group_name: groupName }
+      const without = flat.filter((s) => s.id !== srcId)
+      let insertAt = without.length
+      for (let i = without.length - 1; i >= 0; i--) {
+        if ((without[i].group_name || '') === groupName) {
+          insertAt = i + 1
+          break
+        }
+      }
+      without.splice(insertAt, 0, moved)
+      applyOrder(without)
+    },
+    [applyOrder, flatServers],
+  )
+
+  // бросили заголовок группы на другой заголовок → двигаем весь блок группы
+  const dropGroupOnGroup = useCallback(
+    (targetGroup: string) => {
+      const src = dragGroup.current
+      dragGroup.current = null
+      setDropHint(null)
+      if (src == null || src === targetGroup) return
+      const order = groupList.map((g) => g.name)
+      const from = order.indexOf(src)
+      if (from < 0 || order.indexOf(targetGroup) < 0) return
+      order.splice(from, 1)
+      order.splice(order.indexOf(targetGroup), 0, src)
+      const byGroup = new Map(groupList.map((g) => [g.name, g.servers]))
+      applyOrder(order.flatMap((name) => byGroup.get(name) || []))
+    },
+    [applyOrder, groupList],
+  )
 
   const hasGroups = groupList.some((g) => g.name !== '')
   // существующие имена групп — для подсказки в форме
@@ -528,12 +619,24 @@ export function ServersPage({ onUnauthorized }: Props) {
           const canOpenClients = online && protocols.length > 0
           return (
           <div
-            className={`server-card${canOpenClients ? ' card-clickable' : ''}`}
+            className={`server-card${canOpenClients ? ' card-clickable' : ''}${
+              dropHint === `srv-${s.id}` ? ' drag-over' : ''
+            }`}
             key={s.id}
             role={canOpenClients ? 'button' : undefined}
             tabIndex={canOpenClients ? 0 : undefined}
             title={canOpenClients ? t('Открыть клиентов') : undefined}
             onClick={canOpenClients ? () => setClientsFor(s) : undefined}
+            onDragOver={(e) => {
+              if (dragServer.current != null) {
+                e.preventDefault()
+                if (dropHint !== `srv-${s.id}`) setDropHint(`srv-${s.id}`)
+              }
+            }}
+            onDragLeave={() => {
+              if (dropHint === `srv-${s.id}`) setDropHint(null)
+            }}
+            onDrop={() => dropOnServer(s.id)}
             onKeyDown={
               canOpenClients
                 ? (e) => {
@@ -547,6 +650,24 @@ export function ServersPage({ onUnauthorized }: Props) {
           >
             <div className="server-top">
               <div className="server-title">
+                <span
+                  className="drag-handle"
+                  draggable
+                  title={t('Перетащить')}
+                  onClick={(e) => e.stopPropagation()}
+                  onDragStart={(e) => {
+                    dragServer.current = s.id
+                    dragGroup.current = null
+                    e.dataTransfer.effectAllowed = 'move'
+                    e.dataTransfer.setData('text/plain', String(s.id))
+                  }}
+                  onDragEnd={() => {
+                    dragServer.current = null
+                    setDropHint(null)
+                  }}
+                >
+                  ⠿
+                </span>
                 <span className="server-name" title={s.name}>
                   {s.name}
                 </span>
@@ -597,9 +718,44 @@ export function ServersPage({ onUnauthorized }: Props) {
             <div className="server-group" key={g.name || '__ungrouped'}>
               <button
                 type="button"
-                className="group-header"
+                className={`group-header${
+                  dropHint === `grp-${g.name}` ? ' drag-over' : ''
+                }`}
                 onClick={() => toggleGroup(g.name)}
+                onDragOver={(e) => {
+                  if (dragServer.current != null || dragGroup.current != null) {
+                    e.preventDefault()
+                    if (dropHint !== `grp-${g.name}`) setDropHint(`grp-${g.name}`)
+                  }
+                }}
+                onDragLeave={() => {
+                  if (dropHint === `grp-${g.name}`) setDropHint(null)
+                }}
+                onDrop={() => {
+                  if (dragServer.current != null) dropServerOnGroup(g.name)
+                  else if (dragGroup.current != null) dropGroupOnGroup(g.name)
+                }}
               >
+                {g.name !== '' && (
+                  <span
+                    className="drag-handle"
+                    draggable
+                    title={t('Перетащить группу')}
+                    onClick={(e) => e.stopPropagation()}
+                    onDragStart={(e) => {
+                      dragGroup.current = g.name
+                      dragServer.current = null
+                      e.dataTransfer.effectAllowed = 'move'
+                      e.dataTransfer.setData('text/plain', g.name)
+                    }}
+                    onDragEnd={() => {
+                      dragGroup.current = null
+                      setDropHint(null)
+                    }}
+                  >
+                    ⠿
+                  </span>
+                )}
                 <span className="group-caret">
                   {collapsed[g.name] ? '▸' : '▾'}
                 </span>

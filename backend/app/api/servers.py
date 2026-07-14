@@ -1,6 +1,6 @@
 from fastapi import APIRouter, HTTPException, status
 from sqlalchemy import delete as sa_delete
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from app import audit, limits, server_ops, sshops
 from app.config import get_settings
@@ -10,6 +10,7 @@ from app.models import Server
 from app.schemas import (
     BootstrapRequest,
     DeleteServerResult,
+    ReorderRequest,
     ServerCreate,
     ServerOut,
     ServerUpdate,
@@ -45,7 +46,9 @@ async def _get_or_404(server_id: int, session: SessionDep) -> Server:
 
 @router.get("", response_model=list[ServerOut])
 async def list_servers(_: CurrentUser, session: SessionDep) -> list[Server]:
-    result = await session.scalars(select(Server).order_by(Server.id))
+    result = await session.scalars(
+        select(Server).order_by(Server.position, Server.id)
+    )
     return list(result)
 
 
@@ -53,12 +56,30 @@ async def list_servers(_: CurrentUser, session: SessionDep) -> list[Server]:
 async def create_server(
     body: ServerCreate, user: CurrentUser, session: SessionDep
 ) -> Server:
-    server = Server(**body.model_dump())
+    # новый сервер — в конец списка
+    max_pos = await session.scalar(select(func.max(Server.position)))
+    server = Server(**body.model_dump(), position=(max_pos or 0) + 1)
     session.add(server)
     await session.commit()
     await session.refresh(server)
     await audit.record(session, user.username, "server_create", server.name, server.host)
     return server
+
+
+@router.post("/order", status_code=status.HTTP_204_NO_CONTENT)
+async def reorder_servers(
+    body: ReorderRequest, _: CurrentUser, session: SessionDep
+) -> None:
+    """Сохраняет ручной порядок карточек: position = индекс в присланном списке,
+    заодно фиксирует группу каждого сервера (drag-and-drop между группами).
+    Порядок групп при выводе выводится из позиций (по минимальной в группе)."""
+    servers = {s.id: s for s in await session.scalars(select(Server))}
+    for i, item in enumerate(body.order):
+        s = servers.get(item.id)
+        if s is not None:
+            s.position = i
+            s.group_name = item.group_name
+    await session.commit()
 
 
 @router.get("/{server_id}", response_model=ServerOut)
