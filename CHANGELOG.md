@@ -4,6 +4,23 @@ All notable changes to Amnezia Control are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.43.0] — 2026-07-15
+
+### Fixed
+- **The panel now notices when a protocol's container is removed outside the
+  panel.** The background collector (every few minutes, over the SSH connection it
+  already opens) refreshes the live container list per server, so a protocol
+  deleted via the AmneziaVPN desktop app — or by hand — disappears from the panel
+  automatically, without a manual **Check**. The list is only updated when Docker
+  actually answered; a transient SSH failure or a Docker restart never hides a
+  protocol tab.
+- **Redeploying a client-less legacy AmneziaWG server now upgrades it to 2.0.**
+  When a reused config is legacy (no `I1` parameter) and the server has no peers,
+  redeploy regenerates it as AmneziaWG 2.0 — so **Full access** and issued client
+  configs come up as **AmneziaWG**, not **AmneziaWG Legacy**. Servers that already
+  have clients are left untouched (changing obfuscation would break their
+  handshake — redeploy such a server deliberately to move it to 2.0).
+
 ## [0.42.0] — 2026-07-14
 
 ### Fixed
