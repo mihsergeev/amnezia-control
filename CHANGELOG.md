@@ -4,6 +4,19 @@ All notable changes to Amnezia Control are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.43.2] — 2026-07-15
+
+### Fixed
+- **Full access to a 2.0 server now connects from the AmneziaVPN app.** The panel
+  wrote the AmneziaWG `I1`–`I5` (CPS) parameters as active lines in the server
+  config, but the AmneziaVPN app keeps them **commented** (`# I1 = …`) and reads
+  them from there when it builds a client over full access. So the app's client
+  came up without CPS while the server had it applied, and the 2.0 handshake never
+  completed (the peer was added, but no handshake). The panel now writes `I1`–`I5`
+  commented — exactly matching Amnezia's own server layout (awg-quick doesn't apply
+  them to the server anyway) — and reads them back from the commented lines for
+  client configs. Redeploy an existing server to move it to this format.
+
 ## [0.43.1] — 2026-07-15
 
 ### Fixed

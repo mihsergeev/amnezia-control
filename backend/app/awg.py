@@ -181,7 +181,18 @@ def parse_conf(text: str) -> tuple[dict[str, str], list[dict[str, str]]]:
             cur = {}
             section = "peer"
             continue
-        if not s or s.startswith("#") or "=" not in s:
+        if s.startswith("#"):
+            # I1–I5 (CPS) у Amnezia в СЕРВЕРНОМ конфиге закомментированы
+            # (# I1 = ...): awg-quick их не применяет к интерфейсу, они хранятся
+            # лишь чтобы раздать клиентам. Вычитываем их как обычные параметры,
+            # иначе клиентские конфиги (и приложение по full-access) остались бы
+            # без CPS и рукопожатие с 2.0-клиентом не сошлось бы.
+            k, _, v = s.lstrip("#").strip().partition("=")
+            k, v = k.strip(), v.strip()
+            if section == "iface" and v and k in ("I1", "I2", "I3", "I4", "I5"):
+                interface[k] = v
+            continue
+        if not s or "=" not in s:
             continue
         key, _, value = s.partition("=")
         key, value = key.strip(), value.strip()
