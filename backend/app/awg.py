@@ -11,6 +11,7 @@
 import base64
 import ipaddress
 import json
+import random
 import re
 import shlex
 import struct
@@ -439,8 +440,19 @@ def build_client_config(
         f"PrivateKey = {client_private}",
     ]
     for key in AWG_PARAM_KEYS:
-        if key in params:
-            lines.append(f"{key} = {params[key]}")
+        v = params.get(key)
+        if not v:  # пропускаем пустые (I2–I5 у 2.0 пустые)
+            continue
+        # H1–H4 у 2.0-сервера — диапазон «low-high»; клиент берёт КОНКРЕТНОЕ
+        # значение внутри (сервер принимает любой заголовок из диапазона),
+        # как это делает приложение Amnezia в клиентском конфиге.
+        if key in ("H1", "H2", "H3", "H4") and "-" in v:
+            lo, _, hi = v.partition("-")
+            try:
+                v = str(random.randint(int(lo), int(hi)))
+            except ValueError:
+                pass
+        lines.append(f"{key} = {v}")
     lines += [
         "",
         "[Peer]",

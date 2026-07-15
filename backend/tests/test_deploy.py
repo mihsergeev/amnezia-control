@@ -12,9 +12,13 @@ def test_awg_params_constraints() -> None:
         assert p["S1"] != p["S2"]
         assert p["S1"] + 56 != p["S2"]
         assert p["S2"] + 56 != p["S1"]
-        hs = [p["H1"], p["H2"], p["H3"], p["H4"]]
-        assert len(set(hs)) == 4
-        assert all(h > 4 for h in hs)
+        # H1-H4 (2.0) — восходящие непересекающиеся диапазоны «low-high»
+        prev = 4
+        for h in ("H1", "H2", "H3", "H4"):
+            lo_s, dash, hi_s = str(p[h]).partition("-")
+            lo, hi = int(lo_s), int(hi_s)
+            assert dash and 4 < lo <= hi and lo >= prev
+            prev = hi
 
 
 def test_server_config_shape() -> None:
@@ -28,25 +32,41 @@ def test_server_config_shape() -> None:
 
 
 def test_server_config_is_awg2() -> None:
-    # AmneziaWG 2.0: S3/S4 активны, а I1-I5 (CPS) в СЕРВЕРНОМ конфиге
-    # ЗАКОММЕНТИРОВАНЫ (конвенция Amnezia) — awg-quick их не применяет, приложение
-    # читает их из «# I1 = …». Без них AmneziaVPN метит конфиг «Legacy».
+    # AmneziaWG 2.0 (точно как приложение): H1-H4 — ДИАПАЗОНЫ «low-high» (признак
+    # 2.0; одиночные значения приложение считает Legacy), S3/S4 активны, I1
+    # закомментирован (# I1 = …), I2-I5 пустые.
     cfg = deploy.generate_server_config(47180)
-    assert "\n# I1 = " in cfg["conf"]
-    assert "\nI1 = " not in cfg["conf"]  # НЕ активная
+    conf = cfg["conf"]
+    assert "\n# I1 = " in conf and "\nI1 = " not in conf
     for marker in ("\nS3 = ", "\nS4 = "):
-        assert marker in cfg["conf"], marker
+        assert marker in conf, marker
+    # H1-H4 — диапазоны
+    p = deploy.generate_awg_params()
+    for h in ("H1", "H2", "H3", "H4"):
+        lo, dash, hi = str(p[h]).partition("-")
+        assert dash and int(lo) <= int(hi), f"{h} не диапазон: {p[h]}"
 
 
 def test_server_cps_roundtrips_to_client() -> None:
-    # закомментированные I1-I5 в серверном конфиге панель должна вычитывать —
-    # иначе клиентские конфиги выйдут без CPS и не сойдётся хендшейк с 2.0
+    # закомментированный I1 в серверном конфиге панель должна вычитывать (I2-I5
+    # пустые), иначе клиент выйдет без CPS и не сойдётся хендшейк с 2.0
     from app import awg
 
     conf = deploy.generate_server_config(47180)["conf"]
     interface, _ = awg.parse_conf(conf)
-    for k in ("I1", "I2", "I3", "I4", "I5"):
-        assert interface.get(k), f"{k} не прочитан из # {k}"
+    assert interface.get("I1"), "I1 не прочитан из # I1"
+    # клиентский конфиг: H — одиночное значение внутри серверного диапазона
+    client = awg.build_client_config(
+        client_private="k", address="10.8.1.2", server_public="s",
+        preshared="p", endpoint="1.2.3.4:47180", params=interface, dns="1.1.1.1",
+    )
+    import re as _re
+    for h in ("H1", "H2", "H3", "H4"):
+        m = _re.search(rf"^{h} = (\d+)$", client, _re.M)
+        assert m, f"{h} в клиенте не одиночное значение"
+        lo, hi = map(int, interface[h].split("-"))
+        assert lo <= int(m.group(1)) <= hi
+    assert "\nI1 = " in client and "\nI2 = " not in client  # I1 активен, I2 пуст
 
 
 def test_build_script_upgrades_legacy_without_clients() -> None:
