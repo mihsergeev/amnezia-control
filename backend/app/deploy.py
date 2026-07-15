@@ -208,6 +208,17 @@ def build_script(mode: str, port: int, cfg: dict[str, str]) -> str:
         '  fi',
         '  log "конфиг перечитан из контейнера $SRC"',
         'fi',
+        # legacy-конфиг (без параметра I1 = AmneziaWG 1.0) БЕЗ клиентов —
+        # пересоздаём как 2.0, иначе приложение AmneziaVPN метит его «Legacy»
+        # и им нельзя нормально подключаться/выдавать конфиги. Если пиры есть —
+        # НЕ трогаем: смена обфускации разорвала бы им хендшейк.
+        'if sudo test -f "$D/awg0.conf" && ! sudo grep -q "^I1" "$D/awg0.conf"; then',
+        '  PEERS=$(sudo grep -c "^\\[Peer\\]" "$D/awg0.conf" 2>/dev/null || echo 0)',
+        '  if [ "$PEERS" = "0" ]; then',
+        '    sudo rm -f "$D/awg0.conf"',
+        '    log "legacy-конфиг без клиентов — пересоздаю как AmneziaWG 2.0"',
+        '  fi',
+        'fi',
         'if [ ! -f "$D/awg0.conf" ]; then',
         f'  echo {_b64(cfg["conf"])} | base64 -d | sudo tee "$D/awg0.conf" >/dev/null',
         f'  echo {_b64(cfg["pub"])} | base64 -d | sudo tee "$D/wireguard_server_public_key.key" >/dev/null',
