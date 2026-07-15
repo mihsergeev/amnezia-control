@@ -4,6 +4,22 @@ All notable changes to Amnezia Control are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.43.4] — 2026-07-15
+
+### Fixed
+- **Full access to a panel-deployed AmneziaWG 2.0 finally connects from the
+  AmneziaVPN app as "AmneziaWG (version 2)".** This was the real root cause behind
+  the whole "shows as Legacy over full access" saga: the panel's full-access
+  `vpn://` link carried only the bare container marker
+  (`{"container": "amnezia-awg2"}`) with **no embedded protocol config**, so the
+  app never saw `protocol_version = "2"` and fell back to treating the server as
+  legacy — regardless of how correct the on-server config was. The panel now reads
+  the node's `awg0.conf` over SSH and embeds the full `awg` object into the link
+  (H1–H4 ranges, `I1`–`I5`, `Jc`/`S…`, port, `subnet_address`,
+  `transport_proto`, `protocol_version = "2"`), exactly matching the AmneziaVPN
+  app's own full-access export — verified key-for-key against a link the app
+  itself produced. Re-export full access after upgrading.
+
 ## [0.43.3] — 2026-07-15
 
 ### Fixed

@@ -97,6 +97,7 @@ def build_full_access_link(
     dns1: str,
     dns2: str,
     container_names: list[str],
+    awg2_config: dict | None = None,
 ) -> str:
     types: list[str] = []
     for name in container_names:
@@ -105,7 +106,14 @@ def build_full_access_link(
             types.append(canon)
     if not types:
         types = ["amnezia-awg"]
-    containers = [{"container": t} for t in types]
+    containers: list[dict] = []
+    for t in types:
+        entry: dict = {"container": t}
+        # Для нового AmneziaWG 2.0 вкладываем полный конфиг протокола: без него
+        # приложение не видит protocol_version="2" и лечит сервер как legacy.
+        if t == "amnezia-awg2" and awg2_config:
+            entry["awg"] = awg2_config
+        containers.append(entry)
     top = {
         "containers": containers,
         "defaultContainer": types[0],
