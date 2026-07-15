@@ -67,49 +67,44 @@ def _b64(text: str) -> str:
     return base64.b64encode(text.encode()).decode()
 
 
-def _cps_packet() -> str:
-    """Один CPS-джанк-пакет (Custom Protocol Signature) из валидных тегов awg 2.0.
-    Проверено на amneziawg-go 0.0.20250522: допустимы <b 0xHEX> (статичные байты),
-    <r N> (случайные байты), <rd N> (случайные цифры), <rc N> (случайные символы),
-    <t> (таймштамп). Тег <c> НЕ поддерживается («Invalid argument»)."""
-    parts: list[str] = []
-    if random.random() < 0.5:
-        parts.append(f"<b 0x{secrets.token_hex(random.randint(4, 14))}>")
-    if random.random() < 0.35:
-        parts.append("<t>")
-    if random.random() < 0.3:
-        parts.append(f"<rd {random.randint(8, 24)}>")
-    if random.random() < 0.3:
-        parts.append(f"<rc {random.randint(8, 24)}>")
-    parts.append(f"<r {random.randint(24, 160)}>")  # всегда есть случайные байты
-    random.shuffle(parts)
-    return "".join(parts)
+# I1 по умолчанию как у самого приложения Amnezia (CPS-пакет, мимикрирующий под
+# DNS-ответ icloud.com); I2–I5 приложение оставляет ПУСТЫМИ. Берём тот же дефолт —
+# так конфиг байт-в-байт совместим с деплоем приложения (full-access видит 2.0).
+_DEFAULT_SPECIAL_JUNK_1 = (
+    "<r 2><b 0x858000010001000000000669636c6f756403636f6d"
+    "0000010001c00c000100010000105a00044d583737>"
+)
 
 
 def generate_awg_params() -> dict[str, object]:
-    """Параметры обфускации AmneziaWG 2.0. Наличие I1 переводит клиента в режим
-    2.0 — иначе приложение AmneziaVPN метит конфиг как «AmneziaWG Legacy»."""
-    jc = random.randint(3, 10)
-    jmin = random.randint(4, 12)
-    jmax = random.randint(jmin + 50, jmin + 900)
+    """Параметры обфускации AmneziaWG 2.0 — точно как генерит приложение Amnezia:
+    H1–H4 в формате ДИАПАЗОНОВ «low-high» (это и есть признак 2.0; одиночные
+    значения приложение считает 1.0/Legacy), I1 = дефолтный CPS, I2–I5 пустые."""
+    jc = random.randint(4, 6)  # у приложения bounded(4, 7)
+    jmin = 10  # у приложения фиксировано
+    jmax = 50
     while True:
         s1 = random.randint(15, 150)
         s2 = random.randint(15, 150)
         if s1 != s2 and s1 + 56 != s2 and s2 + 56 != s1:
             break
-    hs: set[int] = set()
-    while len(hs) < 4:
-        hs.add(random.randint(5, 2**31 - 1))
-    h1, h2, h3, h4 = sorted(hs)
-    # 2.0: S3 — джанк cookie-пакета (0..64), S4 — джанк transport-пакета (0..32)
     s3 = random.randint(0, 64)
-    s4 = random.randint(0, 32)
+    s4 = random.randint(0, 20)  # у приложения bounded(0, 20)
+    # H1–H4: восходящие непересекающиеся диапазоны (каждый следующий стартует от
+    # верхней границы предыдущего) — как AwgInstaller::generateAwgParameters для 2.0
+    headers: list[str] = []
+    lo = 5
+    hi_max = 2**31 - 1
+    for _ in range(4):
+        first = random.randint(lo, hi_max - 1)
+        second = random.randint(first, hi_max)
+        lo = second
+        headers.append(f"{first}-{second}")
     return {
         "Jc": jc, "Jmin": jmin, "Jmax": jmax,
         "S1": s1, "S2": s2, "S3": s3, "S4": s4,
-        "H1": h1, "H2": h2, "H3": h3, "H4": h4,
-        "I1": _cps_packet(), "I2": _cps_packet(), "I3": _cps_packet(),
-        "I4": _cps_packet(), "I5": _cps_packet(),
+        "H1": headers[0], "H2": headers[1], "H3": headers[2], "H4": headers[3],
+        "I1": _DEFAULT_SPECIAL_JUNK_1, "I2": "", "I3": "", "I4": "", "I5": "",
     }
 
 

@@ -4,6 +4,20 @@ All notable changes to Amnezia Control are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.43.3] — 2026-07-15
+
+### Fixed
+- **Full access to a panel-deployed AmneziaWG now connects from the AmneziaVPN
+  app as "AmneziaWG (version 2)".** The panel wrote the magic headers `H1`–`H4`
+  as single values (the AmneziaWG 1.x format), so the app read a panel server
+  over full access as legacy and its client's obfuscation didn't match the server
+  (peer added, no handshake). The panel now generates the 2.0 config exactly like
+  the AmneziaVPN app: `H1`–`H4` as ascending non-overlapping **ranges**
+  (`low-high` — the 2.0 marker), the default CPS `I1` with `I2`–`I5` empty, and
+  `Jmin`/`Jmax`/`S4` in the app's ranges. Client configs pick a single header
+  value inside each server range. Verified byte-for-byte against an
+  app-deployed 2.0 server. Redeploy a server to move it to this format.
+
 ## [0.43.2] — 2026-07-15
 
 ### Fixed
