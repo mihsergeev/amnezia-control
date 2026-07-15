@@ -55,17 +55,18 @@ def test_server_cps_roundtrips_to_client() -> None:
     conf = deploy.generate_server_config(47180)["conf"]
     interface, _ = awg.parse_conf(conf)
     assert interface.get("I1"), "I1 не прочитан из # I1"
-    # клиентский конфиг: H — одиночное значение внутри серверного диапазона
+    # клиентский конфиг: H — ТЕ ЖЕ диапазоны, что у сервера (в 2.0 заголовки
+    # варьируются в пределах диапазона; одиночное значение → клиент отверг бы
+    # ответ сервера и хендшейк завис бы). Приложение строит клиента так же.
     client = awg.build_client_config(
         client_private="k", address="10.8.1.2", server_public="s",
         preshared="p", endpoint="1.2.3.4:47180", params=interface, dns="1.1.1.1",
     )
     import re as _re
     for h in ("H1", "H2", "H3", "H4"):
-        m = _re.search(rf"^{h} = (\d+)$", client, _re.M)
-        assert m, f"{h} в клиенте не одиночное значение"
-        lo, hi = map(int, interface[h].split("-"))
-        assert lo <= int(m.group(1)) <= hi
+        m = _re.search(rf"^{h} = (\d+-\d+)$", client, _re.M)
+        assert m, f"{h} в клиенте не диапазон"
+        assert m.group(1) == interface[h], f"{h} клиента != сервера"
     assert "\nI1 = " in client and "\nI2 = " not in client  # I1 активен, I2 пуст
 
 

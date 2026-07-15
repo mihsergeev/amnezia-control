@@ -4,6 +4,19 @@ All notable changes to Amnezia Control are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.43.5] — 2026-07-15
+
+### Fixed
+- **Client configs ("For the AmneziaVPN app" / `.conf`) for a 2.0 server now
+  connect instead of hanging on "Connecting…".** The panel collapsed the server's
+  `H1`–`H4` header **ranges** into a single value inside each range for the client
+  config. But AmneziaWG 2.0 varies the message-type header per packet within the
+  range: the server sends its handshake response with a random header in its `H2`
+  range, and a client pinned to one exact value rejects it — so the handshake
+  never completes. The client now mirrors the server's `H1`–`H4` ranges verbatim
+  (identical ranges on both ends), exactly like the AmneziaVPN app's own client
+  config. Re-issue client configs after upgrading.
+
 ## [0.43.4] — 2026-07-15
 
 ### Fixed

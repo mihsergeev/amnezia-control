@@ -11,7 +11,6 @@
 import base64
 import ipaddress
 import json
-import random
 import re
 import shlex
 import struct
@@ -482,15 +481,11 @@ def build_client_config(
         v = params.get(key)
         if not v:  # пропускаем пустые (I2–I5 у 2.0 пустые)
             continue
-        # H1–H4 у 2.0-сервера — диапазон «low-high»; клиент берёт КОНКРЕТНОЕ
-        # значение внутри (сервер принимает любой заголовок из диапазона),
-        # как это делает приложение Amnezia в клиентском конфиге.
-        if key in ("H1", "H2", "H3", "H4") and "-" in v:
-            lo, _, hi = v.partition("-")
-            try:
-                v = str(random.randint(int(lo), int(hi)))
-            except ValueError:
-                pass
+        # H1–H4 у 2.0-сервера — диапазон «low-high»; клиент держит ТЕ ЖЕ
+        # диапазоны verbatim. В 2.0 заголовки варьируются в пределах диапазона:
+        # сервер шлёт ответ рукопожатия со случайным H из своего диапазона, и
+        # клиент с одиночным значением отверг бы ответ (ждёт точного) — коннект
+        # висел бы вечно. Так же строит клиента и само приложение Amnezia.
         lines.append(f"{key} = {v}")
     lines += [
         "",
