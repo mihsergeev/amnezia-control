@@ -166,6 +166,45 @@ def build_amnezia_link(
     return "vpn://" + base64.urlsafe_b64encode(compressed).decode().rstrip("=")
 
 
+def build_fullaccess_awg_object(conf_text: str) -> dict:
+    """Собирает `awg`-объект контейнера для full-access ссылки приложения.
+
+    В отличие от клиентской ссылки (build_amnezia_link) full-access НЕ содержит
+    last_config — только параметры протокола (H1-H4 диапазонами, I1-I5, Jc/S…),
+    порт, subnet и, главное, protocol_version="2". Без этого объекта приложение
+    AmneziaVPN не распознаёт версию 2 и помечает сервер как «AmneziaWG Legacy».
+    Формат сверен байт-в-байт с экспортом самого приложения.
+    """
+    interface, _peers = parse_conf(conf_text)
+    params = {k: interface.get(k, "") for k in _AMNEZIA_PARAM_KEYS}
+    listen_port = int(interface.get("ListenPort", "0") or 0)
+    server_ip = interface.get("Address", "").split("/")[0]
+    subnet = (
+        str(ipaddress.ip_network(f"{server_ip}/24", strict=False).network_address)
+        if server_ip
+        else ""
+    )
+    return {
+        **params,
+        "port": str(listen_port),
+        "protocol_version": "2",
+        "subnet_address": subnet,
+        "transport_proto": "udp",
+    }
+
+
+async def read_awg_conf(
+    conn: asyncssh.SSHClientConnection,
+    container: str,
+    interface_name: str = "awg0",
+) -> str:
+    """Читает текст awg0.conf из контейнера (для сборки full-access объекта)."""
+    interface_name = _safe_interface(interface_name)
+    return await _run(
+        conn, _docker_exec(container, f"cat {AWG_DIR}/{interface_name}.conf")
+    )
+
+
 def parse_conf(text: str) -> tuple[dict[str, str], list[dict[str, str]]]:
     interface: dict[str, str] = {}
     peers: list[dict[str, str]] = []
