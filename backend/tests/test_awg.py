@@ -112,6 +112,9 @@ def test_build_client_config_mirrors_awg_params() -> None:
     assert "PrivateKey = CLIENTPRIV" in config
     assert "Jc = 4" in config
     assert "S3 = 62" in config
+    # H1–H4 (2.0) зеркалятся диапазоном verbatim, НЕ схлопываются в одно число
+    assert "H1 = 1204862887-1882451066" in config
+    assert "H4 = 2147211240-2147260204" in config
     assert "PublicKey = SERVERPUB" in config
     assert "PresharedKey = PSK123" in config
     assert "Endpoint = 203.0.113.10:47180" in config
