@@ -28,17 +28,33 @@ def test_server_config_shape() -> None:
 
 
 def test_server_config_is_awg2() -> None:
-    # наличие I1/S3/S4 = AmneziaWG 2.0; без них AmneziaVPN метит конфиг «Legacy»
+    # AmneziaWG 2.0: S3/S4 активны, а I1-I5 (CPS) в СЕРВЕРНОМ конфиге
+    # ЗАКОММЕНТИРОВАНЫ (конвенция Amnezia) — awg-quick их не применяет, приложение
+    # читает их из «# I1 = …». Без них AmneziaVPN метит конфиг «Legacy».
     cfg = deploy.generate_server_config(47180)
-    for marker in ("\nI1 = ", "\nS3 = ", "\nS4 = "):
+    assert "\n# I1 = " in cfg["conf"]
+    assert "\nI1 = " not in cfg["conf"]  # НЕ активная
+    for marker in ("\nS3 = ", "\nS4 = "):
         assert marker in cfg["conf"], marker
+
+
+def test_server_cps_roundtrips_to_client() -> None:
+    # закомментированные I1-I5 в серверном конфиге панель должна вычитывать —
+    # иначе клиентские конфиги выйдут без CPS и не сойдётся хендшейк с 2.0
+    from app import awg
+
+    conf = deploy.generate_server_config(47180)["conf"]
+    interface, _ = awg.parse_conf(conf)
+    for k in ("I1", "I2", "I3", "I4", "I5"):
+        assert interface.get(k), f"{k} не прочитан из # {k}"
 
 
 def test_build_script_upgrades_legacy_without_clients() -> None:
     # передеплой: legacy-конфиг (без I1) и без пиров → пересоздать как 2.0
     cfg = deploy.generate_server_config(47180)
     script = deploy.build_script("deploy", 47180, cfg)
-    assert 'grep -q "^I1"' in script  # детект legacy
+    # I1 активный ИЛИ закомментированный (# I1) считаем 2.0
+    assert 'grep -qE "^#? *I1"' in script
     assert 'grep -c "^\\[Peer\\]"' in script  # проверка отсутствия клиентов
     assert "пересоздаю как AmneziaWG 2.0" in script
 

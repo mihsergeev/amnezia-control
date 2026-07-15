@@ -67,15 +67,6 @@ def _b64(text: str) -> str:
     return base64.b64encode(text.encode()).decode()
 
 
-# порядок параметров obfuscation в awg0.conf (AmneziaWG 2.0)
-_AWG_CONF_ORDER = [
-    "Jc", "Jmin", "Jmax",
-    "S1", "S2", "S3", "S4",
-    "H1", "H2", "H3", "H4",
-    "I1", "I2", "I3", "I4", "I5",
-]
-
-
 def _cps_packet() -> str:
     """Один CPS-джанк-пакет (Custom Protocol Signature) из валидных тегов awg 2.0.
     Проверено на amneziawg-go 0.0.20250522: допустимы <b 0xHEX> (статичные байты),
@@ -122,6 +113,18 @@ def generate_awg_params() -> dict[str, object]:
     }
 
 
+# Активные параметры (применяются awg-quick к серверному интерфейсу) и порядок.
+# I1–I5 (CPS) в СЕРВЕРНОМ конфиге хранятся ЗАКОММЕНТИРОВАННЫМИ (как у Amnezia):
+# awg-quick их не применяет (это клиентский джанк, сервер входящий CPS игнорит),
+# они нужны лишь чтобы раздавать клиентам — и чтобы приложение AmneziaVPN по
+# full-access прочитало их из «# I1 = …» (иначе клиент выходит без CPS и
+# рукопожатие с 2.0-сервером не сходится).
+_AWG_ACTIVE_ORDER = [
+    "Jc", "Jmin", "Jmax", "S1", "S2", "S3", "S4", "H1", "H2", "H3", "H4",
+]
+_AWG_CPS_KEYS = ["I1", "I2", "I3", "I4", "I5"]
+
+
 def generate_server_config(port: int) -> dict[str, str]:
     priv, pub = awg.generate_keypair()
     psk = base64.b64encode(secrets.token_bytes(32)).decode()
@@ -131,7 +134,8 @@ def generate_server_config(port: int) -> dict[str, str]:
         f"PrivateKey = {priv}\n"
         f"Address = {SUBNET}\n"
         f"ListenPort = {port}\n"
-        + "".join(f"{k} = {p[k]}\n" for k in _AWG_CONF_ORDER)
+        + "".join(f"{k} = {p[k]}\n" for k in _AWG_ACTIVE_ORDER)
+        + "".join(f"# {k} = {p[k]}\n" for k in _AWG_CPS_KEYS)
     )
     return {"priv": priv, "pub": pub, "psk": psk, "conf": conf}
 
@@ -212,7 +216,9 @@ def build_script(mode: str, port: int, cfg: dict[str, str]) -> str:
         # пересоздаём как 2.0, иначе приложение AmneziaVPN метит его «Legacy»
         # и им нельзя нормально подключаться/выдавать конфиги. Если пиры есть —
         # НЕ трогаем: смена обфускации разорвала бы им хендшейк.
-        'if sudo test -f "$D/awg0.conf" && ! sudo grep -q "^I1" "$D/awg0.conf"; then',
+        # I1 у 2.0 может быть активным ИЛИ закомментированным (# I1 = …, как у
+        # Amnezia на сервере) — оба варианта считаем 2.0, чтобы не пересоздавать зря.
+        'if sudo test -f "$D/awg0.conf" && ! sudo grep -qE "^#? *I1" "$D/awg0.conf"; then',
         '  PEERS=$(sudo grep -c "^\\[Peer\\]" "$D/awg0.conf" 2>/dev/null || echo 0)',
         '  if [ "$PEERS" = "0" ]; then',
         '    sudo rm -f "$D/awg0.conf"',
