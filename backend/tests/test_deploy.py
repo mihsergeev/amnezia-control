@@ -27,6 +27,22 @@ def test_server_config_shape() -> None:
     assert len(base64.b64decode(cfg["psk"])) == 32
 
 
+def test_server_config_is_awg2() -> None:
+    # наличие I1/S3/S4 = AmneziaWG 2.0; без них AmneziaVPN метит конфиг «Legacy»
+    cfg = deploy.generate_server_config(47180)
+    for marker in ("\nI1 = ", "\nS3 = ", "\nS4 = "):
+        assert marker in cfg["conf"], marker
+
+
+def test_build_script_upgrades_legacy_without_clients() -> None:
+    # передеплой: legacy-конфиг (без I1) и без пиров → пересоздать как 2.0
+    cfg = deploy.generate_server_config(47180)
+    script = deploy.build_script("deploy", 47180, cfg)
+    assert 'grep -q "^I1"' in script  # детект legacy
+    assert 'grep -c "^\\[Peer\\]"' in script  # проверка отсутствия клиентов
+    assert "пересоздаю как AmneziaWG 2.0" in script
+
+
 def test_build_script_deploy() -> None:
     cfg = deploy.generate_server_config(47180)
     script = deploy.build_script("deploy", 47180, cfg)
