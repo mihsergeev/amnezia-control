@@ -292,6 +292,21 @@ async def check_server(
     return _parse_check_output(output)
 
 
+async def probe_containers(conn: "asyncssh.SSHClientConnection") -> CheckResult | None:
+    """Список контейнеров через УЖЕ ОТКРЫТОЕ соединение (для фонового сбора).
+
+    Возвращает CheckResult при успешном ответе docker (даже пустой список —
+    это валидное «контейнеров нет»), либо None, если сама команда не выполнилась
+    (SSH-сбой) — чтобы транзиентная ошибка не затирала список протоколов.
+    """
+    try:
+        run = await conn.run(CHECK_COMMAND, check=False)
+    except (OSError, asyncssh.Error):
+        return None
+    output = run.stdout if isinstance(run.stdout, str) else ""
+    return _parse_check_output(output)
+
+
 async def bootstrap_server(
     host: str,
     port: int,

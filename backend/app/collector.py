@@ -1,6 +1,7 @@
 """Фоновый сборщик метрик: периодически снимает статистику со всех серверов."""
 
 import asyncio
+import json
 import logging
 from datetime import datetime, timedelta, timezone
 
@@ -121,6 +122,12 @@ async def _sample_server(
                     res = await nodestat.read_resources(conn)
                 except Exception:  # noqa: BLE001 — ресурсы не критичны
                     res = None
+                # живой список контейнеров — чтобы удаление протокола извне
+                # (через десктоп-клиент/руками) отражалось без ручной «Проверки»
+                try:
+                    check = await sshops.probe_containers(conn)
+                except Exception:  # noqa: BLE001 — список не критичен
+                    check = None
     except sshops.HostKeyChangedError:
         # host-ключ ноды не совпал — сигналим наверх (возможен MITM/подмена)
         hostkey_changed.add(server.id)
@@ -135,6 +142,7 @@ async def _sample_server(
         "clients_online": agg["online"],
         "resources": res,
         "clients": client_rows,
+        "check": check,  # CheckResult | None (None = docker не ответил, не трогаем список)
     }
 
 
@@ -194,9 +202,18 @@ async def collect_once(
 
     # алерты о падении/восстановлении: online = удалось снять метрики
     online_map = {s.id: r is not None for s, r in zip(servers, results)}
+    # свежий список контейнеров по каждому серверу, где docker надёжно ответил
+    # (check.docker=True). Пустой список — валидное «протоколов нет» (контейнер
+    # удалили извне). None/docker=False — не трогаем прежний список (транзиентный
+    # сбой не должен спрятать вкладки протоколов).
+    check_map: dict[int, str] = {}
+    for s, r in zip(servers, results):
+        chk = r.get("check") if r else None
+        if chk is not None and chk.docker:
+            check_map[s.id] = json.dumps(chk.as_dict(), ensure_ascii=False)
     # отражаем живой online/offline прямо на карточке сервера, чтобы упавшая нода
-    # краснела без ручной «Проверки». last_check_info НЕ трогаем — там список
-    # контейнеров для вкладок протоколов (его пишет полноценная проверка).
+    # краснела без ручной «Проверки», и обновляем список контейнеров (вкладки
+    # протоколов), чтобы удалённый извне протокол пропадал автоматически.
     if online_map:
         try:
             now = datetime.now(timezone.utc)
@@ -209,6 +226,8 @@ async def collect_once(
                     srv.last_check_at = now
                     if geo_map.get(srv.id):
                         srv.country = geo_map[srv.id]
+                    if srv.id in check_map:
+                        srv.last_check_info = check_map[srv.id]
                 await session.commit()
         except Exception:  # noqa: BLE001 — статус карточки не критичен
             log.exception("ошибка обновления статуса серверов")
