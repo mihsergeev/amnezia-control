@@ -21,6 +21,17 @@ All notable changes to Amnezia Control are documented here. The format is based 
   have clients are left untouched (changing obfuscation would break their
   handshake — redeploy such a server deliberately to move it to 2.0).
 
+## [0.42.1] — 2026-07-14
+
+### Fixed
+- **Full-access link mislabeled the new AmneziaWG as Legacy.** The export
+  collapsed the modern `amnezia-awg2` container into the legacy `amnezia-awg`
+  type (a `startswith` ordering bug), so the AmneziaVPN app showed the server as
+  "AmneziaWG Legacy" and failed to connect with ErrorCode 202 ("missing Docker
+  container" — it looked for a non-existent `amnezia-awg`). The link now emits
+  `amnezia-awg2` for the new protocol, and keeps both types when a server runs
+  legacy + new side by side.
+
 ## [0.42.0] — 2026-07-14
 
 ### Fixed

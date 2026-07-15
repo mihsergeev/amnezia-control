@@ -70,6 +70,12 @@ async def detect_containers(conn: asyncssh.SSHClientConnection) -> list[str]:
 
 
 def _canonical(name: str) -> str | None:
+    # ВАЖНО: amnezia-awg2 (новый AmneziaWG 2.0) проверяем ДО amnezia-awg —
+    # иначе startswith("amnezia-awg") схлопнул бы новый контейнер в legacy, и
+    # приложение AmneziaVPN пометило бы протокол «AmneziaWG Legacy» и полезло
+    # искать несуществующий контейнер amnezia-awg (ErrorCode 202).
+    if name.startswith("amnezia-awg2"):
+        return "amnezia-awg2"
     if name.startswith("amnezia-awg"):
         return "amnezia-awg"
     if name.startswith("amnezia-openvpn"):
