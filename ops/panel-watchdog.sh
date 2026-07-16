@@ -18,9 +18,10 @@
 # (скрипт — в /lib65, т.к. /usr исключён из бэкапа; cron-конфиг в /etc.)
 
 set -u
-HB=/app/acontrol/data/heartbeat
+HB="${ACONTROL_HEARTBEAT:-/app/acontrol/data/heartbeat}"
 STATE=/lib65/acontrol/watchdog.state
-MAX_AGE=600
+MAX_AGE="${ACONTROL_HB_MAX_AGE:-600}"
+STRIKES="${ACONTROL_WD_STRIKES:-2}"                       # проверок ПОДРЯД с проблемой до тревоги
 NOW=$(date +%s)
 
 val(){ grep -m1 "^$1=" "$HB" 2>/dev/null | cut -d= -f2-; }
@@ -50,11 +51,29 @@ else
   fi
 fi
 
-last=$(cat "$STATE" 2>/dev/null || echo ok)
+# какая именно панель (из пульса) — чтобы в алерте была видна КОНКРЕТНАЯ панель
+# со ссылкой (когда в один чат шлют 2-3 панели — сразу понятно, чья тревога)
+panel=$(val panel)
+[ -z "$panel" ] && panel="$(hostname)"
+tag="🚑 Amnezia Control watchdog [$panel]"
+
+# Дебаунс: тревогу шлём лишь после STRIKES проверок ПОДРЯД с проблемой — чтобы
+# кратковременные события (рестарт панели при деплое, разовый блип канала) не
+# будили сторожа. Состояние: строка1 = слали ли уже (ok|problem), строка2 = стрик.
+alerted=$(sed -n 1p "$STATE" 2>/dev/null); [ -z "$alerted" ] && alerted=ok
+strikes=$(sed -n 2p "$STATE" 2>/dev/null); case "$strikes" in ''|*[!0-9]*) strikes=0;; esac
+
 if [ -n "$problem" ]; then
-  [ "$last" != "problem" ] && send "🚑 Amnezia Control watchdog: $problem"
-  echo problem > "$STATE"
+  strikes=$((strikes + 1))
+  if [ "$alerted" != "problem" ] && [ "$strikes" -ge "$STRIKES" ]; then
+    send "$tag: $problem"
+    alerted=problem
+  fi
 else
-  [ "$last" = "problem" ] && send "✅ Amnezia Control watchdog: панель снова в норме."
-  echo ok > "$STATE"
+  strikes=0
+  if [ "$alerted" = "problem" ]; then
+    send "✅ Amnezia Control watchdog [$panel]: панель снова в норме."
+    alerted=ok
+  fi
 fi
+printf '%s\n%s\n' "$alerted" "$strikes" > "$STATE"

@@ -9,12 +9,14 @@ def test_heartbeat_write_format(tmp_path):
         p,
         {"telegram_token": "TOK", "telegram_chat": "CHAT", "telegram_api": "", "webhook": ""},
         True,
+        "https://acontrol.example",
     )
     content = open(p, encoding="utf-8").read()
     assert "\nalerts_ok=1\n" in content
     assert "\ntg_token=TOK\n" in content
     assert "\ntg_chat=CHAT\n" in content
     assert "\ntg_api=https://api.telegram.org\n" in content  # пустой → дефолт
+    assert "\npanel=https://acontrol.example\n" in content  # watchdog назовёт эту панель
     assert content.startswith("ts=")
 
 
