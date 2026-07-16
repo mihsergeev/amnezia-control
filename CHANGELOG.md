@@ -4,6 +4,35 @@ All notable changes to Amnezia Control are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.44.0] — 2026-07-16
+
+### Changed
+- **New AmneziaWG deployments now pin the base image to a known-good digest**
+  instead of pulling `amneziavpn/amneziawg-go:latest` blindly. A broken upstream
+  `:latest` can no longer break fresh installs. Upgrading the base image is now an
+  explicit action — the "Update" button (`mode="update"`) deliberately pulls
+  `:latest`. The exact base digest a node was built on is recorded on the node
+  (`/opt/acontrol/base-digest`) and used for version detection, so it stays
+  accurate regardless of how the image was pulled.
+
+### Added
+- **Post-deploy readback check.** A deploy now verifies the `awg0` interface
+  actually came up and is listening before reporting success; if `awg-quick up`
+  silently failed (e.g. an upstream image changed behavior), the deploy reports an
+  error instead of marking a broken node "ready".
+- **Golden-master format contract tests.** The AmneziaVPN app's `vpn://` format
+  (full-access and client link) is now pinned in a fixture derived from real app
+  exports, with tests asserting the panel's output matches it key-for-key. If the
+  undocumented format drifts — on our side or upstream — the tests point at exactly
+  which key set diverged, instead of configs silently failing in the field.
+
+### Fixed
+- **Redeploy never overwrites a config it doesn't recognize.** The "recreate a
+  clientless legacy config as 2.0" path now fires only for a genuinely-recognized
+  AmneziaWG 1.0 config (single-value `H1`, no `I1`). An unfamiliar future format
+  (e.g. a hypothetical AWG 3.0) is preserved and logged rather than rewritten,
+  guarding against upstream-format-driven config loss.
+
 ## [0.43.5] — 2026-07-15
 
 ### Fixed

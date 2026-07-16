@@ -1,0 +1,48 @@
+{
+  "_source": "Декодированные РЕАЛЬНЫЕ экспорты приложения AmneziaVPN (16.07.2026): full-access ('Поделиться → Полный доступ') и клиентская ссылка ('Для приложения AmneziaVPN'). Секреты вырезаны — фиксируем ТОЛЬКО структуру (наборы ключей + инварианты). Если апстрим сменит формат, контракт-тест укажет, какой набор ключей разъехался. При смене формата: пере-декодировать свежий экспорт приложения и обновить этот файл.",
+  "full_access": {
+    "top_keys": [
+      "containers", "defaultContainer", "description", "dns1", "dns2",
+      "hostName", "password", "port", "userName"
+    ],
+    "container_entry_keys": ["awg", "container"],
+    "awg_keys": [
+      "H1", "H2", "H3", "H4",
+      "I1", "I2", "I3", "I4", "I5",
+      "Jc", "Jmax", "Jmin",
+      "S1", "S2", "S3", "S4",
+      "port", "protocol_version", "subnet_address", "transport_proto"
+    ],
+    "awg_invariants": {
+      "protocol_version": "2",
+      "transport_proto": "udp"
+    }
+  },
+  "client_link": {
+    "top_keys": [
+      "containers", "defaultContainer", "description", "dns1", "dns2", "hostName"
+    ],
+    "container_entry_keys": ["awg", "container"],
+    "awg_keys": [
+      "H1", "H2", "H3", "H4",
+      "I1", "I2", "I3", "I4", "I5",
+      "Jc", "Jmax", "Jmin",
+      "S1", "S2", "S3", "S4",
+      "last_config", "port", "protocol_version", "subnet_address", "transport_proto"
+    ],
+    "awg_invariants": {
+      "protocol_version": "2",
+      "transport_proto": "udp"
+    },
+    "last_config_keys": [
+      "H1", "H2", "H3", "H4",
+      "I1", "I2", "I3", "I4", "I5",
+      "Jc", "Jmax", "Jmin",
+      "S1", "S2", "S3", "S4",
+      "allowed_ips", "clientId", "client_ip", "client_priv_key", "client_pub_key",
+      "config", "hostName", "mtu", "persistent_keep_alive", "port", "psk_key",
+      "server_pub_key"
+    ]
+  },
+  "default_container": "amnezia-awg2"
+}

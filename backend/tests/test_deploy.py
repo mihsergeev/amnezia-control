@@ -84,16 +84,50 @@ def test_build_script_deploy() -> None:
     cfg = deploy.generate_server_config(47180)
     script = deploy.build_script("deploy", 47180, cfg)
     assert "docker build -t $IMG" in script
-    assert "docker pull amneziavpn/amneziawg-go:latest" in script  # для digest-версии
     assert 'if [ ! -f "$D/awg0.conf" ]; then' in script  # сохранение конфига
     assert "DEPLOY_DONE" in script
     assert "trap 'echo DEPLOY_ERROR' ERR" in script
 
 
-def test_build_script_update_pulls() -> None:
+def test_deploy_pins_base_image_update_uses_latest() -> None:
+    # D: новый деплой пинится на известный digest, update тянет :latest намеренно
     cfg = deploy.generate_server_config(47180)
-    script = deploy.build_script("update", 47180, cfg)
-    assert "docker pull amneziavpn/amneziawg-go:latest" in script
+    deploy_script = deploy.build_script("deploy", 47180, cfg)
+    adopt_script = deploy.build_script("adopt", 47180, cfg)
+    update_script = deploy.build_script("update", 47180, cfg)
+    pinned = f"amneziavpn/amneziawg-go@{deploy.PINNED_BASE_DIGEST}"
+    # deploy/adopt пинятся на digest и НЕ тянут :latest
+    assert f"docker pull {pinned}" in deploy_script
+    assert "amneziavpn/amneziawg-go:latest" not in deploy_script
+    assert f"docker pull {pinned}" in adopt_script
+    assert "amneziavpn/amneziawg-go:latest" not in adopt_script
+    # update тянет :latest (явное обновление образа)
+    assert "docker pull amneziavpn/amneziawg-go:latest" in update_script
+    assert deploy.PINNED_BASE_DIGEST not in update_script
+    # оба режима пишут digest-маркер для детекта версий
+    assert deploy.BASE_DIGEST_MARKER in deploy_script
+    assert deploy.BASE_DIGEST_MARKER in update_script
+
+
+def test_build_script_readback_fails_if_iface_down() -> None:
+    # C: readback — если awg0 не слушает, деплой печатает DEPLOY_ERROR и выходит,
+    # а не помечает битую ноду как готовую (раньше был `|| true` + всегда DEPLOY_DONE)
+    cfg = deploy.generate_server_config(47180)
+    script = deploy.build_script("deploy", 47180, cfg)
+    assert 'grep -qE "listening port"' in script
+    assert "READBACK" in script
+    # DEPLOY_ERROR должен стоять ДО безусловного DEPLOY_DONE в проверке readback
+    readback = script[script.index("AWGSHOW="):]
+    assert "echo DEPLOY_ERROR; exit 1" in readback
+
+
+def test_build_script_recreates_only_recognized_legacy() -> None:
+    # C: пересоздаём как 2.0 ТОЛЬКО legacy 1.0 (одиночный H1), незнакомый формат
+    # (без I1, но H1 не одиночный) НЕ переписываем
+    cfg = deploy.generate_server_config(47180)
+    script = deploy.build_script("deploy", 47180, cfg)
+    assert 'grep -qE "^H1 *= *[0-9]+ *$"' in script  # признак именно 1.0
+    assert "формат не распознан, НЕ переписываю" in script
 
 
 def test_embedded_dockerfile_decodes() -> None:
@@ -102,7 +136,8 @@ def test_embedded_dockerfile_decodes() -> None:
     # находим base64-блоб Dockerfile и проверяем, что он декодируется в наш Dockerfile
     b64s = re.findall(r"echo ([A-Za-z0-9+/=]{40,}) \| base64 -d", script)
     decoded = [base64.b64decode(b).decode() for b in b64s]
-    assert any("FROM amneziavpn/amneziawg-go:latest" in d for d in decoded)
+    # deploy пинится на digest → FROM ...@sha256:...
+    assert any(f"FROM amneziavpn/amneziawg-go@{deploy.PINNED_BASE_DIGEST}" in d for d in decoded)
     assert any("[Interface]" in d for d in decoded)  # конфиг тоже вшит
 
 
