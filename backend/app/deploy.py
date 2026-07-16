@@ -18,8 +18,21 @@ import httpx
 
 from app import awg
 
-BASE_IMAGE = "amneziavpn/amneziawg-go:latest"
 BASE_REPO = "amneziavpn/amneziawg-go"
+# Известный рабочий digest базового образа. НОВЫЕ развёртывания (deploy/adopt)
+# пинятся на него — чтобы внезапно сломанный `:latest` на Docker Hub не поломал
+# установку на свежих нодах. Обновление образа — ЯВНОЕ действие (mode="update",
+# кнопка «Обновить» в UI), оно намеренно тянет `:latest`. Порядок обновления пина:
+# дождаться нового latest → проверить его canary/тестом → вписать сюда новый digest.
+PINNED_BASE_DIGEST = (
+    "sha256:acef5ae84808a9568448e9d8c7a96f640a5ccc590b0f8dfbc2df9f9dc0e848c9"
+)  # latest на 2026-06-17
+BASE_IMAGE_LATEST = f"{BASE_REPO}:latest"
+BASE_IMAGE_PINNED = f"{BASE_REPO}@{PINNED_BASE_DIGEST}"
+# файл-маркер на ноде: точный digest базового образа, на котором собран текущий
+# контейнер (пишется деплоем). Детект версий читает его — не зависит от того,
+# каким рефом (пин/тег) тянули, и переживает уход `:latest` вперёд.
+BASE_DIGEST_MARKER = "/opt/acontrol/base-digest"
 IMAGE = "acontrol-awg"
 CONTAINER = "amnezia-awg2"
 SUBNET = "10.8.1.0/24"
@@ -41,14 +54,18 @@ iptables -C FORWARD -m state --state ESTABLISHED,RELATED -j ACCEPT 2>/dev/null \
 exec tail -f /dev/null
 """
 
-DOCKERFILE = """FROM amneziavpn/amneziawg-go:latest
-RUN apk add --no-cache bash iptables iproute2 2>/dev/null \\
-  || (apt-get update && apt-get install -y --no-install-recommends bash iptables iproute2) \\
-  || true
-COPY start.sh /opt/amnezia/start.sh
-RUN chmod +x /opt/amnezia/start.sh
-ENTRYPOINT ["/opt/amnezia/start.sh"]
-"""
+def _dockerfile(base_ref: str) -> str:
+    """Dockerfile надстройки над базовым образом. base_ref — пин (repo@sha256:…)
+    для обычного деплоя или repo:latest для явного обновления."""
+    return (
+        f"FROM {base_ref}\n"
+        "RUN apk add --no-cache bash iptables iproute2 2>/dev/null \\\n"
+        "  || (apt-get update && apt-get install -y --no-install-recommends bash iptables iproute2) \\\n"
+        "  || true\n"
+        "COPY start.sh /opt/amnezia/start.sh\n"
+        "RUN chmod +x /opt/amnezia/start.sh\n"
+        'ENTRYPOINT ["/opt/amnezia/start.sh"]\n'
+    )
 
 # идемпотентный подъём интерфейса + NAT внутри контейнера
 _BRINGUP = (
@@ -136,11 +153,17 @@ def generate_server_config(port: int) -> dict[str, str]:
 
 
 def build_script(mode: str, port: int, cfg: dict[str, str]) -> str:
-    """mode: 'deploy' или 'update' — оба тянут свежий базовый образ.
+    """mode: 'deploy' | 'adopt' | 'update'.
+
+    deploy/adopt пинятся на PINNED_BASE_DIGEST (известный рабочий образ) — так
+    сломанный `:latest` не ломает новые установки. update ТЯНЕТ `:latest`
+    намеренно (явное обновление образа кнопкой). Точный digest собранного образа
+    пишется в BASE_DIGEST_MARKER на ноде для детекта версий.
 
     Явный `docker pull` обязателен: без него buildkit не оставляет базовый
     образ тегированным, и версию (digest) потом не прочитать.
     """
+    base_ref = BASE_IMAGE_LATEST if mode == "update" else BASE_IMAGE_PINNED
     parts = [
         "#!/bin/bash",
         "set -e",
@@ -165,17 +188,21 @@ def build_script(mode: str, port: int, cfg: dict[str, str]) -> str:
         'sudo firewall-cmd --reload >/dev/null 2>&1 || true; fi',
         "",
         'log "[3/6] Dockerfile + start.sh"',
-        'sudo mkdir -p "$BUILD" "$D"',
-        f'echo {_b64(DOCKERFILE)} | base64 -d | sudo tee "$BUILD/Dockerfile" >/dev/null',
+        'sudo mkdir -p "$BUILD" "$D" /opt/acontrol',
+        f'echo {_b64(_dockerfile(base_ref))} | base64 -d | sudo tee "$BUILD/Dockerfile" >/dev/null',
         f'echo {_b64(START_SH)} | base64 -d | sudo tee "$BUILD/start.sh" >/dev/null',
         "",
-        f'log "[4/6] базовый образ {BASE_IMAGE} + сборка"',
-        f'sudo docker pull {BASE_IMAGE} 2>&1 | tail -1',
+        f'log "[4/6] базовый образ {base_ref} + сборка"',
+        f'sudo docker pull {base_ref} 2>&1 | tail -1',
         # `| tail` маскирует код возврата build → без проверки PIPESTATUS битая
         # сборка прошла бы дальше к rm+run (снос рабочего контейнера ради
         # несобравшегося образа). Прерываемся ДО удаления контейнера.
         'sudo docker build -t $IMG "$BUILD" 2>&1 | tail -3; '
         '[ ${PIPESTATUS[0]} -eq 0 ] || { echo DEPLOY_ERROR; exit 1; }',
+        # запоминаем точный digest базового образа, на котором собрались, — детект
+        # версий читает этот маркер (не зависит от того, пином или тегом тянули).
+        f'sudo docker inspect --format "{{{{index .RepoDigests 0}}}}" {base_ref} 2>/dev/null '
+        f'| sed "s/.*@//" | sudo tee {BASE_DIGEST_MARKER} >/dev/null || true',
         "",
         'log "[5/6] конфиг + контейнер"',
         # КРИТИЧНО: перед пересборкой вытаскиваем текущий конфиг из ЖИВОГО
@@ -207,17 +234,24 @@ def build_script(mode: str, port: int, cfg: dict[str, str]) -> str:
         '  fi',
         '  log "конфиг перечитан из контейнера $SRC"',
         'fi',
-        # legacy-конфиг (без параметра I1 = AmneziaWG 1.0) БЕЗ клиентов —
-        # пересоздаём как 2.0, иначе приложение AmneziaVPN метит его «Legacy»
-        # и им нельзя нормально подключаться/выдавать конфиги. Если пиры есть —
-        # НЕ трогаем: смена обфускации разорвала бы им хендшейк.
-        # I1 у 2.0 может быть активным ИЛИ закомментированным (# I1 = …, как у
-        # Amnezia на сервере) — оба варианта считаем 2.0, чтобы не пересоздавать зря.
+        # Пересоздаём как 2.0 ТОЛЬКО распознанный legacy AmneziaWG 1.0 без клиентов
+        # (иначе приложение метит его «Legacy» и им нельзя нормально пользоваться).
+        # Признак 1.0: нет I1 (ни активного, ни `# I1`) И H1 — ОДИНОЧНОЕ число (у 2.0
+        # H1 — диапазон «low-high»). Если пиры есть — НЕ трогаем (смена обфускации
+        # разорвёт хендшейк). Если формат НЕ распознан (нет I1, но H1 не одиночный —
+        # напр. будущий AWG 3.0) — НИЧЕГО не переписываем: сохраняем и логируем,
+        # чтобы неизвестный апстрим-формат не был затёрт нашим (защита от потери).
         'if sudo test -f "$D/awg0.conf" && ! sudo grep -qE "^#? *I1" "$D/awg0.conf"; then',
-        '  PEERS=$(sudo grep -c "^\\[Peer\\]" "$D/awg0.conf" 2>/dev/null || echo 0)',
-        '  if [ "$PEERS" = "0" ]; then',
-        '    sudo rm -f "$D/awg0.conf"',
-        '    log "legacy-конфиг без клиентов — пересоздаю как AmneziaWG 2.0"',
+        '  if sudo grep -qE "^H1 *= *[0-9]+ *$" "$D/awg0.conf"; then',
+        '    PEERS=$(sudo grep -c "^\\[Peer\\]" "$D/awg0.conf" 2>/dev/null || echo 0)',
+        '    if [ "$PEERS" = "0" ]; then',
+        '      sudo rm -f "$D/awg0.conf"',
+        '      log "legacy 1.0 без клиентов — пересоздаю как AmneziaWG 2.0"',
+        '    else',
+        '      log "legacy 1.0 с клиентами — сохранён, не трогаю"',
+        '    fi',
+        '  else',
+        '    log "конфиг без I1 и не legacy 1.0 — формат не распознан, НЕ переписываю"',
         '  fi',
         'fi',
         'if [ ! -f "$D/awg0.conf" ]; then',
@@ -262,7 +296,16 @@ def build_script(mode: str, port: int, cfg: dict[str, str]) -> str:
         f'sudo docker exec $CONT sh -c {_shell_quote(_BRINGUP)}',
         f'echo {_b64(_systemd_unit())} | base64 -d | sudo tee /etc/systemd/system/awg-up.service >/dev/null',
         "sudo systemctl daemon-reload && sudo systemctl enable awg-up.service >/dev/null 2>&1",
-        'sudo docker exec $CONT wg show awg0 | grep -E "interface|listening" || true',
+        # READBACK-проверка: убеждаемся, что интерфейс РЕАЛЬНО поднялся и слушает,
+        # а не молча провалился (awg-quick up мог упасть — напр. новый базовый образ
+        # сменил поведение). Раньше здесь стоял `|| true` и DEPLOY_DONE печатался
+        # всегда — битая нода помечалась «готова». Теперь при неуспехе — DEPLOY_ERROR.
+        'AWGSHOW=$(sudo docker exec $CONT wg show awg0 2>/dev/null || true)',
+        'if ! printf "%s" "$AWGSHOW" | grep -qE "listening port"; then '
+        'echo "READBACK: интерфейс awg0 не поднялся (awg-quick up не сработал)"; '
+        'echo DEPLOY_ERROR; exit 1; fi',
+        'printf "%s" "$AWGSHOW" | grep -E "interface|listening" || true',
+        'log "readback: awg0 поднят и слушает — ok"',
         "echo DEPLOY_DONE",
     ]
     return "\n".join(parts) + "\n"
@@ -551,14 +594,25 @@ async def read_status(
 
 
 async def node_base_digest(conn: asyncssh.SSHClientConnection) -> str | None:
-    cmd = (
-        f"docker inspect --format '{{{{index .RepoDigests 0}}}}' {BASE_IMAGE} 2>/dev/null "
-        f"|| sudo docker inspect --format '{{{{index .RepoDigests 0}}}}' {BASE_IMAGE} 2>/dev/null"
+    # 1) маркер, записанный деплоем — точный digest собранного образа (не зависит
+    # от того, пином или тегом тянули; переживает уход :latest вперёд).
+    marker = await conn.run(
+        f"cat {BASE_DIGEST_MARKER} 2>/dev/null || sudo -n cat {BASE_DIGEST_MARKER} 2>/dev/null",
+        check=False,
     )
-    result = await conn.run(cmd, check=False)
-    out = (result.stdout or "").strip()
-    if "@sha256:" in out:
-        return out.split("@", 1)[1]
+    mout = (marker.stdout or "").strip()
+    if mout.startswith("sha256:"):
+        return mout
+    # 2) фолбэк для нод, развёрнутых до появления маркера: inspect пина, затем тега.
+    for ref in (BASE_IMAGE_PINNED, BASE_IMAGE_LATEST):
+        cmd = (
+            f"docker inspect --format '{{{{index .RepoDigests 0}}}}' {ref} 2>/dev/null "
+            f"|| sudo docker inspect --format '{{{{index .RepoDigests 0}}}}' {ref} 2>/dev/null"
+        )
+        result = await conn.run(cmd, check=False)
+        out = (result.stdout or "").strip()
+        if "@sha256:" in out:
+            return out.split("@", 1)[1]
     return None
 
 
