@@ -7,7 +7,7 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="VPNPANEL_", env_file=".env")
 
     app_name: str = "Amnezia Control"
-    version: str = "0.44.0"
+    version: str = "0.44.1"
     debug: bool = False
 
     db_url: str = "sqlite+aiosqlite:///./data/panel.db"
@@ -52,6 +52,10 @@ class Settings(BaseSettings):
     alert_telegram_token: str = ""
     alert_telegram_chat: str = ""
     alert_webhook: str = ""
+
+    # Публичный URL панели — пишется в пульс, чтобы хостовый watchdog называл
+    # КОНКРЕТНУЮ панель со ссылкой (когда в один чат шлют 2-3 панели — видно, чья).
+    panel_url: str = ""
 
     # Алерт «мало места на диске ноды»: порог в % (0 = выключить)
     disk_alert_percent: int = 90

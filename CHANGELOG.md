@@ -4,6 +4,26 @@ All notable changes to Amnezia Control are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.44.1] — 2026-07-16
+
+### Fixed
+- **No more false "alert channel is broken" pages from a single transient.** The
+  heartbeat's channel self-test (`getMe`) now retries once, and the channel is
+  only marked down after `CHANNEL_FAIL_STRIKES` (3) consecutive failures — a brief
+  network/DNS blip or the restart during a deploy no longer trips it, while a real
+  outage (revoked token, Telegram blocked) still persists past the streak and
+  alerts. An invalid-token response (401/404) fails fast without waiting out the
+  retry. The host watchdog (`ops/panel-watchdog.sh`) gained the same defense: it
+  pages only after 2 consecutive problem detections (streak debounce, state file
+  stays backward-compatible), and `HB`/`MAX_AGE`/`STRIKES` are now env-tunable.
+
+### Added
+- **Watchdog alerts name the specific panel with a link.** The heartbeat now
+  records the panel's public URL (`panel=…`, from the new `panel_url` setting /
+  `VPNPANEL_PANEL_URL`, derived from `ACONTROL_DOMAIN` by default), and the
+  watchdog puts it in the alert — so when several panels report to one Telegram
+  chat, it's immediately clear which one is alerting.
+
 ## [0.44.0] — 2026-07-16
 
 ### Changed
