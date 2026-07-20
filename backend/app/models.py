@@ -172,6 +172,13 @@ class ServerStatus(Base):
     changed_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
+    # Момент ПЕРВОГО наблюдения офлайна в текущей серии (сбрасывается, как только
+    # нода ответила). Пока статус ещё «online», это таймер антидребезга: падением
+    # считаем лишь непрерывную недоступность дольше server_down_minutes. В БД, а не
+    # в памяти — чтобы рестарт панели не обнулял отсчёт посреди реальной аварии.
+    down_since: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, default=None
+    )
 
 
 class AppSetting(Base):

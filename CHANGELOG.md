@@ -4,6 +4,32 @@ All notable changes to Amnezia Control are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.45.0] — 2026-07-17
+
+### Changed
+- **A server is only reported down after sustained unavailability (30 min by
+  default), so flapping nodes stop paging you.** A node that blinked offline for
+  two minutes and came back used to fire a "server is down" alert followed by a
+  "back online" one — pure noise from transient network latency, at 3 AM. The
+  threshold is now measured in **time**, not in collection cycles: the new
+  `server_down_minutes` setting (`VPNPANEL_SERVER_DOWN_MINUTES`, default `30`,
+  `0` disables the debounce) replaces `server_down_misses`, so it no longer
+  drifts when `stats_interval` changes. Any successful poll resets the timer, so
+  only *continuous* downtime counts — and because a recovery alert is only sent
+  if a down alert was, flapping now produces complete silence. The countdown is
+  persisted (`server_status.down_since`, migration `0021`) rather than kept in
+  memory, so restarting the panel mid-outage doesn't restart the clock.
+  The alert text states the duration ("недоступен больше 30 мин") to make clear
+  it's a real outage, not a blip. Guiding rule: an alert means a duty engineer
+  actually has to intervene.
+
+### Added
+- **Alerts link to the panel.** The server name is a clickable link in Telegram
+  (HTML, with the name escaped so `<`/`&` can't break parsing); webhooks get the
+  URL on its own line since they don't render markup. The link comes from
+  `panel_url`, so when several panels report into one chat it's obvious which one
+  is paging and you can jump straight to it.
+
 ## [0.44.1] — 2026-07-16
 
 ### Fixed
