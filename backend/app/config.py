@@ -7,7 +7,7 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="VPNPANEL_", env_file=".env")
 
     app_name: str = "Amnezia Control"
-    version: str = "0.44.1"
+    version: str = "0.45.0"
     debug: bool = False
 
     db_url: str = "sqlite+aiosqlite:///./data/panel.db"
@@ -44,9 +44,12 @@ class Settings(BaseSettings):
     # За сколько дней до истечения слать предупреждающий алерт (0 = выключить)
     expiry_warn_days: int = 3
 
-    # Сколько подряд пропущенных циклов сбора считать нодой «упавшей» перед
-    # алертом (антидребезг: одна транзиентная ошибка не поднимает ложную тревогу)
-    server_down_misses: int = 2
+    # Сколько минут нода должна быть НЕПРЕРЫВНО недоступна, прежде чем поднять
+    # алерт. Порог во ВРЕМЕНИ, а не в циклах сбора — не «поедет» при смене
+    # stats_interval. Короткие сетевые блипы (нода вернулась через 2-3 минуты)
+    # дежурного будить не должны: алерт шлём только когда реально нужно
+    # вмешательство. 0 = алертить с первого же пропуска (без антидребезга).
+    server_down_minutes: int = 30
 
     # Алерты о падении серверов (Telegram / вебхук)
     alert_telegram_token: str = ""

@@ -1,16 +1,15 @@
+from datetime import datetime, timedelta, timezone
+
 import httpx
 import pytest
 
 from app import alerts, config, settings_store
 from app.db import Base, create_engine_and_factory
 
-
-@pytest.fixture(autouse=True)
-def _reset_down_streak():
-    """Антидребезг падений держит стрик в памяти модуля — чистим между тестами."""
-    alerts._down_streak.clear()
-    yield
-    alerts._down_streak.clear()
+# «сейчас» и момент заведомо позже порога недоступности — антидребезг теперь
+# ВРЕМЕННОЙ (server_down_minutes), состояние в БД, а не в памяти модуля
+NOW = datetime(2026, 7, 17, 12, 0, tzinfo=timezone.utc)
+LATER = NOW + timedelta(minutes=31)
 
 
 @pytest.fixture
@@ -32,7 +31,7 @@ async def test_reconcile_alerts_on_transition(session, monkeypatch):
 
     sent: list[str] = []
 
-    async def fake_send(cfg, text):
+    async def fake_send(cfg, text, *, html_text=None):
         sent.append(text)
         return []
 
@@ -40,38 +39,51 @@ async def test_reconcile_alerts_on_transition(session, monkeypatch):
 
     names = {1: "n1"}
     # первое наблюдение — только фиксируем статус, без алерта
-    assert await alerts.reconcile(session, settings, {1: True}, names) == []
+    assert await alerts.reconcile(session, settings, {1: True}, names, now=NOW) == []
     assert sent == []
-    # антидребезг: одиночный офлайн (по умолчанию нужно 2 подряд) НЕ алертит
-    assert await alerts.reconcile(session, settings, {1: False}, names) == []
+    # офлайн замечен, но порог (30 мин) ещё не выбран — молчим
+    assert await alerts.reconcile(session, settings, {1: False}, names, now=NOW) == []
     assert sent == []
-    # второй подряд офлайн — теперь падение
-    assert await alerts.reconcile(session, settings, {1: False}, names) == [(1, False)]
+    # всё ещё офлайн через минуту — по-прежнему блип, не алертим
+    assert await alerts.reconcile(
+        session, settings, {1: False}, names, now=NOW + timedelta(minutes=1)
+    ) == []
+    assert sent == []
+    # недоступен непрерывно дольше порога — вот теперь падение
+    assert await alerts.reconcile(
+        session, settings, {1: False}, names, now=LATER
+    ) == [(1, False)]
     assert len(sent) == 1 and "недоступен" in sent[0]
     # восстановился — алерт сразу (без задержки)
-    assert await alerts.reconcile(session, settings, {1: True}, names) == [(1, True)]
+    assert await alerts.reconcile(session, settings, {1: True}, names, now=LATER) == [
+        (1, True)
+    ]
     assert len(sent) == 2 and "онлайн" in sent[1]
 
 
-async def test_reconcile_debounces_transient_offline(session, monkeypatch):
-    """Транзиентный офлайн между онлайнами не поднимает ложную тревогу."""
+async def test_reconcile_debounces_flapping_offline(session, monkeypatch):
+    """Регресс на спам: нода «моргает» (офлайн 2 мин → онлайн) часами — ни одного
+    алерта, т.к. непрерывной недоступности дольше порога так и не набралось."""
     settings = config.get_settings()
     await settings_store.set_alert_config(session, "TOKEN", "123", "")
     sent: list[str] = []
 
-    async def fake_send(cfg, text):
+    async def fake_send(cfg, text, *, html_text=None):
         sent.append(text)
         return []
 
     monkeypatch.setattr(alerts, "send_alert", fake_send)
 
     names = {1: "n1"}
-    await alerts.reconcile(session, settings, {1: True}, names)
-    assert await alerts.reconcile(session, settings, {1: False}, names) == []  # 1 пропуск
-    assert await alerts.reconcile(session, settings, {1: True}, names) == []   # снова онлайн
-    # стрик сбросился — одиночный офлайн опять не алертит
-    assert await alerts.reconcile(session, settings, {1: False}, names) == []
-    assert sent == []
+    await alerts.reconcile(session, settings, {1: True}, names, now=NOW)
+    # 10 циклов «упал на 2 минуты и вернулся» подряд — таймер каждый раз обнуляется
+    t = NOW
+    for _ in range(10):
+        t += timedelta(minutes=9)
+        assert await alerts.reconcile(session, settings, {1: False}, names, now=t) == []
+        t += timedelta(minutes=2)
+        assert await alerts.reconcile(session, settings, {1: True}, names, now=t) == []
+    assert sent == []  # за полтора часа моргания — тишина, дежурного не будим
 
 
 async def test_reconcile_no_alert_when_unconfigured(session, monkeypatch):
@@ -79,18 +91,48 @@ async def test_reconcile_no_alert_when_unconfigured(session, monkeypatch):
 
     sent: list[str] = []
 
-    async def fake_send(cfg, text):
+    async def fake_send(cfg, text, *, html_text=None):
         sent.append(text)
         return []
 
     monkeypatch.setattr(alerts, "send_alert", fake_send)
 
     names = {1: "n1"}
-    await alerts.reconcile(session, settings, {1: True}, names)
-    # переход (после 2 пропусков) есть, но каналы не настроены → send не вызывается
-    await alerts.reconcile(session, settings, {1: False}, names)
-    assert await alerts.reconcile(session, settings, {1: False}, names) == [(1, False)]
+    await alerts.reconcile(session, settings, {1: True}, names, now=NOW)
+    # переход (после порога недоступности) есть, но каналы не настроены → send не зовём
+    await alerts.reconcile(session, settings, {1: False}, names, now=NOW)
+    assert await alerts.reconcile(
+        session, settings, {1: False}, names, now=LATER
+    ) == [(1, False)]
     assert sent == []
+
+
+async def test_down_alert_carries_panel_link(session, monkeypatch):
+    """В алерте должна быть ссылка на панель: в Telegram — кликабельным именем
+    (HTML), вебхуку — отдельной строкой. Имя экранируется."""
+    settings = config.get_settings()
+    settings.panel_url = "https://acontrol.example/"
+    await settings_store.set_alert_config(session, "TOKEN", "123", "")
+    sent: list[tuple[str, str | None]] = []
+
+    async def fake_send(cfg, text, *, html_text=None):
+        sent.append((text, html_text))
+        return []
+
+    monkeypatch.setattr(alerts, "send_alert", fake_send)
+
+    names = {1: "srv<&>"}
+    await alerts.reconcile(session, settings, {1: True}, names, now=NOW)
+    await alerts.reconcile(session, settings, {1: False}, names, now=NOW)
+    assert await alerts.reconcile(
+        session, settings, {1: False}, names, now=LATER
+    ) == [(1, False)]
+
+    plain, html_text = sent[0]
+    assert "https://acontrol.example" in plain  # вебхуку — ссылка строкой
+    assert '<a href="https://acontrol.example">' in html_text  # TG — кликабельно
+    assert "srv&lt;&amp;&gt;" in html_text  # имя экранировано
+    assert "больше 30 мин" in plain  # видно, что это не блип
 
 
 async def test_alerts_api_roundtrip(
