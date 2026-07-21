@@ -3,6 +3,7 @@ import { ApiError, downloadBackup, getToken, restoreBackup, setToken } from './a
 import { LoginPage } from './LoginPage'
 import { ServersPage } from './ServersPage'
 import { Dashboard } from './Dashboard'
+import { ApiKeysPage } from './ApiKeysPage'
 import { AuditPage } from './AuditPage'
 import { Menu } from './Menu'
 import { BackupsModal } from './BackupsModal'
@@ -12,7 +13,7 @@ import { PasswordModal } from './PasswordModal'
 import { useI18n } from './i18n'
 import './App.css'
 
-type View = 'servers' | 'overview' | 'audit'
+type View = 'servers' | 'overview' | 'audit' | 'apikeys'
 
 function App() {
   const { t, lang, setLang } = useI18n()
@@ -132,6 +133,12 @@ function App() {
             >
               {t('Журнал')}
             </button>
+            <button
+              className={view === 'apikeys' ? 'navlink navlink-active' : 'navlink'}
+              onClick={() => setView('apikeys')}
+            >
+              {t('API-ключи')}
+            </button>
           </nav>
         )}
         <span className="header-right">
@@ -205,6 +212,8 @@ function App() {
           <Dashboard onUnauthorized={logout} />
         ) : view === 'audit' ? (
           <AuditPage onUnauthorized={logout} />
+        ) : view === 'apikeys' ? (
+          <ApiKeysPage onUnauthorized={logout} />
         ) : (
           <ServersPage onUnauthorized={logout} />
         )

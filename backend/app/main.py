@@ -6,6 +6,7 @@ from fastapi import FastAPI
 
 from app.api import (
     alerts,
+    apikeys,
     audit,
     auth,
     awg,
@@ -17,6 +18,7 @@ from app.api import (
     openvpn,
     servers,
     stats,
+    v1,
     xray,
 )
 from app.autobackup import backup_loop
@@ -69,15 +71,25 @@ def create_app() -> FastAPI:
         hb_task.cancel()
         await engine.dispose()
 
-    # доки/схему API отдаём только в debug — в проде не раскрываем поверхность API
-    docs_url = "/api/docs" if settings.debug else None
-    openapi_url = "/api/openapi.json" if settings.debug else None
+    # Доки/схему отдаём в debug ИЛИ когда явно включены (api_docs) — интегратору
+    # нужен читаемый контракт /api/v1. Сами ручки при этом всё равно закрыты
+    # (JWT или X-API-Key), доки раскрывают только форму запросов.
+    show_docs = settings.debug or settings.api_docs
     app = FastAPI(
         title=settings.app_name,
         version=settings.version,
-        docs_url=docs_url,
-        openapi_url=openapi_url,
+        docs_url="/api/docs" if show_docs else None,
+        openapi_url="/api/openapi.json" if show_docs else None,
         lifespan=lifespan,
+        description=(
+            "Панель управления VPN-серверами.\n\n"
+            "**`/api/v1/*` — интеграционный API** со стабильным контрактом для "
+            "внешних систем: аутентификация ключом в заголовке `X-API-Key` "
+            "(создать ключ: в панели → «API-ключи»). Права ключа ограничены "
+            "клиентскими операциями AmneziaWG и чтением списка серверов.\n\n"
+            "Остальные ручки обслуживают веб-интерфейс панели, требуют "
+            "пользовательский JWT и могут меняться без сохранения совместимости."
+        ),
     )
     app.state.engine = engine
     app.state.session_factory = session_factory
@@ -95,6 +107,8 @@ def create_app() -> FastAPI:
     app.include_router(fullaccess.router, prefix="/api")
     app.include_router(audit.router, prefix="/api")
     app.include_router(alerts.router, prefix="/api")
+    app.include_router(apikeys.router, prefix="/api")
+    app.include_router(v1.router, prefix="/api")
     return app
 
 

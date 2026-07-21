@@ -207,6 +207,29 @@ Telegram / webhook alert channels are configured **from the UI** (🔔 button) a
 
 ---
 
+## Integration API
+
+Other systems (a billing panel, your own portal) can manage AmneziaWG clients over
+a versioned HTTP API at `/api/v1`. Interactive docs: **`/api/docs`**.
+
+Create a key in the panel under **API keys**. It is shown once — store it right
+away, only a hash is kept. Send it in the `X-API-Key` header:
+
+```bash
+curl -H "X-API-Key: ack_..." https://panel.example.com/api/v1/servers
+
+# issue a client -> returns the .conf text and a vpn:// link
+curl -X POST -H "X-API-Key: ack_..." -H "Content-Type: application/json"   -d '{"name": "alice"}'   https://panel.example.com/api/v1/servers/1/clients
+
+# revoke (public key is base64 -> url-encode it)
+curl -X DELETE -H "X-API-Key: ack_..."   "https://panel.example.com/api/v1/servers/1/clients?public_key=abc%2Fdef%3D"
+```
+
+A key's permissions are deliberately narrow: it may list servers and issue,
+fetch, revoke, pause and resume clients — it **cannot** deploy or delete servers,
+change settings, export full access, or create further keys. Revoke a key at any
+time from the same page; everything it did is in the audit log as `apikey:<name>`.
+
 ## Security notes
 
 - Set a strong `ACONTROL_JWT_SECRET` (`openssl rand -hex 32`) and admin password — **the panel refuses to start** on empty/default values.
