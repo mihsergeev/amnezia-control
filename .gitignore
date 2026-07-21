@@ -22,3 +22,7 @@ data/
 .idea/
 .vscode/
 .DS_Store
+
+# ассеты Swagger UI копируются из npm-пакета на сборке (см. frontend/scripts/copy-swagger.mjs)
+frontend/public/swagger/swagger-ui.css
+frontend/public/swagger/swagger-ui-bundle.js

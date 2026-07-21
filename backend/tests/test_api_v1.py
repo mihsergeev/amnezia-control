@@ -112,3 +112,16 @@ async def test_docs_exposed_for_integrators(client, path):
     """Контракт должен быть читаем — иначе интегрировать вслепую."""
     r = await client.get(path)
     assert r.status_code == 200
+
+
+async def test_docs_page_survives_strict_csp(client):
+    """Регресс: штатная страница FastAPI грузила Swagger с внешнего CDN и
+    инициализировала его ИНЛАЙН-скриптом — CSP панели (script-src 'self', без
+    'unsafe-inline') резала и то, и другое, страница открывалась пустой.
+    Своя страница обязана обходиться своим origin и внешними файлами."""
+    html = (await client.get("/api/docs")).text
+    assert "cdn.jsdelivr" not in html and "unpkg.com" not in html  # без CDN
+    assert "<script>" not in html  # без инлайна: только <script src=...>
+    for asset in ("/swagger/swagger-ui.css", "/swagger/swagger-ui-bundle.js",
+                  "/swagger/swagger-init.js"):
+        assert asset in html

@@ -8,7 +8,8 @@
     "build": "tsc -b && vite build",
     "lint": "oxlint",
     "check-i18n": "node scripts/check-i18n.mjs",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "prebuild": "node scripts/copy-swagger.mjs"
   },
   "dependencies": {
     "qrcode": "^1.5.4",
@@ -22,6 +23,7 @@
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^6.0.3",
     "oxlint": "^1.74.0",
+    "swagger-ui-dist": "^5.32.10",
     "typescript": "~7.0.2",
     "vite": "^8.1.5"
   }

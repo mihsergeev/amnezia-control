@@ -3,6 +3,7 @@ from contextlib import asynccontextmanager
 from typing import AsyncIterator
 
 from fastapi import FastAPI
+from fastapi.responses import HTMLResponse
 
 from app.api import (
     alerts,
@@ -78,7 +79,11 @@ def create_app() -> FastAPI:
     app = FastAPI(
         title=settings.app_name,
         version=settings.version,
-        docs_url="/api/docs" if show_docs else None,
+        # Штатную страницу доков отключаем и отдаём свою (см. ниже): встроенная
+        # тянет JS/CSS с внешнего CDN и инициализируется ИНЛАЙН-скриптом, а CSP
+        # панели (script-src 'self', без 'unsafe-inline') блокирует и то, и то —
+        # страница открывалась пустой.
+        docs_url=None,
         openapi_url="/api/openapi.json" if show_docs else None,
         lifespan=lifespan,
         description=(
@@ -109,6 +114,28 @@ def create_app() -> FastAPI:
     app.include_router(alerts.router, prefix="/api")
     app.include_router(apikeys.router, prefix="/api")
     app.include_router(v1.router, prefix="/api")
+
+    if show_docs:
+        # Ассеты берём со своего origin (/swagger/* раздаёт nginx фронтенда из
+        # npm-пакета swagger-ui-dist), инициализацию — отдельным файлом, а не
+        # инлайном: так строгая CSP не ослабляется и внешний CDN не нужен —
+        # доки работают и в сети, где jsdelivr недоступен.
+        @app.get("/api/docs", include_in_schema=False)
+        async def swagger_ui() -> HTMLResponse:
+            return HTMLResponse(
+                "<!DOCTYPE html>"
+                '<html lang="ru"><head><meta charset="utf-8">'
+                '<meta name="viewport" content="width=device-width,initial-scale=1">'
+                '<meta name="robots" content="noindex,nofollow">'
+                f"<title>{settings.app_name} — API</title>"
+                '<link rel="stylesheet" href="/swagger/swagger-ui.css">'
+                "</head><body>"
+                '<div id="swagger-ui"></div>'
+                '<script src="/swagger/swagger-ui-bundle.js"></script>'
+                '<script src="/swagger/swagger-init.js"></script>'
+                "</body></html>"
+            )
+
     return app
 
 

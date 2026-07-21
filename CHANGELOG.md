@@ -4,6 +4,19 @@ All notable changes to Amnezia Control are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.46.1] — 2026-07-21
+
+### Fixed
+- **The API docs page at `/api/docs` opened blank.** FastAPI's stock Swagger page
+  pulls its JS/CSS from an external CDN and boots them with an *inline* script;
+  the panel's strict Content-Security-Policy (`script-src 'self'`, no
+  `'unsafe-inline'`) blocked both, so only an empty page loaded. Rather than
+  weakening the policy, the panel now serves Swagger UI from its own origin: the
+  assets are copied from the `swagger-ui-dist` package at build time and the
+  initialization lives in a separate file instead of inline. The CSP is unchanged,
+  and the docs now also work on networks where the CDN is unreachable — which
+  matters for a tool that often runs in exactly those networks.
+
 ## [0.46.0] — 2026-07-17
 
 ### Added
