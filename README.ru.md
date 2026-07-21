@@ -207,6 +207,30 @@ docker compose -f compose.yml -f compose.caddy.yml up -d --build
 
 ---
 
+## Интеграционный API
+
+Внешние системы (биллинг, свой портал) могут управлять клиентами AmneziaWG через
+версионированный HTTP API `/api/v1`. Интерактивная документация: **`/api/docs`**.
+
+Ключ создаётся в панели в разделе **API-ключи**. Он показывается один раз —
+сохраните сразу, в базе лежит только хэш. Передаётся в заголовке `X-API-Key`:
+
+```bash
+curl -H "X-API-Key: ack_..." https://panel.example.com/api/v1/servers
+
+# выдать клиента -> вернёт текст .conf и ссылку vpn://
+curl -X POST -H "X-API-Key: ack_..." -H "Content-Type: application/json"   -d '{"name": "alice"}'   https://panel.example.com/api/v1/servers/1/clients
+
+# отозвать (public key — base64, его нужно url-кодировать)
+curl -X DELETE -H "X-API-Key: ack_..."   "https://panel.example.com/api/v1/servers/1/clients?public_key=abc%2Fdef%3D"
+```
+
+Права ключа намеренно узкие: список серверов и операции с клиентами (выдать,
+забрать конфиг, отозвать, пауза/возобновление). Развернуть или удалить сервер,
+сменить настройки, забрать полный доступ или выпустить новые ключи им **нельзя**.
+Ключ отзывается в один клик там же; все его действия видны в журнале как
+`apikey:<имя>`.
+
 ## Безопасность
 
 - Задайте надёжные `ACONTROL_JWT_SECRET` (`openssl rand -hex 32`) и пароль админа — **на дефолтных/пустых панель не запустится**.

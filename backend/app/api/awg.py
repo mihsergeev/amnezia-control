@@ -94,6 +94,47 @@ def _amnezia_link(config: str, server: Server) -> str:
     return awg.build_amnezia_link(config, server.host, server.name, dns1, dns2)
 
 
+async def build_client_list(session, server_id: int, state) -> list[dict]:
+    """Живые пиры ноды + панельные данные (сохранён ли конфиг, заметка, срок) и
+    клиенты на паузе. Общая сборка для UI-эндпойнта и интеграционного /api/v1 —
+    чтобы оба показывали ровно один и тот же список."""
+    stored = set(
+        (
+            await session.scalars(
+                select(AwgConfig.public_key).where(AwgConfig.server_id == server_id)
+            )
+        ).all()
+    )
+    notes_by_pk = await _notes_map(session, server_id)
+    lim = await limits.limits_map(session, server_id, "awg")
+    paused = await pausestore.list_paused(session, server_id, "awg")
+    clients = []
+    for c in state.clients:
+        clients.append(
+            c.__dict__
+            | {
+                "has_config": c.public_key in stored,
+                "note": notes_by_pk.get(c.public_key, ""),
+                "expires_at": lim.get(c.public_key),
+                "paused": False,
+            }
+        )
+    # клиенты на паузе: их нет в живом конфиге — показываем из хранилища
+    live = {c["public_key"] for c in clients}
+    for cid, p in paused.items():
+        if cid in live:
+            continue
+        ip = p["data"].get("ip", "")
+        clients.append({
+            "name": p["name"], "public_key": cid,
+            "address": f"{ip}/32" if ip else "",
+            "latest_handshake": None, "rx_bytes": 0, "tx_bytes": 0, "endpoint": "",
+            "has_config": cid in stored, "note": notes_by_pk.get(cid, ""),
+            "expires_at": lim.get(cid), "paused": True,
+        })
+    return clients
+
+
 @router.get("", response_model=AwgStateOut)
 async def get_awg(server_id: int, _: CurrentUser, session: SessionDep) -> AwgStateOut:
     server = await _get_or_404(server_id, session)
@@ -108,38 +149,7 @@ async def get_awg(server_id: int, _: CurrentUser, session: SessionDep) -> AwgSta
     # legacy-only сервер остаётся обычной AWG-секцией (обратная совместимость)
     legacy_container = conts["legacy"] if conts["new"] else None
 
-    stored = set(
-        (
-            await session.scalars(
-                select(AwgConfig.public_key).where(AwgConfig.server_id == server_id)
-            )
-        ).all()
-    )
-    notes_by_pk = await _notes_map(session, server_id)
-    lim = await limits.limits_map(session, server_id, "awg")
-    paused = await pausestore.list_paused(session, server_id, "awg")
-    clients = []
-    for c in state.clients:
-        item = c.__dict__ | {
-            "has_config": c.public_key in stored,
-            "note": notes_by_pk.get(c.public_key, ""),
-            "expires_at": lim.get(c.public_key),
-            "paused": False,
-        }
-        clients.append(item)
-    # клиенты на паузе: их нет в живом конфиге — показываем из хранилища
-    live = {c["public_key"] for c in clients}
-    for cid, p in paused.items():
-        if cid in live:
-            continue
-        ip = p["data"].get("ip", "")
-        clients.append({
-            "name": p["name"], "public_key": cid,
-            "address": f"{ip}/32" if ip else "",
-            "latest_handshake": None, "rx_bytes": 0, "tx_bytes": 0, "endpoint": "",
-            "has_config": cid in stored, "note": notes_by_pk.get(cid, ""),
-            "expires_at": lim.get(cid), "paused": True,
-        })
+    clients = await build_client_list(session, server_id, state)
     return AwgStateOut(
         container=state.container,
         interface=state.interface,

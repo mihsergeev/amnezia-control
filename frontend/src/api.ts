@@ -512,3 +512,32 @@ export function protocolsFromContainers(containers: string[]): Protocol[] {
   if (has(/^amnezia-xray/)) found.push({ key: 'xray', label: 'XRay/REALITY' })
   return found
 }
+
+// --- Ключи интеграционного API (/api/v1) ------------------------------------
+
+export type ApiKey = {
+  id: number
+  name: string
+  prefix: string
+  created_at: string
+  last_used_at: string | null
+  revoked: boolean
+}
+
+// Полный ключ приходит ТОЛЬКО в ответе на создание — показать и не терять.
+export type ApiKeyCreated = ApiKey & { key: string }
+
+export async function listApiKeys(): Promise<ApiKey[]> {
+  return api<ApiKey[]>('/api/apikeys')
+}
+
+export async function createApiKey(name: string): Promise<ApiKeyCreated> {
+  return api<ApiKeyCreated>('/api/apikeys', {
+    method: 'POST',
+    body: JSON.stringify({ name }),
+  })
+}
+
+export async function revokeApiKey(id: number): Promise<void> {
+  return api<void>(`/api/apikeys/${id}`, { method: 'DELETE' })
+}

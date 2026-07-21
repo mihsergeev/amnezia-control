@@ -58,6 +58,8 @@ const LABELS: Record<string, string> = {
   host_key_changed: 'Host-ключ ноды изменился',
   '2fa_enable': 'Включена 2FA',
   '2fa_disable': 'Отключена 2FA',
+  apikey_create: 'Создан API-ключ',
+  apikey_revoke: 'Отозван API-ключ',
 }
 
 export function AuditPage({ onUnauthorized }: Props) {

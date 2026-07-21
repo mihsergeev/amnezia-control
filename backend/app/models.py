@@ -263,3 +263,28 @@ class NodeMetric(Base):
     ts: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
+
+
+class ApiKey(Base):
+    """Ключ интеграционного API (/api/v1) — для машин, не для людей.
+
+    Хранится ТОЛЬКО хэш секрета (bcrypt), как пароль: утечка БД не даёт рабочих
+    ключей. Полный ключ показывается один раз при создании. `prefix` — открытая
+    часть для быстрого поиска строки без перебора хэшей всей таблицы и для
+    опознания ключа в UI/логах. Права ключа фиксированы и узки: клиентские
+    операции AmneziaWG + чтение списка серверов (ни деплоя, ни full-access).
+    """
+
+    __tablename__ = "api_keys"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(String(120))
+    prefix: Mapped[str] = mapped_column(String(16), unique=True, index=True)
+    key_hash: Mapped[str] = mapped_column(String(255))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    last_used_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, default=None
+    )
+    revoked: Mapped[bool] = mapped_column(Boolean, default=False)

@@ -468,3 +468,42 @@ class AuditEntryOut(BaseModel):
     action: str
     target: str
     detail: str
+
+
+# --- Интеграционный API (/api/v1) и ключи к нему ----------------------------
+
+
+class ApiKeyOut(BaseModel):
+    """Ключ без секрета — то, что можно показывать в списке."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    name: str
+    prefix: str
+    created_at: datetime
+    last_used_at: datetime | None = None
+    revoked: bool = False
+
+
+class ApiKeyCreateRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=120, description="Кому выдан ключ")
+
+
+class ApiKeyCreated(ApiKeyOut):
+    key: str = Field(
+        description="Полный ключ. Показывается ОДИН раз — сохраните его сразу, "
+        "восстановить нельзя (в БД только хэш)."
+    )
+
+
+class V1ServerOut(BaseModel):
+    """Сервер в интеграционном API: только то, что нужно для выбора ноды."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    name: str
+    host: str
+    country: str = ""
+    last_check_ok: bool | None = None

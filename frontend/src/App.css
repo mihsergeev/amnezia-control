@@ -1648,3 +1648,22 @@ body {
   color: var(--text);
   text-decoration: underline;
 }
+
+/* Показ свежесозданного API-ключа: моноширинный, с переносом (ключ длинный)
+   и кнопкой копирования рядом — увидеть его можно только один раз. */
+.key-reveal {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+  margin: 10px 0;
+}
+.key-reveal code {
+  flex: 1 1 320px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  word-break: break-all;
+}
+.row-muted td { opacity: 0.55; }

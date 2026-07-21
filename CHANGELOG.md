@@ -4,6 +4,34 @@ All notable changes to Amnezia Control are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.46.0] — 2026-07-17
+
+### Added
+- **Integration API `/api/v1` — a stable contract for external systems.** Lets
+  another panel or billing system manage AmneziaWG clients over HTTP: list
+  servers, list clients, issue a client (returns both the `.conf` text and the
+  `vpn://` link), fetch a previously issued config, revoke, pause and resume.
+  It's deliberately separate from the endpoints that serve the web UI — those
+  follow the frontend and change with it, while `/api/v1` is versioned and kept
+  compatible. Client identity is the WireGuard public key, passed as a
+  url-encoded query parameter (it's base64 and contains `/`, which would break a
+  path segment).
+- **API keys with narrow, fixed permissions.** Authentication is a key in the
+  `X-API-Key` header, not a user JWT — a machine has no business logging in as a
+  person. A key may only touch clients and read the server list: it **cannot**
+  deploy or delete servers, change settings, export full access, or mint further
+  keys. Keys are stored as bcrypt hashes (the full key is shown exactly once on
+  creation and is unrecoverable), carry an open `prefix` for lookup and
+  identification, record `last_used_at`, and can be revoked. Every action a key
+  takes is written to the audit log as `apikey:<name>`, so integration activity
+  is distinguishable from a human's. Managed from a new **API keys** page in the
+  panel; minting a key still requires a logged-in admin. Migration `0022`.
+- **Swagger/OpenAPI at `/api/docs`** so integrators can read the contract instead
+  of guessing. Previously the schema was exposed only in debug mode; it is now on
+  by default (`VPNPANEL_API_DOCS=0` disables it). The endpoints stay protected —
+  the docs reveal only the shape of requests — and both auth schemes (bearer JWT
+  and `X-API-Key`) are declared, so the key can be tried straight from Swagger.
+
 ## [0.45.0] — 2026-07-17
 
 ### Changed
