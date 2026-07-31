@@ -37,7 +37,12 @@ async def _import_spec(session: SessionDep, spec: ServerSpec) -> ImportResult:
         host=spec.host,
         ssh_port=spec.ssh_port,
         ssh_user=spec.ssh_user,
-        note=("протоколы: " + ", ".join(spec.protocols)) if spec.protocols else "",
+        # Заметку с перечнем протоколов больше НЕ пишем. Она фиксировала то, что
+        # было в ссылке в момент импорта, и навсегда застывала: сервер потом
+        # менялся (протокол сняли, добавили AmneziaWG 3.0), а карточка продолжала
+        # показывать старый список рядом с живыми бейджами — и противоречила им.
+        # Актуальные протоколы панель определяет проверкой ноды и рисует бейджами.
+        note="",
     )
     session.add(server)
     await session.commit()
