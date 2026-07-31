@@ -8,11 +8,38 @@ from pathlib import Path
 import asyncssh
 
 # hostname + список docker-контейнеров (с фолбэком на sudo без пароля)
+# Определение РЕАЛЬНОГО протокола в каждом amnezia-контейнере — по содержимому
+# его конфига, а не по имени. Имена у Amnezia версию не отражают: контейнер
+# amnezia-awg2 может нести и legacy-конфиг, а панельный amnezia-awg3 внешне
+# неотличим от него же. Признаки (сверены с исходниками апстрима и живыми нодами):
+#   HeaderProtectionKey  -> AmneziaWG 3.0 (ключ появился только в третьей версии)
+#   I1 (в т.ч. «# I1»)   -> AmneziaWG 2.0 (CPS; у Amnezia хранится закомментированным)
+#   ни того, ни другого  -> AmneziaWG 1.0 / legacy
+_PROTO_PROBE = (
+    "for c in $($D ps --format '{{.Names}}' 2>/dev/null | grep -i '^amnezia'); do "
+    "k=other; "
+    'case "$c" in '
+    "*openvpn*) k=openvpn ;; "
+    "*xray*) k=xray ;; "
+    "*) "
+    "f=$($D exec \"$c\" sh -c 'ls /opt/amnezia/awg/awg0.conf /opt/amnezia/awg/wg0.conf "
+    "2>/dev/null | head -1' 2>/dev/null); "
+    'if [ -n "$f" ]; then '
+    "cfg=$($D exec \"$c\" cat \"$f\" 2>/dev/null); "
+    'if printf "%s" "$cfg" | grep -qi "^HeaderProtectionKey"; then k=awg3; '
+    'elif printf "%s" "$cfg" | grep -qE "^#? *I1"; then k=awg2; '
+    "else k=awg1; fi; fi ;; "
+    "esac; "
+    'echo "PROTO=$c|$k"; '
+    "done"
+)
+
 CHECK_COMMAND = (
     'echo "HOST=$(hostname)"; '
-    "if docker ps --format '{{.Names}}' 2>/dev/null; then :; "
-    "elif sudo -n docker ps --format '{{.Names}}' 2>/dev/null; then :; "
-    "else echo DOCKER_UNAVAILABLE; fi"
+    "if docker ps --format '{{.Names}}' 2>/dev/null; then D=docker; "
+    "elif sudo -n docker ps --format '{{.Names}}' 2>/dev/null; then D='sudo -n docker'; "
+    "else echo DOCKER_UNAVAILABLE; D=''; fi; "
+    '[ -n "$D" ] && { ' + _PROTO_PROBE + "; } || true"
 )
 
 
@@ -24,6 +51,9 @@ class CheckResult:
     docker: bool = False
     containers: list[str] = field(default_factory=list)
     amnezia_containers: list[str] = field(default_factory=list)
+    # реальный протокол по каждому amnezia-контейнеру: {имя: awg1|awg2|awg3|
+    # openvpn|xray|other} — определяется по конфигу ВНУТРИ контейнера, а не по имени
+    protocols: dict[str, str] = field(default_factory=dict)
 
     def as_dict(self) -> dict:
         return {
@@ -32,6 +62,7 @@ class CheckResult:
             "docker": self.docker,
             "containers": self.containers,
             "amnezia_containers": self.amnezia_containers,
+            "protocols": self.protocols,
         }
 
 
@@ -52,6 +83,10 @@ def _parse_check_output(output: str) -> CheckResult:
             result.hostname = line.removeprefix("HOST=")
         elif line == "DOCKER_UNAVAILABLE":
             result.docker = False
+        elif line.startswith("PROTO="):
+            name, _, kind = line.removeprefix("PROTO=").partition("|")
+            if name and kind:
+                result.protocols[name] = kind
         else:
             result.containers.append(line)
     result.amnezia_containers = [

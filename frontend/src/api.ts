@@ -133,6 +133,10 @@ export type CheckInfo = {
   docker?: boolean
   containers?: string[]
   amnezia_containers?: string[]
+  // реальный протокол каждого контейнера, определённый по его КОНФИГУ:
+  // awg1 | awg2 | awg3 | openvpn | xray. Имя контейнера версию не отражает —
+  // на боевой ноде встречается amnezia-awg2, внутри которого конфиг 1.0.
+  protocols?: Record<string, string>
 }
 
 export function parseCheckInfo(server: Server): CheckInfo | null {
@@ -498,7 +502,18 @@ export type Protocol = {
 }
 
 // какие протоколы есть на сервере (по именам контейнеров amnezia-*)
-export function protocolsFromContainers(containers: string[]): Protocol[] {
+// Метка реальной версии AmneziaWG по данным проверки ноды. Имя контейнера
+// версию не отражает: Amnezia называет контейнер amnezia-awg2 и для старого 1.0.
+const AWG_KIND_LABEL: Record<string, string> = {
+  awg1: 'AmneziaWG 1.0',
+  awg2: 'AmneziaWG 2.0',
+  awg3: 'AmneziaWG 3.0',
+}
+
+export function protocolsFromContainers(
+  containers: string[],
+  kinds: Record<string, string> = {},
+): Protocol[] {
   const found: Protocol[] = []
   const has = (re: RegExp) => containers.some((c) => re.test(c))
   // AmneziaWG 3.0 — отдельный контейнер amnezia-awg3. Его нужно исключать из
@@ -508,7 +523,14 @@ export function protocolsFromContainers(containers: string[]): Protocol[] {
   const hasAwgOther = containers.some(
     (c) => /^amnezia-awg/.test(c) && !/^amnezia-awg3/.test(c),
   )
-  if (hasAwgOther) found.push({ key: 'awg', label: 'AmneziaWG' })
+  if (hasAwgOther) {
+    // версию берём из конфига контейнера; пока проверка старая (без protocols)
+    // — остаётся прежняя нейтральная подпись
+    const c = containers.find(
+      (x) => /^amnezia-awg2/.test(x) && kinds[x],
+    ) ?? containers.find((x) => /^amnezia-awg/.test(x) && !/^amnezia-awg3/.test(x) && kinds[x])
+    found.push({ key: 'awg', label: (c && AWG_KIND_LABEL[kinds[c]]) || 'AmneziaWG' })
+  }
   // старый AmneziaWG (wg0) рядом с новым: у Amnezia legacy=amnezia-awg, new=
   // amnezia-awg2 — если есть ОБА контейнера, второй протокол это legacy
   if (containers.includes('amnezia-awg') && has(/^amnezia-awg2/)) {
