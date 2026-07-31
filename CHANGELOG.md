@@ -4,6 +4,16 @@ All notable changes to Amnezia Control are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.47.1] — 2026-07-31
+
+### Added
+- **Config snapshots and one-click rollback for AmneziaWG 3.0.** Snapshots were
+  already being taken before every 3.0 rebuild, but there was no way to list or
+  restore them — 2.0 had the endpoints and 3.0 didn't. Found during a clean-install
+  test round; the panel now exposes `config-backups` / `config-restore` for 3.0
+  and shows the rollback menu (plus a rebuild button) on the 3.0 tab, at parity
+  with 2.0. Verified end to end: restoring a snapshot brought a revoked client back.
+
 ## [0.47.0] — 2026-07-31
 
 ### Added

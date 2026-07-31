@@ -33,6 +33,8 @@ from app.schemas import (
     NoteRequest,
     PublicKeyRequest,
     RevokeClientRequest,
+    SnapshotOut,
+    SnapshotRestoreRequest,
 )
 
 router = APIRouter(prefix="/servers/{server_id}/awg3", tags=["awg3"])
@@ -357,3 +359,40 @@ async def deploy_status(
     except Exception as exc:  # noqa: BLE001
         raise _ssh_error(exc) from exc
     return DeployStatusOut(**result)
+
+
+@router.get("/config-backups", response_model=list[SnapshotOut])
+async def config_backups(
+    server_id: int, _: CurrentUser, session: SessionDep
+) -> list[SnapshotOut]:
+    """Снимки конфига 3.0 на ноде (снимаются перед каждой пересборкой) — для отката."""
+    server = await _get_or_404(server_id, session)
+    try:
+        async with _connect(server) as conn:
+            snaps = await deploy.list_snapshots(conn, PROTO)
+    except Exception as exc:  # noqa: BLE001
+        raise _ssh_error(exc) from exc
+    return [SnapshotOut(**s) for s in snaps]
+
+
+@router.post("/config-restore", status_code=status.HTTP_202_ACCEPTED)
+async def config_restore(
+    server_id: int, body: SnapshotRestoreRequest, user: CurrentUser, session: SessionDep
+) -> dict:
+    """Откат конфига 3.0 к снимку (возвращает клиентов и ключи из снимка)."""
+    server = await _get_or_404(server_id, session)
+    try:
+        async with _connect(server) as conn:
+            # пре-оп бэкап: снимок текущего состояния ДО отката — откат тоже обратим
+            await deploy.snapshot_all(conn, PROTO)
+            ok = await deploy.restore_snapshot(conn, PROTO, body.id)
+    except ValueError as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001
+        raise _ssh_error(exc) from exc
+    if not ok:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Снимок не найден или повреждён")
+    await audit.record(
+        session, user.username, "awg3_config_restore", server.name, body.id
+    )
+    return {"restored": True}

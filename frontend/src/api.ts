@@ -235,7 +235,7 @@ export type VersionInfo = {
 }
 
 // снимки конфига на ноде (для отката пересборки), для любого протокола
-export type SnapProto = 'awg' | 'xray' | 'openvpn'
+export type SnapProto = 'awg' | 'awg3' | 'xray' | 'openvpn'
 export type Snapshot = { id: string; clients: number }
 
 export function listConfigBackups(
