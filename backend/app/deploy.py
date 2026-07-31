@@ -293,8 +293,11 @@ def generate_server_config_v3(port: int) -> dict[str, str]:
     return {"priv": priv, "pub": pub, "psk": psk, "conf": conf}
 
 
-def build_script(mode: str, port: int, cfg: dict[str, str]) -> str:
-    """mode: 'deploy' | 'adopt' | 'update'.
+def build_script(
+    mode: str, port: int, cfg: dict[str, str], base_ref: str | None = None
+) -> str:
+    """mode: 'deploy' | 'adopt' | 'update'. base_ref — конкретный образ для
+    режима update (см. ниже); по умолчанию берётся ветка 2.x, а НЕ `:latest`.
 
     deploy/adopt пинятся на PINNED_BASE_DIGEST (известный рабочий образ) — так
     сломанный `:latest` не ломает новые установки. update ТЯНЕТ `:latest`
@@ -304,7 +307,15 @@ def build_script(mode: str, port: int, cfg: dict[str, str]) -> str:
     Явный `docker pull` обязателен: без него buildkit не оставляет базовый
     образ тегированным, и версию (digest) потом не прочитать.
     """
-    base_ref = BASE_IMAGE_LATEST if mode == "update" else BASE_IMAGE_PINNED
+    # ВАЖНО: `:latest` с 31.07.2026 указывает на 3.0.x — а это ДРУГОЙ протокол,
+    # живущий у нас в своём контейнере. Обновление AmneziaWG 2.0 обязано
+    # оставаться в своей ветке, иначе кнопка «Обновить» пересобрала бы рабочий
+    # 2.0 на образе третьей версии. Конкретный образ ветки передаёт вызывающий
+    # (он знает теги с Docker Hub); без него безопасный дефолт — известный пин.
+    if mode == "update":
+        base_ref = base_ref or BASE_IMAGE_PINNED
+    else:
+        base_ref = BASE_IMAGE_PINNED
     parts = [
         "#!/bin/bash",
         "set -e",
@@ -964,6 +975,12 @@ async def hub_info() -> dict:
     latest_digest = ""
     latest_updated = ""
     digest_to_version: dict[str, str] = {}
+    # Новейший тег ВЕТКИ 2.x (major < 3). С 31.07.2026 `:latest` указывает на
+    # 3.0.x, а у нас 3.0 — ОТДЕЛЬНЫЙ протокол со своим контейнером. Сравнивать
+    # 2.0-ноду с `:latest` значит предлагать «обновиться» на чужую ветку: кнопка
+    # пересобрала бы рабочий 2.0 на образе 3.0. Поэтому для 2.0 держим свою линию.
+    # Берём самый свежий ПО ДАТЕ, а не по номеру: тег 2.0.0 старше 0.2.19.
+    line_latest: tuple[str, str, str] | None = None
     for tag in data.get("results", []):
         name = tag.get("name", "")
         digest = tag.get("digest", "")
@@ -972,9 +989,17 @@ async def hub_info() -> dict:
             latest_updated = tag.get("last_updated", "")
         elif digest and _is_version_tag(name):
             digest_to_version.setdefault(digest, name)
+            if not name.startswith("3."):
+                upd = tag.get("last_updated", "")
+                if line_latest is None or upd > line_latest[0]:
+                    line_latest = (upd, name, digest)
     return {
         "latest_digest": latest_digest,
         "latest_version": digest_to_version.get(latest_digest),
         "latest_updated": latest_updated,
         "digest_to_version": digest_to_version,
+        # ветка 2.x — с ней сравнивается версия протокола AmneziaWG 2.0
+        "line_latest_digest": line_latest[2] if line_latest else "",
+        "line_latest_version": line_latest[1] if line_latest else None,
+        "line_latest_updated": line_latest[0] if line_latest else "",
     }

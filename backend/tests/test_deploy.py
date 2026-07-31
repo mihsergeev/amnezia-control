@@ -89,8 +89,12 @@ def test_build_script_deploy() -> None:
     assert "trap 'echo DEPLOY_ERROR' ERR" in script
 
 
-def test_deploy_pins_base_image_update_uses_latest() -> None:
-    # D: новый деплой пинится на известный digest, update тянет :latest намеренно
+def test_deploy_and_update_never_use_latest_tag() -> None:
+    """Новый деплой пинится на известный digest. Обновление РАНЬШЕ тянуло
+    `:latest` — теперь так нельзя: с 31.07.2026 latest указывает на 3.0.x, а
+    третья версия у нас ОТДЕЛЬНЫЙ протокол со своим контейнером, и «Обновить»
+    пересобрало бы рабочий 2.0 на чужой ветке. Образ ветки 2.x передаёт API
+    (deploy.hub_info → line_latest_digest); без него — безопасный пин."""
     cfg = deploy.generate_server_config(47180)
     deploy_script = deploy.build_script("deploy", 47180, cfg)
     adopt_script = deploy.build_script("adopt", 47180, cfg)
@@ -101,9 +105,9 @@ def test_deploy_pins_base_image_update_uses_latest() -> None:
     assert "amneziavpn/amneziawg-go:latest" not in deploy_script
     assert f"docker pull {pinned}" in adopt_script
     assert "amneziavpn/amneziawg-go:latest" not in adopt_script
-    # update тянет :latest (явное обновление образа)
-    assert "docker pull amneziavpn/amneziawg-go:latest" in update_script
-    assert deploy.PINNED_BASE_DIGEST not in update_script
+    # update без явного образа — тоже не latest, а известный рабочий пин
+    assert "amneziavpn/amneziawg-go:latest" not in update_script
+    assert deploy.PINNED_BASE_DIGEST in update_script
     # оба режима пишут digest-маркер для детекта версий
     assert deploy.BASE_DIGEST_MARKER in deploy_script
     assert deploy.BASE_DIGEST_MARKER in update_script

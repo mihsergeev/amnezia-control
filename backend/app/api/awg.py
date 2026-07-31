@@ -324,7 +324,17 @@ async def update_awg(
     server = await _get_or_404(server_id, session)
     # config уже есть на ноде и сохраняется; cfg тут не используется
     cfg = deploy.generate_server_config(47180)
-    script = deploy.build_script("update", 47180, cfg)
+    # Обновляемся в пределах ветки 2.x: `:latest` теперь 3.0.x, а третья версия —
+    # отдельный протокол. Если Docker Hub недоступен, build_script возьмёт
+    # известный рабочий пин — но никогда не latest.
+    base_ref = None
+    try:
+        hub = await deploy.hub_info()
+        if hub.get("line_latest_digest"):
+            base_ref = f"{deploy.BASE_REPO}@{hub['line_latest_digest']}"
+    except (httpx.HTTPError, ValueError):
+        base_ref = None
+    script = deploy.build_script("update", 47180, cfg, base_ref=base_ref)
     try:
         async with _connect(server) as conn:
             await _guard_foreign_awg(conn)
@@ -481,9 +491,17 @@ async def awg_version(
         deployed=current_digest is not None,
         current_version=current_version,
         current_awg_go=awg_go,
-        latest_version=hub["latest_version"],
-        latest_updated=hub["latest_updated"],
-        update_available=bool(current_digest) and current_digest != hub["latest_digest"],
+        # Сравниваем с последней версией ВЕТКИ 2.x, а не с `:latest`: с 31.07.2026
+        # latest указывает на 3.0.x, и панель предлагала бы «обновить» рабочий
+        # AmneziaWG 2.0 на образ третьей версии. Третья версия у нас — отдельный
+        # протокол (вкладка «AmneziaWG 3.0») со своим контейнером и портом.
+        latest_version=hub["line_latest_version"] or hub["latest_version"],
+        latest_updated=hub["line_latest_updated"] or hub["latest_updated"],
+        update_available=(
+            bool(current_digest)
+            and bool(hub["line_latest_digest"])
+            and current_digest != hub["line_latest_digest"]
+        ),
         foreign_container=foreign,
         adoptable=adoptable,
     )
