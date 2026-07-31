@@ -4,6 +4,17 @@ All notable changes to Amnezia Control are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.47.5] — 2026-07-31
+
+### Fixed
+- **Imported servers no longer carry a frozen "protocols: …" note.** The importer
+  wrote the protocol list from the `vpn://` link into the server's note, where it
+  stayed forever: the server later changed (a protocol removed, AmneziaWG 3.0
+  added) while the card kept showing the original list right under the live
+  protocol badges — and contradicting them. Live protocols come from the node
+  check and are shown as badges; the stale duplicate is gone. Existing notes are
+  left untouched (they are user-editable text) — clear one by editing the server.
+
 ## [0.47.4] — 2026-07-31
 
 ### Fixed
