@@ -239,7 +239,8 @@ class _FakeConn:
 async def test_port_guard_detects_foreign_container() -> None:
     """Перед развёртыванием 3.0 надо знать, кто держит целевой порт: скрипт
     сносит контейнер на этом порту, и чужой рабочий протокол погиб бы с клиентами."""
-    conn = _FakeConn({"publish=49908": "amnezia-awg2\n"})
+    # проверяем ИМЕННО udp-форму: без протокола docker не находит udp-публикации
+    conn = _FakeConn({"publish=49908/udp": "amnezia-awg2\n"})
     assert await deploy.container_on_port(conn, 49908) == "amnezia-awg2"
     # свой же контейнер (пересборка 3.0) поводом для отказа не считается
     assert await deploy.container_on_port(
@@ -273,3 +274,15 @@ async def test_snapshots_are_namespaced_per_protocol(monkeypatch) -> None:
     await deploy.snapshot_all(conn, "awg3")
     assert all(t == "awg3" for t, _ in taken)
     assert all("awg3" in (c or "") for _, c in taken), f"чужой контейнер в awg3: {taken}"
+
+
+def test_port_guard_queries_udp_and_tcp() -> None:
+    """AmneziaWG публикует UDP-порт, а `--filter publish=NNN` без протокола его
+    НЕ находит (поймано на живой ноде: awg2 на 47180/udp был не виден, и защита
+    молча пропускала занятый порт). Запрос обязан спрашивать оба протокола."""
+    import asyncio
+
+    conn = _FakeConn({})
+    asyncio.run(deploy.container_on_port(conn, 47180))
+    cmd = conn.commands[0]
+    assert "publish=47180/udp" in cmd and "publish=47180/tcp" in cmd

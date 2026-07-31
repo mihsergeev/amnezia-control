@@ -782,9 +782,14 @@ async def container_on_port(
     по ошибке указан чужой — снесётся рабочий контейнер другого протокола со
     всеми клиентами. Поэтому такой случай ловим заранее и операцию не начинаем.
     """
+    # ВАЖНО: `--filter publish=NNN` без протокола НЕ находит контейнеры с
+    # UDP-публикацией (проверено на ноде: awg2 на 47180/udp так не виден), а у
+    # AmneziaWG порт как раз UDP. Поэтому спрашиваем оба протокола явно.
+    p = int(port)
     cmd = (
         'D=$(docker info >/dev/null 2>&1 && echo docker || echo "sudo -n docker"); '
-        f'$D ps --filter "publish={int(port)}" --format "{{{{.Names}}}}"'
+        f'$D ps --filter "publish={p}/udp" --filter "publish={p}/tcp" '
+        '--format "{{.Names}}"'
     )
     result = await conn.run(cmd, check=False)
     for line in (result.stdout or "").splitlines():
