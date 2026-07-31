@@ -772,6 +772,28 @@ async def foreign_awg_container(conn: asyncssh.SSHClientConnection) -> str | Non
     return names[0] if names else None
 
 
+async def container_on_port(
+    conn: asyncssh.SSHClientConnection, port: int, exclude: str = ""
+) -> str | None:
+    """Имя контейнера, который уже публикует этот порт (кроме `exclude`).
+
+    Нужна ПЕРЕД развёртыванием нового протокола: скрипт деплоя сносит контейнер,
+    занимающий целевой порт (так заменяется свой же при пересборке). Если порт
+    по ошибке указан чужой — снесётся рабочий контейнер другого протокола со
+    всеми клиентами. Поэтому такой случай ловим заранее и операцию не начинаем.
+    """
+    cmd = (
+        'D=$(docker info >/dev/null 2>&1 && echo docker || echo "sudo -n docker"); '
+        f'$D ps --filter "publish={int(port)}" --format "{{{{.Names}}}}"'
+    )
+    result = await conn.run(cmd, check=False)
+    for line in (result.stdout or "").splitlines():
+        name = line.strip()
+        if name and name != exclude:
+            return name
+    return None
+
+
 async def awg3_containers(conn: asyncssh.SSHClientConnection) -> list[str]:
     """Контейнеры AmneziaWG 3.0 на ноде (по образу панели, а не по имени —
     имя мог бы занять кто угодно)."""
@@ -812,8 +834,13 @@ async def snapshot_all(conn: asyncssh.SSHClientConnection, tag: str) -> int:
     чтобы её можно было откатить (config-restore/ручная пересборка). Для awg
     снимает и legacy (amnezia-awg), и awg2, и панельный контейнер; для остальных —
     контейнер из спецификации. Возвращает число сделанных снимков."""
+    # Снимки строго разведены по тегам: restore_snapshot распаковывает архив в
+    # контейнер СВОЕГО тега, поэтому конфиг 2.0, попавший в снимки 3.0, при
+    # откате уехал бы в чужой контейнер и сломал его. Отсюда фильтры ниже.
     if tag == "awg":
-        conts = await all_awg_containers(conn)
+        conts = [c for c in await all_awg_containers(conn) if "awg3" not in c.lower()]
+    elif tag == "awg3":
+        conts = await awg3_containers(conn)
     else:
         spec = _SNAP_SPECS.get(tag)
         conts = [spec["container"]] if spec else []

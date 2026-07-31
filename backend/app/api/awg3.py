@@ -316,9 +316,27 @@ async def deploy_awg3(
     script = deploy.build_script_v3("deploy", body.port, cfg)
     try:
         async with _connect(server) as conn:
-            # пре-оп бэкап: если 3.0 уже стоит — снимем конфиг до пересоздания
+            # Порт занят ЧУЖИМ контейнером — отказываемся: скрипт деплоя сносит
+            # того, кто держит целевой порт (так он заменяет свой же при
+            # пересборке), и рабочий протокол на этом порту погиб бы вместе с
+            # клиентами. Лучше явная ошибка, чем «успешный» деплой ценой чужого.
+            busy = await deploy.container_on_port(
+                conn, body.port, exclude=deploy.CONTAINER_V3
+            )
+            if busy:
+                raise HTTPException(
+                    status.HTTP_409_CONFLICT,
+                    f"Порт {body.port} уже занят контейнером «{busy}». "
+                    "Выберите другой порт для AmneziaWG 3.0 — иначе развёртывание "
+                    "снесло бы работающий контейнер вместе с его клиентами.",
+                )
+            # Пре-оп бэкап ВСЕХ протоколов AmneziaWG на ноде (2.0/legacy и, если
+            # уже есть, 3.0) — точка отката на случай, если что-то пойдёт не так.
+            await deploy.snapshot_all(conn, "awg")
             await deploy.snapshot_all(conn, PROTO)
             await deploy.launch(conn, script, tag=PROTO)
+    except HTTPException:
+        raise
     except Exception as exc:  # noqa: BLE001
         raise _ssh_error(exc) from exc
     deploywatch.spawn(request.app, server, PROTO)
