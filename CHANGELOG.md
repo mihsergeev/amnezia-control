@@ -4,6 +4,37 @@ All notable changes to Amnezia Control are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.47.0] — 2026-07-31
+
+### Added
+- **AmneziaWG 3.0 support — deploy and manage it as its own protocol**, next to
+  2.0 and legacy, exactly as those two coexist. A 3.0 server gets its own
+  container (`amnezia-awg3`), port, subnet (`10.8.3.0/24`) and config directory,
+  so both versions run on one node without touching each other's clients. All the
+  usual client operations are there: issue (`.conf` plus a `vpn://` link with
+  `protocol_version = 3`), fetch a stored config, reissue, pause/resume, revoke,
+  expiry auto-revoke, snapshots and rollback.
+- **3.0 protocol parameters**, taken from upstream sources rather than guessed
+  (`amneziawg-tools v3.0.20260730`, `amneziawg-go v3.0.2`): `HeaderProtectionKey`
+  (a 32-byte shared secret that encrypts packet headers), `ContentPaddingAddition`,
+  and the randomizable timing ranges `RekeyAfterTime`, `RekeyTimeout`,
+  `RejectAfterTime`, `KeepaliveTimeout`, `MaxHandshakeAttempts`. Clients mirror
+  them from the server, as they already do for `H1`–`H4`.
+- **3.0 is built from source on the node** at pinned tags. The published
+  `amneziavpn/amneziawg-go` image — even tagged `3.0.2` — still ships
+  `amneziawg-tools v1.0.20210914` and an engine without the 3.0 UAPI keys, so
+  `awg setconf` rejects `HeaderProtectionKey` outright (verified on a live node).
+  Building the engine and tools ourselves is the only way to get a working 3.0
+  today, and it removes the dependency on when upstream refreshes that image.
+
+### Fixed
+- **A 3.0 container is no longer mistaken for a 2.0 one.** Both use `awg0.conf`,
+  so the 2.0 detector happily picked up `amnezia-awg3` — on a node running both,
+  2.0 operations would have landed on the 3.0 server (a client issued in the
+  wrong place). Detection now excludes 3.0, which has its own `/awg3` path.
+  Conversely, the panel's own 3.0 image counts as ours, so its presence no longer
+  blocks deploying or updating 2.0 on the same node with a 409.
+
 ## [0.46.1] — 2026-07-21
 
 ### Fixed

@@ -89,9 +89,12 @@ async def _notes_map(session, server_id) -> dict[str, str]:
     return await notes.notes_map(session, server_id, "awg")
 
 
-def _amnezia_link(config: str, server: Server) -> str:
+def _amnezia_link(config: str, server: Server, protocol_version: str = "2") -> str:
     dns1, dns2 = awg.dns_pair(get_settings().awg_client_dns)
-    return awg.build_amnezia_link(config, server.host, server.name, dns1, dns2)
+    return awg.build_amnezia_link(
+        config, server.host, server.name, dns1, dns2,
+        protocol_version=protocol_version,
+    )
 
 
 async def build_client_list(session, server_id: int, state) -> list[dict]:

@@ -16,6 +16,9 @@ const EN: Record<string, string> = {
   'Обзор': 'Overview',
   'Журнал': 'Log',
   'Журнал действий': 'Action log',
+  'Развернуть AmneziaWG 3.0': 'Deploy AmneziaWG 3.0',
+  'Сервер собирает AmneziaWG 3.0 из исходников (движок + утилиты закреплённых версий) и запускает его. Готового образа с бинарями 3.0 пока нет, поэтому первая сборка занимает 3–7 минут.':
+    'The server builds AmneziaWG 3.0 from source (engine + tools at pinned versions) and starts it. No prebuilt image with 3.0 binaries exists yet, so the first build takes 3-7 minutes.',
   'API-ключи': 'API keys',
   'Документация API': 'API docs',
   'Ключ': 'Key',

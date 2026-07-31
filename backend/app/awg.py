@@ -22,11 +22,22 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey
 
 AWG_DIR = "/opt/amnezia/awg"
+# Параметры, добавленные AmneziaWG 3.0. Клиент обязан повторять их за сервером
+# (как и H1–H4): HeaderProtectionKey — общий секрет защиты заголовков, остальные
+# — диапазоны, из которых обе стороны выбирают значения. На серверах 2.0 их
+# просто нет, поэтому список общий: чего нет в конфиге — то не попадёт и клиенту.
+AWG3_PARAM_KEYS = [
+    "HeaderProtectionKey", "ContentPaddingAddition",
+    "RekeyAfterTime", "RekeyTimeout", "RejectAfterTime",
+    "KeepaliveTimeout", "MaxHandshakeAttempts",
+]
+
 AWG_PARAM_KEYS = [
     "Jc", "Jmin", "Jmax",
     "S1", "S2", "S3", "S4",
     "H1", "H2", "H3", "H4",
     "I1", "I2", "I3", "I4", "I5",
+    *AWG3_PARAM_KEYS,
 ]
 # выбирает docker или sudo docker в зависимости от прав ssh-пользователя
 _DOCKER = 'DOCKER=$(docker info >/dev/null 2>&1 && echo docker || echo "sudo -n docker"); '
@@ -89,6 +100,9 @@ _AMNEZIA_PARAM_KEYS = [
     "Jc", "Jmax", "Jmin",
     "S1", "S2", "S3", "S4",
 ]
+# ключи 3.0 в vpn://-ссылке называются так же, как в .conf (сверено с
+# configKeys.h клиента 5.0.0.5): HeaderProtectionKey, ContentPaddingAddition, …
+_AMNEZIA_PARAM_KEYS_V3 = _AMNEZIA_PARAM_KEYS + AWG3_PARAM_KEYS
 
 
 def dns_pair(dns: str) -> tuple[str, str]:
@@ -105,8 +119,15 @@ def build_amnezia_link(
     dns1: str,
     dns2: str,
     container: str = "amnezia-awg2",
+    protocol_version: str = "2",
 ) -> str:
-    """Строит vpn://-ссылку формата «Для приложения AmneziaVPN» из .conf."""
+    """Строит vpn://-ссылку формата «Для приложения AmneziaVPN» из .conf.
+
+    protocol_version: "2" — AmneziaWG 2.0, "3" — 3.0. Приложение 5.0.0.5 знает
+    только константу «2», но поля третьей версии (HeaderProtectionKey и прочие)
+    читает БЕЗУСЛОВНО и передаёт в туннель, поэтому честно помечаем 3.0 как "3":
+    когда Amnezia добавит свою awgV3, ссылки подпишутся корректно сами.
+    """
     interface, peers = parse_conf(conf_text)
     peer = peers[0] if peers else {}
     client_priv = interface.get("PrivateKey", "")
@@ -119,7 +140,10 @@ def build_amnezia_link(
     )
     endpoint = peer.get("Endpoint", f"{host}:0")
     port = int(endpoint.rsplit(":", 1)[-1]) if ":" in endpoint else 0
-    params = {k: interface.get(k, "") for k in _AMNEZIA_PARAM_KEYS}
+    # набор ключей зависит от версии; пустые значения СОХРАНЯЕМ (у 2.0 приложение
+    # всегда пишет I1–I5, в том числе пустые — от этого зависит совместимость)
+    keys = _AMNEZIA_PARAM_KEYS_V3 if protocol_version == "3" else _AMNEZIA_PARAM_KEYS
+    params = {k: interface.get(k, "") for k in keys}
 
     # DNS в конфиге шаблонизируем, как делает Amnezia
     config_str = re.sub(
@@ -148,7 +172,7 @@ def build_amnezia_link(
         )
         + "\n",
         "port": str(port),
-        "protocol_version": "2",
+        "protocol_version": protocol_version,
         "subnet_address": subnet,
         "transport_proto": "udp",
     }
@@ -338,7 +362,12 @@ async def detect_container(conn: asyncssh.SSHClientConnection) -> str:
         return conts["new"]
     if conts["legacy"]:
         return conts["legacy"]
-    cmd = _DOCKER + "$DOCKER ps --format '{{.Names}}' | grep -m1 amnezia-awg"
+    # ВАЖНО: исключаем контейнер 3.0 — у него тоже awg0.conf, и без фильтра на
+    # ноде с обеими версиями операции 2.0 уехали бы на сервер 3.0 (клиент 2.0
+    # оказался бы заведён не там). 3.0 живёт под своим роутером /awg3.
+    cmd = _DOCKER + (
+        "$DOCKER ps --format '{{.Names}}' | grep amnezia-awg | grep -v awg3 | head -1"
+    )
     out = (await _run(conn, cmd)).strip()
     if not out:
         raise AwgError("Контейнер amnezia-awg на сервере не найден")
@@ -351,9 +380,15 @@ async def detect_awg_containers(
     """Разделяет awg-контейнеры ноды на «новый» (AmneziaWG, awg0.conf) и «legacy»
     (старый AmneziaWG, только wg0.conf). Возвращает {"new": имя|None, "legacy": имя|None}.
     Различаем по РАНТАЙМ-конфигу внутри контейнера, а не по имени — имена
-    (amnezia-awg2) у Amnezia и панели совпадают."""
+    (amnezia-awg2) у Amnezia и панели совпадают.
+
+    Контейнеры AmneziaWG 3.0 (amnezia-awg3) СЮДА НЕ ПОПАДАЮТ: у них тот же
+    awg0.conf, и без фильтра они определялись бы как «новый» контейнер 2.0 —
+    на ноде с обеими версиями операции 2.0 ушли бы на сервер 3.0. У 3.0 своя
+    ветка управления (/awg3, deploy.awg3_containers)."""
     cmd = _DOCKER + (
-        "for c in $($DOCKER ps --format '{{.Names}}' | grep -iE 'amnezia-awg|acontrol-awg'); do "
+        "for c in $($DOCKER ps --format '{{.Names}}' "
+        "| grep -iE 'amnezia-awg|acontrol-awg' | grep -iv awg3); do "
         "if $DOCKER exec \"$c\" test -f /opt/amnezia/awg/awg0.conf 2>/dev/null; then echo \"$c new\"; "
         "elif $DOCKER exec \"$c\" test -f /opt/amnezia/awg/wg0.conf 2>/dev/null; then echo \"$c legacy\"; fi; "
         "done"
