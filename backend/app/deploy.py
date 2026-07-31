@@ -36,23 +36,51 @@ BASE_DIGEST_MARKER = "/opt/acontrol/base-digest"
 IMAGE = "acontrol-awg"
 CONTAINER = "amnezia-awg2"
 SUBNET = "10.8.1.0/24"
+
+# --- AmneziaWG 3.0 ----------------------------------------------------------
+# Третья версия протокола — ОТДЕЛЬНЫЙ протокол рядом с 2.0 и legacy: свой
+# контейнер, порт, подсеть и каталог конфига, поэтому обе версии спокойно живут
+# на одной ноде и клиенты одной не задеваются операциями над другой.
+# ВАЖНО про образ: официальный amneziavpn/amneziawg-go даже с тегом 3.0.2
+# (latest на 28.07.2026) содержит СТАРЫЕ бинари — amneziawg-tools v1.0.20210914 и
+# go-движок без UAPI-ключей третьей версии. Проверено на ноде: `awg setconf`
+# отвечает «Line unrecognized: HeaderProtectionKey». Поэтому 3.0 собираем ИЗ
+# ИСХОДНИКОВ по закреплённым тегам — это единственный способ получить рабочий
+# AmneziaWG 3.0 сегодня и заодно независимость от сроков обновления их образа.
+AWG3_GO_TAG = "v3.0.2"  # amneziawg-go (движок)
+AWG3_TOOLS_TAG = "v3.0.20260730"  # amneziawg-tools (awg / awg-quick)
+AWG3_VERSION_MARKER = "/opt/acontrol/awg3-version"
+IMAGE_V3 = "acontrol-awg3"
+CONTAINER_V3 = "amnezia-awg3"
+SUBNET_V3 = "10.8.3.0/24"  # НЕ пересекается с 2.0 (10.8.1.0/24) на той же ноде
+# конфиг 3.0 живёт в отдельном каталоге хоста, а внутрь контейнера монтируется на
+# штатный путь — иначе два контейнера делили бы один awg0.conf и затирали друг друга
+HOST_DIR_V3 = "/opt/amnezia/awg3"
+# образы, которые собирает САМА панель (для отличия своих контейнеров от чужих)
+_PANEL_AWG_IMAGES = {IMAGE, IMAGE_V3}
 # Каталог рабочих файлов деплоя — в $HOME текущего ssh-пользователя (всегда наш,
 # без коллизий владельца в общем /tmp) и СВОЙ у каждого протокола (tag), чтобы
 # лог одного деплоя не подменял другой на сервере с несколькими протоколами.
 WORK_ROOT = "$HOME/.acontrol"
 HUB_TAGS_URL = "https://hub.docker.com/v2/repositories/amneziavpn/amneziawg-go/tags?page_size=50"
 
-START_SH = """#!/bin/sh
+def _start_sh(subnet: str = SUBNET) -> str:
+    """Точка входа контейнера. Параметр — подсеть клиентов: у 3.0 она своя, а
+    для 2.0 подставляется прежняя, поэтому её скрипт остаётся байт-в-байт тем же."""
+    return f"""#!/bin/sh
 # Amnezia Control: точка входа контейнера AmneziaWG
 awg-quick down /opt/amnezia/awg/awg0.conf >/dev/null 2>&1
 awg-quick up /opt/amnezia/awg/awg0.conf 2>/dev/null || true
-iptables -t nat -C POSTROUTING -s 10.8.1.0/24 -o eth0 -j MASQUERADE 2>/dev/null \\
-  || iptables -t nat -A POSTROUTING -s 10.8.1.0/24 -o eth0 -j MASQUERADE
+iptables -t nat -C POSTROUTING -s {subnet} -o eth0 -j MASQUERADE 2>/dev/null \\
+  || iptables -t nat -A POSTROUTING -s {subnet} -o eth0 -j MASQUERADE
 iptables -C FORWARD -i awg0 -j ACCEPT 2>/dev/null || iptables -A FORWARD -i awg0 -j ACCEPT
 iptables -C FORWARD -m state --state ESTABLISHED,RELATED -j ACCEPT 2>/dev/null \\
   || iptables -A FORWARD -m state --state ESTABLISHED,RELATED -j ACCEPT
 exec tail -f /dev/null
 """
+
+
+START_SH = _start_sh()
 
 def _dockerfile(base_ref: str) -> str:
     """Dockerfile надстройки над базовым образом. base_ref — пин (repo@sha256:…)
@@ -68,16 +96,55 @@ def _dockerfile(base_ref: str) -> str:
     )
 
 # идемпотентный подъём интерфейса + NAT внутри контейнера
-_BRINGUP = (
-    "awg-quick down /opt/amnezia/awg/awg0.conf >/dev/null 2>&1; "
-    "awg-quick up /opt/amnezia/awg/awg0.conf; "
-    "iptables -t nat -C POSTROUTING -s 10.8.1.0/24 -o eth0 -j MASQUERADE 2>/dev/null "
-    "|| iptables -t nat -A POSTROUTING -s 10.8.1.0/24 -o eth0 -j MASQUERADE; "
-    "iptables -C FORWARD -i awg0 -j ACCEPT 2>/dev/null "
-    "|| iptables -A FORWARD -i awg0 -j ACCEPT; "
-    "iptables -C FORWARD -m state --state ESTABLISHED,RELATED -j ACCEPT 2>/dev/null "
-    "|| iptables -A FORWARD -m state --state ESTABLISHED,RELATED -j ACCEPT"
-)
+def _dockerfile_v3() -> str:
+    """Образ AmneziaWG 3.0: движок и тулзы собираются из исходников по
+    закреплённым тегам (готового образа с бинарями 3.0 в природе пока нет).
+    Многостадийная сборка — в финальном образе только бинари, без тулчейнов."""
+    return (
+        f"FROM golang:1.25-alpine AS go-build\n"
+        "RUN apk add --no-cache git make\n"
+        f"RUN git clone --depth 1 --branch {AWG3_GO_TAG} "
+        "https://github.com/amnezia-vpn/amneziawg-go /src && make -C /src\n"
+        "\n"
+        "FROM alpine:3.22 AS tools-build\n"
+        "RUN apk add --no-cache git make build-base linux-headers bash\n"
+        f"RUN git clone --depth 1 --branch {AWG3_TOOLS_TAG} "
+        "https://github.com/amnezia-vpn/amneziawg-tools /src && "
+        "make -C /src/src install DESTDIR=/out PREFIX=/usr WITH_WGQUICK=yes\n"
+        "\n"
+        "FROM alpine:3.22\n"
+        "RUN apk add --no-cache bash iptables iproute2 openresolv\n"
+        "COPY --from=go-build /src/amneziawg-go /usr/bin/amneziawg-go\n"
+        "COPY --from=tools-build /out/usr/bin/awg /usr/bin/awg\n"
+        "COPY --from=tools-build /out/usr/bin/awg-quick /usr/bin/awg-quick\n"
+        # amneziawg-tools — форк wireguard-tools, и панель читает состояние нод
+        # командами `wg show/set`. В базовом образе Amnezia `wg` есть, в собранном
+        # из исходников — нет, поэтому даём алиасы: иначе все клиентские операции
+        # 3.0 падали бы с 502 (проверено на ноде).
+        "RUN ln -sf /usr/bin/awg /usr/bin/wg "
+        "&& ln -sf /usr/bin/awg-quick /usr/bin/wg-quick\n"
+        "COPY start.sh /opt/amnezia/start.sh\n"
+        "RUN chmod +x /opt/amnezia/start.sh\n"
+        'ENTRYPOINT ["/opt/amnezia/start.sh"]\n'
+    )
+
+
+def _bringup(subnet: str = SUBNET) -> str:
+    """Идемпотентный подъём интерфейса + NAT внутри контейнера (подсеть — своя
+    у каждой версии протокола)."""
+    return (
+        "awg-quick down /opt/amnezia/awg/awg0.conf >/dev/null 2>&1; "
+        "awg-quick up /opt/amnezia/awg/awg0.conf; "
+        f"iptables -t nat -C POSTROUTING -s {subnet} -o eth0 -j MASQUERADE 2>/dev/null "
+        f"|| iptables -t nat -A POSTROUTING -s {subnet} -o eth0 -j MASQUERADE; "
+        "iptables -C FORWARD -i awg0 -j ACCEPT 2>/dev/null "
+        "|| iptables -A FORWARD -i awg0 -j ACCEPT; "
+        "iptables -C FORWARD -m state --state ESTABLISHED,RELATED -j ACCEPT 2>/dev/null "
+        "|| iptables -A FORWARD -m state --state ESTABLISHED,RELATED -j ACCEPT"
+    )
+
+
+_BRINGUP = _bringup()
 
 
 def _b64(text: str) -> str:
@@ -147,6 +214,80 @@ def generate_server_config(port: int) -> dict[str, str]:
         f"Address = {SUBNET}\n"
         f"ListenPort = {port}\n"
         + "".join(f"{k} = {p[k]}\n" for k in _AWG_ACTIVE_ORDER)
+        + "".join(f"# {k} = {p[k]}\n" for k in _AWG_CPS_KEYS)
+    )
+    return {"priv": priv, "pub": pub, "psk": psk, "conf": conf}
+
+
+# --- параметры AmneziaWG 3.0 ------------------------------------------------
+# Что 3.0 добавляет к 2.0 (сверено с исходниками amneziawg-tools v3.0.20260730 и
+# amneziawg-go v3.0.2, ключи .conf — src/config.c):
+#   HeaderProtectionKey    — 32-байтный ключ (как PSK): защита заголовков пакетов
+#   ContentPaddingAddition — добавочный паддинг содержимого, ДИАПАЗОН uint16
+#   Rekey/Reject/Keepalive/MaxHandshakeAttempts — тайминги протокола, тоже
+#   диапазоны uint16: значение выбирается в пределах диапазона, что размывает
+#   характерный временной «отпечаток» WireGuard.
+# H1–H4 в 3.0 остались диапазонами uint32, как в 2.0 (u32_range_from_string).
+_AWG3_TIMING_DEFAULTS = {
+    # Диапазоны вокруг штатных таймингов WireGuard: рандомизация ломает
+    # тайминг-фингерпринт, но остаётся в проверенных пределах. Инвариант
+    # RejectAfterTime > RekeyAfterTime соблюдён с запасом (180-200 > 120-140).
+    "RekeyAfterTime": (120, 140),      # WG: 120
+    "RekeyTimeout": (5, 7),            # WG: 5
+    "RejectAfterTime": (180, 200),     # WG: 180
+    "KeepaliveTimeout": (10, 12),      # WG: 10
+    "MaxHandshakeAttempts": (18, 20),  # WG: 18
+}
+
+
+
+# Минимальный размер джанка при включённой защите заголовков. Движок 3.0
+# требует, чтобы КАЖДЫЙ из S1–S4 был >= HeaderCipherNonceSize (12): под nonce
+# шифра заголовка нужно место. Иначе setconf падает с «Invalid argument».
+# ОСТОРОЖНО с текстом ошибки движка: «S3 must be more then 8 to use
+# headerProtection» врёт дважды — порог на самом деле 12, а индекс в сообщении
+# нумеруется с нуля, поэтому «S3» означает S4 (проверено на живой ноде).
+_AWG3_MIN_JUNK = 12
+
+
+def generate_awg3_params() -> dict[str, object]:
+    """Параметры AmneziaWG 3.0 = все параметры 2.0 + новые ключи третьей версии."""
+    p = dict(generate_awg_params())
+    # S3/S4 у 2.0 могут быть меньше 12 (0-64 и 0-20) — для 3.0 поднимаем порог,
+    # иначе защита заголовков не включится. S1/S2 и так генерятся от 15.
+    p["S3"] = random.randint(_AWG3_MIN_JUNK, 64)
+    p["S4"] = random.randint(_AWG3_MIN_JUNK, 20)
+    # ключ защиты заголовков — общий секрет сервера и клиента (как PSK), 32 байта
+    p["HeaderProtectionKey"] = base64.b64encode(secrets.token_bytes(32)).decode()
+    # добавочный паддинг держим скромным: конверт не должен упереться в MTU
+    lo = random.randint(0, 8)
+    p["ContentPaddingAddition"] = f"{lo}-{lo + random.randint(4, 16)}"
+    for key, (low, high) in _AWG3_TIMING_DEFAULTS.items():
+        start = random.randint(low, high - 1)
+        p[key] = f"{start}-{random.randint(start + 1, high)}"
+    return p
+
+
+_AWG3_ACTIVE_ORDER = _AWG_ACTIVE_ORDER + [
+    "HeaderProtectionKey", "ContentPaddingAddition",
+    "RekeyAfterTime", "RekeyTimeout", "RejectAfterTime",
+    "KeepaliveTimeout", "MaxHandshakeAttempts",
+]
+
+
+def generate_server_config_v3(port: int) -> dict[str, str]:
+    """Серверный awg0.conf для AmneziaWG 3.0. I1–I5, как и в 2.0, пишем
+    ЗАКОММЕНТИРОВАННЫМИ: awg-quick их к серверу не применяет (это клиентский
+    джанк), но они нужны, чтобы раздать их клиентам."""
+    priv, pub = awg.generate_keypair()
+    psk = base64.b64encode(secrets.token_bytes(32)).decode()
+    p = generate_awg3_params()
+    conf = (
+        "[Interface]\n"
+        f"PrivateKey = {priv}\n"
+        f"Address = {SUBNET_V3}\n"
+        f"ListenPort = {port}\n"
+        + "".join(f"{k} = {p[k]}\n" for k in _AWG3_ACTIVE_ORDER)
         + "".join(f"# {k} = {p[k]}\n" for k in _AWG_CPS_KEYS)
     )
     return {"priv": priv, "pub": pub, "psk": psk, "conf": conf}
@@ -311,6 +452,107 @@ def build_script(mode: str, port: int, cfg: dict[str, str]) -> str:
     return "\n".join(parts) + "\n"
 
 
+def build_script_v3(mode: str, port: int, cfg: dict[str, str]) -> str:
+    """Развёртывание AmneziaWG 3.0 (mode: 'deploy' | 'update').
+
+    Скрипт СВОЙ, а не общий с 2.0, намеренно: у 2.0 он оброс историей — апгрейд
+    legacy-конфига, «усыновление» чужого контейнера, спасение конфига из живого
+    контейнера. Для 3.0 всё это лишнее (развёрнутых кем-то ещё amnezia-awg3 в
+    природе нет), а общий скрипт пришлось бы ветвить и рисковать боевым 2.0.
+
+    Как и у 2.0: deploy пинится на известный рабочий образ, update тянет :latest.
+    Существующий конфиг НЕ перезаписывается — клиенты переживают пересборку.
+    """
+    bringup = _bringup(SUBNET_V3)
+    parts = [
+        "#!/bin/bash",
+        "set -e",
+        "trap 'echo DEPLOY_ERROR' ERR",
+        f"D={HOST_DIR_V3}; BUILD=/opt/acontrol/build-awg3; IMG={IMAGE_V3}; "
+        f"CONT={CONTAINER_V3}; PORT={port}",
+        'log(){ echo "[$(date +%H:%M:%S)] $*"; }',
+        "",
+        'log "[1/6] docker"',
+        "command -v docker >/dev/null || { curl -fsSL https://get.docker.com | sudo sh >/dev/null; }",
+        "",
+        'log "[2/6] tun + ip_forward + фаервол"',
+        "sudo modprobe tun || true",
+        "echo tun | sudo tee /etc/modules-load.d/tun.conf >/dev/null",
+        'echo "net.ipv4.ip_forward=1" | sudo tee /etc/sysctl.d/99-acontrol.conf >/dev/null',
+        "sudo sysctl -p /etc/sysctl.d/99-acontrol.conf >/dev/null",
+        'if command -v ufw >/dev/null 2>&1; then sudo ufw allow $PORT/udp >/dev/null 2>&1 || true; '
+        'sudo ufw route allow proto udp from any to any port $PORT >/dev/null 2>&1 || true; fi',
+        'if command -v firewall-cmd >/dev/null 2>&1; then '
+        'sudo firewall-cmd --permanent --add-port=$PORT/udp >/dev/null 2>&1 && '
+        'sudo firewall-cmd --reload >/dev/null 2>&1 || true; fi',
+        "",
+        'log "[3/6] Dockerfile + start.sh"',
+        'sudo mkdir -p "$BUILD" "$D" /opt/acontrol',
+        f'echo {_b64(_dockerfile_v3())} | base64 -d | sudo tee "$BUILD/Dockerfile" >/dev/null',
+        f'echo {_b64(_start_sh(SUBNET_V3))} | base64 -d | sudo tee "$BUILD/start.sh" >/dev/null',
+        "",
+        f'log "[4/6] сборка из исходников: go {AWG3_GO_TAG} + tools {AWG3_TOOLS_TAG}"',
+        'log "(первая сборка тянет тулчейны и компилирует — это несколько минут)"',
+        # без --pull: тулчейн-образы кешируются, повторная сборка быстрая
+        'sudo docker build -t $IMG "$BUILD" 2>&1 | tail -5; '
+        '[ ${PIPESTATUS[0]} -eq 0 ] || { echo DEPLOY_ERROR; exit 1; }',
+        f'printf "go={AWG3_GO_TAG}\\ntools={AWG3_TOOLS_TAG}\\n" '
+        f'| sudo tee {AWG3_VERSION_MARKER} >/dev/null || true',
+        "",
+        'log "[5/6] конфиг + контейнер"',
+        # конфиг 3.0 живёт в своём каталоге, поэтому спасать его из контейнера
+        # (как у 2.0) не требуется — он и так на хост-маунте и переживает пересборку
+        'if [ ! -f "$D/awg0.conf" ]; then',
+        f'  echo {_b64(cfg["conf"])} | base64 -d | sudo tee "$D/awg0.conf" >/dev/null',
+        f'  echo {_b64(cfg["pub"])} | base64 -d | sudo tee "$D/wireguard_server_public_key.key" >/dev/null',
+        f'  echo {_b64(cfg["priv"])} | base64 -d | sudo tee "$D/wireguard_server_private_key.key" >/dev/null',
+        f'  echo {_b64(cfg["psk"])} | base64 -d | sudo tee "$D/wireguard_psk.key" >/dev/null',
+        '  printf "[]\\n" | sudo tee "$D/clientsTable" >/dev/null',
+        '  log "конфиг создан (новый сервер AmneziaWG 3.0)"',
+        "else",
+        '  log "конфиг уже есть — сохранён, клиенты не тронуты"',
+        "fi",
+        # порт берём из конфига: при пересборке он должен остаться прежним, иначе
+        # у выданных клиентов протухнет endpoint
+        'DPORT=$(sudo grep -iE "^ *ListenPort" "$D/awg0.conf" 2>/dev/null '
+        '| head -1 | tr -dc "0-9" || true)',
+        '[ -n "$DPORT" ] && PORT=$DPORT',
+        'if command -v ufw >/dev/null 2>&1; then sudo ufw allow $PORT/udp >/dev/null 2>&1 || true; '
+        'sudo ufw route allow proto udp from any to any port $PORT >/dev/null 2>&1 || true; fi',
+        'log "порт контейнера: $PORT"',
+        # сносим ТОЛЬКО свой контейнер 3.0 и то, что занимает наш порт: контейнеры
+        # других протоколов (2.0/legacy) на этой ноде не трогаем
+        'RM="$(sudo docker ps -aq --filter "name=^${CONT}$" 2>/dev/null; '
+        'sudo docker ps -aq --filter "publish=$PORT" 2>/dev/null)"; '
+        'RM=$(printf "%s\\n" "$RM" | sort -u | grep . || true); '
+        '[ -n "$RM" ] && sudo docker rm -f $RM >/dev/null 2>&1 || true',
+        "sudo docker run -d --name $CONT --restart always --privileged \\",
+        "  --cap-add NET_ADMIN --cap-add SYS_MODULE \\",
+        "  --sysctl net.ipv4.conf.all.src_valid_mark=1 \\",
+        '  -v "$D":/opt/amnezia/awg -p $PORT:$PORT/udp $IMG >/dev/null',
+        "sleep 5",
+        "",
+        'log "[6/6] подъём awg0 + NAT + systemd"',
+        f'sudo docker exec $CONT sh -c {_shell_quote(bringup)}',
+        f'echo {_b64(_systemd_unit_v3())} | base64 -d | sudo tee '
+        "/etc/systemd/system/awg3-up.service >/dev/null",
+        "sudo systemctl daemon-reload && sudo systemctl enable awg3-up.service >/dev/null 2>&1",
+        # readback: убеждаемся, что интерфейс реально поднялся (иначе битую ноду
+        # пометили бы «готова» — та же защита, что у 2.0)
+        # В образе 3.0 (собран из исходников amneziawg-tools) бинарь называется
+        # `awg`; `wg` из базового образа Amnezia тут отсутствует, поэтому читаем
+        # состояние именно им, иначе readback ложно сочтёт ноду битой.
+        'AWGSHOW=$(sudo docker exec $CONT awg show awg0 2>/dev/null || true)',
+        'if ! printf "%s" "$AWGSHOW" | grep -qE "listening port"; then '
+        'echo "READBACK: интерфейс awg0 не поднялся (awg-quick up не сработал)"; '
+        'echo DEPLOY_ERROR; exit 1; fi',
+        'printf "%s" "$AWGSHOW" | grep -E "interface|listening" || true',
+        'log "readback: awg0 (3.0) поднят и слушает — ok"',
+        "echo DEPLOY_DONE",
+    ]
+    return "\n".join(parts) + "\n"
+
+
 def _shell_quote(s: str) -> str:
     return "'" + s.replace("'", "'\\''") + "'"
 
@@ -322,6 +564,20 @@ def _systemd_unit() -> str:
         "After=docker.service\nRequires=docker.service\n\n"
         "[Service]\nType=oneshot\nExecStartPre=/bin/sleep 8\n"
         f"ExecStart=/usr/bin/docker exec {CONTAINER} sh -c '{_BRINGUP}'\n"
+        "RemainAfterExit=yes\n\n"
+        "[Install]\nWantedBy=multi-user.target\n"
+    )
+
+
+def _systemd_unit_v3() -> str:
+    """Юнит подъёма 3.0 — отдельный от awg-up.service, чтобы версии протокола
+    не мешали друг другу при перезагрузке ноды."""
+    return (
+        "[Unit]\n"
+        "Description=Bring up AmneziaWG 3.0 interface + NAT inside container\n"
+        "After=docker.service\nRequires=docker.service\n\n"
+        "[Service]\nType=oneshot\nExecStartPre=/bin/sleep 8\n"
+        f"ExecStart=/usr/bin/docker exec {CONTAINER_V3} sh -c '{_bringup(SUBNET_V3)}'\n"
         "RemainAfterExit=yes\n\n"
         "[Install]\nWantedBy=multi-user.target\n"
     )
@@ -349,6 +605,17 @@ _SNAP_SPECS: dict[str, dict] = {
             "'[ -s /opt/amnezia/awg/awg0.conf ] || cp /opt/amnezia/awg/wg0.conf "
             "/opt/amnezia/awg/awg0.conf 2>/dev/null; "
             "awg-quick down /opt/amnezia/awg/awg0.conf >/dev/null 2>&1; "
+            "awg-quick up /opt/amnezia/awg/awg0.conf'"
+        ),
+    },
+    "awg3": {
+        "container": CONTAINER_V3,  # amnezia-awg3
+        # внутри контейнера путь штатный — свой каталог 3.0 монтируется именно сюда
+        "paths": "/opt/amnezia/awg",
+        "table": "/opt/amnezia/awg/clientsTable",
+        "reload": (
+            "sudo docker exec %C sh -c "
+            "'awg-quick down /opt/amnezia/awg/awg0.conf >/dev/null 2>&1; "
             "awg-quick up /opt/amnezia/awg/awg0.conf'"
         ),
     },
@@ -473,8 +740,11 @@ def _parse_foreign_awg(stdout: str) -> list[str]:
         name, image = parts[0].strip(), parts[1].strip()
         if not name:
             continue
-        # свой контейнер — образ acontrol-awg (с любым тегом); всё прочее чужое
-        if image.split(":", 1)[0] != IMAGE:
+        # свои контейнеры — образы панели (acontrol-awg для 2.0, acontrol-awg3
+        # для 3.0) с любым тегом; всё прочее чужое. ВАЖНО: 3.0 обязан быть в
+        # этом списке — иначе панельный amnezia-awg3 считался бы чужим и
+        # блокировал бы deploy/update AmneziaWG 2.0 на той же ноде (409).
+        if image.split(":", 1)[0] not in _PANEL_AWG_IMAGES:
             foreign.append(name)
     return foreign
 
@@ -500,6 +770,25 @@ async def foreign_awg_container(conn: asyncssh.SSHClientConnection) -> str | Non
     """Первый чужой AWG-контейнер, если есть (одиночный случай)."""
     names = await foreign_awg_containers(conn)
     return names[0] if names else None
+
+
+async def awg3_containers(conn: asyncssh.SSHClientConnection) -> list[str]:
+    """Контейнеры AmneziaWG 3.0 на ноде (по образу панели, а не по имени —
+    имя мог бы занять кто угодно)."""
+    cmd = (
+        'D=$(docker info >/dev/null 2>&1 && echo docker || echo "sudo -n docker"); '
+        '$D ps --format "{{.Names}}\t{{.Image}}" | grep -iE "awg3" || true'
+    )
+    result = await conn.run(cmd, check=False)
+    names: list[str] = []
+    for line in (result.stdout or "").splitlines():
+        parts = line.split("\t")
+        if len(parts) < 2:
+            continue
+        name, image = parts[0].strip(), parts[1].strip()
+        if name and image.split(":", 1)[0] == IMAGE_V3:
+            names.append(name)
+    return names
 
 
 async def all_awg_containers(conn: asyncssh.SSHClientConnection) -> list[str]:

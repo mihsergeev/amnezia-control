@@ -51,8 +51,10 @@ export function ClientsModal({
     protocols[0]?.key ?? 'awg',
   )
   // 'awglegacy' — старый AmneziaWG (wg0) рядом с новым; путь /awg-legacy
-  const isAwg = proto === 'awg' || proto === 'awglegacy'
-  const awgBase = proto === 'awglegacy' ? 'awg-legacy' : 'awg'
+  // 'awg3' — AmneziaWG 3.0, отдельный контейнер и свой путь /awg3
+  const isAwg = proto === 'awg' || proto === 'awglegacy' || proto === 'awg3'
+  const awgBase =
+    proto === 'awglegacy' ? 'awg-legacy' : proto === 'awg3' ? 'awg3' : 'awg'
   const [state, setState] = useState<AwgState | null>(null)
   const [version, setVersion] = useState<VersionInfo | null>(null)
   const [loading, setLoading] = useState(true)

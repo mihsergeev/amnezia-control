@@ -20,7 +20,7 @@
 
 ![Amnezia Control demo](docs/demo.gif)
 
-Nodes are managed over plain SSH (no agent installed on them). Three protocols are supported side by side: **AmneziaWG**, **OpenVPN over Cloak**, and **XRay / REALITY**. Clients are issued in the AmneziaVPN `vpn://` format (with a scannable animated QR) and, for WireGuard, as a plain `.conf`.
+Nodes are managed over plain SSH (no agent installed on them). Four protocols are supported side by side: **AmneziaWG**, **AmneziaWG 3.0**, **OpenVPN over Cloak**, and **XRay / REALITY**. Clients are issued in the AmneziaVPN `vpn://` format (with a scannable animated QR) and, for WireGuard, as a plain `.conf`.
 
 ## Why Amnezia Control
 
@@ -48,7 +48,8 @@ The [AmneziaVPN desktop client](https://amnezia.org) is great for personal use �
 **Servers & nodes**
 - Add servers with one-command onboarding (auto-setup over SSH password, or a copy-paste root script)
 - Import already-deployed servers from an AmneziaVPN "full access" `vpn://` link or a bulk host list
-- Deploy AmneziaWG / XRay / OpenVPN-over-Cloak to a clean server (build-on-target, config-preserving)
+- Deploy AmneziaWG / AmneziaWG 3.0 / XRay / OpenVPN-over-Cloak to a clean server (build-on-target, config-preserving)
+- **AmneziaWG 3.0** as a separate protocol next to 2.0 and legacy — own container, port and subnet, so both versions run on one node
 - Update the server core in one click; live deploy log
 - Per-node resource monitoring: CPU load, RAM, disk, uptime — right on the card
 - Organize servers into collapsible **groups** (folders) — by company, location, etc.

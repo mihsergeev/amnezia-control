@@ -181,7 +181,7 @@ export function ServersPage({ onUnauthorized }: Props) {
   const [deployFor, setDeployFor] = useState<{
     server: Server
     mode: 'deploy' | 'update' | 'adopt'
-    protocol: 'awg' | 'xray' | 'openvpn'
+    protocol: 'awg' | 'awg3' | 'xray' | 'openvpn'
   } | null>(null)
   const [fullAccess, setFullAccess] = useState<{
     server: Server
@@ -578,6 +578,12 @@ export function ServersPage({ onUnauthorized }: Props) {
             moreItems.push({
               label: t('Развернуть AmneziaWG'),
               onClick: () => setDeployFor({ server: s, mode: 'deploy', protocol: 'awg' }),
+            })
+          }
+          if (online && !protocols.some((p) => p.key === 'awg3')) {
+            moreItems.push({
+              label: t('Развернуть AmneziaWG 3.0'),
+              onClick: () => setDeployFor({ server: s, mode: 'deploy', protocol: 'awg3' }),
             })
           }
           if (online && !protocols.some((p) => p.key === 'xray')) {

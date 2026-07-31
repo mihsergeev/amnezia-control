@@ -7,7 +7,7 @@ from datetime import datetime, timedelta, timezone
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app import alerts, audit, awg, openvpn, sshops, xray
+from app import alerts, audit, awg, deploy, openvpn, sshops, xray
 from app.config import Settings
 from app.models import AwgConfig, AwgNote, ClientLimit, OvpnConfig, Server
 from app.sshkeys import ensure_panel_key, key_paths
@@ -36,6 +36,15 @@ async def _revoke_ssh_inner(
         if protocol == "awg":
             state = await awg.read_state(conn, server.host)
             await awg.revoke_client(conn, state.container, state.interface, client_id)
+        elif protocol == "awg3":
+            # у 3.0 свой контейнер — читаем состояние именно из него, иначе
+            # истёкший клиент 3.0 остался бы на сервере вопреки сроку
+            names = await deploy.awg3_containers(conn)
+            if names:
+                state = await awg.read_state(conn, server.host, container=names[0])
+                await awg.revoke_client(
+                    conn, state.container, state.interface, client_id
+                )
         elif protocol == "openvpn":
             container = await openvpn.detect_container(conn)
             await openvpn.revoke_client(conn, container, client_id)
@@ -45,7 +54,7 @@ async def _revoke_ssh_inner(
 
 
 async def _cleanup_db(session: AsyncSession, server_id, protocol, client_id) -> None:
-    if protocol == "awg":
+    if protocol in ("awg", "awg3"):
         await session.execute(
             delete(AwgConfig).where(
                 AwgConfig.server_id == server_id, AwgConfig.public_key == client_id
