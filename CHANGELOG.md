@@ -4,6 +4,20 @@ All notable changes to Amnezia Control are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.48.0] — 2026-08-01
+
+### Added
+- **The panel now shows the protocol version a node actually runs, read from the
+  config inside the container instead of guessed from its name.** Container names
+  don't carry the version — Amnezia names the container `amnezia-awg2` for old
+  1.0 servers too, so the card said "AmneziaWG" for everything. The node check now
+  inspects each container's config: `HeaderProtectionKey` means 3.0, an `I1` line
+  (even commented out) means 2.0, neither means 1.0/legacy. Badges read
+  "AmneziaWG 1.0 / 2.0 / 3.0" accordingly. Verified against production nodes,
+  where it immediately revealed a server named `amnezia-awg2` that is in fact
+  running 1.0 (single-value `H1`–`H4`, no `I1`). Servers show the neutral old
+  label until their next check populates the new data.
+
 ## [0.47.5] — 2026-07-31
 
 ### Fixed

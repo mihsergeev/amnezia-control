@@ -565,7 +565,10 @@ export function ServersPage({ onUnauthorized }: Props) {
         {groupList.map((g) => {
           const cards = g.servers.map((s) => {
           const info = parseCheckInfo(s)
-          const protocols = protocolsFromContainers(info?.amnezia_containers ?? [])
+          const protocols = protocolsFromContainers(
+            info?.amnezia_containers ?? [],
+            info?.protocols ?? {},
+          )
           const online = s.last_check_ok === true
           const moreItems: MenuItem[] = []
           // «Проверить» — редкое действие, прячем в меню (было отдельной кнопкой)
@@ -969,6 +972,7 @@ export function ServersPage({ onUnauthorized }: Props) {
           server={clientsFor}
           protocols={protocolsFromContainers(
             parseCheckInfo(clientsFor)?.amnezia_containers ?? [],
+            parseCheckInfo(clientsFor)?.protocols ?? {},
           )}
           onClose={() => setClientsFor(null)}
           onUnauthorized={onUnauthorized}

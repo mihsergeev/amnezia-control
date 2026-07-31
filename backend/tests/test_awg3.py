@@ -341,3 +341,37 @@ def test_hub_info_separates_2x_line_from_latest(monkeypatch) -> None:
     assert info["latest_digest"] == "sha256:v303"          # latest — третья версия
     assert info["line_latest_digest"] == "sha256:v0219"    # ветка 2.x — по дате
     assert info["line_latest_version"] == "0.2.19"
+
+
+def test_check_command_detects_real_protocol_not_name() -> None:
+    """Имя контейнера версию НЕ отражает: на боевой ноде встречен amnezia-awg2,
+    внутри которого конфиг 1.0 (одиночные H, нет I1). Проверка ноды обязана
+    смотреть в конфиг: HeaderProtectionKey -> 3.0, I1 (в т.ч. «# I1») -> 2.0,
+    иначе 1.0/legacy."""
+    from app.sshops import CHECK_COMMAND
+
+    assert "HeaderProtectionKey" in CHECK_COMMAND
+    assert "^#? *I1" in CHECK_COMMAND
+    assert "PROTO=" in CHECK_COMMAND
+    for kind in ("awg1", "awg2", "awg3", "openvpn", "xray"):
+        assert kind in CHECK_COMMAND
+
+
+def test_check_output_parses_protocol_kinds() -> None:
+    """Строки PROTO=<контейнер>|<вид> разбираются в карту протоколов и не
+    попадают в список контейнеров."""
+    from app.sshops import _parse_check_output
+
+    out = (
+        "HOST=node1\n"
+        "amnezia-awg2\n"
+        "amnezia-xray\n"
+        "PROTO=amnezia-awg2|awg1\n"
+        "PROTO=amnezia-xray|xray\n"
+    )
+    res = _parse_check_output(out)
+    assert res.hostname == "node1"
+    assert res.containers == ["amnezia-awg2", "amnezia-xray"]
+    # контейнер называется awg2, а реально внутри 1.0 — именно это и показываем
+    assert res.protocols == {"amnezia-awg2": "awg1", "amnezia-xray": "xray"}
+    assert "protocols" in res.as_dict()
