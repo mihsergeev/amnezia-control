@@ -4,6 +4,23 @@ All notable changes to Amnezia Control are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.47.4] — 2026-07-31
+
+### Fixed
+- **AmneziaWG 2.0 servers offered a bogus "update" to a 3.0 image.** On
+  2026-07-31 the upstream `:latest` tag moved to 3.0.x, and the 2.0 version check
+  compared against `:latest` — so every 2.0 node showed "3.0.3 available", and
+  pressing Update would have rebuilt a working 2.0 container on a different
+  protocol's image. Version comparison and the update itself now stay on the 2.x
+  line (newest by date, since tag `2.0.0` is older than `0.2.19`), and an update
+  never resolves to `:latest`. AmneziaWG 3.0 remains a separate protocol with its
+  own container, deployed from its own tab.
+- **The 3.0 tab showed the 2.0 server's data.** Switching protocol tabs kept the
+  previous protocol's state on screen, so when 3.0 wasn't deployed the tab
+  displayed 2.0's endpoint, subnet and client list next to the error "3.0 is not
+  deployed" — it looked as if 3.0 were installed and owned those clients. State
+  is now cleared before each load.
+
 ## [0.47.3] — 2026-07-31
 
 ### Fixed

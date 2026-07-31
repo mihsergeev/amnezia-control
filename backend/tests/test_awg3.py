@@ -286,3 +286,58 @@ def test_port_guard_queries_udp_and_tcp() -> None:
     asyncio.run(deploy.container_on_port(conn, 47180))
     cmd = conn.commands[0]
     assert "publish=47180/udp" in cmd and "publish=47180/tcp" in cmd
+
+
+def test_awg2_update_never_pulls_v3_image() -> None:
+    """С 31.07.2026 `:latest` базового образа указывает на 3.0.x. Обновление
+    AmneziaWG 2.0 обязано оставаться в своей ветке: иначе кнопка «Обновить»
+    пересобрала бы рабочий 2.0 на образе ДРУГОГО протокола (у нас 3.0 — отдельный
+    контейнер). Без явного образа безопасный дефолт — известный пин, не latest."""
+    cfg = deploy.generate_server_config(47180)
+    script = deploy.build_script("update", 47180, cfg)
+    assert "amneziavpn/amneziawg-go:latest" not in script
+    assert deploy.PINNED_BASE_DIGEST in script
+    # с явным образом ветки 2.x — тянется именно он
+    ref = f"{deploy.BASE_REPO}@sha256:" + "b" * 64
+    script2 = deploy.build_script("update", 47180, cfg, base_ref=ref)
+    assert ref in script2
+    assert "amneziavpn/amneziawg-go:latest" not in script2
+
+
+def test_hub_info_separates_2x_line_from_latest(monkeypatch) -> None:
+    """hub_info должен отдавать отдельно «последнее в ветке 2.x» — и выбирать по
+    ДАТЕ, а не по номеру: тег 2.0.0 старше, чем 0.2.19."""
+    import httpx
+
+    payload = {"results": [
+        {"name": "latest", "digest": "sha256:v303", "last_updated": "2026-07-31T00:00:00Z"},
+        {"name": "3.0.3", "digest": "sha256:v303", "last_updated": "2026-07-31T00:00:00Z"},
+        {"name": "3.0.2", "digest": "sha256:v302", "last_updated": "2026-07-28T00:00:00Z"},
+        {"name": "0.2.19", "digest": "sha256:v0219", "last_updated": "2026-06-17T00:00:00Z"},
+        {"name": "2.0.0", "digest": "sha256:v200", "last_updated": "2025-12-01T00:00:00Z"},
+    ]}
+
+    class FakeResp:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return payload
+
+    class FakeClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+        async def get(self, url):
+            return FakeResp()
+
+    monkeypatch.setattr(httpx, "AsyncClient", lambda **kw: FakeClient())
+    import asyncio
+
+    info = asyncio.run(deploy.hub_info())
+    assert info["latest_digest"] == "sha256:v303"          # latest — третья версия
+    assert info["line_latest_digest"] == "sha256:v0219"    # ветка 2.x — по дате
+    assert info["line_latest_version"] == "0.2.19"

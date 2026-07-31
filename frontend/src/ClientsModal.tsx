@@ -95,6 +95,11 @@ export function ClientsModal({
 
   const load = useCallback(async () => {
     setLoading(true)
+    // Сбрасываем состояние ДО запроса: иначе при переключении вкладки протокола
+    // (или при неудачном запросе) на экране остаются данные ПРЕДЫДУЩЕГО протокола
+    // — вкладка «AmneziaWG 3.0» показывала endpoint, подсеть и клиентов от 2.0
+    // вместе с ошибкой «не развёрнут», и выглядело это так, будто 3.0 стоит.
+    setState(null)
     try {
       setState(await api<AwgState>(`/api/servers/${server.id}/${awgBase}`))
       setError(null)
@@ -108,7 +113,9 @@ export function ClientsModal({
   useEffect(() => {
     if (!isAwg) return
     void load()
-    // версия/обновление — только у нового AmneziaWG; legacy панель не пересобирает
+    // версия/обновление — только у нового AmneziaWG; legacy панель не пересобирает.
+    // Сбрасываем перед запросом, чтобы версия 2.0 не «переезжала» на другую вкладку.
+    setVersion(null)
     if (proto === 'awg') {
       api<VersionInfo>(`/api/servers/${server.id}/awg/version`)
         .then(setVersion)
