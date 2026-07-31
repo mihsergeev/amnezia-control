@@ -212,3 +212,64 @@ def test_v2_link_unchanged_by_v3_support() -> None:
     assert entry["protocol_version"] == "2"
     for key in awg.AWG3_PARAM_KEYS:
         assert key not in entry  # полей 3.0 в ссылке 2.0 быть не должно
+
+
+class _FakeResult:
+    def __init__(self, stdout=""):
+        self.stdout = stdout
+        self.stderr = ""
+        self.exit_status = 0
+
+
+class _FakeConn:
+    """Подставляет вывод docker ps по подстроке в команде."""
+
+    def __init__(self, by_substring: dict):
+        self.by_substring = by_substring
+        self.commands: list[str] = []
+
+    async def run(self, cmd, **kw):
+        self.commands.append(cmd)
+        for sub, out in self.by_substring.items():
+            if sub in cmd:
+                return _FakeResult(out)
+        return _FakeResult()
+
+
+async def test_port_guard_detects_foreign_container() -> None:
+    """Перед развёртыванием 3.0 надо знать, кто держит целевой порт: скрипт
+    сносит контейнер на этом порту, и чужой рабочий протокол погиб бы с клиентами."""
+    conn = _FakeConn({"publish=49908": "amnezia-awg2\n"})
+    assert await deploy.container_on_port(conn, 49908) == "amnezia-awg2"
+    # свой же контейнер (пересборка 3.0) поводом для отказа не считается
+    assert await deploy.container_on_port(
+        conn, 49908, exclude="amnezia-awg2"
+    ) is None
+    # свободный порт
+    assert await deploy.container_on_port(_FakeConn({}), 47300) is None
+
+
+async def test_snapshots_are_namespaced_per_protocol(monkeypatch) -> None:
+    """Снимок распаковывается в контейнер СВОЕГО тега, поэтому конфиг 2.0 не
+    должен попадать в снимки 3.0 (и наоборот) — иначе откат сломает чужой
+    контейнер. При этом бэкап перед установкой 3.0 обязан покрывать и 2.0:
+    его делает отдельный вызов с тегом awg (см. api/awg3.deploy_awg3)."""
+    taken: list[tuple[str, str]] = []
+
+    async def fake_snapshot(conn, tag, container=None, keep=10):
+        taken.append((tag, container))
+        return True
+
+    monkeypatch.setattr(deploy, "snapshot_config", fake_snapshot)
+    # порядок важен: более специфичный ключ (awg3) проверяется первым в _FakeConn
+    conn = _FakeConn({
+        "grep -iE 'awg3'": "amnezia-awg3\tacontrol-awg3\n",
+        "grep -iE": "amnezia-awg2\tacontrol-awg\namnezia-awg3\tacontrol-awg3\n",
+    })
+    await deploy.snapshot_all(conn, "awg")
+    assert taken == [("awg", "amnezia-awg2")], f"в снимки awg попал лишний: {taken}"
+
+    taken.clear()
+    await deploy.snapshot_all(conn, "awg3")
+    assert all(t == "awg3" for t, _ in taken)
+    assert all("awg3" in (c or "") for _, c in taken), f"чужой контейнер в awg3: {taken}"

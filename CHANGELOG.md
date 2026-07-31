@@ -4,6 +4,27 @@ All notable changes to Amnezia Control are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.47.2] — 2026-07-31
+
+### Fixed
+- **v0.47.1 was broken and must not be used: `app/config.py` shipped empty**, so
+  the backend failed to import and the container wouldn't start. A bad in-place
+  edit truncated the file before reading it. Restored, with the release pipeline
+  otherwise unchanged. Anyone on 0.47.1 should move to 0.47.2.
+
+### Added
+- **A full pre-deploy backup is now taken before installing AmneziaWG 3.0 on a
+  node that already runs 2.0.** Previously the pre-op snapshot covered only the
+  3.0 container — which does not exist on a first install, so the operation ran
+  with no backup of the working 2.0 next to it. Snapshots stay namespaced per
+  protocol (restore unpacks into its own container, so mixing them would corrupt
+  the wrong one), and the 3.0 deploy now snapshots both.
+- **Port-collision guard.** The deploy script removes whatever container holds
+  the target port (that is how it replaces its own on a rebuild), so pointing a
+  3.0 deploy at a port already used by another protocol would have destroyed a
+  working container together with its clients. The panel now refuses with a clear
+  409 instead.
+
 ## [0.47.1] — 2026-07-31
 
 ### Added
