@@ -29,7 +29,7 @@ type Props = {
   protocols: Protocol[]
   onClose: () => void
   onUnauthorized: () => void
-  onRequestUpdate: (protocol: 'awg' | 'xray' | 'openvpn') => void
+  onRequestUpdate: (protocol: 'awg' | 'awg3' | 'xray' | 'openvpn') => void
   onRequestAdopt?: () => void
 }
 
@@ -482,6 +482,27 @@ export function ClientsModal({
                     : t('Переустановить')}
                 </button>
               )}
+            </div>
+          </div>
+        )}
+
+        {proto === 'awg3' && state && (
+          <div className="version-line">
+            <span className="muted small">
+              {t('AmneziaWG 3.0 — собирается на ноде из закреплённых версий исходников')}
+            </span>
+            <div className="version-actions">
+              {/* откат к снимку, снятому перед пересборкой (страховка) */}
+              <RollbackMenu
+                serverId={server.id}
+                serverName={server.name}
+                proto="awg3"
+                onRestored={load}
+                onUnauthorized={onUnauthorized}
+              />
+              <button className="ghost" onClick={() => onRequestUpdate('awg3')}>
+                {t('Пересобрать')}
+              </button>
             </div>
           </div>
         )}
