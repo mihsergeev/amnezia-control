@@ -4,6 +4,22 @@ All notable changes to Amnezia Control are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.47.3] — 2026-07-31
+
+### Fixed
+- **The port-collision guard missed UDP ports — that is, every AmneziaWG port.**
+  `docker ps --filter publish=NNN` does not match a UDP publication without an
+  explicit protocol, so a port held by a running 2.0 server looked free and the
+  guard waved the deploy through. Caught on a live node. The check now asks for
+  both `NNN/udp` and `NNN/tcp`, and refuses with a clear 409 either way.
+
+### Added
+- **Documented, verified rollback for 3.0** in both READMEs: what the pre-deploy
+  backup covers, why installing 3.0 cannot disturb a running 2.0, and the exact
+  commands to remove 3.0 entirely. Verified on a production node — after install
+  and rollback the 2.0 container was byte-identical (same container ID, config
+  hash, clients and handshakes).
+
 ## [0.47.2] — 2026-07-31
 
 ### Fixed

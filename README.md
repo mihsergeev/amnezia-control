@@ -231,6 +231,32 @@ fetch, revoke, pause and resume clients — it **cannot** deploy or delete serve
 change settings, export full access, or create further keys. Revoke a key at any
 time from the same page; everything it did is in the audit log as `apikey:<name>`.
 
+### Rolling back AmneziaWG 3.0
+
+Installing 3.0 is **additive**: it brings up a separate container
+(`amnezia-awg3`) with its own port, subnet and config directory. Running
+2.0/legacy containers are neither recreated nor reconfigured — verified on a live
+production node: after a 3.0 install the 2.0 container kept the same container ID,
+the same config hash, the same clients and live handshakes.
+
+Before installing, the panel snapshots **every AmneziaWG container on the node**
+(`~/.acontrol/snapshots/…`), and the target port is checked up front: if another
+container already holds it, the deploy refuses to start (otherwise the script
+would remove whoever occupies that port).
+
+To roll 3.0 back completely, on the node:
+
+```bash
+sudo docker rm -f amnezia-awg3
+sudo systemctl disable --now awg3-up.service && sudo rm -f /etc/systemd/system/awg3-up.service && sudo systemctl daemon-reload
+sudo rm -rf /opt/amnezia/awg3 /opt/acontrol/build-awg3 /opt/acontrol/awg3-version
+sudo docker rmi acontrol-awg3
+sudo ufw delete allow <3.0 port>/udp   # if you use ufw
+```
+
+None of this touches 2.0 clients. To restore a **config** (rather than remove the
+protocol), use "Roll back" on the protocol tab in the panel — it lists snapshots.
+
 ## Security notes
 
 - Set a strong `ACONTROL_JWT_SECRET` (`openssl rand -hex 32`) and admin password — **the panel refuses to start** on empty/default values.
