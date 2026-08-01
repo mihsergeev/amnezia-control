@@ -83,7 +83,12 @@ All notable changes to Amnezia Control are documented here. The format is based 
   working container together with its clients. The panel now refuses with a clear
   409 instead.
 
-## [0.47.1] — 2026-07-31
+## [0.47.1] — 2026-07-31 — WITHDRAWN
+
+> This release shipped an empty `app/config.py`: the backend could not import and
+> the container refused to start. The GitHub release and its tag have been
+> removed, which is why the version is missing from the release list. Everything
+> below landed in **0.47.2** — use that or later. Do not pin `0.47.1`.
 
 ### Added
 - **Config snapshots and one-click rollback for AmneziaWG 3.0.** Snapshots were
