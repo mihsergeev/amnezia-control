@@ -4,6 +4,13 @@ All notable changes to Amnezia Control are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.48.1] — 2026-08-01
+
+### Changed
+- **Protocol tabs are ordered newest first: 3.0, then 2.0, then Legacy.** The
+  first tab is the one that opens by default, and on a node that already runs 3.0
+  there is no point landing on 2.0.
+
 ## [0.48.0] — 2026-08-01
 
 ### Added

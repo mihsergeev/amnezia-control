@@ -523,6 +523,10 @@ export function protocolsFromContainers(
   const hasAwgOther = containers.some(
     (c) => /^amnezia-awg/.test(c) && !/^amnezia-awg3/.test(c),
   )
+  // Порядок вкладок — от НОВОГО к старому: 3.0, затем 2.0, затем legacy. Первая
+  // вкладка открывается по умолчанию, а нужен обычно самый свежий протокол: если
+  // на ноде уже есть 3.0, открывать её на 2.0 бессмысленно.
+  if (hasAwg3) found.push({ key: 'awg3', label: 'AmneziaWG 3.0' })
   if (hasAwgOther) {
     // версию берём из конфига контейнера; пока проверка старая (без protocols)
     // — остаётся прежняя нейтральная подпись
@@ -536,7 +540,6 @@ export function protocolsFromContainers(
   if (containers.includes('amnezia-awg') && has(/^amnezia-awg2/)) {
     found.push({ key: 'awglegacy', label: 'AmneziaWG Legacy' })
   }
-  if (hasAwg3) found.push({ key: 'awg3', label: 'AmneziaWG 3.0' })
   if (has(/^amnezia-openvpn/))
     found.push({ key: 'openvpn', label: 'OpenVPN/Cloak' })
   if (has(/^amnezia-xray/)) found.push({ key: 'xray', label: 'XRay/REALITY' })
