@@ -74,6 +74,14 @@ def _canonical(name: str) -> str | None:
     # иначе startswith("amnezia-awg") схлопнул бы новый контейнер в legacy, и
     # приложение AmneziaVPN пометило бы протокол «AmneziaWG Legacy» и полезло
     # искать несуществующий контейнер amnezia-awg (ErrorCode 202).
+    # AmneziaWG 3.0 в полный доступ НЕ отдаём. Приложение 5.0.0.5 знает только
+    # amnezia-awg, amnezia-awg2 и amnezia-openvpn-cloak, а незнакомое имя
+    # превращает в DockerContainer::None (containerUtils.cpp) — управлять таким
+    # контейнером оно не умеет. Раньше awg3 попадал под условие ниже и уезжал в
+    # ссылку как «amnezia-awg», из-за чего приложение показывало третью версию
+    # как «AmneziaWG Legacy» на сервере, где legacy вообще нет.
+    if name.startswith("amnezia-awg3"):
+        return None
     if name.startswith("amnezia-awg2"):
         return "amnezia-awg2"
     if name.startswith("amnezia-awg"):
