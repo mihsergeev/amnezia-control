@@ -69,6 +69,17 @@ async def export_full_access(
         raise HTTPException(
             status.HTTP_502_BAD_GATEWAY, f"Ошибка SSH: {exc or type(exc).__name__}"
         ) from exc
+    # Приложение AmneziaVPN пока не знает контейнер AmneziaWG 3.0, поэтому в
+    # полный доступ он не попадает. Если на ноде НЕТ ничего, кроме 3.0, ссылку
+    # отдавать нечем: молча подставить другой контейнер значит соврать —
+    # приложение полезет искать несуществующий и упадёт с ErrorCode 202.
+    if not any(fullaccess._canonical(name) for name in containers):
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "На сервере нет протоколов, которыми умеет управлять приложение "
+            "AmneziaVPN. AmneziaWG 3.0 оно пока не поддерживает — для неё "
+            "выдайте обычный клиентский конфиг (кнопка «Клиенты»).",
+        )
     link = fullaccess.build_full_access_link(
         host=server.host, ssh_user=server.ssh_user, ssh_port=server.ssh_port,
         private_key=private_key, description=server.name, dns1=dns1, dns2=dns2,

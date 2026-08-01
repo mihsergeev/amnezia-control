@@ -120,3 +120,27 @@ def test_link_without_awg2_config_stays_bare() -> None:
     )
     entry = _decode(link)["containers"][0]
     assert entry == {"container": "amnezia-openvpn-cloak"}
+
+
+def test_awg3_never_sent_as_legacy() -> None:
+    """Регресс с боевого сервера: контейнер amnezia-awg3 попадал под условие
+    startswith("amnezia-awg") и уезжал в ссылку как «amnezia-awg», из-за чего
+    приложение показывало третью версию как «AmneziaWG Legacy» — на сервере,
+    где legacy вообще нет. Приложение 5.0.0.5 знает только amnezia-awg,
+    amnezia-awg2 и amnezia-openvpn-cloak; незнакомое имя = DockerContainer::None,
+    поэтому 3.0 в полный доступ не отдаём вовсе."""
+    assert _canonical("amnezia-awg3") is None
+    # соседние версии по-прежнему распознаются
+    assert _canonical("amnezia-awg2") == "amnezia-awg2"
+    assert _canonical("amnezia-awg") == "amnezia-awg"
+
+    link = build_full_access_link(
+        host="203.0.113.10", ssh_user="amn", ssh_port=22,
+        private_key="KEY", description="srv", dns1="1.1.1.1", dns2="1.0.0.1",
+        container_names=["amnezia-awg2", "amnezia-awg3"],
+    )
+    types = {c["container"] for c in _decode(link)["containers"]}
+    assert types == {"amnezia-awg2"}, f"в ссылку попало лишнее: {types}"
+    assert "amnezia-awg3" not in types
+    # и главное: 3.0 не выдаётся за legacy
+    assert "amnezia-awg" not in types

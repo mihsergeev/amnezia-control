@@ -4,6 +4,20 @@ All notable changes to Amnezia Control are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.48.3] — 2026-08-01
+
+### Fixed
+- **Full access presented an AmneziaWG 3.0 server as "AmneziaWG Legacy".** The
+  container `amnezia-awg3` matched the `amnezia-awg` prefix check and went into
+  the link as the legacy container, so the AmneziaVPN app listed a Legacy
+  protocol on a node that has none — and of course could not manage it. The app
+  (5.0.0.5) only knows `amnezia-awg`, `amnezia-awg2` and `amnezia-openvpn-cloak`;
+  an unknown name becomes `DockerContainer::None`, so 3.0 is now left out of the
+  full-access link entirely instead of being disguised as something else. If a
+  node runs *only* 3.0, the panel refuses with an explanation rather than
+  shipping a container the app would fail to find. Regular client configs for 3.0
+  are unaffected and keep working — that is the way to hand out 3.0 access today.
+
 ## [0.48.2] — 2026-08-01
 
 ### Fixed
