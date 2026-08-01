@@ -46,6 +46,23 @@ jobs:
             type=semver,pattern={{major}}.{{minor}}
             type=raw,value=latest
 
+      # Дым-тест ДО публикации: собираем образ локально (amd64) и убеждаемся, что
+      # он вообще импортируется. Релиз v0.47.1 уехал в GHCR с пустым config.py —
+      # сборка прошла, а контейнер не стартовал; такая проверка это ловит.
+      - name: Build for smoke test
+        if: matrix.name == 'backend'
+        uses: docker/build-push-action@v7
+        with:
+          context: ${{ matrix.context }}
+          load: true
+          tags: smoke-test:latest
+
+      - name: Smoke test (backend image imports)
+        if: matrix.name == 'backend'
+        run: |
+          docker run --rm --entrypoint python smoke-test:latest \
+            -c "import app.main; from app.config import Settings; print('образ стартует')"
+
       - name: Build and push
         uses: docker/build-push-action@v7
         with:
