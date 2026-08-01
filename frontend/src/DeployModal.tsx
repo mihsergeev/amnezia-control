@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { api, ApiError, type DeployStatus } from './api'
 import { useI18n } from './i18n'
 import { useModalDismiss } from './useModalDismiss'
@@ -34,43 +34,60 @@ export function DeployModal({
           : 'AmneziaWG'
   const [status, setStatus] = useState<DeployStatus | null>(null)
   const [error, setError] = useState<string | null>(null)
+  // Порт по умолчанию СВОЙ у каждого протокола: у 3.0 он обязан отличаться от
+  // 2.0, иначе установка целилась бы в порт работающего сервера и упиралась в
+  // защиту (а раньше — снесла бы его контейнер вместе с клиентами).
+  const defaultPort =
+    protocol === 'xray' ? 443 : protocol === 'openvpn' ? 8443 : protocol === 'awg3' ? 47300 : 47180
+  const [port, setPort] = useState(defaultPort)
+  // порт занят другим контейнером — предлагаем выбрать свободный и повторить
+  const [portBusy, setPortBusy] = useState(false)
   const startedRef = useRef(false)
+  const aliveRef = useRef(true)
+  const timerRef = useRef<number | undefined>(undefined)
 
-  useEffect(() => {
-    if (startedRef.current) return
-    startedRef.current = true
-    let alive = true
-    let timer: number | undefined
-
-    function handleError(err: unknown) {
+  const handleError = useCallback(
+    (err: unknown) => {
       if (err instanceof ApiError && err.status === 401) {
         onUnauthorized()
         return
       }
+      // 409 от развёртывания = порт занят другим контейнером: показываем поле
+      // выбора порта, чтобы можно было повторить, а не упираться в тупик
+      if (err instanceof ApiError && err.status === 409) {
+        setPortBusy(true)
+        // подставляем соседний порт, чтобы не пришлось придумывать самому
+        setPort((prev) => (prev >= 65535 ? prev : prev + 1))
+      }
       setError(err instanceof Error ? err.message : t('Ошибка'))
-    }
+    },
+    [onUnauthorized, t],
+  )
 
-    async function poll() {
-      if (!alive) return
-      try {
-        const s = await api<DeployStatus>(
-          `/api/servers/${serverId}/${protocol}/deploy/status`,
-        )
-        if (!alive) return
-        setStatus(s)
-        if (s.state === 'done') {
-          onDone()
-          return
-        }
-        if (s.state === 'error') return
-      } catch (err) {
-        handleError(err)
+  const poll = useCallback(async () => {
+    if (!aliveRef.current) return
+    try {
+      const s = await api<DeployStatus>(
+        `/api/servers/${serverId}/${protocol}/deploy/status`,
+      )
+      if (!aliveRef.current) return
+      setStatus(s)
+      if (s.state === 'done') {
+        onDone()
         return
       }
-      timer = window.setTimeout(poll, 3000)
+      if (s.state === 'error') return
+    } catch (err) {
+      handleError(err)
+      return
     }
+    timerRef.current = window.setTimeout(() => void poll(), 3000)
+  }, [serverId, protocol, onDone, handleError])
 
-    async function start() {
+  const start = useCallback(
+    async (p: number) => {
+      setError(null)
+      setPortBusy(false)
       try {
         const path =
           mode === 'update'
@@ -78,29 +95,29 @@ export function DeployModal({
             : mode === 'adopt'
               ? `/api/servers/${serverId}/${protocol}/adopt`
               : `/api/servers/${serverId}/${protocol}/deploy`
-        const deployBody =
-          protocol === 'xray'
-            ? JSON.stringify({ port: 443 })
-            : protocol === 'openvpn'
-              ? JSON.stringify({ port: 8443 })
-              : JSON.stringify({ port: 47180 })
         await api(path, {
           method: 'POST',
-          body: mode === 'deploy' ? deployBody : undefined,
+          body: mode === 'deploy' ? JSON.stringify({ port: p }) : undefined,
         })
       } catch (err) {
         handleError(err)
         return
       }
-      timer = window.setTimeout(poll, 2500)
-    }
+      timerRef.current = window.setTimeout(() => void poll(), 2500)
+    },
+    [serverId, mode, protocol, handleError, poll],
+  )
 
-    void start()
+  useEffect(() => {
+    if (startedRef.current) return
+    startedRef.current = true
+    aliveRef.current = true
+    void start(defaultPort)
     return () => {
-      alive = false
-      if (timer) window.clearTimeout(timer)
+      aliveRef.current = false
+      if (timerRef.current) window.clearTimeout(timerRef.current)
     }
-  }, [serverId, mode, protocol, onDone, onUnauthorized])
+  }, [start, defaultPort])
 
   const running = !error && (!status || status.state === 'running' || status.state === 'unknown')
   const done = status?.state === 'done'
@@ -146,6 +163,29 @@ export function DeployModal({
         </div>
 
         {error && <p className="form-error">{error}</p>}
+
+        {portBusy && (
+          <div className="row port-retry">
+            <label className="muted small">{t('Порт для установки')}</label>
+            <input
+              type="number"
+              min={1}
+              max={65535}
+              value={port}
+              onChange={(e) => setPort(Number(e.target.value))}
+              style={{ maxWidth: 140 }}
+            />
+            <button
+              onClick={() => {
+                startedRef.current = true
+                void start(port)
+              }}
+              disabled={!port || port < 1 || port > 65535}
+            >
+              {t('Развернуть на этом порту')}
+            </button>
+          </div>
+        )}
 
         <pre className="script-box deploy-log">
           {status?.log || t('запуск…')}
