@@ -16,6 +16,8 @@ const EN: Record<string, string> = {
   'Обзор': 'Overview',
   'Журнал': 'Log',
   'Журнал действий': 'Action log',
+  'Порт для установки': 'Port to install on',
+  'Развернуть на этом порту': 'Deploy on this port',
   'AmneziaWG 3.0 — собирается на ноде из закреплённых версий исходников':
     'AmneziaWG 3.0 — built on the node from pinned source versions',
   'Развернуть AmneziaWG 3.0': 'Deploy AmneziaWG 3.0',

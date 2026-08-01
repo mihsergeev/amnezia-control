@@ -4,6 +4,16 @@ All notable changes to Amnezia Control are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.48.2] — 2026-08-01
+
+### Fixed
+- **Installing AmneziaWG 3.0 aimed at the 2.0 port and left no way out.** The
+  deploy dialog sent port `47180` for every AmneziaWG flavour, so on a node
+  already running 2.0 the 3.0 install hit the port guard — correctly refusing,
+  but with no field to pick a different port, which was a dead end. 3.0 now
+  defaults to its own port `47300`, and when a port really is taken the dialog
+  shows a port input (pre-filled with the next one) and a retry button.
+
 ## [0.48.1] — 2026-08-01
 
 ### Changed
