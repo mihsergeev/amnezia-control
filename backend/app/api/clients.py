@@ -39,6 +39,11 @@ router = APIRouter(prefix="/clients", tags=["clients"])
 # сколько нашлось клиентов.
 _MAX_PARALLEL_REVOKES = 5
 
+# С какой длины запроса вообще пробуем искать по открытому ключу. Короткие
+# запросы — это почти всегда имена, а случайные base64-ключи содержат любые
+# короткие сочетания букв, что даёт ложные совпадения.
+_MIN_KEY_QUERY = 8
+
 
 def _key(server_id: int, protocol: str, client_id: str) -> tuple:
     return (server_id, protocol, client_id)
@@ -51,9 +56,21 @@ async def search_clients(
     q: str = Query(min_length=2, description="Часть имени, заметки или ключа клиента"),
 ) -> list[ClientSearchHit]:
     """Ищет клиентов по всем серверам и протоколам: по имени, заметке и id/ключу."""
-    needle = q.strip().lower()
+    raw = q.strip()
+    needle = raw.lower()
     servers = {s.id: s for s in await session.scalars(select(Server))}
     hits: dict[tuple, dict] = {}
+
+    def id_match(client_id: str) -> bool:
+        """Совпадение по КЛЮЧУ — строго и с учётом регистра.
+
+        Ключи это base64 из случайных байт, и регистронезависимый поиск по ним
+        даёт ложные срабатывания: запрос «ifed» (фамилия) поймал чужого клиента,
+        у которого в ключе оказалось «IfeD». В списке с преотмеченными строками
+        это прямой путь отозвать доступ постороннему. Поэтому по ключу ищем
+        как есть — с регистром — и только для запросов длиннее короткого имени.
+        """
+        return len(raw) >= _MIN_KEY_QUERY and raw in client_id
 
     def add(server_id: int, protocol: str, client_id: str, **fields) -> None:
         if server_id not in servers:
@@ -77,7 +94,7 @@ async def search_clients(
 
     # имена с нод (кэш сборщика) — покрывают и клиентов, созданных мимо панели
     for row in await session.scalars(select(ClientName)):
-        if needle in (row.name or "").lower() or needle in row.client_id.lower():
+        if needle in (row.name or "").lower() or id_match(row.client_id):
             add(row.server_id, row.protocol, row.client_id, name=row.name)
     # заметки панели
     for row in await session.scalars(select(AwgNote)):
@@ -85,10 +102,10 @@ async def search_clients(
             add(row.server_id, row.protocol, row.public_key, note=row.note)
     # выданные конфиги: имя хранится вместе с ними
     for row in await session.scalars(select(AwgConfig)):
-        if needle in (row.name or "").lower() or needle in row.public_key.lower():
+        if needle in (row.name or "").lower() or id_match(row.public_key):
             add(row.server_id, "awg", row.public_key, name=row.name, has_config=True)
     for row in await session.scalars(select(OvpnConfig)):
-        if needle in (row.name or "").lower() or needle in row.client_id.lower():
+        if needle in (row.name or "").lower() or id_match(row.client_id):
             add(row.server_id, "openvpn", row.client_id, name=row.name, has_config=True)
 
     # заметки хранятся без привязки к тому, жив ли клиент, поэтому сортируем
