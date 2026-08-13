@@ -45,15 +45,28 @@ async def test_search_finds_client_across_servers(client, auth_headers, session_
     assert any(h["has_config"] for h in hits)
 
 
-async def test_search_is_case_insensitive_and_matches_key(client, auth_headers, session_factory):
+async def test_search_name_case_insensitive_key_case_sensitive(
+    client, auth_headers, session_factory
+):
+    """Имя ищем без учёта регистра (человек не помнит, как записан), а ключ —
+    строго: base64 регистрозависим, и вольный поиск по нему даёт ложные хиты."""
     ids = await _seed(client, auth_headers)
     async with session_factory() as s:
         s.add(ClientName(server_id=ids["srv-a"], protocol="awg",
-                         client_id="AbCdEf123=", name="Иванов"))
+                         client_id="AbCdEf123456=", name="Иванов"))
         await s.commit()
-    for q in ("иванов", "ИВАНОВ", "abcdef"):
+    for q in ("иванов", "ИВАНОВ", "Иванов"):
         r = await client.get(f"/api/clients/search?q={q}", headers=auth_headers)
-        assert len(r.json()) == 1, f"не нашлось по запросу {q}"
+        assert len(r.json()) == 1, f"не нашлось по имени «{q}»"
+    # ключ: точный фрагмент от 8 символов находит
+    r = await client.get("/api/clients/search?q=AbCdEf1234", headers=auth_headers)
+    assert len(r.json()) == 1
+    # тот же фрагмент в другом регистре — нет
+    r = await client.get("/api/clients/search?q=abcdef1234", headers=auth_headers)
+    assert r.json() == []
+    # короткий фрагмент ключа не ищем вовсе (это почти всегда имя)
+    r = await client.get("/api/clients/search?q=AbCd", headers=auth_headers)
+    assert r.json() == []
 
 
 async def test_search_ignores_orphans_of_deleted_servers(client, auth_headers, session_factory):
@@ -154,3 +167,34 @@ async def test_bulk_revoke_reports_each_item(client, auth_headers, session_facto
     by_srv = {i["server_name"]: i for i in body["items"]}
     assert by_srv["srv-a"]["ok"] is True
     assert by_srv["srv-b"]["ok"] is False
+
+
+async def test_search_does_not_match_random_key_substring(
+    client, auth_headers, session_factory
+):
+    """Регресс с боевого парка: запрос «ifed» (фамилия) вытащил ЧУЖОГО клиента
+    Den4ick24 — в его случайном base64-ключе оказалось «IfeD». Строки в выдаче
+    отмечены по умолчанию, поэтому такой ложный хит вёл прямо к отзыву доступа
+    постороннему. По ключу ищем с учётом регистра и только от 8 символов."""
+    ids = await _seed(client, auth_headers)
+    async with session_factory() as s:
+        s.add(ClientName(server_id=ids["srv-a"], protocol="awg",
+                         client_id="z6rcBnx9/IfeD757abcdef=", name="Den4ick24"))
+        s.add(ClientName(server_id=ids["srv-b"], protocol="awg",
+                         client_id="WJtHmYYBiH77JXJaZZ=", name="ifedorof"))
+        await s.commit()
+
+    hits = (await client.get("/api/clients/search?q=ifed", headers=auth_headers)).json()
+    assert [h["name"] for h in hits] == ["ifedorof"], hits
+
+    # поиск ПО КЛЮЧУ по-прежнему работает: точный фрагмент с регистром
+    hits = (await client.get(
+        "/api/clients/search?q=z6rcBnx9/IfeD", headers=auth_headers
+    )).json()
+    assert [h["name"] for h in hits] == ["Den4ick24"]
+
+    # а тот же фрагмент в другом регистре — не совпадение (ключи регистрозависимы)
+    hits = (await client.get(
+        "/api/clients/search?q=Z6RCBNX9/IFED", headers=auth_headers
+    )).json()
+    assert hits == []

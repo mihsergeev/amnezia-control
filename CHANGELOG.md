@@ -4,6 +4,20 @@ All notable changes to Amnezia Control are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.49.1] — 2026-08-01
+
+### Fixed
+- **Client search matched unrelated people through their keys.** Searching a
+  surname ("ifed") pulled in a stranger whose random base64 public key happened
+  to contain "IfeD" — and since results come pre-selected, that was a direct path
+  to revoking the wrong person's access. Names and notes still match
+  case-insensitively; keys now require an exact, case-sensitive fragment of at
+  least 8 characters, which is how you would search for a key anyway.
+
+### Changed
+- Reworded the search page description to state the actual matching rules and
+  batch behaviour instead of a general blurb.
+
 ## [0.49.0] — 2026-08-01
 
 ### Added
