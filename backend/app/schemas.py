@@ -507,3 +507,46 @@ class V1ServerOut(BaseModel):
     host: str
     country: str = ""
     last_check_ok: bool | None = None
+
+
+# --- Глобальный поиск клиентов и массовый отзыв -----------------------------
+
+
+class ClientSearchHit(BaseModel):
+    """Найденный клиент: на каком сервере, каким протоколом, как зовут."""
+
+    server_id: int
+    server_name: str
+    protocol: str  # awg | awg3 | awglegacy | openvpn | xray
+    client_id: str
+    name: str = ""
+    note: str = ""
+    has_config: bool = False
+
+
+class RevokeBulkItem(BaseModel):
+    server_id: int
+    protocol: str = Field(min_length=1, max_length=16)
+    client_id: str = Field(min_length=1)
+
+
+class RevokeBulkRequest(BaseModel):
+    items: list[RevokeBulkItem] = Field(min_length=1, max_length=500)
+    # что искали — попадёт в журнал действий, чтобы потом было понятно, за что
+    # отзывали пачку доступов
+    query: str = Field(default="", max_length=128)
+
+
+class RevokeBulkResultItem(BaseModel):
+    server_id: int
+    server_name: str
+    protocol: str
+    client_id: str
+    ok: bool
+    error: str = ""
+
+
+class RevokeBulkResult(BaseModel):
+    revoked: int
+    failed: int
+    items: list[RevokeBulkResultItem]
