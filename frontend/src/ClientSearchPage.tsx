@@ -234,7 +234,7 @@ export function ClientSearchPage({ onUnauthorized }: Props) {
                     </td>
                     <td>{h.server_name}</td>
                     <td className="muted">
-                      {PROTOCOL_LABEL[h.protocol] ?? h.protocol}
+                      {h.protocol_label || PROTOCOL_LABEL[h.protocol] || h.protocol}
                     </td>
                     <td className="muted small">{h.note}</td>
                   </tr>

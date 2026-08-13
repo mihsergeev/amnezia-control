@@ -581,6 +581,9 @@ export type ClientHit = {
   server_id: number
   server_name: string
   protocol: string
+  // подпись с версией («AmneziaWG 2.0/3.0», «AmneziaWG Legacy», …) — считается
+  // на бэкенде: ключ протокола версию не несёт, её знает проверка ноды
+  protocol_label?: string
   client_id: string
   name: string
   note: string

@@ -13,6 +13,7 @@ SSH: ходить в десяток нод на каждое нажатие кл
 """
 
 import asyncio
+import json
 import logging
 
 from fastapi import APIRouter, Query
@@ -61,6 +62,34 @@ async def search_clients(
     servers = {s.id: s for s in await session.scalars(select(Server))}
     hits: dict[tuple, dict] = {}
 
+    def label_for(server_id: int, protocol: str) -> str:
+        """Человекочитаемый протокол с ВЕРСИЕЙ. Для awg версия не заложена в
+        ключ (1.0 и 2.0 неотличимы), поэтому берём её из последней проверки
+        ноды — там версия определена по содержимому конфига контейнера."""
+        fixed = {
+            "awg3": "AmneziaWG 3.0",
+            "awglegacy": "AmneziaWG Legacy",
+            "openvpn": "OpenVPN/Cloak",
+            "xray": "XRay/REALITY",
+        }
+        if protocol in fixed:
+            return fixed[protocol]
+        server = servers.get(server_id)
+        kinds: dict = {}
+        if server and server.last_check_info:
+            try:
+                kinds = json.loads(server.last_check_info).get("protocols") or {}
+            except (ValueError, TypeError):
+                kinds = {}
+        for cont, kind in kinds.items():
+            if "awg3" in cont.lower():
+                continue
+            if kind == "awg2":
+                return "AmneziaWG 2.0"
+            if kind == "awg1":
+                return "AmneziaWG 1.0"
+        return "AmneziaWG"
+
     def id_match(client_id: str) -> bool:
         """Совпадение по КЛЮЧУ — строго и с учётом регистра.
 
@@ -83,6 +112,7 @@ async def search_clients(
                 "server_name": servers[server_id].name,
                 "protocol": protocol,
                 "client_id": client_id,
+                "protocol_label": label_for(server_id, protocol),
                 "name": "",
                 "note": "",
                 "has_config": False,
