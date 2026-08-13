@@ -53,7 +53,7 @@ async def test_expired_client_is_revoked(factory, monkeypatch):
     async def fake_revoke(server, protocol, client_id, key_path, timeout):
         calls.append((server.id, protocol, client_id))
 
-    monkeypatch.setattr(expiry, "_revoke_ssh", fake_revoke)
+    monkeypatch.setattr(expiry, "revoke_on_node", fake_revoke)
 
     n = await expiry.expiry_once(factory, settings)
 
@@ -71,7 +71,7 @@ async def test_future_client_is_kept(factory, monkeypatch):
     await _seed(factory, future)
 
     monkeypatch.setattr(
-        expiry, "_revoke_ssh",
+        expiry, "revoke_on_node",
         lambda *a, **k: (_ for _ in ()).throw(AssertionError("не должно вызываться")),
     )
 
@@ -90,7 +90,7 @@ async def test_unreachable_node_keeps_limit(factory, monkeypatch):
     async def boom(*a, **k):
         raise OSError("нода недоступна")
 
-    monkeypatch.setattr(expiry, "_revoke_ssh", boom)
+    monkeypatch.setattr(expiry, "revoke_on_node", boom)
 
     n = await expiry.expiry_once(factory, settings)
 

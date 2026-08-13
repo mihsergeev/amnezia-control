@@ -4,6 +4,7 @@ import { LoginPage } from './LoginPage'
 import { ServersPage } from './ServersPage'
 import { Dashboard } from './Dashboard'
 import { ApiKeysPage } from './ApiKeysPage'
+import { ClientSearchPage } from './ClientSearchPage'
 import { AuditPage } from './AuditPage'
 import { Menu } from './Menu'
 import { BackupsModal } from './BackupsModal'
@@ -13,7 +14,7 @@ import { PasswordModal } from './PasswordModal'
 import { useI18n } from './i18n'
 import './App.css'
 
-type View = 'servers' | 'overview' | 'audit' | 'apikeys'
+type View = 'servers' | 'overview' | 'search' | 'audit' | 'apikeys'
 
 function App() {
   const { t, lang, setLang } = useI18n()
@@ -128,6 +129,12 @@ function App() {
               {t('Обзор')}
             </button>
             <button
+              className={view === 'search' ? 'navlink navlink-active' : 'navlink'}
+              onClick={() => setView('search')}
+            >
+              {t('Поиск')}
+            </button>
+            <button
               className={view === 'audit' ? 'navlink navlink-active' : 'navlink'}
               onClick={() => setView('audit')}
             >
@@ -210,6 +217,8 @@ function App() {
       {authed ? (
         view === 'overview' ? (
           <Dashboard onUnauthorized={logout} />
+        ) : view === 'search' ? (
+          <ClientSearchPage onUnauthorized={logout} />
         ) : view === 'audit' ? (
           <AuditPage onUnauthorized={logout} />
         ) : view === 'apikeys' ? (

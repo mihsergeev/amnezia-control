@@ -20,14 +20,14 @@ _deferred_alerted: set[tuple[int, str]] = set()
 _expiry_warned: set[tuple[int, str]] = set()
 
 
-async def _revoke_ssh(server: Server, protocol: str, client_id: str, key_path, timeout):
+async def revoke_on_node(server: Server, protocol: str, client_id: str, key_path, timeout):
     # жёсткий таймаут: без него зависший docker exec на одной ноде застопорил бы
     # весь последовательный проход expiry — остальные истёкшие не отозвались бы.
     async with asyncio.timeout(max(timeout * 4, 30)):
-        await _revoke_ssh_inner(server, protocol, client_id, key_path, timeout)
+        await _revoke_on_node_inner(server, protocol, client_id, key_path, timeout)
 
 
-async def _revoke_ssh_inner(
+async def _revoke_on_node_inner(
     server: Server, protocol: str, client_id: str, key_path, timeout
 ):
     async with sshops.connect(
@@ -45,6 +45,15 @@ async def _revoke_ssh_inner(
                 await awg.revoke_client(
                     conn, state.container, state.interface, client_id
                 )
+        elif protocol == "awglegacy":
+            # старый AmneziaWG живёт в своём контейнере (wg0) рядом с новым —
+            # без этой ветки массовый отзыв молча пропускал бы legacy-клиентов
+            cont = (await awg.detect_awg_containers(conn))["legacy"]
+            if cont:
+                state = await awg.read_state(conn, server.host, container=cont)
+                await awg.revoke_client(
+                    conn, state.container, state.interface, client_id
+                )
         elif protocol == "openvpn":
             container = await openvpn.detect_container(conn)
             await openvpn.revoke_client(conn, container, client_id)
@@ -53,8 +62,8 @@ async def _revoke_ssh_inner(
             await xray.revoke_client(conn, container, client_id)
 
 
-async def _cleanup_db(session: AsyncSession, server_id, protocol, client_id) -> None:
-    if protocol in ("awg", "awg3"):
+async def cleanup_client_db(session: AsyncSession, server_id, protocol, client_id) -> None:
+    if protocol in ("awg", "awg3", "awglegacy"):
         await session.execute(
             delete(AwgConfig).where(
                 AwgConfig.server_id == server_id, AwgConfig.public_key == client_id
@@ -107,7 +116,7 @@ async def expiry_once(
                 await session.commit()
             continue
         try:
-            await _revoke_ssh(
+            await revoke_on_node(
                 server, lim.protocol, lim.client_id, key_path,
                 settings.ssh_connect_timeout,
             )
@@ -128,7 +137,7 @@ async def expiry_once(
                 )
             continue
         async with session_factory() as session:
-            await _cleanup_db(session, lim.server_id, lim.protocol, lim.client_id)
+            await cleanup_client_db(session, lim.server_id, lim.protocol, lim.client_id)
             await audit.record(
                 session, "система", f"{lim.protocol}_expired",
                 server.name, lim.name or lim.client_id,

@@ -16,6 +16,28 @@ const EN: Record<string, string> = {
   'Обзор': 'Overview',
   'Журнал': 'Log',
   'Журнал действий': 'Action log',
+  'Поиск': 'Search',
+  'Поиск клиентов': 'Client search',
+  'Поиск по всем серверам сразу — по имени клиента, заметке или ключу. Удобно, когда доступы одного человека раскиданы по нескольким нодам: нашли всё разом и отозвали одним действием.':
+    'Search every server at once — by client name, note or key. Handy when access for one person is spread across several nodes: find it all, revoke it in one go.',
+  'Например: фамилия, имя устройства или часть ключа': 'e.g. a surname, a device name or part of a key',
+  'Найти': 'Search',
+  'Ищу…': 'Searching…',
+  'Найдено: {n}': 'Found: {n}',
+  'выбрано: {n}': 'selected: {n}',
+  'Выбрать все': 'Select all',
+  'Снять все': 'Clear selection',
+  'Отозвать выбранные': 'Revoke selected',
+  'Отозвать {n} доступ(ов)? Клиенты будут удалены с серверов — подключиться по старым конфигам станет нельзя. Отменить это нельзя.':
+    'Revoke {n} access(es)? The clients are removed from the servers — old configs will stop connecting. This cannot be undone.',
+  'Да, отозвать': 'Yes, revoke',
+  'Отзываю…': 'Revoking…',
+  'Результат отзыва': 'Revocation result',
+  'Отозвано: {n}': 'Revoked: {n}',
+  'не удалось: {n}': 'failed: {n}',
+  'Клиенты, которых не удалось отозвать, остались в поиске — повторите, когда нода станет доступна.':
+    'Clients that could not be revoked are still listed — retry once the node is reachable.',
+  'без имени': 'unnamed',
   'Порт для установки': 'Port to install on',
   'Развернуть на этом порту': 'Deploy on this port',
   'AmneziaWG 3.0 — собирается на ноде из закреплённых версий исходников':

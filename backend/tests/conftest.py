@@ -28,6 +28,8 @@ async def client(tmp_path, monkeypatch) -> AsyncIterator[httpx.AsyncClient]:
 
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as c:
+        # фабрика сессий того же приложения — тестам нужно готовить данные в БД
+        c.session_factory = app.state.session_factory  # type: ignore[attr-defined]
         yield c
 
     await app.state.engine.dispose()
@@ -51,3 +53,9 @@ async def auth_headers(client: httpx.AsyncClient) -> dict[str, str]:
     )
     assert response.status_code == 200
     return {"Authorization": f"Bearer {response.json()['access_token']}"}
+
+
+@pytest.fixture
+def session_factory(client):
+    """Сессии к БД тестового приложения — чтобы наполнять таблицы напрямую."""
+    return client.session_factory

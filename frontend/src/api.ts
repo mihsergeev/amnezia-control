@@ -574,3 +574,54 @@ export async function createApiKey(name: string): Promise<ApiKeyCreated> {
 export async function revokeApiKey(id: number): Promise<void> {
   return api<void>(`/api/apikeys/${id}`, { method: 'DELETE' })
 }
+
+// --- Глобальный поиск клиентов по всему парку -------------------------------
+
+export type ClientHit = {
+  server_id: number
+  server_name: string
+  protocol: string
+  client_id: string
+  name: string
+  note: string
+  has_config: boolean
+}
+
+export type RevokeBulkResultItem = {
+  server_id: number
+  server_name: string
+  protocol: string
+  client_id: string
+  ok: boolean
+  error: string
+}
+
+export type RevokeBulkResult = {
+  revoked: number
+  failed: number
+  items: RevokeBulkResultItem[]
+}
+
+export function searchClients(q: string): Promise<ClientHit[]> {
+  return api<ClientHit[]>(`/api/clients/search?q=${encodeURIComponent(q)}`)
+}
+
+export function revokeClientsBulk(
+  items: { server_id: number; protocol: string; client_id: string }[],
+  query: string,
+): Promise<RevokeBulkResult> {
+  return api<RevokeBulkResult>('/api/clients/revoke-bulk', {
+    method: 'POST',
+    body: JSON.stringify({ items, query }),
+  })
+}
+
+// человекочитаемое имя протокола для списков поиска
+export const PROTOCOL_LABEL: Record<string, string> = {
+  awg: 'AmneziaWG',
+  awg2: 'AmneziaWG 2.0',
+  awg3: 'AmneziaWG 3.0',
+  awglegacy: 'AmneziaWG Legacy',
+  openvpn: 'OpenVPN/Cloak',
+  xray: 'XRay/REALITY',
+}
