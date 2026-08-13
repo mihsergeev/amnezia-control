@@ -4,6 +4,29 @@ All notable changes to Amnezia Control are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.49.0] — 2026-08-01
+
+### Added
+- **Global client search across the whole fleet, with bulk revocation.** When
+  someone leaves, their access is usually scattered over several nodes and
+  protocols, and walking server by server is slow and easy to get wrong. A new
+  **Search** page finds clients everywhere at once — by name, note or key — and
+  revokes everything selected in one action. Search runs against the panel's own
+  data (the collector's name cache, notes, issued configs), so it stays instant
+  instead of SSH-ing into a dozen nodes per keystroke; the cache also covers
+  clients created outside the panel. Revocation itself goes to the nodes, reusing
+  the same code path as expiry-driven auto-revoke, a few nodes in parallel.
+- Each client is reported individually: one unreachable node no longer aborts the
+  batch. Panel-side data is cleared **only** for clients actually revoked — a
+  client left behind on an unreachable node stays searchable so the revoke can be
+  retried, instead of vanishing from the panel while keeping access.
+- Bulk revocations are written to the audit log together with the search term.
+
+### Fixed
+- **Legacy AmneziaWG clients were skipped by automatic revocation.** The expiry
+  job knew `awg`, `awg3`, `openvpn` and `xray` but not `awglegacy`, so an expired
+  legacy client stayed on its node. Now handled (and shared with bulk revoke).
+
 ## [0.48.3] — 2026-08-01
 
 ### Fixed
