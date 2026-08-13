@@ -4,6 +4,22 @@ All notable changes to Amnezia Control are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.49.2] — 2026-08-01
+
+### Fixed
+- **Search never listed AmneziaWG 3.0 clients at all.** The collector that fills
+  the name cache read only a node's primary container and tagged everything
+  `awg`, so 3.0 clients were invisible to search (and to traffic stats), and a
+  legacy container sitting next to a 2.0 one was merged into it. It now walks
+  every AmneziaWG container on the node and records each under its own protocol —
+  which also matters for revocation, since the protocol selects the container.
+- **Search results labelled every AmneziaWG client simply "AmneziaWG".** The
+  protocol key carries no version (1.0 and 2.0 share `awg`), so results couldn't
+  tell you what a client actually sits on. Each hit now carries a display label
+  resolved from the node check, which detects the version from the container's
+  config: "AmneziaWG 1.0 / 2.0 / 3.0", "AmneziaWG Legacy", "OpenVPN/Cloak",
+  "XRay/REALITY".
+
 ## [0.49.1] — 2026-08-01
 
 ### Fixed

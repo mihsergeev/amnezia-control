@@ -8,7 +8,7 @@ from datetime import datetime, timedelta, timezone
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app import alerts, audit, awg, geo, nodestat, openvpn, settings_store, sshops, xray
+from app import alerts, audit, awg, deploy, geo, nodestat, openvpn, settings_store, sshops, xray
 from app.config import Settings
 from app.models import (
     ClientName,
@@ -31,24 +31,43 @@ _ZERO = {"rx": 0, "tx": 0, "total": 0, "online": 0}
 
 
 async def _awg_part(conn, host) -> tuple[dict, list[dict]]:
-    state = await awg.read_state(conn, host)
+    """Собирает клиентов ВСЕХ версий AmneziaWG на ноде, каждую под своим
+    протоколом. Раньше читался только основной контейнер и всё помечалось как
+    «awg»: клиенты 3.0 не попадали в статистику и в глобальный поиск вовсе, а
+    legacy рядом с новым сливался с ним. Ключ протокола важен и для отзыва —
+    по нему выбирается контейнер."""
+    targets: list[tuple[str, str]] = []  # (контейнер, протокол)
+    conts = await awg.detect_awg_containers(conn)  # awg3 сюда не попадает
+    if conts["new"]:
+        targets.append((conts["new"], "awg"))
+    if conts["legacy"]:
+        targets.append((conts["legacy"], "awglegacy"))
+    for name in await deploy.awg3_containers(conn):
+        targets.append((name, "awg3"))
+    if not targets:
+        targets.append((await awg.detect_container(conn), "awg"))
+
     now = datetime.now(timezone.utc).timestamp()
-    online = sum(
-        1
-        for c in state.clients
-        if c.latest_handshake and now - c.latest_handshake < ONLINE_WINDOW
-    )
-    totals = {
-        "rx": sum(c.rx_bytes for c in state.clients),
-        "tx": sum(c.tx_bytes for c in state.clients),
-        "total": len(state.clients),
-        "online": online,
-    }
-    clients = [
-        {"protocol": "awg", "client_id": c.public_key, "rx": c.rx_bytes,
-         "tx": c.tx_bytes, "name": c.name}
-        for c in state.clients
-    ]
+    totals = {"rx": 0, "tx": 0, "total": 0, "online": 0}
+    clients: list[dict] = []
+    for container, proto in targets:
+        try:
+            state = await awg.read_state(conn, host, container=container)
+        except Exception:  # noqa: BLE001 — один протокол не должен ронять сбор
+            continue
+        totals["rx"] += sum(c.rx_bytes for c in state.clients)
+        totals["tx"] += sum(c.tx_bytes for c in state.clients)
+        totals["total"] += len(state.clients)
+        totals["online"] += sum(
+            1
+            for c in state.clients
+            if c.latest_handshake and now - c.latest_handshake < ONLINE_WINDOW
+        )
+        clients += [
+            {"protocol": proto, "client_id": c.public_key, "rx": c.rx_bytes,
+             "tx": c.tx_bytes, "name": c.name}
+            for c in state.clients
+        ]
     return totals, clients
 
 
