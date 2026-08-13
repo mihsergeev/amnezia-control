@@ -518,6 +518,10 @@ class ClientSearchHit(BaseModel):
     server_id: int
     server_name: str
     protocol: str  # awg | awg3 | awglegacy | openvpn | xray
+    # Готовая подпись для интерфейса: «AmneziaWG 2.0», «AmneziaWG 3.0» и т.п.
+    # Ключ протокола версию не несёт (у 1.0 и 2.0 он одинаковый — «awg»),
+    # поэтому версию берём из проверки ноды, где она определена по конфигу.
+    protocol_label: str = ""
     client_id: str
     name: str = ""
     note: str = ""
