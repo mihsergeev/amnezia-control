@@ -4,6 +4,15 @@ All notable changes to Amnezia Control are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.49.3] — 2026-08-01
+
+### Changed
+- **Search page: a search box instead of a wall of text.** The description had
+  grown into a paragraph of matching rules that pushed the input into a narrow
+  stub — the one control the page exists for. The field is now full width with
+  the hint in its placeholder, and the explanation is a single line about what
+  the page does.
+
 ## [0.49.2] — 2026-08-01
 
 ### Fixed

@@ -18,9 +18,9 @@ const EN: Record<string, string> = {
   'Журнал действий': 'Action log',
   'Поиск': 'Search',
   'Поиск клиентов': 'Client search',
-  'Сквозной поиск по всему парку: имена клиентов, заметки и открытые ключи со всех нод и протоколов. По имени и заметке — совпадение подстроки без учёта регистра; по ключу — точный фрагмент от 8 символов, с учётом регистра. Отзыв выполняется пакетно и параллельно по нодам, с поимённым отчётом: недоступный сервер не срывает операцию, его клиенты остаются в выдаче для повтора.':
-    'Fleet-wide search: client names, notes and public keys across every node and protocol. Names and notes match case-insensitively on substring; keys require an exact fragment of 8+ characters, case-sensitive. Revocation runs in batch, in parallel across nodes, and reports per client: an unreachable server does not abort the run and its clients stay listed for a retry.',
-  'Например: фамилия, имя устройства или часть ключа': 'e.g. a surname, a device name or part of a key',
+  'Имя клиента, заметка или ключ': 'Client name, note or key',
+  'По всем серверам и протоколам сразу. Найденное можно отозвать одним действием.':
+    'Across every server and protocol at once. Revoke what you find in one action.',
   'Найти': 'Search',
   'Ищу…': 'Searching…',
   'Найдено: {n}': 'Found: {n}',
