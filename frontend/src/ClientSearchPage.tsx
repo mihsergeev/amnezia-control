@@ -95,16 +95,12 @@ export function ClientSearchPage({ onUnauthorized }: Props) {
       </div>
 
       <div className="card">
-        <p className="muted">
-          {t(
-            'Сквозной поиск по всему парку: имена клиентов, заметки и открытые ключи со всех нод и протоколов. По имени и заметке — совпадение подстроки без учёта регистра; по ключу — точный фрагмент от 8 символов, с учётом регистра. Отзыв выполняется пакетно и параллельно по нодам, с поимённым отчётом: недоступный сервер не срывает операцию, его клиенты остаются в выдаче для повтора.',
-          )}
-        </p>
-        <div className="row">
+        <div className="toolbar">
           <input
             autoFocus
+            className="search-box"
             value={query}
-            placeholder={t('Например: фамилия, имя устройства или часть ключа')}
+            placeholder={t('Имя клиента, заметка или ключ')}
             onChange={(e) => setQuery(e.target.value)}
             onKeyDown={(e) => e.key === 'Enter' && void run()}
           />
@@ -112,6 +108,9 @@ export function ClientSearchPage({ onUnauthorized }: Props) {
             {busy ? t('Ищу…') : t('Найти')}
           </button>
         </div>
+        <p className="muted small">
+          {t('По всем серверам и протоколам сразу. Найденное можно отозвать одним действием.')}
+        </p>
       </div>
 
       {error && <p className="form-error">{error}</p>}
