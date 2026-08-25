@@ -496,7 +496,7 @@ export function ClientsModal({
         {proto === 'awg3' && state && (
           <div className="version-line">
             <span className="muted small">
-              {t('AmneziaWG 3.0 — собирается на ноде из закреплённых версий исходников')}
+              {t('AmneziaWG 3.1 — собирается на ноде из закреплённых версий исходников')}
             </span>
             <div className="version-actions">
               {/* откат к снимку, снятому перед пересборкой (страховка) */}

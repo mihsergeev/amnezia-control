@@ -1,7 +1,7 @@
-"""Управление AmneziaWG 3.0 — третья версия протокола как ОТДЕЛЬНЫЙ протокол
-рядом с 2.0 (amnezia-awg2) и legacy (wg0), ровно как их развели между собой.
+"""Управление AmneziaWG 3.x (сейчас 3.1) — третья версия протокола как ОТДЕЛЬНЫЙ
+протокол рядом с 2.0 (amnezia-awg2) и legacy (wg0), как их развели между собой.
 
-У 3.0 свой контейнер (amnezia-awg3), свой порт, своя подсеть (10.8.3.0/24) и свой
+У 3.x свой контейнер (amnezia-awg3), свой порт, своя подсеть (10.8.3.0/24) и свой
 каталог конфига, поэтому обе версии спокойно живут на одной ноде и операции над
 одной не задевают клиентов другой.
 
@@ -39,17 +39,17 @@ from app.schemas import (
 
 router = APIRouter(prefix="/servers/{server_id}/awg3", tags=["awg3"])
 
-# метаданные клиентов 3.0 — под своим протоколом, чтобы не смешивать с 2.0
+# метаданные клиентов 3.x — под своим протоколом, чтобы не смешивать с 2.0
 PROTO = "awg3"
 
 
 async def _state(conn, host: str):
-    """Состояние контейнера 3.0. 409, если он на сервере не развёрнут."""
+    """Состояние контейнера 3.x. 409, если он на сервере не развёрнут."""
     names = await deploy.awg3_containers(conn)
     if not names:
         raise HTTPException(
             status.HTTP_409_CONFLICT,
-            "AmneziaWG 3.0 на сервере не развёрнут — сначала разверните его.",
+            "AmneziaWG 3.1 на сервере не развёрнут — сначала разверните его.",
         )
     return await awg.read_state(conn, host, container=names[0])
 
@@ -140,7 +140,7 @@ async def create_client(
         client=client.__dict__
         | {"has_config": True, "note": body.note, "expires_at": body.expires_at},
         config=config,
-        config_amnezia=_amnezia_link(config, server, protocol_version="3"),
+        config_amnezia=_amnezia_link(config, server, protocol_version=deploy.AWG3_PROTOCOL_VERSION),
     )
 
 
@@ -170,7 +170,7 @@ async def get_stored_config(
         )
     return ConfigTextResponse(
         config=row.config,
-        config_amnezia=_amnezia_link(row.config, server, protocol_version="3"),
+        config_amnezia=_amnezia_link(row.config, server, protocol_version=deploy.AWG3_PROTOCOL_VERSION),
         name=row.name,
     )
 
@@ -218,7 +218,7 @@ async def reissue_client(
     return CreateClientResponse(
         client=client.__dict__ | {"has_config": True, "note": note},
         config=config,
-        config_amnezia=_amnezia_link(config, server, protocol_version="3"),
+        config_amnezia=_amnezia_link(config, server, protocol_version=deploy.AWG3_PROTOCOL_VERSION),
     )
 
 
@@ -308,7 +308,7 @@ async def deploy_awg3(
     server_id: int, body: DeployRequest, user: CurrentUser, session: SessionDep,
     request: Request,
 ) -> dict:
-    """Разворачивает AmneziaWG 3.0. Движок и тулзы собираются на ноде из
+    """Разворачивает AmneziaWG 3.1. Движок и тулзы собираются на ноде из
     исходников по закреплённым тегам — готового образа с бинарями 3.0 пока нет,
     поэтому первая сборка занимает несколько минут."""
     server = await _get_or_404(server_id, session)
@@ -350,7 +350,7 @@ async def deploy_awg3(
 async def update_awg3(
     server_id: int, user: CurrentUser, session: SessionDep, request: Request
 ) -> dict:
-    """Пересборка образа 3.0 из тех же закреплённых тегов. Конфиг и клиенты
+    """Пересборка образа 3.x из тех же закреплённых тегов. Конфиг и клиенты
     сохраняются (скрипт не перезаписывает существующий awg0.conf)."""
     server = await _get_or_404(server_id, session)
     cfg = deploy.generate_server_config_v3(47300)
@@ -383,7 +383,7 @@ async def deploy_status(
 async def config_backups(
     server_id: int, _: CurrentUser, session: SessionDep
 ) -> list[SnapshotOut]:
-    """Снимки конфига 3.0 на ноде (снимаются перед каждой пересборкой) — для отката."""
+    """Снимки конфига 3.x на ноде (снимаются перед каждой пересборкой) — для отката."""
     server = await _get_or_404(server_id, session)
     try:
         async with _connect(server) as conn:
@@ -397,7 +397,7 @@ async def config_backups(
 async def config_restore(
     server_id: int, body: SnapshotRestoreRequest, user: CurrentUser, session: SessionDep
 ) -> dict:
-    """Откат конфига 3.0 к снимку (возвращает клиентов и ключи из снимка)."""
+    """Откат конфига 3.x к снимку (возвращает клиентов и ключи из снимка)."""
     server = await _get_or_404(server_id, session)
     try:
         async with _connect(server) as conn:

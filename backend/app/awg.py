@@ -30,6 +30,8 @@ AWG3_PARAM_KEYS = [
     "HeaderProtectionKey", "ContentPaddingAddition",
     "RekeyAfterTime", "RekeyTimeout", "RejectAfterTime",
     "KeepaliveTimeout", "MaxHandshakeAttempts",
+    # добавлены в 3.1 (булевы, значения «on»/«off»)
+    "RandomTrailers", "DisableCookies",
 ]
 
 AWG_PARAM_KEYS = [
@@ -123,10 +125,10 @@ def build_amnezia_link(
 ) -> str:
     """Строит vpn://-ссылку формата «Для приложения AmneziaVPN» из .conf.
 
-    protocol_version: "2" — AmneziaWG 2.0, "3" — 3.0. Приложение 5.0.0.5 знает
-    только константу «2», но поля третьей версии (HeaderProtectionKey и прочие)
-    читает БЕЗУСЛОВНО и передаёт в туннель, поэтому честно помечаем 3.0 как "3":
-    когда Amnezia добавит свою awgV3, ссылки подпишутся корректно сами.
+    protocol_version: "2" — AmneziaWG 2.0, "3.1" — третья версия. Строку берём
+    ровно как у приложения (protocolConstants.h: awgV2="2", awgV3="3.1"): по ней
+    оно подписывает протокол «(version 3.1)» и считает контейнер актуальным.
+    Любое другое значение приложение метит устаревшим и просит обновить протокол.
     """
     interface, peers = parse_conf(conf_text)
     peer = peers[0] if peers else {}
@@ -142,7 +144,7 @@ def build_amnezia_link(
     port = int(endpoint.rsplit(":", 1)[-1]) if ":" in endpoint else 0
     # набор ключей зависит от версии; пустые значения СОХРАНЯЕМ (у 2.0 приложение
     # всегда пишет I1–I5, в том числе пустые — от этого зависит совместимость)
-    keys = _AMNEZIA_PARAM_KEYS_V3 if protocol_version == "3" else _AMNEZIA_PARAM_KEYS
+    keys = _AMNEZIA_PARAM_KEYS if protocol_version == "2" else _AMNEZIA_PARAM_KEYS_V3
     params = {k: interface.get(k, "") for k in keys}
 
     # DNS в конфиге шаблонизируем, как делает Amnezia

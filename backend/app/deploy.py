@@ -47,8 +47,14 @@ SUBNET = "10.8.1.0/24"
 # отвечает «Line unrecognized: HeaderProtectionKey». Поэтому 3.0 собираем ИЗ
 # ИСХОДНИКОВ по закреплённым тегам — это единственный способ получить рабочий
 # AmneziaWG 3.0 сегодня и заодно независимость от сроков обновления их образа.
-AWG3_GO_TAG = "v3.0.2"  # amneziawg-go (движок)
-AWG3_TOOLS_TAG = "v3.0.20260730"  # amneziawg-tools (awg / awg-quick)
+AWG3_GO_TAG = "v3.1.20260814"  # amneziawg-go (движок)
+AWG3_TOOLS_TAG = "v3.1.20260812"  # amneziawg-tools (awg / awg-quick)
+# Версия протокола в vpn://-ссылке. У приложения это СТРОКА «3.1»
+# (protocolConstants.h: awgV3[] = "3.1"), а не «3»: наши прежние ссылки с "3"
+# приложение не распознавало и рисовало сервер без номера версии. Более того,
+# любой awg-контейнер с protocol_version != "3.1" оно метит устаревшим
+# (serversUiController.cpp) и показывает баннер «обновите протокол».
+AWG3_PROTOCOL_VERSION = "3.1"
 AWG3_VERSION_MARKER = "/opt/acontrol/awg3-version"
 IMAGE_V3 = "acontrol-awg3"
 CONTAINER_V3 = "amnezia-awg3"
@@ -251,7 +257,13 @@ _AWG3_MIN_JUNK = 12
 
 
 def generate_awg3_params() -> dict[str, object]:
-    """Параметры AmneziaWG 3.0 = все параметры 2.0 + новые ключи третьей версии."""
+    """Параметры AmneziaWG 3.1 = параметры 2.0 + ключи третьей версии.
+
+    3.1 к 3.0 добавила ровно два булевых ключа (RandomTrailers, DisableCookies)
+    и ничего не убрала — сверено дифом amneziawg-tools v3.0→v3.1. Значения у
+    приложения строковые «on»/«off» (awgBoolOn/awgBoolOff), оба по умолчанию
+    включены (defaultRandomTrailers / defaultDisableCookies).
+    """
     p = dict(generate_awg_params())
     # S3/S4 у 2.0 могут быть меньше 12 (0-64 и 0-20) — для 3.0 поднимаем порог,
     # иначе защита заголовков не включится. S1/S2 и так генерятся от 15.
@@ -265,6 +277,9 @@ def generate_awg3_params() -> dict[str, object]:
     for key, (low, high) in _AWG3_TIMING_DEFAULTS.items():
         start = random.randint(low, high - 1)
         p[key] = f"{start}-{random.randint(start + 1, high)}"
+    # ключи 3.1: включены, как и у приложения (оба дефолта — «on»)
+    p["RandomTrailers"] = "on"
+    p["DisableCookies"] = "on"
     return p
 
 
@@ -272,6 +287,8 @@ _AWG3_ACTIVE_ORDER = _AWG_ACTIVE_ORDER + [
     "HeaderProtectionKey", "ContentPaddingAddition",
     "RekeyAfterTime", "RekeyTimeout", "RejectAfterTime",
     "KeepaliveTimeout", "MaxHandshakeAttempts",
+    # порядок как в template.conf приложения: новые ключи 3.1 идут последними
+    "RandomTrailers", "DisableCookies",
 ]
 
 
@@ -558,7 +575,7 @@ def build_script_v3(mode: str, port: int, cfg: dict[str, str]) -> str:
         'echo "READBACK: интерфейс awg0 не поднялся (awg-quick up не сработал)"; '
         'echo DEPLOY_ERROR; exit 1; fi',
         'printf "%s" "$AWGSHOW" | grep -E "interface|listening" || true',
-        'log "readback: awg0 (3.0) поднят и слушает — ok"',
+        'log "readback: awg0 (3.1) поднят и слушает — ok"',
         "echo DEPLOY_DONE",
     ]
     return "\n".join(parts) + "\n"

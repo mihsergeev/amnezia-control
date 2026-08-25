@@ -508,6 +508,7 @@ const AWG_KIND_LABEL: Record<string, string> = {
   awg1: 'AmneziaWG 1.0',
   awg2: 'AmneziaWG 2.0',
   awg3: 'AmneziaWG 3.0',
+  awg31: 'AmneziaWG 3.1',
 }
 
 export function protocolsFromContainers(
@@ -526,7 +527,15 @@ export function protocolsFromContainers(
   // Порядок вкладок — от НОВОГО к старому: 3.0, затем 2.0, затем legacy. Первая
   // вкладка открывается по умолчанию, а нужен обычно самый свежий протокол: если
   // на ноде уже есть 3.0, открывать её на 2.0 бессмысленно.
-  if (hasAwg3) found.push({ key: 'awg3', label: 'AmneziaWG 3.0' })
+  if (hasAwg3) {
+    // подпись по реальной версии из конфига: панель ставит 3.1, но на ноде
+    // может стоять и раньше развёрнутая 3.0
+    const c3 = containers.find((x) => /^amnezia-awg3/.test(x) && kinds[x])
+    found.push({
+      key: 'awg3',
+      label: (c3 && AWG_KIND_LABEL[kinds[c3]]) || 'AmneziaWG 3.1',
+    })
+  }
   if (hasAwgOther) {
     // версию берём из конфига контейнера; пока проверка старая (без protocols)
     // — остаётся прежняя нейтральная подпись

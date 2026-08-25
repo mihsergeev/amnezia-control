@@ -4,6 +4,34 @@ All notable changes to Amnezia Control are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.50.0] — 2026-08-01
+
+### Added
+- **AmneziaWG 3.1 — the panel now deploys and hands out the version the app
+  actually expects.** Amnezia shipped 3.1 in client 5.0.1.5, and the app treats
+  *any* AmneziaWG container whose `protocol_version` isn't exactly `"3.1"` as
+  outdated, showing an "update your protocol" banner — which is why 2.0 servers
+  suddenly looked broken. Deployments now build from the 3.1 upstream tags
+  (`amneziawg-go v3.1.20260814`, `amneziawg-tools v3.1.20260812`) and configs
+  carry the two keys 3.1 added, `RandomTrailers` and `DisableCookies` (booleans,
+  `on`/`off`, both on by default as in the app). Links are stamped
+  `protocol_version = "3.1"` — the exact string from the app's own constants,
+  where the previous `"3"` was recognised by nothing.
+- **The panel tells 3.1 apart from 3.0.** Node checks read the container's config,
+  so a server shows what it really runs: the two new keys mean 3.1, their absence
+  with `HeaderProtectionKey` means 3.0.
+
+### Changed
+- 3.1 replaces 3.0 as the third-version protocol rather than becoming a fourth
+  tab: 3.1 is a strict superset (nothing was removed upstream), and only "3.1" is
+  recognised by the app. Existing 3.0 servers move over with **Rebuild**.
+
+Verified end to end on clean nodes: the panel deploys 3.1 (`amneziawg-tools
+v3.1.20260812` + `amneziawg-go v3.1.20260814` on the node, both new keys applied
+to the live interface), issues a client, and that client completes a handshake
+with traffic actually routed through the server. 3.1 and 2.0 run side by side on
+one node, each on its own container and port.
+
 ## [0.49.3] — 2026-08-01
 
 ### Changed
