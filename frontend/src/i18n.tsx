@@ -16,6 +16,8 @@ const EN: Record<string, string> = {
   'Обзор': 'Overview',
   'Журнал': 'Log',
   'Журнал действий': 'Action log',
+  'На этой ноде развёрнута AmneziaWG 3.0. Нажмите «Пересобрать» — конфиг мигрирует до 3.1, после чего клиентов нужно перевыпустить.':
+    'This node runs AmneziaWG 3.0. Press "Rebuild" — the config migrates to 3.1, after which clients need reissuing.',
   'Поиск': 'Search',
   'Поиск клиентов': 'Client search',
   'Имя клиента, заметка или ключ': 'Client name, note or key',
