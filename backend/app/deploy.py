@@ -536,9 +536,23 @@ def build_script_v3(mode: str, port: int, cfg: dict[str, str]) -> str:
         f'  echo {_b64(cfg["priv"])} | base64 -d | sudo tee "$D/wireguard_server_private_key.key" >/dev/null',
         f'  echo {_b64(cfg["psk"])} | base64 -d | sudo tee "$D/wireguard_psk.key" >/dev/null',
         '  printf "[]\\n" | sudo tee "$D/clientsTable" >/dev/null',
-        '  log "конфиг создан (новый сервер AmneziaWG 3.0)"',
+        '  log "конфиг создан (новый сервер AmneziaWG 3.1)"',
         "else",
         '  log "конфиг уже есть — сохранён, клиенты не тронуты"',
+        "fi",
+        # Миграция 3.0 -> 3.1. Пересборка намеренно СОХРАНЯЕТ конфиг (иначе
+        # потерялись бы клиенты), поэтому после обновления бинарей сервер остался
+        # бы на конфиге 3.0 — без ключей третьей-с-половиной версии, хотя ссылки
+        # уже помечены protocol_version=3.1. Дописываем недостающие ключи в
+        # секцию [Interface] (перед первым [Peer], либо в конец, если пиров нет).
+        'if sudo test -f "$D/awg0.conf" && ! sudo grep -qE '
+        '"^(RandomTrailers|DisableCookies)" "$D/awg0.conf"; then',
+        '  sudo awk \'BEGIN{d=0} /^\\[Peer\\]/ && !d {print "RandomTrailers = on"; '
+        'print "DisableCookies = on"; d=1} {print} '
+        'END{if(!d){print "RandomTrailers = on"; print "DisableCookies = on"}}\' '
+        '"$D/awg0.conf" > /tmp/awg0.mig && sudo cp /tmp/awg0.mig "$D/awg0.conf" '
+        '&& rm -f /tmp/awg0.mig',
+        '  log "конфиг 3.0 дополнен ключами 3.1 (клиентам нужен перевыпуск)"',
         "fi",
         # порт берём из конфига: при пересборке он должен остаться прежним, иначе
         # у выданных клиентов протухнет endpoint
