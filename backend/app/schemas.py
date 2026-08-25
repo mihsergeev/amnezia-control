@@ -144,6 +144,9 @@ class AwgStateOut(BaseModel):
     # имя отдельного legacy-контейнера (старый AmneziaWG на wg0), если он есть
     # РЯДОМ с новым — тогда фронт покажет вторую секцию «AmneziaWG Legacy»
     legacy_container: str | None = None
+    # вкладка 3.x: есть ли на ноде ключи 3.1 (RandomTrailers/DisableCookies).
+    # None — вопрос неприменим (2.0/legacy); False — на ноде ещё 3.0
+    params_v31: bool | None = None
 
 
 class CreateClientRequest(BaseModel):

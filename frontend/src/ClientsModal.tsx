@@ -496,7 +496,9 @@ export function ClientsModal({
         {proto === 'awg3' && state && (
           <div className="version-line">
             <span className="muted small">
-              {t('AmneziaWG 3.1 — собирается на ноде из закреплённых версий исходников')}
+              {state.params_v31 === false
+                ? t('На этой ноде развёрнута AmneziaWG 3.0. Нажмите «Пересобрать» — конфиг мигрирует до 3.1, после чего клиентов нужно перевыпустить.')
+                : t('AmneziaWG 3.1 — собирается на ноде из закреплённых версий исходников')}
             </span>
             <div className="version-actions">
               {/* откат к снимку, снятому перед пересборкой (страховка) */}
