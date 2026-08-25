@@ -12,7 +12,8 @@ import asyncssh
 # его конфига, а не по имени. Имена у Amnezia версию не отражают: контейнер
 # amnezia-awg2 может нести и legacy-конфиг, а панельный amnezia-awg3 внешне
 # неотличим от него же. Признаки (сверены с исходниками апстрима и живыми нодами):
-#   HeaderProtectionKey  -> AmneziaWG 3.0 (ключ появился только в третьей версии)
+#   RandomTrailers/DisableCookies -> AmneziaWG 3.1 (добавлены в 3.1)
+#   HeaderProtectionKey  -> AmneziaWG 3.0 (ключ появился в третьей версии)
 #   I1 (в т.ч. «# I1»)   -> AmneziaWG 2.0 (CPS; у Amnezia хранится закомментированным)
 #   ни того, ни другого  -> AmneziaWG 1.0 / legacy
 _PROTO_PROBE = (
@@ -26,7 +27,10 @@ _PROTO_PROBE = (
     "2>/dev/null | head -1' 2>/dev/null); "
     'if [ -n "$f" ]; then '
     "cfg=$($D exec \"$c\" cat \"$f\" 2>/dev/null); "
-    'if printf "%s" "$cfg" | grep -qi "^HeaderProtectionKey"; then k=awg3; '
+    # 3.1 отличается от 3.0 ровно двумя булевыми ключами (RandomTrailers /
+    # DisableCookies) — по ним версии и различаем; всё остальное у них общее
+    'if printf "%s" "$cfg" | grep -qiE "^(RandomTrailers|DisableCookies)"; then k=awg31; '
+    'elif printf "%s" "$cfg" | grep -qi "^HeaderProtectionKey"; then k=awg3; '
     'elif printf "%s" "$cfg" | grep -qE "^#? *I1"; then k=awg2; '
     "else k=awg1; fi; fi ;; "
     "esac; "

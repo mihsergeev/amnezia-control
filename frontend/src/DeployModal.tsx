@@ -30,7 +30,7 @@ export function DeployModal({
       : protocol === 'openvpn'
         ? 'OpenVPN/Cloak'
         : protocol === 'awg3'
-          ? 'AmneziaWG 3.0'
+          ? 'AmneziaWG 3.1'
           : 'AmneziaWG'
   const [status, setStatus] = useState<DeployStatus | null>(null)
   const [error, setError] = useState<string | null>(null)
@@ -152,7 +152,7 @@ export function DeployModal({
               : protocol === 'openvpn'
                 ? t('Сервер собирает образ (openvpn + Cloak + shadowsocks) и генерирует PKI. Это займёт 1–3 минуты.')
                 : protocol === 'awg3'
-                  ? t('Сервер собирает AmneziaWG 3.0 из исходников (движок + утилиты закреплённых версий) и запускает его. Готового образа с бинарями 3.0 пока нет, поэтому первая сборка занимает 3–7 минут.')
+                  ? t('Сервер собирает AmneziaWG 3.1 из исходников (движок + утилиты закреплённых версий) и запускает его. Готового образа с бинарями 3.x пока нет, поэтому первая сборка занимает 3–7 минут.')
                   : t('Сервер собирает образ из amneziavpn/amneziawg-go:latest и запускает AmneziaWG. Это займёт 1–3 минуты.')}
         </p>
 

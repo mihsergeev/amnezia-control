@@ -177,13 +177,14 @@ def test_v3_link_carries_v3_fields_and_version() -> None:
         endpoint="203.0.113.10:47300", params=params, dns="1.1.1.1, 1.0.0.1",
     )
     link = awg.build_amnezia_link(
-        client, "203.0.113.10", "srv", "1.1.1.1", "1.0.0.1", protocol_version="3"
+        client, "203.0.113.10", "srv", "1.1.1.1", "1.0.0.1",
+        protocol_version=deploy.AWG3_PROTOCOL_VERSION,
     )
     raw = link[len("vpn://"):]
     raw += "=" * (-len(raw) % 4)
     top = json.loads(zlib.decompress(base64.urlsafe_b64decode(raw)[4:]))
     obj = top["containers"][0]["awg"]
-    assert obj["protocol_version"] == "3"
+    assert obj["protocol_version"] == "3.1"
     for key in awg.AWG3_PARAM_KEYS:
         assert obj[key] == interface[key]
 
@@ -375,3 +376,106 @@ def test_check_output_parses_protocol_kinds() -> None:
     # контейнер называется awg2, а реально внутри 1.0 — именно это и показываем
     assert res.protocols == {"amnezia-awg2": "awg1", "amnezia-xray": "xray"}
     assert "protocols" in res.as_dict()
+
+
+# --- AmneziaWG 3.1 -----------------------------------------------------------
+
+
+def test_v31_protocol_version_matches_app_constant() -> None:
+    """Приложение хранит версию третьего протокола СТРОКОЙ «3.1»
+    (protocolConstants.h: awgV3[] = "3.1"), а не «3». С «3» оно не распознавало
+    версию и рисовало сервер без номера; более того, всё, что не равно «3.1»,
+    оно метит устаревшим и показывает баннер «обновите протокол»."""
+    assert deploy.AWG3_PROTOCOL_VERSION == "3.1"
+
+
+def test_v31_adds_two_boolean_keys() -> None:
+    """3.1 к 3.0 добавила ровно два ключа — RandomTrailers и DisableCookies
+    (диф amneziawg-tools v3.0→v3.1), оба булевы со значениями «on»/«off» и оба
+    включены по умолчанию, как у приложения."""
+    p = deploy.generate_awg3_params()
+    assert p["RandomTrailers"] == "on"
+    assert p["DisableCookies"] == "on"
+    # ключи 3.0 никуда не делись — 3.1 это надстройка, а не замена
+    for key in ("HeaderProtectionKey", "ContentPaddingAddition", "RekeyAfterTime"):
+        assert key in p
+
+
+def test_v31_server_config_and_build_tags() -> None:
+    conf = deploy.generate_server_config_v3(47300)["conf"]
+    for key in ("RandomTrailers", "DisableCookies"):
+        assert re.search(rf"^{key} = (on|off)$", conf, re.M), f"{key} нет в конфиге"
+    # новые ключи идут ПОСЛЕ MaxHandshakeAttempts — порядок как в template.conf
+    assert conf.index("MaxHandshakeAttempts") < conf.index("RandomTrailers")
+    # собираемся из тегов 3.1
+    script = deploy.build_script_v3("deploy", 47300, deploy.generate_server_config_v3(47300))
+    assert deploy.AWG3_GO_TAG.startswith("v3.1")
+    assert deploy.AWG3_TOOLS_TAG.startswith("v3.1")
+    assert deploy.AWG3_GO_TAG in script and deploy.AWG3_TOOLS_TAG in script
+
+
+def test_v31_keys_reach_client_and_link() -> None:
+    """Клиент обязан получить оба новых ключа — и в .conf, и в vpn://-ссылке."""
+    import json
+    import zlib
+
+    conf = deploy.generate_server_config_v3(47300)["conf"]
+    interface, _ = awg.parse_conf(conf)
+    params = {k: interface[k] for k in awg.AWG_PARAM_KEYS if k in interface}
+    priv, _pub = awg.generate_keypair()
+    client = awg.build_client_config(
+        client_private=priv, address="10.8.3.2",
+        server_public="NSzHmLC7cq08Y7FK1EeAzPu51yZeOZiuoLIPYeeH3yk=",
+        preshared="7jE5uKQj63MXTY7KX6oL90Oe5sCYvUCe/uab9fY3kao=",
+        endpoint="203.0.113.10:47300", params=params, dns="1.1.1.1, 1.0.0.1",
+    )
+    for key in ("RandomTrailers", "DisableCookies"):
+        assert f"{key} = on" in client, f"{key} не перенесён клиенту"
+
+    link = awg.build_amnezia_link(
+        client, "203.0.113.10", "srv", "1.1.1.1", "1.0.0.1",
+        protocol_version=deploy.AWG3_PROTOCOL_VERSION,
+    )
+    raw = link[len("vpn://"):]
+    raw += "=" * (-len(raw) % 4)
+    obj = json.loads(zlib.decompress(base64.urlsafe_b64decode(raw)[4:]))
+    awg_obj = obj["containers"][0]["awg"]
+    assert awg_obj["protocol_version"] == "3.1"
+    assert awg_obj["RandomTrailers"] == "on"
+    assert awg_obj["DisableCookies"] == "on"
+
+
+def test_check_command_distinguishes_31_from_30() -> None:
+    """Панель должна показывать РЕАЛЬНУЮ версию: 3.1 отличается от 3.0 наличием
+    RandomTrailers/DisableCookies, и проверка ноды обязана это различать."""
+    from app.sshops import CHECK_COMMAND, _parse_check_output
+
+    assert "RandomTrailers|DisableCookies" in CHECK_COMMAND
+    assert "k=awg31" in CHECK_COMMAND
+    res = _parse_check_output(
+        "HOST=n\namnezia-awg3\nPROTO=amnezia-awg3|awg31\n"
+    )
+    assert res.protocols == {"amnezia-awg3": "awg31"}
+
+
+def test_v2_link_still_untouched_by_31() -> None:
+    """Ссылка 2.0 не должна получить ключи 3.1 — иначе поедет совместимость."""
+    import json
+    import zlib
+
+    conf = deploy.generate_server_config(47180)["conf"]
+    interface, _ = awg.parse_conf(conf)
+    params = {k: interface[k] for k in awg.AWG_PARAM_KEYS if k in interface}
+    priv, _pub = awg.generate_keypair()
+    client = awg.build_client_config(
+        client_private=priv, address="10.8.1.2",
+        server_public="NSzHmLC7cq08Y7FK1EeAzPu51yZeOZiuoLIPYeeH3yk=",
+        preshared="7jE5uKQj63MXTY7KX6oL90Oe5sCYvUCe/uab9fY3kao=",
+        endpoint="203.0.113.10:47180", params=params, dns="1.1.1.1, 1.0.0.1",
+    )
+    link = awg.build_amnezia_link(client, "203.0.113.10", "srv", "1.1.1.1", "1.0.0.1")
+    raw = link[len("vpn://"):]
+    raw += "=" * (-len(raw) % 4)
+    entry = json.loads(zlib.decompress(base64.urlsafe_b64decode(raw)[4:]))["containers"][0]["awg"]
+    assert entry["protocol_version"] == "2"
+    assert "RandomTrailers" not in entry and "DisableCookies" not in entry
