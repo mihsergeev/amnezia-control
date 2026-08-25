@@ -479,3 +479,21 @@ def test_v2_link_still_untouched_by_31() -> None:
     entry = json.loads(zlib.decompress(base64.urlsafe_b64decode(raw)[4:]))["containers"][0]["awg"]
     assert entry["protocol_version"] == "2"
     assert "RandomTrailers" not in entry and "DisableCookies" not in entry
+
+
+def test_update_migrates_30_config_to_31() -> None:
+    """Пересборка СОХРАНЯЕТ конфиг (иначе потерялись бы клиенты), поэтому при
+    обновлении 3.0 -> 3.1 сервер остался бы на старом конфиге: бинари новые, а
+    ключей 3.1 нет — при том что ссылки уже помечены protocol_version=3.1.
+    Скрипт обязан дописать недостающие ключи в существующий конфиг."""
+    cfg = deploy.generate_server_config_v3(47300)
+    script = deploy.build_script_v3("update", 47300, cfg)
+    # условие: мигрируем только если ключей ещё нет
+    assert '"^(RandomTrailers|DisableCookies)"' in script
+    # вставка идёт в [Interface] — перед первым [Peer], иначе ключи попали бы
+    # в секцию пира и awg-quick их не применил бы
+    assert '/^\[Peer\]/ && !d' in script
+    assert 'print "RandomTrailers = on"' in script
+    assert 'print "DisableCookies = on"' in script
+    # конфиг без пиров тоже мигрируется (ветка END)
+    assert "END{if(!d)" in script

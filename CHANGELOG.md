@@ -4,6 +4,22 @@ All notable changes to Amnezia Control are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.50.1] — 2026-08-25
+
+### Fixed
+- **Rebuilding a 3.0 server left it half-upgraded.** A rebuild deliberately keeps
+  the existing config so clients survive, which meant an upgrade to 3.1 replaced
+  the binaries but not the config: the server stayed on 3.0 settings while links
+  already claimed `protocol_version = "3.1"`. The rebuild now adds the missing
+  3.1 keys (`RandomTrailers`, `DisableCookies`) to the `[Interface]` section of an
+  existing config — before the first `[Peer]`, or at the end if the server has no
+  peers yet.
+
+  **Clients must be reissued after this upgrade.** Verified on a production node:
+  a config without the two new keys gets no handshake at all against an upgraded
+  server (0 B received, 100% packet loss), while a freshly issued 3.1 config runs
+  20/20 pings clean. The deploy log says so as it migrates.
+
 ## [0.50.0] — 2026-08-01
 
 ### Added
