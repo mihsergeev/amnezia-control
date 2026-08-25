@@ -497,3 +497,25 @@ def test_update_migrates_30_config_to_31() -> None:
     assert 'print "DisableCookies = on"' in script
     # конфиг без пиров тоже мигрируется (ветка END)
     assert "END{if(!d)" in script
+
+
+def test_link_version_follows_actual_server_config() -> None:
+    """Версию в ссылке берём из РЕАЛЬНОГО конфига ноды, а не из того, что панель
+    умеет ставить сегодня. На ноде может остаться развёрнутая раньше 3.0 — пометить
+    её «3.1» значило бы соврать: приложение сочло бы сервер актуальным, хотя ключей
+    3.1 там нет. Для такой ноды отдаём «3» — приложение покажет протокол без номера
+    и предложит обновиться, что и нужно (ноду надо пересобрать)."""
+    from app.api.awg3 import _link_version
+
+    conf31 = deploy.generate_server_config_v3(47300)["conf"]
+    assert _link_version(conf31) == "3.1"
+
+    # конфиг 3.0: те же ключи, но без двух добавленных в 3.1
+    conf30 = "\n".join(
+        line for line in conf31.splitlines()
+        if not line.startswith(("RandomTrailers", "DisableCookies"))
+    )
+    assert _link_version(conf30) == "3"
+    # частичный случай (есть только один ключ) тоже не считаем 3.1
+    conf_part = conf30 + "\nRandomTrailers = on"
+    assert _link_version(conf_part) == "3"

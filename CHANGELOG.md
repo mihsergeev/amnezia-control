@@ -4,6 +4,22 @@ All notable changes to Amnezia Control are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.50.2] — 2026-08-25
+
+### Fixed
+- **A 3.0 node no longer hands out links that claim to be 3.1.** The version in a
+  `vpn://` link was hardcoded to whatever the panel deploys today, so a node still
+  running 3.0 — deployed before 3.1 existed — produced links labelled `"3.1"`
+  without the keys that version implies. The version is now read from the node's
+  actual config: with `RandomTrailers`/`DisableCookies` it is `"3.1"`, without them
+  `"3"`, which the app doesn't recognise and therefore flags for an update. That
+  is the correct signal — such a node does need rebuilding.
+
+### Added
+- **The 3.x tab says when a node is still on 3.0** and what to do about it: press
+  Rebuild to migrate the config to 3.1, then reissue clients. Previously nothing
+  distinguished the two, and the only clue was the protocol badge on the card.
+
 ## [0.50.1] — 2026-08-25
 
 ### Fixed

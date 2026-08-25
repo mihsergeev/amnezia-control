@@ -189,6 +189,9 @@ export type AwgClient = {
 
 export type AwgState = {
   container: string
+  // для вкладки 3.x: несёт ли конфиг ноды ключи 3.1. false = там ещё 3.0 и
+  // ноду надо пересобрать, иначе выданные конфиги будут трёхнулевыми
+  params_v31?: boolean
   interface: string
   listen_port: number
   server_public_key: string

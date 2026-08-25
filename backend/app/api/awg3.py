@@ -9,6 +9,8 @@
 в общей таблице awg_configs: пары ключей глобально уникальны, коллизий нет.
 """
 
+import re
+
 from fastapi import APIRouter, HTTPException, Request, status
 from sqlalchemy import delete, select
 
@@ -52,6 +54,24 @@ async def _state(conn, host: str):
             "AmneziaWG 3.1 на сервере не развёрнут — сначала разверните его.",
         )
     return await awg.read_state(conn, host, container=names[0])
+
+
+def _link_version(conf_text: str) -> str:
+    """Версия протокола для ссылки — по РЕАЛЬНОМУ конфигу, а не по тому, что
+    панель умеет разворачивать сегодня.
+
+    На ноде может стоять и раньше развёрнутая 3.0 (без RandomTrailers /
+    DisableCookies). Помечать её ссылку как «3.1» было бы враньём: приложение
+    сочло бы сервер актуальным, хотя ключей третьей-с-половиной версии там нет.
+    Для такого сервера отдаём «3» — приложение эту константу не знает, покажет
+    протокол без номера и предложит обновиться, что и требуется: ноду надо
+    пересобрать (кнопка «Пересобрать» мигрирует конфиг до 3.1).
+    """
+    has31 = all(
+        re.search(rf"^{key} = ", conf_text, re.M)
+        for key in ("RandomTrailers", "DisableCookies")
+    )
+    return deploy.AWG3_PROTOCOL_VERSION if has31 else "3"
 
 
 async def _set_note(session, server_id: int, pk: str, note: str) -> None:
@@ -103,7 +123,11 @@ async def get_awg3(
             "has_config": cid in stored, "note": notes_by_pk.get(cid, ""),
             "expires_at": lim.get(cid), "paused": True,
         })
+    # конфиг ноды может быть ещё трёхнулевым (развёрнут до появления 3.1) —
+    # интерфейс покажет подсказку о пересборке
+    has31 = all(k in state.params for k in ("RandomTrailers", "DisableCookies"))
     return AwgStateOut(
+        params_v31=has31,
         container=state.container,
         interface=state.interface,
         listen_port=state.listen_port,
@@ -140,7 +164,7 @@ async def create_client(
         client=client.__dict__
         | {"has_config": True, "note": body.note, "expires_at": body.expires_at},
         config=config,
-        config_amnezia=_amnezia_link(config, server, protocol_version=deploy.AWG3_PROTOCOL_VERSION),
+        config_amnezia=_amnezia_link(config, server, protocol_version=_link_version(config)),
     )
 
 
@@ -170,7 +194,7 @@ async def get_stored_config(
         )
     return ConfigTextResponse(
         config=row.config,
-        config_amnezia=_amnezia_link(row.config, server, protocol_version=deploy.AWG3_PROTOCOL_VERSION),
+        config_amnezia=_amnezia_link(row.config, server, protocol_version=_link_version(row.config)),
         name=row.name,
     )
 
@@ -218,7 +242,7 @@ async def reissue_client(
     return CreateClientResponse(
         client=client.__dict__ | {"has_config": True, "note": note},
         config=config,
-        config_amnezia=_amnezia_link(config, server, protocol_version=deploy.AWG3_PROTOCOL_VERSION),
+        config_amnezia=_amnezia_link(config, server, protocol_version=_link_version(config)),
     )
 
 
