@@ -585,7 +585,7 @@ export function ServersPage({ onUnauthorized }: Props) {
           }
           if (online && !protocols.some((p) => p.key === 'awg3')) {
             moreItems.push({
-              label: t('Развернуть AmneziaWG 3.0'),
+              label: t('Развернуть AmneziaWG 3.1'),
               onClick: () => setDeployFor({ server: s, mode: 'deploy', protocol: 'awg3' }),
             })
           }

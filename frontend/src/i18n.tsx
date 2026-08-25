@@ -38,13 +38,13 @@ const EN: Record<string, string> = {
   'Клиенты, которых не удалось отозвать, остались в поиске — повторите, когда нода станет доступна.':
     'Clients that could not be revoked are still listed — retry once the node is reachable.',
   'без имени': 'unnamed',
+  'Развернуть AmneziaWG 3.1': 'Deploy AmneziaWG 3.1',
+  'AmneziaWG 3.1 — собирается на ноде из закреплённых версий исходников':
+    'AmneziaWG 3.1 — built on the node from pinned source versions',
+  'Сервер собирает AmneziaWG 3.1 из исходников (движок + утилиты закреплённых версий) и запускает его. Готового образа с бинарями 3.x пока нет, поэтому первая сборка занимает 3–7 минут.':
+    'The server builds AmneziaWG 3.1 from source (engine + tools at pinned versions) and starts it. No prebuilt image with 3.x binaries exists yet, so the first build takes 3-7 minutes.',
   'Порт для установки': 'Port to install on',
   'Развернуть на этом порту': 'Deploy on this port',
-  'AmneziaWG 3.0 — собирается на ноде из закреплённых версий исходников':
-    'AmneziaWG 3.0 — built on the node from pinned source versions',
-  'Развернуть AmneziaWG 3.0': 'Deploy AmneziaWG 3.0',
-  'Сервер собирает AmneziaWG 3.0 из исходников (движок + утилиты закреплённых версий) и запускает его. Готового образа с бинарями 3.0 пока нет, поэтому первая сборка занимает 3–7 минут.':
-    'The server builds AmneziaWG 3.0 from source (engine + tools at pinned versions) and starts it. No prebuilt image with 3.0 binaries exists yet, so the first build takes 3-7 minutes.',
   'API-ключи': 'API keys',
   'Документация API': 'API docs',
   'Ключ': 'Key',
