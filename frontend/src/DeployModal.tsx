@@ -6,7 +6,7 @@ import { useModalDismiss } from './useModalDismiss'
 type Props = {
   serverId: number
   serverName: string
-  mode: 'deploy' | 'update' | 'adopt'
+  mode: 'deploy' | 'update' | 'adopt' | 'upgrade31'
   protocol?: 'awg' | 'awg3' | 'xray' | 'openvpn'
   onClose: () => void
   onDone: () => void
@@ -94,7 +94,9 @@ export function DeployModal({
             ? `/api/servers/${serverId}/${protocol}/update`
             : mode === 'adopt'
               ? `/api/servers/${serverId}/${protocol}/adopt`
-              : `/api/servers/${serverId}/${protocol}/deploy`
+              : mode === 'upgrade31'
+                ? `/api/servers/${serverId}/${protocol}/upgrade31`
+                : `/api/servers/${serverId}/${protocol}/deploy`
         await api(path, {
           method: 'POST',
           body: mode === 'deploy' ? JSON.stringify({ port: p }) : undefined,
@@ -128,7 +130,9 @@ export function DeployModal({
       ? t('Обновление {label}', { label })
       : mode === 'adopt'
         ? t('Взятие под управление · {label}', { label })
-        : t('Установка {label}', { label })
+        : mode === 'upgrade31'
+          ? t('Обновление до AmneziaWG 3.1')
+          : t('Установка {label}', { label })
 
   return (
     <div className="modal-backdrop" onClick={dismiss}>
@@ -143,7 +147,9 @@ export function DeployModal({
         </div>
 
         <p className="muted small">
-          {mode === 'adopt'
+          {mode === 'upgrade31'
+            ? t('Контейнер amnezia-awg2 обновляется до протокола 3.1 на месте: порт, ключ сервера и подсеть сохраняются, к конфигу добавляются параметры третьей версии. Клиенты 2.0 после этого не подключатся — их нужно перевыпустить. Перед обновлением снят снимок для отката.')
+            : mode === 'adopt'
             ? t('Панель перечитывает конфиг из текущего контейнера, сохраняет его порт и ключи и заменяет его своим образом. Клиенты остаются — туннель кратко перезапустится. Перед этим снят снимок для отката.')
             : mode === 'update'
             ? t('Сервер тянет свежий базовый образ и пересобирает контейнер. Клиенты и ключи сохраняются.')

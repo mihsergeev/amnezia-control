@@ -164,7 +164,7 @@ async def create_client(
         client=client.__dict__
         | {"has_config": True, "note": body.note, "expires_at": body.expires_at},
         config=config,
-        config_amnezia=_amnezia_link(config, server, protocol_version=_link_version(config)),
+        config_amnezia=_amnezia_link(config, server, protocol_version=None),
     )
 
 
@@ -194,7 +194,7 @@ async def get_stored_config(
         )
     return ConfigTextResponse(
         config=row.config,
-        config_amnezia=_amnezia_link(row.config, server, protocol_version=_link_version(row.config)),
+        config_amnezia=_amnezia_link(row.config, server, protocol_version=None),
         name=row.name,
     )
 
@@ -242,7 +242,7 @@ async def reissue_client(
     return CreateClientResponse(
         client=client.__dict__ | {"has_config": True, "note": note},
         config=config,
-        config_amnezia=_amnezia_link(config, server, protocol_version=_link_version(config)),
+        config_amnezia=_amnezia_link(config, server, protocol_version=None),
     )
 
 

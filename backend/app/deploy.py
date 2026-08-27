@@ -9,6 +9,7 @@ Amnezia `amneziavpn/amneziawg-go:latest` (Docker Hub) + наш start.sh. По SS
 """
 
 import base64
+import ipaddress
 import random
 import re
 import secrets
@@ -1034,3 +1035,133 @@ async def hub_info() -> dict:
         "line_latest_version": line_latest[1] if line_latest else None,
         "line_latest_updated": line_latest[0] if line_latest else "",
     }
+
+
+# --- обновление AmneziaWG 2.0 -> 3.1 «на месте» -----------------------------
+# Приложение AmneziaVPN знает только контейнеры amnezia-awg / amnezia-awg2 /
+# amnezia-openvpn-cloak; третья версия у него — это ТОТ ЖЕ amnezia-awg2, но с
+# protocol_version="3.1". Наш отдельный amnezia-awg3 приложение не видит вовсе,
+# поэтому в полном доступе оно показывает старую 2.0 и просит переустановить
+# контейнер. Обновление «на месте» приводит ноду к модели Amnezia: тот же
+# контейнер и порт, но протокол 3.1.
+#
+# Клиенты СОХРАНЯЮТСЯ в конфиге и clientsTable (имена и адреса на месте), но
+# подключаться перестают: обфускация сменилась. Их нужно перевыпустить — зато
+# перевыпуск сохраняет имя и IP, а не заводит всё заново.
+IMAGE_INPLACE_31 = "acontrol-awg31"
+
+
+def upgrade_conf_to_31(conf_text: str, params: dict[str, object]) -> str:
+    """Собирает конфиг 3.1 на месте старого: новые параметры обфускации, но
+    ПРЕЖНИЕ PrivateKey, Address, ListenPort и все [Peer]-блоки."""
+    keep_keys = ("PrivateKey", "Address", "ListenPort")
+    kept: dict[str, str] = {}
+    peers_part = ""
+    idx = conf_text.find("[Peer]")
+    iface_text = conf_text if idx == -1 else conf_text[:idx]
+    if idx != -1:
+        peers_part = conf_text[idx:]
+    for line in iface_text.splitlines():
+        s = line.strip()
+        if not s or s.startswith("#") or "=" not in s:
+            continue
+        k, _, v = s.partition("=")
+        k, v = k.strip(), v.strip()
+        if k in keep_keys:
+            kept[k] = v
+    missing = [k for k in keep_keys if k not in kept]
+    if missing:
+        raise ValueError(f"в конфиге нет обязательных полей: {', '.join(missing)}")
+
+    lines = ["[Interface]", f"PrivateKey = {kept['PrivateKey']}",
+             f"Address = {kept['Address']}", f"ListenPort = {kept['ListenPort']}"]
+    lines += [f"{k} = {params[k]}" for k in _AWG3_ACTIVE_ORDER]
+    lines += [f"# {k} = {params[k]}" for k in _AWG_CPS_KEYS]
+    conf = "\n".join(lines) + "\n"
+    if peers_part:
+        conf += "\n" + peers_part.lstrip("\n")
+    return conf
+
+
+def subnet_from_conf(conf_text: str, default: str = SUBNET) -> str:
+    """Подсеть туннеля из Address в конфиге.
+
+    Правила NAT нельзя зашивать константой: обновляем в том числе контейнер,
+    который панель взяла под управление у Amnezia или у прошлого админа, а там
+    подсеть может быть любой. Промахнись — трафик клиентов не выйдет в интернет
+    (туннель поднимется, но «интернета нет»).
+    """
+    m = re.search(r"^Address\s*=\s*([^,\s]+)", conf_text, re.M)
+    if not m:
+        return default
+    try:
+        return str(ipaddress.ip_interface(m.group(1)).network)
+    except ValueError:
+        return default
+
+
+def build_script_upgrade31(conf_text: str) -> str:
+    """Скрипт обновления контейнера amnezia-awg2 до протокола 3.1 на месте.
+
+    Образ собирается из исходников 3.1 (в готовом образе Amnezia бинарей 3.1
+    нет), конфиг подставляется уже готовым — его собрал upgrade_conf_to_31,
+    сохранив ключ сервера, порт и всех пиров.
+    """
+    subnet = subnet_from_conf(conf_text)
+    bringup = _bringup(subnet)
+    return "\n".join([
+        "#!/bin/bash",
+        "set -e",
+        "trap 'echo DEPLOY_ERROR' ERR",
+        f"D=/opt/amnezia/awg; BUILD=/opt/acontrol/build-awg31; "
+        f"IMG={IMAGE_INPLACE_31}; CONT={CONTAINER}",
+        'log(){ echo "[$(date +%H:%M:%S)] $*"; }',
+        "",
+        'log "[1/5] проверка: контейнер на месте"',
+        'sudo docker ps --format "{{.Names}}" | grep -qx "$CONT" '
+        '|| { echo "DEPLOY_ERROR: контейнер $CONT не найден"; exit 1; }',
+        # порт берём из живого контейнера — он должен остаться прежним, иначе
+        # у существующих клиентов протухнет endpoint
+        # без Go-шаблона: экранирование $p/$c через python-f-string и одинарные
+        # кавычки bash ломает шаблон («unexpected \ in range» — поймано на ноде).
+        # `docker port` печатает «47180/udp -> 0.0.0.0:47180» — берём первое число.
+        '''PORT=$(sudo docker port "$CONT" | head -1 | grep -o "^[0-9]*")''',
+        '[ -n "$PORT" ] || { echo "DEPLOY_ERROR: не определил порт"; exit 1; }',
+        'log "порт сохраняем: $PORT"',
+        "",
+        'log "[2/5] сборка образа 3.1 из исходников"',
+        'sudo mkdir -p "$BUILD" "$D"',
+        f'echo {_b64(_dockerfile_v3())} | base64 -d | sudo tee "$BUILD/Dockerfile" >/dev/null',
+        f'echo {_b64(_start_sh(subnet))} | base64 -d | sudo tee "$BUILD/start.sh" >/dev/null',
+        'sudo docker build -t $IMG "$BUILD" 2>&1 | tail -3; '
+        '[ ${PIPESTATUS[0]} -eq 0 ] || { echo DEPLOY_ERROR; exit 1; }',
+        "",
+        'log "[3/5] вытаскиваю ключи и таблицу клиентов из живого контейнера"',
+        # конфиг мог лежать ВНУТРИ контейнера, а не на хост-маунте — забираем
+        # оттуда, иначе после пересоздания потеряли бы ключ сервера и клиентов
+        '  for f in clientsTable wireguard_server_private_key.key '
+        'wireguard_server_public_key.key wireguard_psk.key; do',
+        '    B=$(sudo docker exec "$CONT" cat "/opt/amnezia/awg/$f" 2>/dev/null '
+        '| base64 -w0 2>/dev/null || true);',
+        '    [ -n "$B" ] && echo "$B" | base64 -d | sudo tee "$D/$f" >/dev/null || true;',
+        '  done',
+        "",
+        'log "[4/5] ставлю конфиг 3.1 (ключ сервера, порт и клиенты сохранены)"',
+        f'echo {_b64(conf_text)} | base64 -d | sudo tee "$D/awg0.conf" >/dev/null',
+        'sudo docker rm -f "$CONT" >/dev/null 2>&1 || true',
+        "sudo docker run -d --name $CONT --restart always --privileged \\",
+        "  --cap-add NET_ADMIN --cap-add SYS_MODULE \\",
+        "  --sysctl net.ipv4.conf.all.src_valid_mark=1 \\",
+        '  -v "$D":/opt/amnezia/awg -p $PORT:$PORT/udp $IMG >/dev/null',
+        "sleep 5",
+        "",
+        'log "[5/5] подъём awg0 + NAT"',
+        f'sudo docker exec $CONT sh -c {_shell_quote(bringup)}',
+        'AWGSHOW=$(sudo docker exec $CONT awg show awg0 2>/dev/null || true)',
+        'if ! printf "%s" "$AWGSHOW" | grep -qE "listening port"; then '
+        'echo "READBACK: awg0 не поднялся"; echo DEPLOY_ERROR; exit 1; fi',
+        'printf "%s" "$AWGSHOW" | grep -E "interface|listening" || true',
+        'log "готово: контейнер amnezia-awg2 теперь на протоколе 3.1"',
+        'log "ВНИМАНИЕ: клиентам нужен перевыпуск — старые конфиги не подключатся"',
+        "echo DEPLOY_DONE",
+    ]) + "\n"

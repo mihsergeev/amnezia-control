@@ -310,6 +310,13 @@ const EN: Record<string, string> = {
 
   // --- версия / обновление / деплой ---
   'Пересобрать': 'Rebuild',
+  'Обновить до 3.1': 'Upgrade to 3.1',
+  'протокол обновлён до 3.1': 'protocol upgraded to 3.1',
+  'Обновление до AmneziaWG 3.1': 'Upgrade to AmneziaWG 3.1',
+  'Контейнер amnezia-awg2 обновляется до протокола 3.1 на месте: порт, ключ сервера и подсеть сохраняются, к конфигу добавляются параметры третьей версии. Клиенты 2.0 после этого не подключатся — их нужно перевыпустить. Перед обновлением снят снимок для отката.':
+    'The amnezia-awg2 container is upgraded to protocol 3.1 in place: port, server key and subnet are kept, third-version parameters are added to the config. Existing 2.0 clients will stop connecting and must be reissued. A snapshot for rollback is taken beforehand.',
+  'Обновить протокол на «{name}» до AmneziaWG 3.1?\n\nОбновление идёт внутри того же контейнера: порт, ключ сервера и подсеть сохраняются, приложение AmneziaVPN увидит 3.1 в «полном доступе».\n\nВАЖНО: выданные ранее конфиги 2.0 работать перестанут — всех клиентов придётся перевыпустить. Перед обновлением снимается снимок для отката.':
+    'Upgrade the protocol on “{name}” to AmneziaWG 3.1?\n\nThe upgrade happens inside the same container: port, server key and subnet are kept, and the AmneziaVPN app will see 3.1 in “full access”.\n\nIMPORTANT: previously issued 2.0 configs will stop working — every client has to be reissued. A snapshot for rollback is taken beforehand.',
   'Обновить': 'Refresh',
   'есть': 'available',
   'образ собран не панелью': 'image not built by the panel',

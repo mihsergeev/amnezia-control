@@ -4,6 +4,34 @@ All notable changes to Amnezia Control are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.51.0] — 2026-08-27
+
+### Added
+- **Upgrade an AmneziaWG 2.0 node to 3.1 in place**, from the 2.0 tab. The
+  AmneziaVPN app identifies a protocol by `protocol_version` inside the container
+  it knows — not by the container's name — so the panel's separate
+  `amnezia-awg3` container is invisible to it: a node could be running 3.1 next
+  door and full access would still hand the app a 2.0 server and the "AmneziaWG
+  2.0 is no longer supported" banner. The new button rebuilds the protocol inside
+  the same `amnezia-awg2` container, keeping its port, server key and subnet, so
+  the app sees a genuine 3.1 server. A snapshot is taken first, and the
+  confirmation states plainly that existing 2.0 configs stop working and every
+  client has to be reissued.
+- **Junk sizes are raised to what the 3.x engine accepts.** A 2.0 config may
+  carry `S1`–`S4` below 12; with `HeaderProtectionKey` present the engine refuses
+  anything under its header cipher nonce size, so an upgrade that copied the old
+  values verbatim would leave the interface down. They are regenerated within
+  valid bounds.
+
+### Fixed
+- **The protocol version in a link now follows the node's config everywhere.** It
+  used to be fixed per endpoint — the 2.0 routes always said `"2"` — which was
+  wrong the moment a container was upgraded in place. Both the client link and the
+  full-access object read the config instead.
+- **NAT rules follow the tunnel's own subnet.** The upgrade path derived them from
+  the panel's default instead of the node's `Address`, which would have left
+  clients on an adopted node connected but without internet.
+
 ## [0.50.2] — 2026-08-25
 
 ### Fixed
