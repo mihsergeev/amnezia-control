@@ -196,12 +196,18 @@ def build_fullaccess_awg_object(conf_text: str) -> dict:
 
     В отличие от клиентской ссылки (build_amnezia_link) full-access НЕ содержит
     last_config — только параметры протокола (H1-H4 диапазонами, I1-I5, Jc/S…),
-    порт, subnet и, главное, protocol_version="2". Без этого объекта приложение
-    AmneziaVPN не распознаёт версию 2 и помечает сервер как «AmneziaWG Legacy».
+    порт, subnet и, главное, protocol_version. Без этого объекта приложение
+    AmneziaVPN не распознаёт версию и помечает сервер как «AmneziaWG Legacy».
     Формат сверен байт-в-байт с экспортом самого приложения.
+
+    Версию берём из САМОГО конфига: контейнер amnezia-awg2 может нести и 2.0, и
+    обновлённый на месте протокол 3.1 (у Amnezia третья версия живёт в том же
+    контейнере, отличаясь только protocol_version).
     """
     interface, _peers = parse_conf(conf_text)
-    params = {k: interface.get(k, "") for k in _AMNEZIA_PARAM_KEYS}
+    is31 = all(interface.get(k) for k in ("RandomTrailers", "DisableCookies"))
+    keys = _AMNEZIA_PARAM_KEYS_V3 if is31 else _AMNEZIA_PARAM_KEYS
+    params = {k: interface.get(k, "") for k in keys}
     listen_port = int(interface.get("ListenPort", "0") or 0)
     server_ip = interface.get("Address", "").split("/")[0]
     subnet = (
@@ -212,7 +218,7 @@ def build_fullaccess_awg_object(conf_text: str) -> dict:
     return {
         **params,
         "port": str(listen_port),
-        "protocol_version": "2",
+        "protocol_version": "3.1" if is31 else "2",
         "subnet_address": subnet,
         "transport_proto": "udp",
     }

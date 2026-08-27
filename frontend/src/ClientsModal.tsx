@@ -30,6 +30,7 @@ type Props = {
   onClose: () => void
   onUnauthorized: () => void
   onRequestUpdate: (protocol: 'awg' | 'awg3' | 'xray' | 'openvpn') => void
+  onRequestUpgrade31?: () => void
   onRequestAdopt?: () => void
 }
 
@@ -43,6 +44,7 @@ export function ClientsModal({
   onClose,
   onUnauthorized,
   onRequestUpdate,
+  onRequestUpgrade31,
   onRequestAdopt,
 }: Props) {
   const { t } = useI18n()
@@ -443,6 +445,9 @@ export function ClientsModal({
               {version.deployed && !version.update_available && (
                 <span className="version-ok"> {t('актуальна')}</span>
               )}
+              {state?.params_v31 === true && (
+                <span className="muted"> · {t('протокол обновлён до 3.1')}</span>
+              )}
               {version.foreign_container ? (
                 <span className="muted">
                   {' '}·{' '}
@@ -474,6 +479,15 @@ export function ClientsModal({
                   ни adopt, ни пересборка, иначе потеряли бы клиентов. Панельный
                   контейнер (в т.ч. без читаемого дайджеста) пересобираем — конфиг
                   переносится из живого контейнера. */}
+              {/* Обновление 2.0 → 3.1 ВНУТРИ amnezia-awg2. Приложение узнаёт
+                  версию не по имени контейнера, а по protocol_version, поэтому
+                  «полный доступ» покажет 3.1 только после такого обновления —
+                  отдельный amnezia-awg3 приложение вообще не видит. */}
+              {onRequestUpgrade31 && state?.params_v31 === false && (
+                <button className="ghost" onClick={onRequestUpgrade31}>
+                  {t('Обновить до 3.1')}
+                </button>
+              )}
               {version.foreign_container ? (
                 version.adoptable
                   ? onRequestAdopt && (

@@ -180,7 +180,7 @@ export function ServersPage({ onUnauthorized }: Props) {
   const [importOpen, setImportOpen] = useState(false)
   const [deployFor, setDeployFor] = useState<{
     server: Server
-    mode: 'deploy' | 'update' | 'adopt'
+    mode: 'deploy' | 'update' | 'adopt' | 'upgrade31'
     protocol: 'awg' | 'awg3' | 'xray' | 'openvpn'
   } | null>(null)
   const [fullAccess, setFullAccess] = useState<{
@@ -990,6 +990,21 @@ export function ServersPage({ onUnauthorized }: Props) {
               return
             setClientsFor(null)
             setDeployFor({ server: srv, mode: 'update', protocol })
+          }}
+          onRequestUpgrade31={() => {
+            const srv = clientsFor
+            if (!srv) return
+            if (
+              !window.confirm(
+                t(
+                  'Обновить протокол на «{name}» до AmneziaWG 3.1?\n\nОбновление идёт внутри того же контейнера: порт, ключ сервера и подсеть сохраняются, приложение AmneziaVPN увидит 3.1 в «полном доступе».\n\nВАЖНО: выданные ранее конфиги 2.0 работать перестанут — всех клиентов придётся перевыпустить. Перед обновлением снимается снимок для отката.',
+                  { name: srv.name },
+                ),
+              )
+            )
+              return
+            setClientsFor(null)
+            setDeployFor({ server: srv, mode: 'upgrade31', protocol: 'awg' })
           }}
           onRequestAdopt={() => {
             const srv = clientsFor
