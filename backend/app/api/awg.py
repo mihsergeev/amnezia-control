@@ -1,3 +1,5 @@
+import re
+
 import asyncssh
 import httpx
 from fastapi import APIRouter, HTTPException, Request, status
@@ -89,11 +91,30 @@ async def _notes_map(session, server_id) -> dict[str, str]:
     return await notes.notes_map(session, server_id, "awg")
 
 
-def _amnezia_link(config: str, server: Server, protocol_version: str = "2") -> str:
+def link_version_from_conf(conf_text: str) -> str:
+    """Версия протокола по РЕАЛЬНОМУ конфигу клиента/сервера.
+
+    Контейнер amnezia-awg2 может нести и 2.0, и обновлённый на месте 3.1 — у
+    Amnezia версия живёт не в имени контейнера, а в protocol_version. Ключи 3.1
+    (RandomTrailers/DisableCookies) — признак третьей версии; только ключи 3.0
+    без них дают «3», которую приложение не знает и пометит устаревшей (что и
+    верно: такую ноду надо пересобрать).
+    """
+    if all(re.search(rf"^{k} = ", conf_text, re.M)
+           for k in ("RandomTrailers", "DisableCookies")):
+        return deploy.AWG3_PROTOCOL_VERSION
+    if re.search(r"^HeaderProtectionKey = ", conf_text, re.M):
+        return "3"
+    return "2"
+
+
+def _amnezia_link(
+    config: str, server: Server, protocol_version: str | None = None
+) -> str:
     dns1, dns2 = awg.dns_pair(get_settings().awg_client_dns)
     return awg.build_amnezia_link(
         config, server.host, server.name, dns1, dns2,
-        protocol_version=protocol_version,
+        protocol_version=protocol_version or link_version_from_conf(config),
     )
 
 
@@ -153,7 +174,17 @@ async def get_awg(server_id: int, _: CurrentUser, session: SessionDep) -> AwgSta
     legacy_container = conts["legacy"] if conts["new"] else None
 
     clients = await build_client_list(session, server_id, state)
+    # Обновлён ли контейнер на месте до 3.1. Приложение различает версии не по
+    # имени контейнера, а по protocol_version, поэтому в amnezia-awg2 может
+    # лежать и 2.0, и 3.1 — интерфейс по этому флагу решает, предлагать ли
+    # обновление на месте.
+    params_v31 = (
+        all(state.params.get(k) for k in ("RandomTrailers", "DisableCookies"))
+        if state.container == deploy.CONTAINER
+        else None
+    )
     return AwgStateOut(
+        params_v31=params_v31,
         container=state.container,
         interface=state.interface,
         listen_port=state.listen_port,
@@ -450,6 +481,47 @@ async def config_restore(
         session, user.username, "awg_config_restore", server.name, body.id
     )
     return {"restored": True}
+
+
+@router.post("/upgrade31", status_code=status.HTTP_202_ACCEPTED)
+async def upgrade_to_31(
+    server_id: int, user: CurrentUser, session: SessionDep, request: Request
+) -> dict:
+    """Обновляет контейнер amnezia-awg2 с протокола 2.0 до 3.1 НА МЕСТЕ.
+
+    Зачем: приложение AmneziaVPN знает только контейнеры amnezia-awg /
+    amnezia-awg2 / amnezia-openvpn-cloak, а третья версия у него — тот же
+    amnezia-awg2 с protocol_version="3.1". Наш отдельный amnezia-awg3 приложение
+    не видит, поэтому в полном доступе показывает старую 2.0 и просит переустановку.
+
+    Сохраняются ключ сервера, порт, IP-адреса и имена клиентов; меняется только
+    обфускация. Клиенты после этого ОБЯЗАНЫ быть перевыпущены — старые конфиги
+    не подключатся (проверено на живой ноде: рукопожатия нет вовсе).
+    """
+    server = await _get_or_404(server_id, session)
+    try:
+        async with _connect(server) as conn:
+            state = await awg.read_state(conn, server.host)
+            if all(state.params.get(k) for k in ("RandomTrailers", "DisableCookies")):
+                raise HTTPException(
+                    status.HTTP_409_CONFLICT,
+                    "Этот контейнер уже на протоколе 3.1 — обновлять нечего.",
+                )
+            conf = await awg.read_awg_conf(conn, state.container, state.interface)
+            new_conf = deploy.upgrade_conf_to_31(conf, deploy.generate_awg3_params())
+            # пре-оп бэкап: снимок ДО замены протокола — откат возможен
+            await deploy.snapshot_all(conn, "awg")
+            script = deploy.build_script_upgrade31(new_conf)
+            await deploy.launch(conn, script, tag="awg")
+    except HTTPException:
+        raise
+    except ValueError as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001
+        raise _ssh_error(exc) from exc
+    deploywatch.spawn(request.app, server, "awg")
+    await audit.record(session, user.username, "awg_upgrade31", server.name)
+    return {"started": True}
 
 
 @router.get("/deploy/status", response_model=DeployStatusOut)
