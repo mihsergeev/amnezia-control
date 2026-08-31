@@ -4,6 +4,23 @@ All notable changes to Amnezia Control are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.52.1] — 2026-08-31
+
+### Fixed
+- **Checkboxes looked like empty text fields.** The base `input` rule was written
+  for text inputs, and its padding, border and background applied to checkboxes
+  too, turning them into pale rectangles that floated above their labels. They are
+  now drawn as proper 16px boxes with a tick — in the delete-server dialog and the
+  client-search table as well.
+
+### Changed
+- **The server transfer dialogs were rewritten.** What travels is a short list
+  rather than a paragraph, the warning about private keys is a note rather than a
+  line of error-red text, counts after an import are shown by what they are
+  ("stored configs") instead of table names, and the next steps are spelled out.
+  The file picker is a button with the chosen file name next to it, and Import
+  stays disabled until a file is picked.
+
 ## [0.52.0] — 2026-08-31
 
 ### Added
