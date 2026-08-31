@@ -110,6 +110,49 @@ export async function downloadSavedBackup(filename: string): Promise<void> {
   URL.revokeObjectURL(url)
 }
 
+// Перенос одного сервера между панелями (в отличие от бэкапа, который
+// переносит панель целиком и затирает принимающую).
+export type ServerImportResult = {
+  server_id: number
+  name: string
+  host: string
+  imported: Record<string, number>
+  skipped_tables: string[]
+}
+
+export async function exportServer(id: number, history: boolean): Promise<void> {
+  const token = getToken()
+  const res = await fetch(`/api/servers/${id}/export?history=${history}`, {
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+  })
+  if (!res.ok) throw new ApiError(`Ошибка HTTP ${res.status}`, res.status)
+  const cd = res.headers.get('Content-Disposition') || ''
+  const m = cd.match(/filename="?([^"]+)"?/)
+  const blob = await res.blob()
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = m ? m[1] : 'server.acontrol-server.json'
+  a.click()
+  URL.revokeObjectURL(url)
+}
+
+export async function importServerFile(file: File | Blob): Promise<ServerImportResult> {
+  const token = getToken()
+  const res = await fetch('/api/servers/import-file', {
+    method: 'POST',
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+    body: file,
+  })
+  const body = await res.json().catch(() => null)
+  if (!res.ok) {
+    const detail =
+      typeof body?.detail === 'string' ? body.detail : `Ошибка HTTP ${res.status}`
+    throw new ApiError(detail, res.status)
+  }
+  return body
+}
+
 export type Server = {
   id: number
   name: string

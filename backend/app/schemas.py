@@ -181,6 +181,18 @@ class ConfigTextResponse(BaseModel):
     name: str
 
 
+class ServerImportResult(BaseModel):
+    """Итог загрузки сервера из файла переноса."""
+
+    server_id: int
+    name: str
+    host: str
+    # сколько строк принято по таблицам — оператор видит, что доехало
+    imported: dict[str, int] = {}
+    # таблицы из более новой панели, которых тут нет: называем вслух
+    skipped_tables: list[str] = []
+
+
 class ImportLinkRequest(BaseModel):
     link: str = Field(min_length=1)
 
