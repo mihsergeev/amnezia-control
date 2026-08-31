@@ -310,6 +310,30 @@ const EN: Record<string, string> = {
 
   // --- версия / обновление / деплой ---
   'Пересобрать': 'Rebuild',
+  'Выгрузить в файл': 'Export to file',
+  'Выгрузить сервер': 'Export server',
+  'Из файла': 'From file',
+  'Загрузить сервер из файла': 'Import a server from a file',
+  'Загрузить': 'Import',
+  'Загружаем…': 'Importing…',
+  'Скачать файл': 'Download file',
+  'Готовим…': 'Preparing…',
+  'Выберите файл выгрузки': 'Choose an export file',
+  'Включить историю трафика (файл станет в сотни раз больше)':
+    'Include traffic history (makes the file hundreds of times larger)',
+  'В файл уедет карточка сервера и то, чего нет на ноде: сохранённые конфиги клиентов, заметки, сроки действия и паузы. Живых клиентов новая панель прочитает с самого сервера.':
+    'The file carries the server entry and what the node does not hold: stored client configs, notes, expiry dates and pauses. Live clients are read from the server itself by the receiving panel.',
+  'SSH-ключ панели в файл не попадает — он общий для всех ваших нод. Новая панель ходит своим ключом, её нужно будет пустить на сервер скриптом настройки.':
+    'The panel SSH key is not included — one key serves all your nodes. The receiving panel uses its own key and has to be let onto the server with the setup script.',
+  'Файл содержит приватные ключи клиентов — храните его как бэкап.':
+    'The file contains client private keys — keep it as safe as a backup.',
+  'Файл, выгруженный из другой панели через «Ещё» → «Выгрузить в файл». Существующие серверы не затрагиваются — добавится один новый.':
+    'A file exported from another panel via More → Export to file. Existing servers are untouched — one new server is added.',
+  'Сервер «{name}» ({host}) добавлен.': 'Server “{name}” ({host}) added.',
+  'Не удалось принять таблицы (файл из более новой панели): {list}':
+    'These tables could not be accepted (the file comes from a newer panel): {list}',
+  'Осталось пустить эту панель на сервер: откройте «Ещё» → «Скрипт настройки» и выполните его на ноде, затем нажмите «Проверить».':
+    'One step left — let this panel onto the server: open More → Setup script, run it on the node, then press Check.',
   'Обновить до 3.1': 'Upgrade to 3.1',
   'протокол обновлён до 3.1': 'protocol upgraded to 3.1',
   'Обновление до AmneziaWG 3.1': 'Upgrade to AmneziaWG 3.1',

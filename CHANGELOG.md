@@ -4,6 +4,26 @@ All notable changes to Amnezia Control are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.52.0] — 2026-08-31
+
+### Added
+- **Move one server to another panel.** A full backup carries the whole panel and
+  overwrites the receiving one, so it was no good for handing a single project
+  over. Adding the server by hand was not enough either: the receiving panel
+  reads live clients off the node, but the panel-side data — stored client
+  configs (without them a client can only be reissued, not handed its file or QR
+  again), notes, expiry dates and pauses — lived in the old panel's database and
+  would have been lost silently. **More → Export to file** writes it all to a
+  readable JSON file, and **From file** on the servers page loads it into another
+  panel, leaving that panel's existing servers untouched.
+  - Traffic history is opt-in: on a busy node it runs to hundreds of thousands of
+    rows, and the receiving panel collects it again by itself.
+  - The panel's SSH key is deliberately not included — one key serves every node,
+    so exporting it would hand the receiving panel the whole fleet. The import
+    result says what is left to do: run the setup script on the node.
+  - Server-scoped tables are discovered from the model registry, so a table added
+    later travels by default instead of being forgotten.
+
 ## [0.51.0] — 2026-08-27
 
 ### Added
