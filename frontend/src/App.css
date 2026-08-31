@@ -344,8 +344,59 @@ label.checkbox {
   cursor: pointer;
 }
 
-label.checkbox input {
+/* сброс ширины нужен текстовым полям внутри такой метки; галочка ниже задаёт
+   свой размер сама, и width: auto её схлопывал бы (селектор тут специфичнее) */
+label.checkbox input:not([type='checkbox']) {
   width: auto;
+}
+
+/* Общее правило input задумано для текстовых полей — на галочках его отступы и
+   рамка превращали квадратик в бледный «инпут». Рисуем чекбокс явно. */
+input[type='checkbox'] {
+  appearance: none;
+  -webkit-appearance: none;
+  flex: none;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  border: 1px solid var(--border-strong);
+  border-radius: 4px;
+  background: var(--bg);
+  cursor: pointer;
+  position: relative;
+  transition: background-color 0.12s ease, border-color 0.12s ease;
+}
+
+input[type='checkbox']:hover:not(:disabled) {
+  border-color: #3563e9;
+}
+
+input[type='checkbox']:checked {
+  background: #3563e9;
+  border-color: #3563e9;
+}
+
+/* галочка: две стороны рамки, повёрнутые на 45° */
+input[type='checkbox']:checked::after {
+  content: '';
+  position: absolute;
+  left: 4.5px;
+  top: 1px;
+  width: 4px;
+  height: 8px;
+  border: solid #fff;
+  border-width: 0 2px 2px 0;
+  transform: rotate(45deg);
+}
+
+input[type='checkbox']:focus-visible {
+  outline: 2px solid #3563e9;
+  outline-offset: 2px;
+}
+
+input[type='checkbox']:disabled {
+  opacity: 0.5;
+  cursor: default;
 }
 
 input {
@@ -1667,3 +1718,142 @@ body {
   word-break: break-all;
 }
 .row-muted td { opacity: 0.55; }
+
+/* --- перенос сервера между панелями --- */
+.transfer-head {
+  align-items: flex-start;
+  gap: 0.8rem;
+}
+
+.transfer-title {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  min-width: 0;
+}
+
+/* длинное имя сервера не должно распихивать «Закрыть» и рвать шапку */
+.transfer-subtitle {
+  font-size: 0.85rem;
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.transfer-section {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.transfer-label {
+  font-size: 0.72rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.transfer-list {
+  margin: 0;
+  padding-left: 1.1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  font-size: 0.88rem;
+  color: var(--text);
+}
+
+.transfer-list li::marker {
+  color: var(--text-muted);
+}
+
+.transfer-tail {
+  margin: 0.1rem 0 0;
+}
+
+/* итог импорта: «что» слева, число справа, чтобы читалось столбиком */
+.transfer-counts {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.transfer-counts li {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.4rem 0.6rem;
+  font-size: 0.88rem;
+}
+
+.transfer-counts li:nth-child(odd) {
+  background: var(--row-zebra);
+}
+
+.transfer-counts b {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Плашки-врезки: заметное, но не «ошибка красным по фону» — предупреждение
+   о секретах в файле важно прочитать, а не пролистать как сбой. */
+.transfer-note {
+  border-radius: 8px;
+  padding: 0.55rem 0.7rem;
+  font-size: 0.86rem;
+  line-height: 1.4;
+  border-left: 3px solid transparent;
+}
+
+.transfer-note-danger {
+  background: rgba(231, 76, 60, 0.12);
+  border-left-color: #e74c3c;
+  color: var(--text);
+}
+
+.transfer-note-ok {
+  background: rgba(46, 204, 113, 0.12);
+  border-left-color: #2ecc71;
+  color: var(--text);
+}
+
+.transfer-check {
+  margin-top: 0.1rem;
+}
+
+.transfer-hint,
+.transfer-foot {
+  margin: -0.55rem 0 0;
+  padding-left: 1.55rem;
+  line-height: 1.4;
+}
+
+.transfer-foot {
+  padding-left: 0;
+  padding-top: 0.6rem;
+  border-top: 1px solid var(--border);
+  margin-top: 0.1rem;
+}
+
+/* штатный <input type=file> выглядит чужеродно — прячем и рисуем своей парой */
+.file-pick {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+}
+
+.file-pick-name {
+  font-size: 0.86rem;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
