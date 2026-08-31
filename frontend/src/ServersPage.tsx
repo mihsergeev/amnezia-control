@@ -21,6 +21,7 @@ import { ClientsModal } from './ClientsModal'
 import { ImportModal } from './ImportModal'
 import { DeployModal } from './DeployModal'
 import { Menu, type MenuItem } from './Menu'
+import { ServerExportModal, ServerImportModal } from './ServerTransfer'
 import { copyText } from './clipboard'
 import { formatBytes, formatUptime } from './format'
 import { useI18n } from './i18n'
@@ -178,6 +179,9 @@ export function ServersPage({ onUnauthorized }: Props) {
   const [checkingId, setCheckingId] = useState<number | null>(null)
   const [clientsFor, setClientsFor] = useState<Server | null>(null)
   const [importOpen, setImportOpen] = useState(false)
+  // перенос одного сервера между панелями (не путать с бэкапом всей панели)
+  const [exportFor, setExportFor] = useState<Server | null>(null)
+  const [fileImportOpen, setFileImportOpen] = useState(false)
   const [deployFor, setDeployFor] = useState<{
     server: Server
     mode: 'deploy' | 'update' | 'adopt' | 'upgrade31'
@@ -542,6 +546,9 @@ export function ServersPage({ onUnauthorized }: Props) {
       <div className="page-head">
         <h2>{t('Серверы')}</h2>
         <div className="page-head-actions">
+          <button className="ghost" onClick={() => setFileImportOpen(true)}>
+            {t('Из файла')}
+          </button>
           <button className="ghost" onClick={() => setImportOpen(true)}>
             {t('Импорт')}
           </button>
@@ -616,6 +623,10 @@ export function ServersPage({ onUnauthorized }: Props) {
           if (!online) {
             moreItems.push({ label: t('Скрипт настройки'), onClick: () => openScript(s) })
           }
+          moreItems.push({
+            label: t('Выгрузить в файл'),
+            onClick: () => setExportFor(s),
+          })
           moreItems.push({ label: t('Изменить'), onClick: () => openEdit(s) })
           moreItems.push({
             label: t('Удалить сервер'),
@@ -1021,6 +1032,22 @@ export function ServersPage({ onUnauthorized }: Props) {
             setClientsFor(null)
             setDeployFor({ server: srv, mode: 'adopt', protocol: 'awg' })
           }}
+        />
+      )}
+
+      {exportFor && (
+        <ServerExportModal
+          server={exportFor}
+          onClose={() => setExportFor(null)}
+          onUnauthorized={onUnauthorized}
+        />
+      )}
+
+      {fileImportOpen && (
+        <ServerImportModal
+          onClose={() => setFileImportOpen(false)}
+          onDone={() => void load()}
+          onUnauthorized={onUnauthorized}
         />
       )}
 
