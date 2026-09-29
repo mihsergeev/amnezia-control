@@ -94,3 +94,24 @@ async def test_collector_stores_client_names(factory):
     async with factory() as s:
         rows = {r.client_id: r.name for r in await s.scalars(select(ClientName))}
     assert rows == {"PUBX": "@bob2"}
+
+
+async def test_top_clients_filters_by_servers(factory):
+    # топ по выбранным серверам: клиенты других серверов в него не попадают,
+    # даже если качают больше всех
+    now = datetime.now(timezone.utc)
+    async with factory() as s:
+        s.add(Server(id=1, name="kz-a", host="h1", ssh_port=22, ssh_user="acontrol"))
+        s.add(Server(id=2, name="de-b", host="h2", ssh_port=22, ssh_user="acontrol"))
+        s.add(ClientTrafficSample(server_id=1, protocol="awg", client_id="SMALL",
+                                  rx=10, tx=0, ts=now))
+        s.add(ClientTrafficSample(server_id=2, protocol="awg", client_id="HUGE",
+                                  rx=10_000, tx=0, ts=now))
+        await s.commit()
+
+    async with factory() as s:
+        only_first = await stats.top_clients(None, s, limit=10, server_id=[1])
+        everyone = await stats.top_clients(None, s, limit=10)
+
+    assert [r.client_id for r in only_first] == ["SMALL"]
+    assert [r.client_id for r in everyone] == ["HUGE", "SMALL"]

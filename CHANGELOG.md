@@ -4,6 +4,23 @@ All notable changes to Amnezia Control are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.53.0] - 2026-09-29
+
+### Added
+- **Filter the Overview by server** ([#17](https://github.com/mihsergeev/amnezia-control/issues/17)).
+  A picker next to the Overview title narrows the whole page to one server, a
+  hand-picked set, or a whole group: the summary cards, both charts, the
+  per-server table and the top-clients list all follow the selection, so
+  "servers online 2 / 3" means the three you picked, not the fleet. Ticking a
+  group selects all of its servers; a partially selected group shows a dash.
+  The choice is remembered in the browser. A server deleted since then is
+  dropped from the saved selection instead of leaving an empty Overview, and
+  ticking every server one by one collapses back to "all servers", so a server
+  added later is not silently left out.
+- `GET /api/stats/overview`, `/api/stats/history` and `/api/stats/top-clients`
+  accept a repeated `server_id` parameter (`?server_id=1&server_id=3`). A single
+  `server_id` on `/history` works as before.
+
 ## [0.52.1] — 2026-08-31
 
 ### Fixed

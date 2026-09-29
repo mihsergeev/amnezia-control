@@ -1,4 +1,5 @@
 from datetime import datetime, timedelta, timezone
+from typing import Annotated
 
 from fastapi import APIRouter, Query
 from sqlalchemy import select
@@ -26,21 +27,29 @@ from app.schemas import (
 
 router = APIRouter(prefix="/stats", tags=["stats"])
 
+# Фильтр "Обзора" по серверам: ?server_id=1&server_id=3. Не задан - весь парк.
+# Annotated, а не `= Query(None)`: у функции остается настоящий None по
+# умолчанию, и её можно звать напрямую (так делают тесты), не получая вместо
+# фильтра объект Query.
+ServerFilter = Annotated[list[int] | None, Query()]
+
 
 @router.get("/top-clients", response_model=list[TopClientOut])
 async def top_clients(
     _: CurrentUser,
     session: SessionDep,
     limit: int = Query(default=10, ge=1, le=50),
+    server_id: ServerFilter = None,
 ) -> list[TopClientOut]:
     settings = get_settings()
     # свежие снимки (последний цикл) → последний по каждому клиенту
     cutoff = datetime.now(timezone.utc) - timedelta(
         seconds=max(settings.stats_interval, 60) * 3
     )
-    samples = await session.scalars(
-        select(ClientTrafficSample).where(ClientTrafficSample.ts >= cutoff)
-    )
+    query = select(ClientTrafficSample).where(ClientTrafficSample.ts >= cutoff)
+    if server_id:
+        query = query.where(ClientTrafficSample.server_id.in_(server_id))
+    samples = await session.scalars(query)
     latest: dict[tuple[int, str, str], ClientTrafficSample] = {}
     for s in samples:
         key = (s.server_id, s.protocol, s.client_id)
@@ -162,20 +171,27 @@ async def client_history(
 
 
 @router.get("/overview", response_model=OverviewOut)
-async def overview(_: CurrentUser, session: SessionDep) -> OverviewOut:
+async def overview(
+    _: CurrentUser, session: SessionDep, server_id: ServerFilter = None
+) -> OverviewOut:
     settings = get_settings()
-    servers = [
-        (s.id, s.name)
-        for s in await session.scalars(select(Server).order_by(Server.id))
-    ]
+    srv_query = select(Server).order_by(Server.id)
+    if server_id:
+        # карточки сверху считаются по выбранным серверам: "серверов онлайн 2 / 3"
+        # должно означать три выбранных, а не весь парк
+        srv_query = srv_query.where(Server.id.in_(server_id))
+    servers = [(s.id, s.name) for s in await session.scalars(srv_query)]
     # свежими считаем снимки не старше 3 интервалов
     staleness = timedelta(seconds=max(settings.stats_interval, 60) * 3)
     cutoff = datetime.now(timezone.utc) - staleness
-    recent = await session.scalars(
+    smp_query = (
         select(TrafficSample)
         .where(TrafficSample.ts >= cutoff)
         .order_by(TrafficSample.ts)
     )
+    if server_id:
+        smp_query = smp_query.where(TrafficSample.server_id.in_(server_id))
+    recent = await session.scalars(smp_query)
     latest_by_id: dict[int, TrafficSample] = {}
     for smp in recent:
         latest_by_id[smp.server_id] = smp  # порядок asc → последний свежайший
@@ -187,7 +203,7 @@ async def overview(_: CurrentUser, session: SessionDep) -> OverviewOut:
 async def history(
     _: CurrentUser,
     session: SessionDep,
-    server_id: int | None = None,
+    server_id: ServerFilter = None,
     hours: int = Query(default=24, ge=1, le=2160),  # до 90 дней
     from_ms: int | None = Query(default=None),  # произвольное окно (drag-zoom)
     to_ms: int | None = Query(default=None),
@@ -208,8 +224,8 @@ async def history(
         .where(TrafficSample.ts >= start, TrafficSample.ts <= end)
         .order_by(TrafficSample.ts)
     )
-    if server_id is not None:
-        query = query.where(TrafficSample.server_id == server_id)
+    if server_id:
+        query = query.where(TrafficSample.server_id.in_(server_id))
     samples = list(await session.scalars(query))
     points = stats_calc.aggregate_history(samples, step)
     return HistoryOut(interval_seconds=step, points=points)
