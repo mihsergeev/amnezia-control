@@ -389,6 +389,23 @@ input[type='checkbox']:checked::after {
   transform: rotate(45deg);
 }
 
+/* "частично": у группы в фильтре отмечена только часть её серверов */
+input[type='checkbox']:indeterminate {
+  background: #3563e9;
+  border-color: #3563e9;
+}
+
+input[type='checkbox']:indeterminate::after {
+  content: '';
+  position: absolute;
+  left: 3px;
+  right: 3px;
+  top: 6.5px;
+  height: 2px;
+  border-radius: 1px;
+  background: #fff;
+}
+
 input[type='checkbox']:focus-visible {
   outline: 2px solid #3563e9;
   outline-offset: 2px;
@@ -1856,4 +1873,89 @@ body {
   text-overflow: ellipsis;
   white-space: nowrap;
   min-width: 0;
+}
+
+/* --- фильтр "Обзора" по серверам --- */
+.page-head-wrap {
+  flex-wrap: wrap;
+  gap: 0.6rem 1rem;
+}
+
+.page-head-title {
+  display: flex;
+  align-items: center;
+  gap: 0.8rem;
+  min-width: 0;
+}
+
+.srv-filter-btn {
+  display: inline-flex;
+  align-items: center;
+  max-width: min(320px, 60vw);
+}
+
+/* длинное имя сервера не должно раздувать шапку */
+.srv-filter-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.srv-filter-pop {
+  width: 300px;
+  max-width: calc(100vw - 2rem);
+  padding: 0.4rem;
+}
+
+.srv-filter-search {
+  margin: 0.1rem 0.1rem 0.35rem;
+  padding: 0.4rem 0.6rem;
+  font-size: 0.85rem;
+}
+
+.srv-filter-list {
+  max-height: min(55vh, 420px);
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+}
+
+.srv-filter-row {
+  padding: 0.4rem 0.5rem;
+  border-radius: 6px;
+  font-size: 0.85rem;
+  user-select: none;
+  min-width: 0;
+}
+
+.srv-filter-row:hover {
+  background: var(--hover);
+}
+
+.srv-filter-head {
+  font-weight: 600;
+  margin-top: 0.15rem;
+}
+
+.srv-filter-nested {
+  padding-left: 1.6rem;
+}
+
+.srv-filter-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.srv-filter-host {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  flex: none;
+}
+
+.srv-filter-empty {
+  margin: 0.4rem 0.5rem;
 }

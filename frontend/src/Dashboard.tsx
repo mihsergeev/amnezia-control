@@ -4,11 +4,35 @@ import {
   ApiError,
   type History,
   type Overview,
+  type Server,
   type TopClient,
 } from './api'
 import { formatBytes } from './format'
 import { LineChart } from './LineChart'
 import { useI18n } from './i18n'
+import { ServerFilter } from './ServerFilter'
+
+// Выбор серверов в фильтре - удобство конкретного браузера: открыл "Обзор"
+// завтра, и он показывает те же серверы. Хранилище может быть недоступно
+// (приватное окно, запрет сайтам) - тогда просто работаем без памяти.
+const FILTER_KEY = 'acontrol_overview_servers'
+
+function loadFilter(): number[] {
+  try {
+    const v: unknown = JSON.parse(localStorage.getItem(FILTER_KEY) || '[]')
+    return Array.isArray(v) ? v.filter((x): x is number => Number.isInteger(x)) : []
+  } catch {
+    return []
+  }
+}
+
+function saveFilter(ids: number[]) {
+  try {
+    localStorage.setItem(FILTER_KEY, JSON.stringify(ids))
+  } catch {
+    // без памяти фильтр все равно работает в пределах вкладки
+  }
+}
 
 const PROTO_LABEL: Record<TopClient['protocol'], string> = {
   awg: 'AmneziaWG',
@@ -61,6 +85,29 @@ export function Dashboard({ onUnauthorized }: Props) {
   const [loading, setLoading] = useState(true)
   const [hours, setHours] = useState(24)
   const [custom, setCustom] = useState<Custom>(null)
+  const [servers, setServers] = useState<Server[] | null>(null)
+  const [picked, setPicked] = useState<number[]>(loadFilter)
+
+  const pick = useCallback((ids: number[]) => {
+    setPicked(ids)
+    saveFilter(ids)
+  }, [])
+
+  // Сохраненный выбор мог пережить удаление сервера. Такие id выкидываем, иначе
+  // фильтр из одних удаленных серверов показал бы пустой обзор вместо всего
+  // парка. Пока список серверов не пришел, фильтр еще не применяем (null).
+  //
+  // Ключ - строка, а не массив, и это важно: список серверов перезапрашивается
+  // при каждой загрузке и всякий раз приходит новым массивом. Массив в
+  // зависимостях load менялся бы на каждом ответе, эффект снова звал бы load,
+  // и "Обзор" слал бы запросы по кругу без остановки.
+  const filterKey = useMemo(() => {
+    if (picked.length === 0) return ''
+    if (!servers) return null
+    const known = new Set(servers.map((s) => s.id))
+    return picked.filter((id) => known.has(id)).join(',')
+  }, [picked, servers])
+  const filterIds = filterKey ? filterKey.split(',').map(Number) : []
 
   const presetLabel = useCallback(
     // 24 ч показываем именно как «24 ч» (а не «1 дн») — это дефолтный вид и так
@@ -102,22 +149,40 @@ export function Dashboard({ onUnauthorized }: Props) {
     const q = custom
       ? `from_ms=${custom.from}&to_ms=${custom.to}`
       : `hours=${hours}`
+    if (filterKey === null) {
+      // есть сохраненный выбор, но еще неизвестно, какие серверы живы: сначала
+      // список, статистика подтянется следующим проходом с уже чистым фильтром
+      try {
+        setServers(await api<Server[]>('/api/servers'))
+      } catch (err) {
+        handleError(err)
+        setLoading(false)
+      }
+      return
+    }
     try {
-      const [ov, hist, tc] = await Promise.all([
-        api<Overview>('/api/stats/overview'),
-        api<History>(`/api/stats/history?${q}`),
-        api<TopClient[]>('/api/stats/top-clients?limit=10'),
+      const f = filterKey
+        ? filterKey.split(',').map((id) => `&server_id=${id}`).join('')
+        : ''
+      const [ov, hist, tc, srv] = await Promise.all([
+        api<Overview>(`/api/stats/overview?${f.slice(1)}`),
+        api<History>(`/api/stats/history?${q}${f}`),
+        api<TopClient[]>(`/api/stats/top-clients?limit=10${f}`),
+        // список для фильтра обновляем вместе со статистикой: сервер, добавленный
+        // при открытом "Обзоре", появится в нем без перезагрузки страницы
+        api<Server[]>('/api/servers'),
       ])
       setOverview(ov)
       setHistory(hist)
       setTop(tc)
+      setServers(srv)
       setError(null)
     } catch (err) {
       handleError(err)
     } finally {
       setLoading(false)
     }
-  }, [handleError, hours, custom])
+  }, [handleError, hours, custom, filterKey])
 
   useEffect(() => {
     void load()
@@ -191,8 +256,13 @@ export function Dashboard({ onUnauthorized }: Props) {
 
   return (
     <section>
-      <div className="page-head">
-        <h2>{t('Обзор')}</h2>
+      <div className="page-head page-head-wrap">
+        <div className="page-head-title">
+          <h2>{t('Обзор')}</h2>
+          {servers && servers.length > 1 && (
+            <ServerFilter servers={servers} selected={filterIds} onChange={pick} />
+          )}
+        </div>
         <div className="range-tabs">
           {PRESETS.map((h) => (
             <button
