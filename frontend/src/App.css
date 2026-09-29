@@ -128,49 +128,159 @@
   margin-bottom: 0.6rem;
 }
 
-.linechart {
+/* ---------- графики: тот же вид, что у Kervax (charts/StackedAreaChart) ---------- */
+.line-chart {
   width: 100%;
-  line-height: 0;
-}
-
-.linechart svg {
+  height: 160px;
   display: block;
 }
 
-.chart-dot {
-  stroke: var(--bg-card);
-  stroke-width: 2;
-}
-
-.chart-grid {
-  stroke: var(--border);
-  stroke-width: 1;
-}
-
-.chart-label {
-  fill: var(--text-muted);
-  font-size: 11px;
-  font-family: 'Segoe UI', system-ui, sans-serif;
-}
-
-.chart-empty {
-  height: 160px;
+.mchart-legend {
   display: flex;
-  align-items: center;
-  justify-content: center;
+  gap: 0.9rem;
+  flex-wrap: wrap;
+  margin-bottom: 0.35rem;
+  font-size: 0.72rem;
+  color: color-mix(in srgb, var(--text) 78%, var(--text-muted));
 }
 
-/* выделение периода мышью (drag-zoom, как в Grafana) */
-.chart-overlay {
+.mchart-leg {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.78rem;
+  color: var(--text-muted);
+}
+
+.mchart-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 2px;
+  display: inline-block;
+  flex: none;
+}
+
+.sac-wrap {
+  position: relative;
+}
+
+/* подписи осей поверх SVG: HTML не растягивается вместе с полотном */
+.sac-ylabel {
+  position: absolute;
+  left: 0;
+  transform: translateY(-50%);
+  text-align: right;
+  padding-right: 6px;
+  font-size: 0.66rem;
+  color: color-mix(in srgb, var(--text) 78%, var(--text-muted));
+  pointer-events: none;
+  white-space: nowrap;
+}
+
+.sac-xtick {
+  position: absolute;
+  bottom: 1px;
+  transform: translateX(-50%);
+  font-size: 0.66rem;
+  color: color-mix(in srgb, var(--text) 78%, var(--text-muted));
+  pointer-events: none;
+  white-space: nowrap;
+}
+
+/* вертикальные линии под подписями времени - как горизонтальная сетка */
+.sac-xgrid {
+  stroke: var(--border-strong);
+  stroke-width: 1;
+  opacity: 0.32;
+}
+
+.sac-legval {
+  color: var(--text);
+  font-weight: 700;
+  margin-left: 0.1rem;
+}
+
+.sac-cursor {
+  stroke: var(--text-muted);
+  stroke-width: 1;
+  stroke-dasharray: 3 3;
+  opacity: 0.7;
+}
+
+.line-chart.sac-zoomable {
   cursor: crosshair;
 }
 
-.chart-select-rect {
-  fill: #3563e9;
-  fill-opacity: 0.16;
+.sac-brush {
+  fill: rgba(53, 99, 233, 0.18);
   stroke: #3563e9;
-  stroke-opacity: 0.55;
   stroke-width: 1;
+  vector-effect: non-scaling-stroke;
+}
+
+.sac-tip {
+  position: absolute;
+  top: 4px;
+  transform: translateX(0.5rem);
+  min-width: 130px;
+  background: var(--bg-card);
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  padding: 0.4rem 0.55rem;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+  pointer-events: none;
+  z-index: 3;
+}
+
+.sac-tip[style*='right'] {
+  transform: translateX(-0.5rem);
+}
+
+.sac-tip-t {
+  color: var(--text-muted);
+  font-size: 0.72rem;
+  margin-bottom: 0.2rem;
+}
+
+.sac-tip-row {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.78rem;
+  white-space: nowrap;
+}
+
+.sac-tip-name {
+  color: var(--text-muted);
+  flex: 1;
+}
+
+.sac-tip-val {
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Сетка графика. Селектор именно line.chart-grid: в Kervax этим же классом
+   был назван контейнер карточек, и правило без "line." приглушало весь блок. */
+line.chart-grid {
+  stroke: var(--border-strong);
+  stroke-width: 1;
+  opacity: 0.42;
+  vector-effect: non-scaling-stroke;
+}
+
+.chart-empty {
+  color: var(--text-muted);
+  font-size: 0.85rem;
+  padding: 1.5rem 0;
+  text-align: center;
+}
+
+/* имя сервера в таблице обзора с цветом его полосы на графике клиентов */
+.srv-name-cell {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
 }
 
 .chart-title {
@@ -1891,7 +2001,7 @@ body {
 .srv-filter-btn {
   display: inline-flex;
   align-items: center;
-  max-width: min(320px, 60vw);
+  max-width: min(360px, 60vw);
 }
 
 /* длинное имя сервера не должно раздувать шапку */
@@ -1901,31 +2011,58 @@ body {
   white-space: nowrap;
 }
 
+/* Широкий список в две колонки: весь парк виден без прокрутки, имена целиком.
+   На узком экране колонка одна (ширину режет еще и JS по месту справа). */
 .srv-filter-pop {
-  width: 300px;
-  max-width: calc(100vw - 2rem);
-  padding: 0.4rem;
+  width: 720px;
+  padding: 0.55rem;
+  gap: 0.4rem;
 }
 
 .srv-filter-search {
-  margin: 0.1rem 0.1rem 0.35rem;
-  padding: 0.4rem 0.6rem;
-  font-size: 0.85rem;
+  width: 100%;
+  padding: 0.45rem 0.65rem;
+  font-size: 0.86rem;
 }
 
-.srv-filter-list {
-  max-height: min(55vh, 420px);
-  overflow-y: auto;
+.srv-filter-summary {
   display: flex;
-  flex-direction: column;
-  gap: 0.1rem;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem;
+  padding: 0.1rem 0.35rem 0.4rem;
+  border-bottom: 1px solid var(--border);
+  min-height: 1.5rem;
+}
+
+.srv-filter-reset {
+  align-self: center;
+}
+
+.srv-filter-scroll {
+  max-height: min(62vh, 520px);
+  overflow-y: auto;
+  padding-right: 0.15rem;
+}
+
+/* колонки выравниваются сами; группа не рвется между колонками */
+.srv-filter-cols {
+  columns: 2 300px;
+  column-gap: 0.9rem;
+}
+
+.srv-filter-group {
+  break-inside: avoid;
+  padding-bottom: 0.45rem;
 }
 
 .srv-filter-row {
-  padding: 0.4rem 0.5rem;
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0 0.35rem 0 0.4rem;
   border-radius: 6px;
-  font-size: 0.85rem;
-  user-select: none;
   min-width: 0;
 }
 
@@ -1933,29 +2070,104 @@ body {
   background: var(--hover);
 }
 
-.srv-filter-head {
-  font-weight: 600;
-  margin-top: 0.15rem;
+.srv-filter-check {
+  flex: 1;
+  min-width: 0;
+  gap: 0.5rem;
+  padding: 0.34rem 0;
+  font-size: 0.85rem;
+  user-select: none;
 }
 
-.srv-filter-nested {
-  padding-left: 1.6rem;
+.srv-filter-head {
+  margin-top: 0.1rem;
+}
+
+.srv-filter-gname {
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.srv-filter-count {
+  font-size: 0.72rem;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+/* серверы группы - с отступом под галочкой группы */
+.srv-filter-group .srv-filter-row:not(.srv-filter-head) {
+  padding-left: 1.2rem;
+}
+
+.srv-filter-flat .srv-filter-group .srv-filter-row {
+  padding-left: 0.4rem;
+}
+
+/* в списке статус без пульса: пятнадцать мигающих точек отвлекают */
+.srv-filter-row .dot {
+  width: 7px;
+  height: 7px;
+  animation: none;
+  box-shadow: none;
+}
+
+.srv-filter-flag {
+  font-family: 'Twemoji Country Flags', 'Segoe UI Emoji', sans-serif;
+  font-size: 0.95rem;
+  line-height: 1;
 }
 
 .srv-filter-name {
-  flex: 1;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  color: var(--text);
 }
 
-.srv-filter-host {
-  font-size: 0.75rem;
-  color: var(--text-muted);
-  flex: none;
+/* "только" всплывает поверх конца строки по наведению и места в строке не
+   занимает: невидимая, но стоящая в потоке кнопка съедала ширину, и имена
+   снова обрезались. На тач-экранах наведения нет - там она в строке всегда. */
+button.linklike.srv-filter-only {
+  position: absolute;
+  right: 0.3rem;
+  top: 50%;
+  transform: translateY(-50%);
+  align-self: auto;
+  padding: 0.05rem 0.5rem;
+  font-size: 0.72rem;
+  background: var(--bg-card);
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.12s;
+}
+
+.srv-filter-row:hover button.linklike.srv-filter-only,
+button.linklike.srv-filter-only:focus-visible {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+button.linklike.srv-filter-only:hover {
+  text-decoration: none;
+  border-color: #6a8bff;
+}
+
+@media (hover: none) {
+  button.linklike.srv-filter-only {
+    position: static;
+    transform: none;
+    flex: none;
+    opacity: 0.85;
+    pointer-events: auto;
+  }
 }
 
 .srv-filter-empty {
-  margin: 0.4rem 0.5rem;
+  margin: 0.6rem 0.4rem;
 }

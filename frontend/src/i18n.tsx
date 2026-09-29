@@ -17,10 +17,21 @@ const EN: Record<string, string> = {
   // --- фильтр "Обзора" по серверам ---
   'Все серверы': 'All servers',
   'Серверов: {n} из {total}': '{n} of {total} servers',
-  'Найти сервер': 'Find a server',
+  'Найти сервер или группу': 'Find a server or group',
   'Ничего не найдено': 'Nothing found',
   'Показать статистику только по выбранным серверам':
     'Show statistics for the selected servers only',
+  'Показаны все серверы: {n}': 'Showing all {n} servers',
+  'Выбрано {n} из {total}': '{n} of {total} selected',
+  'Сбросить': 'Reset',
+  'только': 'only',
+  // --- графики ---
+  '↓ скачивание': '↓ download',
+  '↑ отдача': '↑ upload',
+  'по серверам': 'by server',
+  'остальные ({n})': 'others ({n})',
+  'Скорость, наведите курсор, чтобы увидеть значения':
+    'Speed, hover to see the values',
   'Журнал': 'Log',
   'Журнал действий': 'Action log',
   'На этой ноде развёрнута AmneziaWG 3.0. Нажмите «Пересобрать» — конфиг мигрирует до 3.1, после чего клиентов нужно перевыпустить.':

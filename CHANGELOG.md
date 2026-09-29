@@ -4,6 +4,45 @@ All notable changes to Amnezia Control are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.54.0] - 2026-09-29
+
+### Changed
+- **Overview charts rebuilt in the style of the Kervax monitoring panel.** Dense
+  grid on round steps, time labels on round hours, a legend that shows every
+  series' value under the cursor, a tooltip with all series at once, and
+  drag-to-zoom as before.
+  - **Traffic** is a mirrored chart, like network charts in Grafana: download up,
+    upload down, as a speed (MiB/s) rather than "bytes per point", so the numbers
+    mean the same thing on a 3-hour and a 90-day window.
+  - **Clients online** is stacked by server: the bands add up to the total, and
+    the colour shows where people actually are. The largest servers get their own
+    band, the tail folds into "others". The server table shows each server's
+    band colour next to its name.
+  - The per-client traffic chart uses the same mirrored view.
+- **The server picker on the Overview was redesigned.** Server names are shown in
+  full: in a real fleet they differ at the end (`-manager`, `-developer`,
+  `-admin`), which is exactly what truncation used to cut off. The list is wider,
+  in two columns by group, with the country flag and status of each server; the IP
+  moved to a tooltip and is still searchable. Every server and group has an
+  "only" action that selects just it in one click, and a reset link sits at the
+  top. On a phone the list spans the full screen width.
+
+### Fixed
+- **False spikes on the traffic chart.** Speed was taken from the difference of
+  fleet-wide totals, so a server that missed one collection dropped out of the
+  sum and came back with its whole counter since boot: a spike of hundreds of
+  gigabytes that never happened. Traffic is now computed per server, and each
+  server's speed over its own interval between samples, before being added up.
+- **A missed collection no longer cuts through the stacked chart.** Gaps of up
+  to three points inside a series are bridged with the last value, like
+  "connect null values" in Grafana; a server that was really down for longer
+  still shows as a gap.
+
+### API
+- `GET /api/stats/history` points carry `rx_rate` and `tx_rate` (bytes per
+  second), and `by_server=true` adds a per-server `clients_online` breakdown
+  aligned with the points.
+
 ## [0.53.0] - 2026-09-29
 
 ### Added

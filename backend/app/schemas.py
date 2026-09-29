@@ -286,11 +286,24 @@ class HistoryPoint(BaseModel):
     throughput: int  # байт за интервал (дельта суммарного трафика)
     rx_total: int
     tx_total: int
+    # скорость по направлениям, байт в секунду: сумма посерверных скоростей
+    rx_rate: float = 0
+    tx_rate: float = 0
+
+
+class HistoryServerOut(BaseModel):
+    """Клиенты онлайн одного сервера, по тем же точкам, что и points."""
+
+    server_id: int
+    name: str
+    clients_online: list[int | None]
 
 
 class HistoryOut(BaseModel):
     interval_seconds: int
     points: list[HistoryPoint]
+    # только при by_server=true: разбивка для стека "клиенты по серверам"
+    servers: list[HistoryServerOut] = []
 
 
 class ClientHistoryPoint(BaseModel):

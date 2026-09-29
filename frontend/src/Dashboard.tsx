@@ -8,7 +8,16 @@ import {
   type TopClient,
 } from './api'
 import { formatBytes } from './format'
-import { LineChart } from './LineChart'
+import { StackedAreaChart, type Series } from './charts/StackedAreaChart'
+import {
+  bridgeGaps,
+  DOWN_COLOR,
+  formatRate,
+  GRAFANA_COLORS,
+  MAX_SERIES,
+  REST_COLOR,
+  UP_COLOR,
+} from './charts/series'
 import { useI18n } from './i18n'
 import { ServerFilter } from './ServerFilter'
 
@@ -166,7 +175,7 @@ export function Dashboard({ onUnauthorized }: Props) {
         : ''
       const [ov, hist, tc, srv] = await Promise.all([
         api<Overview>(`/api/stats/overview?${f.slice(1)}`),
-        api<History>(`/api/stats/history?${q}${f}`),
+        api<History>(`/api/stats/history?${q}${f}&by_server=true`),
         api<TopClient[]>(`/api/stats/top-clients?limit=10${f}`),
         // список для фильтра обновляем вместе со статистикой: сервер, добавленный
         // при открытом "Обзоре", появится в нем без перезагрузки страницы
@@ -194,12 +203,87 @@ export function Dashboard({ onUnauthorized }: Props) {
     setCustom({ from, to })
   }, [])
 
-  const throughputPoints =
-    history?.points.map((p) => ({ t: Date.parse(p.ts), v: p.throughput })) ?? []
-  const onlinePoints =
-    history?.points.map((p) => ({ t: Date.parse(p.ts), v: p.clients_online })) ?? []
-
   const interval = history?.interval_seconds ?? 300
+  const ts = useMemo(() => history?.points.map((p) => Date.parse(p.ts)) ?? [], [history])
+
+  // Трафик - зеркально, как "Сеть" в Kervax: скачивание вверх, отдача вниз.
+  // Скорость бэкенд считает по каждому серверу на его собственном промежутке
+  // между снимками. У первой точки сравнивать не с чем - там разрыв, а не
+  // провал в ноль.
+  const trafficSeries = useMemo<Series[]>(() => {
+    const pts = history?.points ?? []
+    return [
+      {
+        name: t('↓ скачивание'),
+        color: DOWN_COLOR,
+        values: pts.map((p, i) => (i === 0 ? null : p.tx_rate)),
+      },
+      {
+        name: t('↑ отдача'),
+        color: UP_COLOR,
+        values: pts.map((p, i) => (i === 0 ? null : p.rx_rate)),
+      },
+    ]
+  }, [history, t])
+
+  // Клиенты онлайн - стеком по серверам: сумма полос равна общему числу, а по
+  // цвету видно, где сидят люди. Крупные серверы снизу своими полосами, хвост
+  // после MAX_SERIES сворачивается в "остальные".
+  const clientSeries = useMemo<(Series & { id: number | null })[]>(() => {
+    if (!history) return []
+    const rows = history.servers ?? []
+    if (rows.length === 0) {
+      return [{
+        id: null,
+        name: t('клиентов онлайн'),
+        color: GRAFANA_COLORS[0],
+        values: history.points.map((p) => p.clients_online),
+      }]
+    }
+    const avg = (v: (number | null)[]) =>
+      v.reduce<number>((a, x) => a + (x ?? 0), 0) / Math.max(1, v.length)
+    // короткие пропуски сбора склеиваем, чтобы они не прорезали весь стек
+    const rowsBridged = rows.map((r) => ({ ...r, clients_online: bridgeGaps(r.clients_online) }))
+    const sorted = [...rowsBridged].sort(
+      (a, b) => avg(b.clients_online) - avg(a.clients_online) || a.name.localeCompare(b.name),
+    )
+    const keep = sorted.length > MAX_SERIES ? MAX_SERIES - 1 : sorted.length
+    const out: (Series & { id: number | null })[] = sorted.slice(0, keep).map((r, i) => ({
+      id: r.server_id,
+      name: r.name,
+      color: GRAFANA_COLORS[i % GRAFANA_COLORS.length],
+      values: r.clients_online,
+    }))
+    const rest = sorted.slice(keep)
+    if (rest.length) {
+      out.push({
+        id: null,
+        name: t('остальные ({n})', { n: rest.length }),
+        color: REST_COLOR,
+        values: history.points.map((_, i) => {
+          let sum = 0
+          let seen = false
+          for (const r of rest) {
+            const v = r.clients_online[i]
+            if (v != null) {
+              sum += v
+              seen = true
+            }
+          }
+          return seen ? sum : null
+        }),
+      })
+    }
+    return out
+  }, [history, t])
+
+  // цвет сервера в таблице тот же, что у его полосы на графике клиентов
+  const colorById = useMemo(() => {
+    const m = new Map<number, string>()
+    for (const sr of clientSeries) if (sr.id != null) m.set(sr.id, sr.color)
+    return m
+  }, [clientSeries])
+  const hasSplit = (history?.servers?.length ?? 0) > 0
 
   // --- сортировка таблиц ---
   const [srvSort, setSrvSort] = useState<Sort | null>(null)
@@ -339,23 +423,32 @@ export function Dashboard({ onUnauthorized }: Props) {
                 {t('выделите период мышью для приближения')}
               </span>
             </div>
-            <LineChart
-              points={throughputPoints}
-              color="#3563e9"
-              format={(v) => formatBytes(v)}
-              onSelectRange={zoomTo}
+            <StackedAreaChart
+              ts={ts}
+              series={trafficSeries}
+              mode="mirror"
+              yNice="bytes"
+              fmtY={(v) => formatRate(v)}
+              fmtTime={fmtDT}
+              height={230}
+              onZoom={zoomTo}
             />
           </div>
 
           <div className="chart-block card">
             <div className="chart-title">
               {t('Клиентов онлайн')} · {rangeLabel}
+              {hasSplit && <span className="muted small">{t('по серверам')}</span>}
             </div>
-            <LineChart
-              points={onlinePoints}
-              color="#2ecc71"
-              format={(v) => String(Math.round(v))}
-              onSelectRange={zoomTo}
+            <StackedAreaChart
+              ts={ts}
+              series={clientSeries}
+              mode="stack"
+              yNice
+              fmtY={(v) => String(Math.round(v))}
+              fmtTime={fmtDT}
+              height={230}
+              onZoom={zoomTo}
             />
           </div>
 
@@ -379,7 +472,15 @@ export function Dashboard({ onUnauthorized }: Props) {
               <tbody>
                 {serversSorted.map((s) => (
                   <tr key={s.id}>
-                    <td>{s.name}</td>
+                    <td>
+                      <span className="srv-name-cell">
+                        <span
+                          className="mchart-dot"
+                          style={{ background: colorById.get(s.id) ?? REST_COLOR }}
+                        />
+                        {s.name}
+                      </span>
+                    </td>
                     <td>
                       <span
                         className={`dot ${s.online ? 'dot-ok' : 'dot-unknown'}`}

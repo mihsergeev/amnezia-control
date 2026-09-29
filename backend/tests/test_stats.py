@@ -103,3 +103,43 @@ def test_aggregate_client_history_throughput() -> None:
 
 def test_aggregate_client_history_empty() -> None:
     assert stats_calc.aggregate_client_history([], interval=300) == []
+
+
+def test_aggregate_history_ignores_missed_collection() -> None:
+    # Сервер пропустил один сбор. Раньше он выпадал из суммы, а в следующем
+    # бакете возвращался всем счетчиком с запуска - на графике рос пик в сотни
+    # гигабайт. Считаем по серверу отдельно: вернулся - только его прирост.
+    t = [datetime(2026, 7, 6, 12, m, tzinfo=timezone.utc) for m in (0, 5, 10)]
+    samples = [
+        _smp(1, t[0], 10, 100, 1),
+        _smp(2, t[0], 5_000_000, 90_000_000, 5),
+        _smp(1, t[1], 20, 200, 1),  # у второго сервера сбор пропал
+        _smp(1, t[2], 30, 300, 1),
+        _smp(2, t[2], 5_000_600, 90_006_000, 5),
+    ]
+    points = stats_calc.aggregate_history(samples, interval=300)
+    assert [p["throughput"] for p in points] == [0, 110, 110 + 6600]
+    # Скорость второго сервера - по ЕГО промежутку (10 минут), а не по шагу
+    # точки: вернувшись, он не дает горб вдвое выше своей настоящей скорости.
+    assert points[2]["tx_rate"] == round(100 / 300 + 6000 / 600, 1)
+    assert points[2]["rx_rate"] == round(10 / 300 + 600 / 600, 1)
+
+
+def test_aggregate_history_splits_directions() -> None:
+    t0 = datetime(2026, 7, 6, 12, 0, tzinfo=timezone.utc)
+    t1 = datetime(2026, 7, 6, 12, 5, tzinfo=timezone.utc)
+    points = stats_calc.aggregate_history(
+        [_smp(1, t0, 100, 1000, 1), _smp(1, t1, 400, 7000, 1)], interval=300
+    )
+    assert points[0]["rx_rate"] == 0 and points[0]["tx_rate"] == 0  # не с чем сравнить
+    assert points[1]["rx_rate"] == 1.0 and points[1]["tx_rate"] == 20.0
+
+
+def test_clients_by_server_aligned_with_gaps() -> None:
+    # ряды выровнены по точкам общей истории; нет снимка - None, а не ноль
+    t0 = datetime(2026, 7, 6, 12, 0, tzinfo=timezone.utc)
+    t1 = datetime(2026, 7, 6, 12, 5, tzinfo=timezone.utc)
+    samples = [_smp(1, t0, 0, 0, 4), _smp(2, t0, 0, 0, 7), _smp(1, t1, 0, 0, 3)]
+    per = stats_calc.clients_by_server(samples, interval=300)
+    assert per == {1: [4, 3], 2: [7, None]}
+    assert len(stats_calc.aggregate_history(samples, interval=300)) == 2
