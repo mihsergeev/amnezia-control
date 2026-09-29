@@ -207,6 +207,7 @@ async def history(
     hours: int = Query(default=24, ge=1, le=2160),  # до 90 дней
     from_ms: int | None = Query(default=None),  # произвольное окно (drag-zoom)
     to_ms: int | None = Query(default=None),
+    by_server: bool = False,
 ) -> HistoryOut:
     settings = get_settings()
     now = datetime.now(timezone.utc)
@@ -228,4 +229,14 @@ async def history(
         query = query.where(TrafficSample.server_id.in_(server_id))
     samples = list(await session.scalars(query))
     points = stats_calc.aggregate_history(samples, step)
-    return HistoryOut(interval_seconds=step, points=points)
+    servers = []
+    if by_server:
+        names = dict((await session.execute(select(Server.id, Server.name))).all())
+        per = stats_calc.clients_by_server(samples, step)
+        # удаленный сервер мог оставить снимки в истории - его в разбивку не берем
+        servers = [
+            {"server_id": sid, "name": names[sid], "clients_online": vals}
+            for sid, vals in per.items()
+            if sid in names
+        ]
+    return HistoryOut(interval_seconds=step, points=points, servers=servers)

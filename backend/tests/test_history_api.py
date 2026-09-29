@@ -150,3 +150,27 @@ async def test_overview_filters_by_servers(app_with_samples) -> None:
 
     whole = await _get(app, "/api/stats/overview")
     assert whole["servers_total"] == 3 and whole["clients_online"] == 34
+
+
+async def test_history_by_server_breakdown(app_with_samples) -> None:
+    # разбивка "клиенты по серверам" для стека: только по запросу и только по
+    # серверам, которые есть в панели
+    from app.models import Server
+
+    app = app_with_samples
+    async with app.state.session_factory() as s:
+        s.add(Server(id=1, name="kz-a", host="203.0.113.1", ssh_port=22, ssh_user="acontrol"))
+        s.add(Server(id=2, name="de-b", host="203.0.113.2", ssh_port=22, ssh_user="acontrol"))
+        await s.commit()
+    base = datetime(2026, 7, 6, 12, 0, tzinfo=timezone.utc)
+    # у сервера 9 снимки остались, а сам он уже удален
+    await _seed(app, [(1, base, 0, 0, 4), (2, base, 0, 0, 6), (9, base, 0, 0, 2)])
+    frm = int((base - timedelta(minutes=1)).timestamp() * 1000)
+    to = int((base + timedelta(minutes=1)).timestamp() * 1000)
+
+    plain = await _get(app, f"/api/stats/history?from_ms={frm}&to_ms={to}")
+    assert plain["servers"] == []
+
+    split = await _get(app, f"/api/stats/history?from_ms={frm}&to_ms={to}&by_server=true")
+    got = {x["name"]: x["clients_online"] for x in split["servers"]}
+    assert got == {"kz-a": [4], "de-b": [6]}

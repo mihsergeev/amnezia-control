@@ -91,42 +91,78 @@ def aggregate_client_history(samples: list, interval: int) -> list[dict]:
     return points
 
 
+def _bucketize(
+    samples: list, step: int
+) -> dict[int, dict[int, tuple[int, int, int, float]]]:
+    """bucket -> {server_id: (rx, tx, online, ts)}; последний снимок в бакете побеждает."""
+    buckets: dict[int, dict[int, tuple[int, int, int, float]]] = defaultdict(dict)
+    for s in samples:
+        ts = s.ts.timestamp()
+        bucket = int(ts // step) * step
+        buckets[bucket][s.server_id] = (s.rx_total, s.tx_total, s.clients_online, ts)
+    return buckets
+
+
 def aggregate_history(samples: list, interval: int) -> list[dict]:
-    """Бинует снимки по интервалу, суммирует по серверам, считает throughput.
+    """Бинует снимки по интервалу, суммирует по серверам, считает трафик за бакет.
 
     samples: объекты с .server_id, .ts (datetime), .rx_total, .tx_total, .clients_online.
-    throughput точки = max(0, суммарный_кумулятивный_трафик - предыдущий) — так
-    рестарты контейнера (сброс счётчиков) не дают отрицательных всплесков.
+
+    Трафик считается по каждому серверу отдельно и только потом складывается.
+    Разность общих сумм врала: сервер, пропустивший сбор, выпадал из суммы
+    (минус, срезанный в ноль), а в следующем бакете возвращался всем счетчиком с
+    запуска - и на графике вырастал пик в сотни гигабайт, которого не было.
+
+    Скорость (rx_rate / tx_rate, байт в секунду) - тоже посерверно: прирост
+    сервера делится на ЕГО промежуток между снимками. Иначе вернувшийся после
+    пропуска сервер отдал бы в одну точку прирост за несколько интервалов, и
+    точка вышла бы в разы выше. Рестарт контейнера сбрасывает счетчик -
+    отрицательный прирост считаем нулем.
     """
     step = max(interval, 1)
-    # (bucket, server_id) -> (rx, tx, online); последний снимок в бакете побеждает
-    by_bucket_server: dict[tuple[int, int], tuple[int, int, int]] = {}
-    for s in samples:
-        bucket = int(s.ts.timestamp() // step) * step
-        by_bucket_server[(bucket, s.server_id)] = (
-            s.rx_total, s.tx_total, s.clients_online,
-        )
-
-    bucket_agg: dict[int, list[int]] = defaultdict(lambda: [0, 0, 0])
-    for (bucket, _sid), (rx, tx, online) in by_bucket_server.items():
-        bucket_agg[bucket][0] += rx
-        bucket_agg[bucket][1] += tx
-        bucket_agg[bucket][2] += online
-
+    buckets = _bucketize(samples, step)
+    prev: dict[int, tuple[float, int, int]] = {}
     points = []
-    prev_total = None
-    for bucket in sorted(bucket_agg):
-        rx, tx, online = bucket_agg[bucket]
-        total = rx + tx
-        throughput = max(0, total - prev_total) if prev_total is not None else 0
-        prev_total = total
+    for bucket in sorted(buckets):
+        rx_sum = tx_sum = online = rx_delta = tx_delta = 0
+        rx_rate = tx_rate = 0.0
+        for sid, (rx, tx, on, ts) in buckets[bucket].items():
+            rx_sum += rx
+            tx_sum += tx
+            online += on
+            if sid in prev:
+                pts, prx, ptx = prev[sid]
+                elapsed = max(1.0, ts - pts)
+                drx = max(0, rx - prx)
+                dtx = max(0, tx - ptx)
+                rx_delta += drx
+                tx_delta += dtx
+                rx_rate += drx / elapsed
+                tx_rate += dtx / elapsed
+            prev[sid] = (ts, rx, tx)
         points.append(
             {
                 "ts": datetime.fromtimestamp(bucket, timezone.utc).isoformat(),
                 "clients_online": online,
-                "throughput": throughput,
-                "rx_total": rx,
-                "tx_total": tx,
+                "throughput": rx_delta + tx_delta,
+                "rx_total": rx_sum,
+                "tx_total": tx_sum,
+                "rx_rate": round(rx_rate, 1),
+                "tx_rate": round(tx_rate, 1),
             }
         )
     return points
+
+
+def clients_by_server(samples: list, interval: int) -> dict[int, list[int | None]]:
+    """Клиенты онлайн по каждому серверу, выровненные по тем же бакетам, что и
+    aggregate_history. None - в этом бакете снимка сервера нет (график рисует
+    разрыв, а не ноль: "данных нет" и "никого нет" - разные вещи)."""
+    step = max(interval, 1)
+    buckets = _bucketize(samples, step)
+    order = sorted(buckets)
+    sids = {sid for per in buckets.values() for sid in per}
+    return {
+        sid: [buckets[b][sid][2] if sid in buckets[b] else None for b in order]
+        for sid in sids
+    }

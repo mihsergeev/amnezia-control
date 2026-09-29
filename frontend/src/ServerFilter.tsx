@@ -4,8 +4,13 @@
  * до него, следующие добавляются к выбору. Если отметить все серверы по
  * одному, выбор схлопывается обратно во "все" - иначе новый сервер, добавленный
  * потом, молча не попал бы в обзор.
+ *
+ * Имена показываются целиком: в реальном парке они различаются хвостом
+ * (sample-manager-node / -developer / -admin), и обрезка съедала ровно то, по
+ * чему их отличают. Поэтому список широкий, в две колонки по группам, а IP ушел
+ * в подсказку (искать по нему можно).
  */
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import type { Server } from './api'
 import { useI18n } from './i18n'
 
@@ -16,22 +21,40 @@ type Props = {
   onChange: (ids: number[]) => void
 }
 
-// список поиска появляется, только когда серверов столько, что их уже ищут глазами
+// поиск появляется, когда серверов столько, что их уже ищут глазами
 const SEARCH_FROM = 9
+
+// ISO-код страны -> флаг (regional indicator symbols), как на странице серверов
+function countryFlag(code: string): string {
+  const cc = (code || '').toUpperCase()
+  if (!/^[A-Z]{2}$/.test(cc)) return ''
+  return String.fromCodePoint(...[...cc].map((c) => 0x1f1e6 + c.charCodeAt(0) - 65))
+}
+
+function statusClass(s: Server): string {
+  return s.last_check_ok === null ? 'dot-unknown' : s.last_check_ok ? 'dot-ok' : 'dot-fail'
+}
 
 export function ServerFilter({ servers, selected, onChange }: Props) {
   const { t } = useI18n()
   const [open, setOpen] = useState(false)
   const [query, setQuery] = useState('')
-  // ширина списка не больше места справа от кнопки: на узком телефоне кнопка
-  // стоит после заголовка, и список фиксированной ширины уезжал за край экрана
-  const [maxWidth, setMaxWidth] = useState<number>()
+  // Геометрия списка от места на экране. На десктопе - от кнопки вправо, но не
+  // дальше края. На телефоне кнопка стоит после заголовка, и привязанный к ней
+  // список получал треть экрана - имена обрезались. Там он растягивается на всю
+  // ширину, от края до края.
+  const [popStyle, setPopStyle] = useState<CSSProperties>()
   const ref = useRef<HTMLDivElement>(null)
 
   function toggleOpen() {
     if (!open && ref.current) {
       const left = ref.current.getBoundingClientRect().left
-      setMaxWidth(Math.max(220, window.innerWidth - left - 16))
+      const vw = window.innerWidth
+      setPopStyle(
+        vw < 640
+          ? { left: 12 - left, width: vw - 24, maxWidth: vw - 24 }
+          : { maxWidth: Math.max(240, vw - left - 16) },
+      )
     }
     setOpen((v) => !v)
   }
@@ -78,7 +101,10 @@ export function ServerFilter({ servers, selected, onChange }: Props) {
       ...g,
       servers: q
         ? g.servers.filter(
-            (s) => s.name.toLowerCase().includes(q) || s.host.includes(q),
+            (s) =>
+              s.name.toLowerCase().includes(q) ||
+              s.host.includes(q) ||
+              g.name.toLowerCase().includes(q),
           )
         : g.servers,
     }))
@@ -103,6 +129,11 @@ export function ServerFilter({ servers, selected, onChange }: Props) {
       else next.add(id)
     }
     commit(next)
+  }
+
+  // "только": один клик - и в обзоре ровно этот сервер или эта группа
+  function only(ids: number[]) {
+    commit(new Set(ids))
   }
 
   // подпись кнопки: имя, если сервер один; имя группы, если выбрана ровно она
@@ -135,62 +166,85 @@ export function ServerFilter({ servers, selected, onChange }: Props) {
       </button>
 
       {open && (
-        <div className="menu-pop menu-pop-left srv-filter-pop" style={{ maxWidth }}>
+        <div className="menu-pop menu-pop-left srv-filter-pop" style={popStyle}>
           {servers.length >= SEARCH_FROM && (
             <input
               autoFocus
               className="srv-filter-search"
-              placeholder={t('Найти сервер')}
+              placeholder={t('Найти сервер или группу')}
               value={query}
               onChange={(e) => setQuery(e.target.value)}
             />
           )}
 
-          <label className="checkbox srv-filter-row srv-filter-all">
-            <input type="checkbox" checked={all} onChange={() => onChange([])} />
-            <span>{t('Все серверы')}</span>
-          </label>
-          <div className="menu-divider" role="separator" />
-
-          <div className="srv-filter-list">
-            {visible.length === 0 && (
-              <p className="muted small srv-filter-empty">{t('Ничего не найдено')}</p>
+          <div className="srv-filter-summary">
+            <span className="muted small">
+              {all
+                ? t('Показаны все серверы: {n}', { n: servers.length })
+                : t('Выбрано {n} из {total}', { n: selected.length, total: servers.length })}
+            </span>
+            {!all && (
+              <button className="linklike srv-filter-reset" onClick={() => onChange([])}>
+                {t('Сбросить')}
+              </button>
             )}
-            {visible.map((g) => {
-              const ids = g.servers.map((s) => s.id)
-              const inCount = ids.filter((id) => sel.has(id)).length
-              return (
-                <div key={g.name || '-'} className="srv-filter-group">
-                  {hasGroups && (
-                    <label className="checkbox srv-filter-row srv-filter-head">
-                      <input
-                        type="checkbox"
-                        checked={inCount === ids.length}
-                        ref={(el) => {
-                          if (el) el.indeterminate = inCount > 0 && inCount < ids.length
-                        }}
-                        onChange={() => toggleGroup(ids)}
-                      />
-                      <span>{g.name || t('Без группы')}</span>
-                    </label>
-                  )}
-                  {g.servers.map((s) => (
-                    <label
-                      key={s.id}
-                      className={`checkbox srv-filter-row${hasGroups ? ' srv-filter-nested' : ''}`}
-                    >
-                      <input
-                        type="checkbox"
-                        checked={sel.has(s.id)}
-                        onChange={() => toggle(s.id)}
-                      />
-                      <span className="srv-filter-name">{s.name}</span>
-                      <span className="srv-filter-host mono">{s.host}</span>
-                    </label>
-                  ))}
-                </div>
-              )
-            })}
+          </div>
+
+          <div className="srv-filter-scroll">
+            {visible.length === 0 ? (
+              <p className="muted small srv-filter-empty">{t('Ничего не найдено')}</p>
+            ) : (
+              <div className={`srv-filter-cols${hasGroups ? '' : ' srv-filter-flat'}`}>
+                {visible.map((g) => {
+                  const ids = g.servers.map((s) => s.id)
+                  const inCount = ids.filter((id) => sel.has(id)).length
+                  return (
+                    <div key={g.name || '-'} className="srv-filter-group">
+                      {hasGroups && (
+                        <div className="srv-filter-row srv-filter-head">
+                          <label className="checkbox srv-filter-check">
+                            <input
+                              type="checkbox"
+                              checked={inCount === ids.length}
+                              ref={(el) => {
+                                if (el) el.indeterminate = inCount > 0 && inCount < ids.length
+                              }}
+                              onChange={() => toggleGroup(ids)}
+                            />
+                            <span className="srv-filter-gname">{g.name || t('Без группы')}</span>
+                            <span className="srv-filter-count">
+                              {inCount > 0 ? `${inCount}/${ids.length}` : ids.length}
+                            </span>
+                          </label>
+                          <button className="linklike srv-filter-only" onClick={() => only(ids)}>
+                            {t('только')}
+                          </button>
+                        </div>
+                      )}
+                      {g.servers.map((s) => (
+                        <div key={s.id} className="srv-filter-row" title={s.host}>
+                          <label className="checkbox srv-filter-check">
+                            <input
+                              type="checkbox"
+                              checked={sel.has(s.id)}
+                              onChange={() => toggle(s.id)}
+                            />
+                            <span className={`dot ${statusClass(s)}`} />
+                            {countryFlag(s.country) && (
+                              <span className="srv-filter-flag">{countryFlag(s.country)}</span>
+                            )}
+                            <span className="srv-filter-name">{s.name}</span>
+                          </label>
+                          <button className="linklike srv-filter-only" onClick={() => only([s.id])}>
+                            {t('только')}
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  )
+                })}
+              </div>
+            )}
           </div>
         </div>
       )}

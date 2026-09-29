@@ -355,11 +355,22 @@ export type HistoryPoint = {
   throughput: number
   rx_total: number
   tx_total: number
+  // скорость по направлениям, байт в секунду (сумма посерверных скоростей)
+  rx_rate: number
+  tx_rate: number
+}
+
+export type HistoryServer = {
+  server_id: number
+  name: string
+  // по тем же точкам, что points; null - снимка сервера в этой точке нет
+  clients_online: (number | null)[]
 }
 
 export type History = {
   interval_seconds: number
   points: HistoryPoint[]
+  servers: HistoryServer[]
 }
 
 export type OvpnClient = {

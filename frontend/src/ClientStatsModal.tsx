@@ -1,6 +1,7 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { clientHistory, type ClientHistory } from './api'
-import { LineChart } from './LineChart'
+import { StackedAreaChart, type Series } from './charts/StackedAreaChart'
+import { deltasFromTotals, DOWN_COLOR, formatRate, toRate, UP_COLOR } from './charts/series'
 import { formatBytes } from './format'
 import { useI18n } from './i18n'
 import { useModalDismiss } from './useModalDismiss'
@@ -42,8 +43,30 @@ export function ClientStatsModal({
       .finally(() => setLoading(false))
   }, [serverId, protocol, clientId, hours, onUnauthorized])
 
-  const points =
-    data?.points.map((p) => ({ t: Date.parse(p.ts), v: p.throughput })) ?? []
+  const ts = useMemo(() => data?.points.map((p) => Date.parse(p.ts)) ?? [], [data])
+  // тот же вид, что у трафика на "Обзоре": скачивание вверх, отдача вниз
+  const series = useMemo<Series[]>(() => {
+    const pts = data?.points ?? []
+    return [
+      {
+        name: t('↓ скачивание'),
+        color: DOWN_COLOR,
+        values: toRate(deltasFromTotals(pts.map((p) => p.tx_total)), ts),
+      },
+      {
+        name: t('↑ отдача'),
+        color: UP_COLOR,
+        values: toRate(deltasFromTotals(pts.map((p) => p.rx_total)), ts),
+      },
+    ]
+  }, [data, ts, t])
+  const fmtDT = (ms: number) =>
+    new Date(ms).toLocaleString('ru', {
+      day: '2-digit',
+      month: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+    })
 
   return (
     <div className="modal-backdrop" onClick={dismiss}>
@@ -79,13 +102,17 @@ export function ClientStatsModal({
           <p className="muted">{t('загрузка…')}</p>
         ) : (
           <>
-            <p className="muted small">{t('Скорость (трафик за интервал сбора)')}</p>
-            <LineChart
-              points={points}
-              format={(v) => formatBytes(v)}
-              color="#3563e9"
+            <p className="muted small">{t('Скорость, наведите курсор, чтобы увидеть значения')}</p>
+            <StackedAreaChart
+              ts={ts}
+              series={series}
+              mode="mirror"
+              yNice="bytes"
+              fmtY={(v) => formatRate(v)}
+              fmtTime={fmtDT}
+              height={220}
             />
-            {points.length < 2 && (
+            {ts.length < 2 && (
               <p className="muted small">
                 {t('Данные копятся со сбором метрик — загляните позже.')}
               </p>
