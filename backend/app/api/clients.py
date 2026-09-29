@@ -19,7 +19,7 @@ import logging
 from fastapi import APIRouter, Query
 from sqlalchemy import select
 
-from app import audit, expiry, pausestore
+from app import audit, expiry, pausestore, protolabel
 from app.config import get_settings
 from app.deps import CurrentUser, SessionDep
 from app.models import AwgConfig, AwgNote, ClientName, OvpnConfig, Server
@@ -63,32 +63,7 @@ async def search_clients(
     hits: dict[tuple, dict] = {}
 
     def label_for(server_id: int, protocol: str) -> str:
-        """Человекочитаемый протокол с ВЕРСИЕЙ. Для awg версия не заложена в
-        ключ (1.0 и 2.0 неотличимы), поэтому берём её из последней проверки
-        ноды — там версия определена по содержимому конфига контейнера."""
-        fixed = {
-            "awg3": "AmneziaWG 3.0",
-            "awglegacy": "AmneziaWG Legacy",
-            "openvpn": "OpenVPN/Cloak",
-            "xray": "XRay/REALITY",
-        }
-        if protocol in fixed:
-            return fixed[protocol]
-        server = servers.get(server_id)
-        kinds: dict = {}
-        if server and server.last_check_info:
-            try:
-                kinds = json.loads(server.last_check_info).get("protocols") or {}
-            except (ValueError, TypeError):
-                kinds = {}
-        for cont, kind in kinds.items():
-            if "awg3" in cont.lower():
-                continue
-            if kind == "awg2":
-                return "AmneziaWG 2.0"
-            if kind == "awg1":
-                return "AmneziaWG 1.0"
-        return "AmneziaWG"
+        return protolabel.protocol_label(servers.get(server_id), protocol)
 
     def id_match(client_id: str) -> bool:
         """Совпадение по КЛЮЧУ — строго и с учётом регистра.

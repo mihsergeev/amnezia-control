@@ -4,6 +4,20 @@ All notable changes to Amnezia Control are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.54.1] - 2026-09-29
+
+### Fixed
+- **Blank protocol badges in the Overview's top clients.** The table only knew
+  the `awg`, `openvpn` and `xray` keys, so clients of AmneziaWG Legacy and 3.x
+  showed an empty badge, and `awg` said just "AmneziaWG" without a version.
+  Clients are now labelled with the version the node actually runs, read from
+  its last check - the same label as on the server card: "AmneziaWG 2.0",
+  "AmneziaWG 3.1", "AmneziaWG Legacy", and "AmneziaWG 1.0" for Amnezia's
+  `amnezia-awg2` container that in fact runs 1.0.
+- **Client search labelled any 3.x node as 3.0** and a container upgraded in
+  place to 3.1 as plain "AmneziaWG". Search and the Overview now share one
+  labelling function.
+
 ## [0.54.0] - 2026-09-29
 
 ### Changed
