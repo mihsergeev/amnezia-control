@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
   api,
   ApiError,
+  PROTOCOL_LABEL,
   type History,
   type Overview,
   type Server,
@@ -43,10 +44,12 @@ function saveFilter(ids: number[]) {
   }
 }
 
-const PROTO_LABEL: Record<TopClient['protocol'], string> = {
-  awg: 'AmneziaWG',
-  openvpn: 'OpenVPN',
-  xray: 'XRay',
+// Подпись протокола клиента. Версию считает бэкенд по последней проверке ноды
+// (та же, что на карточке сервера); справочник - запасной вариант для старого
+// бэкенда. Ключ как есть - последний рубеж: пустой плашки быть не должно, а
+// раньше клиенты Legacy и 3.x выходили именно с пустой.
+function protoLabel(c: TopClient): string {
+  return c.protocol_label || PROTOCOL_LABEL[c.protocol] || c.protocol
 }
 
 type Sort = { key: string; dir: 'asc' | 'desc' }
@@ -330,7 +333,7 @@ export function Dashboard({ onUnauthorized }: Props) {
           : k === 'server'
             ? c.server_name
             : k === 'proto'
-              ? c.protocol
+              ? protoLabel(c)
               : k === 'down'
                 ? c.tx
                 : c.total,
@@ -534,7 +537,7 @@ export function Dashboard({ onUnauthorized }: Props) {
                       <td className="muted">{c.server_name}</td>
                       <td>
                         <span className="proto-badge">
-                          {PROTO_LABEL[c.protocol]}
+                          {protoLabel(c)}
                         </span>
                       </td>
                       <td className="mono muted">

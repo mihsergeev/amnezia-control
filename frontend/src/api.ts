@@ -319,7 +319,10 @@ export type ServerStat = {
 export type TopClient = {
   server_id: number
   server_name: string
-  protocol: 'awg' | 'openvpn' | 'xray'
+  // awg / awg3 / awglegacy / openvpn / xray - версию сам ключ не несет
+  protocol: string
+  // протокол с версией, как на карточке сервера: "AmneziaWG 2.0", "Legacy"...
+  protocol_label?: string
   client_id: string
   name: string
   rx: number
@@ -689,7 +692,7 @@ export function revokeClientsBulk(
 export const PROTOCOL_LABEL: Record<string, string> = {
   awg: 'AmneziaWG',
   awg2: 'AmneziaWG 2.0',
-  awg3: 'AmneziaWG 3.0',
+  awg3: 'AmneziaWG 3.1',
   awglegacy: 'AmneziaWG Legacy',
   openvpn: 'OpenVPN/Cloak',
   xray: 'XRay/REALITY',

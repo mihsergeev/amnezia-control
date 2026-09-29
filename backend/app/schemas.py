@@ -324,6 +324,8 @@ class TopClientOut(BaseModel):
     server_id: int
     server_name: str
     protocol: str
+    # протокол с версией, как на карточке сервера: "AmneziaWG 2.0", "Legacy"...
+    protocol_label: str = ""
     client_id: str
     name: str
     rx: int

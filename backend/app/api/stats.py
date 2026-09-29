@@ -4,7 +4,7 @@ from typing import Annotated
 from fastapi import APIRouter, Query
 from sqlalchemy import select
 
-from app import stats_calc
+from app import protolabel, stats_calc
 from app.config import get_settings
 from app.deps import CurrentUser, SessionDep
 from app.models import (
@@ -64,9 +64,7 @@ async def top_clients(
     if not ranked:
         return []
 
-    server_names = dict(
-        (await session.execute(select(Server.id, Server.name))).all()
-    )
+    servers = {s.id: s for s in await session.scalars(select(Server))}
     awg_names = {
         (sid, pk): n
         for sid, pk, n in (
@@ -118,8 +116,9 @@ async def top_clients(
     return [
         TopClientOut(
             server_id=s.server_id,
-            server_name=server_names.get(s.server_id, ""),
+            server_name=servers[s.server_id].name if s.server_id in servers else "",
             protocol=s.protocol,
+            protocol_label=protolabel.protocol_label(servers.get(s.server_id), s.protocol),
             client_id=s.client_id,
             name=resolve_name(s),
             rx=s.rx,

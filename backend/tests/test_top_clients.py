@@ -115,3 +115,31 @@ async def test_top_clients_filters_by_servers(factory):
 
     assert [r.client_id for r in only_first] == ["SMALL"]
     assert [r.client_id for r in everyone] == ["HUGE", "SMALL"]
+
+
+async def test_top_clients_carry_protocol_label(factory):
+    # в топе на "Обзоре" протокол подписан версией, как на карточке сервера;
+    # раньше клиенты Legacy и 3.x выходили с пустой плашкой
+    import json
+
+    now = datetime.now(timezone.utc)
+    info = json.dumps({
+        "amnezia_containers": ["amnezia-awg3", "amnezia-awg2", "amnezia-awg"],
+        "protocols": {"amnezia-awg3": "awg31", "amnezia-awg2": "awg2", "amnezia-awg": "awg1"},
+    })
+    async with factory() as s:
+        s.add(Server(id=1, name="kz", host="h", ssh_port=22, ssh_user="acontrol",
+                     last_check_info=info))
+        for proto, cid, rx in (("awg", "A", 300), ("awg3", "B", 200), ("awglegacy", "C", 100)):
+            s.add(ClientTrafficSample(server_id=1, protocol=proto, client_id=cid,
+                                      rx=rx, tx=0, ts=now))
+        await s.commit()
+
+    async with factory() as s:
+        rows = await stats.top_clients(None, s, limit=10)
+
+    assert {r.protocol: r.protocol_label for r in rows} == {
+        "awg": "AmneziaWG 2.0",
+        "awg3": "AmneziaWG 3.1",
+        "awglegacy": "AmneziaWG Legacy",
+    }
