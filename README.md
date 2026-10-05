@@ -170,6 +170,20 @@ docker compose -f compose.yml -f compose.caddy.yml up -d --build
 
 (or put `COMPOSE_FILE=compose.yml:compose.caddy.yml` in `.env`). The panel's frontend must share the **same Docker network** as caddy-docker-proxy — set `ACONTROL_CADDY_NETWORK` if it isn't named `caddy`. Leave `ACONTROL_ALLOW_IPS` empty to allow from any IP (rely on the login + 2FA).
 
+**IPv6 and the allow-list.** On a host with a public IPv6 address, Docker hands IPv6 connections to a container through its userland proxy whenever the Docker network the ports are published from has no IPv6. Caddy then sees the network gateway (`172.x.0.1`) instead of the client, so with an allow-list set every IPv6 client is refused, even one that is on the list. Do not work around that by adding Docker subnets (`172.16.0.0/12`) or private ranges to `ACONTROL_ALLOW_IPS`: every IPv6 client arrives from that gateway, and the panel opens to the whole IPv6 internet with only the login in front. Give the network IPv6 instead, and Docker forwards IPv6 with the real client address. For caddy-docker-proxy (Docker 27+ picks the IPv6 subnet itself):
+
+```bash
+docker network create --ipv6 caddy
+```
+
+An existing network can't be switched: stop the stacks attached to it, `docker network rm caddy`, create it again with `--ipv6` and bring the stacks back. If something on the same host must reach the panel through the proxy (a local health check), allow only that network's gateway as a `/32`, and only once the network has IPv6:
+
+```bash
+docker network inspect caddy -f '{{(index .IPAM.Config 0).Gateway}}'
+```
+
+The bundled Caddy (`compose.tls.yml`) publishes its ports from the panel's own network, which has no IPv6: with an allow-list set, IPv6 clients get 403. Reach the panel over IPv4, or enable IPv6 on that network in a compose override (`networks: internal: enable_ipv6: true`, Docker 27+).
+
 **Any other proxy** (plain Caddy with a Caddyfile, nginx, Traefik) doesn't read these labels — use standalone mode instead: publish the port (`ACONTROL_BIND`) and point your proxy at it, or attach your proxy to the `acontrol_internal` network and proxy to `acontrol-frontend-1:80`.
 
 ---
@@ -263,6 +277,7 @@ protocol), use "Roll back" on the protocol tab in the panel — it lists snapsho
 - Change the admin password from the UI (🔑); it invalidates all existing sessions. Enable **2FA** (🔒).
 - The panel **pins each node's SSH host key** on first connect (TOFU) and verifies it after. If you rebuild a node, delete its line from `data/ssh/known_hosts` so the new key can be pinned.
 - Keep the edge **IP allow-list** tight (Caddy labels) — an **empty** `ACONTROL_ALLOW_IPS` means "allow all", leaving only the login in front.
+- Never put Docker subnets (`172.16.0.0/12`) or private ranges into `ACONTROL_ALLOW_IPS`. On a host with IPv6 they let every IPv6 client in (see *IPv6 and the allow-list* above).
 - Put **HTTPS** in front (Caddy edge or your own proxy) — the full-access link and QR configs are secrets in transit.
 - The **"Full access" export** produces a `vpn://` link containing a private SSH key that is root-equivalent on the node — treat it like a secret. It uses a dedicated key; regenerating invalidates the old one.
 - DB backups (`db.json`) contain secrets (password hash, client private keys, panel SSH key) — store them safely; the auto-backups dir is `0700`.

@@ -8,6 +8,11 @@
 #
 # Set ACONTROL_DOMAIN and ACONTROL_ALLOW_IPS in .env. To disable the IP
 # allow-list, remove the @denied / abort labels below.
+#
+# Create that network with IPv6: docker network create --ipv6 caddy. Without
+# it, IPv6 clients reach Caddy as the Docker gateway, so the allow-list refuses
+# them, and a Docker subnet added to the list to "fix" that opens the panel to
+# every IPv6 client. See "IPv6 and the allow-list" in the README.
 services:
   frontend:
     # caddy proxies via the internal network — no host port needed, so drop
