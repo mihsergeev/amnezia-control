@@ -454,14 +454,24 @@ export type XrayState = {
   clients: XrayClient[]
 }
 
+// Вариант подключения: vision (TCP) всегда, xhttp - если он есть на сервере.
+export type XrayVariant = {
+  key: string
+  label: string
+  amnezia: string // vpn:// для AmneziaVPN
+  uri: string // vless:// для Happ, v2rayN, INCY и др.
+}
+
 export type XrayCreated = {
   client: XrayClient
   config_amnezia: string
+  configs?: XrayVariant[]
 }
 
 export type XrayConfig = {
   config_amnezia: string
   name: string
+  configs?: XrayVariant[]
 }
 
 export type XrayVersion = {

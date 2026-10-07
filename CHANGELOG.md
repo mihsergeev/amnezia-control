@@ -4,6 +4,30 @@ All notable changes to Amnezia Control are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.55.0] - 2026-10-07
+
+### Added
+- **vless:// links for XRay clients.** The config dialog now has a second tab
+  with a plain `vless://` link and QR next to the AmneziaVPN `vpn://` one, so the
+  same client can be imported into Happ, v2rayN/v2rayNG, INCY, Shadowrocket and
+  other Xray-based apps. Previously the panel produced only `vpn://`, which no
+  other client understands.
+- **XHTTP variant on the same port.** If the node's main VLESS REALITY inbound
+  falls back to an XHTTP inbound (`settings.fallbacks` pointing at its socket or
+  port), the panel detects it and offers a second variant, "VLESS XHTTP
+  Reality", with the same keys and port and the XHTTP path. Clients issued,
+  paused, resumed or revoked in the panel are mirrored into every extra VLESS
+  inbound, so the XHTTP variant works for exactly the same set of users.
+- `POST .../xray/clients`, `.../xray/config` and `.../xray/reissue` return a new
+  `configs` list (`key`, `label`, `amnezia`, `uri`). `config_amnezia` is kept and
+  equals the Vision variant.
+
+### Changed
+- **Client TLS fingerprint is `firefox` instead of `chrome`** in newly generated
+  XRay configs. Since spring 2026 REALITY with the `chrome` fingerprint gets
+  blocked more often in Russia. Configs already handed out keep working; the
+  server does not check the fingerprint.
+
 ## [0.54.1] - 2026-09-29
 
 ### Fixed

@@ -5,6 +5,9 @@
 имена в /opt/amnezia/xray/clientsTable (массив {clientId, userData}). Дефолтный
 UUID (xray_uuid.key) из пользовательского списка исключаётся. Ключи REALITY:
 xray_public.key, xray_short_id.key. Выдача/отзыв — правка server.json + docker restart.
+
+Дополнительные VLESS-входы (например, XHTTP за fallback основного на том же 443)
+получают тот же набор клиентов: панель держит их списки в зеркале основного.
 """
 
 import base64
@@ -15,6 +18,7 @@ import struct
 import uuid
 import zlib
 from dataclasses import dataclass
+from urllib.parse import quote
 
 import asyncssh
 import httpx
@@ -24,6 +28,8 @@ XRAY_DIR = "/opt/amnezia/xray"
 SERVER_JSON = f"{XRAY_DIR}/server.json"
 CLIENTS_TABLE = f"{XRAY_DIR}/clientsTable"
 FLOW = "xtls-rprx-vision"
+# отпечаток TLS клиента: с весны 2026 ТСПУ чаще режет REALITY с отпечатком chrome
+FINGERPRINT = "firefox"
 CONTAINER_NAME = "amnezia-xray"
 STATS_API_PORT = 10085  # локальный gRPC-API xray (127.0.0.1) для чтения статистики
 _DOCKER = 'DOCKER=$(docker info >/dev/null 2>&1 && echo docker || echo "sudo -n docker"); '
@@ -109,6 +115,70 @@ def _client_list(server: dict) -> list:
         return []
 
 
+def _extra_vless(server: dict) -> list[dict]:
+    """VLESS-входы кроме основного (inbounds[0])."""
+    inbounds = server.get("inbounds") or []
+    return [
+        i for i in inbounds[1:] if isinstance(i, dict) and i.get("protocol") == "vless"
+    ]
+
+
+def _uses_flow(inbound: dict) -> bool:
+    """Vision (flow) бывает только у TCP-транспорта под TLS/REALITY."""
+    ss = inbound.get("streamSettings") or {}
+    return (ss.get("network") or "tcp") in ("tcp", "raw") and ss.get("security") in (
+        "reality", "tls",
+    )
+
+
+def sync_extra_inbounds(server: dict) -> bool:
+    """Делает списки клиентов дополнительных VLESS-входов зеркалом основного.
+
+    Без этого клиент, выданный панелью, работал бы только через основной вход.
+    Возвращает True, если конфиг изменился."""
+    changed = False
+    primary = [c for c in _client_list(server) if isinstance(c, dict) and c.get("id")]
+    for inbound in _extra_vless(server):
+        flow = _uses_flow(inbound)
+        want = []
+        for c in primary:
+            entry = {"id": c["id"], "email": c.get("email") or c["id"]}
+            if flow and c.get("flow"):
+                entry["flow"] = c["flow"]
+            want.append(entry)
+        settings = inbound.setdefault("settings", {})
+        if settings.get("clients") != want:
+            settings["clients"] = want
+            changed = True
+    return changed
+
+
+def xhttp_fallback_path(server: dict) -> str | None:
+    """Путь XHTTP-входа, на который основной вход отдаёт fallback.
+
+    Такой вход доступен клиентам на том же порту и с теми же ключами REALITY,
+    что и основной; клиенту нужен только транспорт xhttp и этот путь."""
+    inbounds = server.get("inbounds") or []
+    if not inbounds or not isinstance(inbounds[0], dict):
+        return None
+    fallbacks = (inbounds[0].get("settings") or {}).get("fallbacks") or []
+    dests = {str(f.get("dest")) for f in fallbacks if isinstance(f, dict)}
+    if not dests:
+        return None
+    for inbound in _extra_vless(server):
+        ss = inbound.get("streamSettings") or {}
+        if ss.get("network") != "xhttp":
+            continue
+        listen = str(inbound.get("listen") or "")
+        port = inbound.get("port")
+        names = {listen} if listen else set()
+        if port is not None:
+            names |= {str(port), f"{listen or '127.0.0.1'}:{port}"}
+        if names & dests:
+            return (ss.get("xhttpSettings") or {}).get("path") or "/"
+    return None
+
+
 def ensure_stats_config(server: dict) -> bool:
     """Идемпотентно включает StatsService + пер-юзер статистику в server.json.
 
@@ -154,6 +224,8 @@ def ensure_stats_config(server: dict) -> bool:
         if isinstance(c, dict) and c.get("id") and c.get("email") != c["id"]:
             c["email"] = c["id"]
             changed = True
+    if sync_extra_inbounds(server):
+        changed = True
     return changed
 
 
@@ -255,6 +327,7 @@ async def read_server_bits(conn, container) -> dict:
         "site": site,
         "port": int(port) if str(port).isdigit() else 443,
         "flow": flow or FLOW,
+        "xhttp_path": xhttp_fallback_path(server),
     }
 
 
@@ -285,12 +358,28 @@ async def latest_release() -> dict:
 
 
 def assemble_xray_link(
-    *, host, description, dns1, dns2, client_id, port, pub, short, site, flow
+    *, host, description, dns1, dns2, client_id, port, pub, short, site, flow,
+    xhttp_path: str | None = None,
 ) -> str:
-    """vpn:// «Для приложения AmneziaVPN» для XRay/REALITY-клиента."""
+    """vpn:// «Для приложения AmneziaVPN» для XRay/REALITY-клиента.
+
+    xhttp_path: собрать вариант с транспортом XHTTP (без Vision) вместо TCP."""
     users = {"id": client_id, "encryption": "none"}
-    if flow:
+    if flow and not xhttp_path:
         users["flow"] = flow
+    stream: dict = {"network": "tcp"}
+    if xhttp_path:
+        stream = {"network": "xhttp", "xhttpSettings": {"path": xhttp_path}}
+    stream |= {
+        "security": "reality",
+        "realitySettings": {
+            "fingerprint": FINGERPRINT,
+            "serverName": site,
+            "publicKey": pub,
+            "shortId": short,
+            "spiderX": "",
+        },
+    }
     client = {
         "log": {"loglevel": "error"},
         "inbounds": [
@@ -305,17 +394,7 @@ def assemble_xray_link(
                         {"address": host, "port": int(port), "users": [users]}
                     ]
                 },
-                "streamSettings": {
-                    "network": "tcp",
-                    "security": "reality",
-                    "realitySettings": {
-                        "fingerprint": "chrome",
-                        "serverName": site,
-                        "publicKey": pub,
-                        "shortId": short,
-                        "spiderX": "",
-                    },
-                },
+                "streamSettings": stream,
             }
         ],
     }
@@ -341,6 +420,57 @@ def assemble_xray_link(
     return "vpn://" + base64.urlsafe_b64encode(compressed).decode().rstrip("=")
 
 
+def build_vless_uri(
+    *, host, port, client_id, pub, short, site, flow, label,
+    xhttp_path: str | None = None,
+) -> str:
+    """Ссылка vless:// для Happ, v2rayN/v2rayNG, INCY, Shadowrocket и т.п."""
+    params = [("type", "xhttp" if xhttp_path else "tcp"), ("encryption", "none")]
+    if xhttp_path:
+        params += [("path", xhttp_path), ("mode", "auto")]
+    elif flow:
+        params.append(("flow", flow))
+    params += [
+        ("security", "reality"),
+        ("sni", site),
+        ("fp", FINGERPRINT),
+        ("pbk", pub),
+        ("sid", short),
+    ]
+    query = "&".join(f"{k}={quote(str(v), safe='')}" for k, v in params)
+    addr = f"[{host}]" if ":" in host else host
+    return f"vless://{client_id}@{addr}:{int(port)}?{query}#{quote(label, safe='')}"
+
+
+def client_configs(
+    bits: dict, *, host, description, dns1, dns2, client_id, name,
+) -> list[dict]:
+    """Все варианты конфига клиента: Vision всегда, XHTTP, если на сервере есть
+    XHTTP-вход за fallback. У каждого варианта есть vpn:// (AmneziaVPN) и vless://."""
+    variants = [("vision", "VLESS Reality (Vision)", None, "")]
+    if bits.get("xhttp_path"):
+        variants.append(("xhttp", "VLESS XHTTP Reality", bits["xhttp_path"], " XHTTP"))
+    out = []
+    for key, label, xhttp_path, suffix in variants:
+        common = dict(
+            client_id=client_id, port=bits["port"], pub=bits["pub"],
+            short=bits["short"], site=bits["site"], flow=bits["flow"],
+            xhttp_path=xhttp_path,
+        )
+        out.append({
+            "key": key,
+            "label": label,
+            "amnezia": assemble_xray_link(
+                host=host, description=f"{description}{suffix}", dns1=dns1,
+                dns2=dns2, **common,
+            ),
+            "uri": build_vless_uri(
+                host=host, label=f"{description}{suffix} {name}".strip(), **common,
+            ),
+        })
+    return out
+
+
 async def _restart(conn, container) -> None:
     await _run(conn, _DOCKER + f"$DOCKER restart {shlex.quote(container)} >/dev/null")
     # проверим, что контейнер поднялся с новым конфигом
@@ -360,8 +490,9 @@ async def issue_client(
     description: str,
     dns1: str,
     dns2: str,
-) -> tuple[XrayClient, str]:
-    """Выдаёт клиента: новый UUID → clients[] + clientsTable → restart → vpn://."""
+) -> tuple[XrayClient, list[dict]]:
+    """Выдаёт клиента: новый UUID → clients[] + clientsTable → restart → конфиги
+    (см. client_configs; первый вариант Vision, его vpn:// и есть прежний config_amnezia)."""
     cid = str(uuid.uuid4())
     server = await _read_server(conn, container)
     _client_list(server).append({"id": cid, "flow": FLOW, "email": cid})
@@ -378,12 +509,11 @@ async def issue_client(
     bits = await read_server_bits(conn, container)
     await _restart(conn, container)
 
-    link = assemble_xray_link(
-        host=host, description=description, dns1=dns1, dns2=dns2, client_id=cid,
-        port=bits["port"], pub=bits["pub"], short=bits["short"], site=bits["site"],
-        flow=bits["flow"],
+    configs = client_configs(
+        bits, host=host, description=description, dns1=dns1, dns2=dns2,
+        client_id=cid, name=name,
     )
-    return XrayClient(client_id=cid, name=name, creation_date=date), link
+    return XrayClient(client_id=cid, name=name, creation_date=date), configs
 
 
 async def pause_client(
@@ -600,15 +730,15 @@ async def build_client_link(
     description: str,
     dns1: str,
     dns2: str,
-) -> str:
-    """Пересобирает vpn:// существующего клиента (UUID живёт в server.json)."""
+    name: str = "",
+) -> list[dict]:
+    """Пересобирает конфиги существующего клиента (UUID живёт в server.json)."""
     server = await _read_server(conn, container)
     ids = [c.get("id") for c in _client_list(server) if isinstance(c, dict)]
     if client_id not in ids:
         raise XrayError("Клиент не найден")
     bits = await read_server_bits(conn, container)
-    return assemble_xray_link(
-        host=host, description=description, dns1=dns1, dns2=dns2, client_id=client_id,
-        port=bits["port"], pub=bits["pub"], short=bits["short"], site=bits["site"],
-        flow=bits["flow"],
+    return client_configs(
+        bits, host=host, description=description, dns1=dns1, dns2=dns2,
+        client_id=client_id, name=name,
     )
