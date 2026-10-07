@@ -426,9 +426,19 @@ class XrayCreateRequest(BaseModel):
     expires_at: datetime | None = None
 
 
+class XrayVariantOut(BaseModel):
+    """Вариант подключения: vision (TCP) или xhttp, если он есть на сервере."""
+
+    key: str
+    label: str
+    amnezia: str  # vpn:// для приложения AmneziaVPN
+    uri: str  # vless:// для Happ, v2rayN, INCY и других клиентов на Xray
+
+
 class XrayCreateResponse(BaseModel):
     client: XrayClientOut
-    config_amnezia: str
+    config_amnezia: str  # = configs[0].amnezia (Vision), для старых клиентов API
+    configs: list[XrayVariantOut] = []
 
 
 class XrayConfigRequest(BaseModel):
@@ -438,6 +448,7 @@ class XrayConfigRequest(BaseModel):
 class XrayConfigResponse(BaseModel):
     config_amnezia: str
     name: str
+    configs: list[XrayVariantOut] = []
 
 
 class XrayRevokeRequest(BaseModel):

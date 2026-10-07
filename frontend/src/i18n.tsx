@@ -318,8 +318,13 @@ const EN: Record<string, string> = {
   // --- клиенты · тексты протоколов ---
   'OpenVPN поверх Cloak (маскировка под HTTPS). Конфиг выдаётся ссылкой vpn:// «Для приложения AmneziaVPN».':
     'OpenVPN over Cloak (masked as HTTPS). The config is issued as a vpn:// link “For the AmneziaVPN app”.',
-  'XRay VLESS + REALITY (маскировка под TLS к настоящему сайту). Конфиг — ссылка vpn:// «Для приложения AmneziaVPN». Выдача/отзыв перезапускают xray (~2 сек, активные клиенты переподключатся).':
-    'XRay VLESS + REALITY (masked as TLS to a real site). The config is a vpn:// link “For the AmneziaVPN app”. Issuing/revoking restarts xray (~2 s, active clients reconnect).',
+  'XRay VLESS + REALITY (маскировка под TLS к настоящему сайту). Конфиг: ссылка vpn:// для AmneziaVPN или vless:// для Happ, v2rayN и других клиентов. Выдача/отзыв перезапускают xray (~2 сек, активные клиенты переподключатся).':
+    'XRay VLESS + REALITY (masked as TLS to a real site). The config is a vpn:// link for AmneziaVPN or a vless:// link for Happ, v2rayN and other clients. Issuing/revoking restarts xray (~2 s, active clients reconnect).',
+  'Ссылка vless://': 'vless:// link',
+  'Ссылка vless:// для Happ, v2rayN, v2rayNG, INCY, Shadowrocket и других клиентов на Xray: импорт из буфера или по QR.':
+    'A vless:// link for Happ, v2rayN, v2rayNG, INCY, Shadowrocket and other Xray-based clients: import from the clipboard or scan the QR.',
+  'XHTTP - запасной вариант на том же порту: включайте, если Vision режут или он рвется.':
+    'XHTTP is a fallback on the same port: use it if Vision is blocked or keeps dropping.',
   'XRay-core:': 'XRay-core:',
   'Обновить ядро': 'Update core',
   'Переустановить': 'Reinstall',

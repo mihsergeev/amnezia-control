@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
+import QRCode from 'qrcode'
 import { AmneziaQr } from './AmneziaQr'
 import {
   api,
@@ -9,6 +10,7 @@ import {
   type XrayConfig,
   type XrayCreated,
   type XrayState,
+  type XrayVariant,
   type XrayVersion,
 } from './api'
 import { ExpiryCell, ExpirySelect } from './Expiry'
@@ -27,7 +29,29 @@ type Props = {
   onRequestUpdate?: () => void
 }
 
-type ConfigView = { name: string; amnezia: string }
+type ConfigView = { name: string; variants: XrayVariant[] }
+type ConfigFormat = 'amnezia' | 'uri'
+
+// старый бэкенд отдает только config_amnezia - показываем его как единственный вариант
+function variantsOf(r: { config_amnezia: string; configs?: XrayVariant[] }) {
+  if (r.configs && r.configs.length) return r.configs
+  return [{ key: 'vision', label: 'VLESS Reality', amnezia: r.config_amnezia, uri: '' }]
+}
+
+// обычный QR для vless:// (Happ и др. не понимают кадры AmneziaVPN)
+function PlainQr({ text }: { text: string }) {
+  const [src, setSrc] = useState('')
+  useEffect(() => {
+    let alive = true
+    QRCode.toDataURL(text, { margin: 1, width: 360 })
+      .then((u) => alive && setSrc(u))
+      .catch(() => alive && setSrc(''))
+    return () => {
+      alive = false
+    }
+  }, [text])
+  return src ? <img src={src} alt="QR" width={240} height={240} /> : null
+}
 
 export function XrayClients({
   serverId,
@@ -48,10 +72,15 @@ export function XrayClients({
   const [creating, setCreating] = useState(false)
 
   const [view, setView] = useState<ConfigView | null>(null)
+  const [variantIdx, setVariantIdx] = useState(0)
+  const [format, setFormat] = useState<ConfigFormat>('amnezia')
   const [statsFor, setStatsFor] = useState<{ id: string; name: string } | null>(
     null,
   )
   const [copied, setCopied] = useState(false)
+
+  const variant = view ? view.variants[Math.min(variantIdx, view.variants.length - 1)] : null
+  const shownText = variant ? (format === 'uri' && variant.uri ? variant.uri : variant.amnezia) : ''
 
   const handleError = useCallback(
     (err: unknown) => {
@@ -86,8 +115,9 @@ export function XrayClients({
       .catch(() => setVersion(null))
   }, [serverId])
 
-  function showConfig(name: string, amnezia: string) {
-    setView({ name, amnezia })
+  function showConfig(name: string, variants: XrayVariant[]) {
+    setView({ name, variants })
+    setVariantIdx(0)
     setCopied(false)
   }
 
@@ -106,7 +136,7 @@ export function XrayClients({
       setAddOpen(false)
       setNewName('')
       setNewExpiry(null)
-      showConfig(result.client.name, result.config_amnezia)
+      showConfig(result.client.name, variantsOf(result))
       await load()
     } catch (err) {
       handleError(err)
@@ -123,7 +153,7 @@ export function XrayClients({
         `/api/servers/${serverId}/xray/config`,
         { method: 'POST', body: JSON.stringify({ client_id: clientId }) },
       )
-      showConfig(result.name, result.config_amnezia)
+      showConfig(result.name, variantsOf(result))
     } catch (err) {
       handleError(err)
     } finally {
@@ -168,7 +198,7 @@ export function XrayClients({
         `/api/servers/${serverId}/xray/reissue`,
         { method: 'POST', body: JSON.stringify({ client_id: clientId }) },
       )
-      showConfig(result.client.name, result.config_amnezia)
+      showConfig(result.client.name, variantsOf(result))
       await load()
     } catch (err) {
       handleError(err)
@@ -222,17 +252,18 @@ export function XrayClients({
 
   async function copyConfig() {
     if (!view) return
-    setCopied(await copyText(view.amnezia))
+    setCopied(await copyText(shownText))
   }
 
   function downloadConfig() {
-    if (!view) return
+    if (!view || !variant) return
     const safe = view.name.replace(/[^a-zA-Z0-9_-]+/g, '_')
-    const blob = new Blob([view.amnezia], { type: 'text/plain' })
+    const suffix = view.variants.length > 1 ? `-${variant.key}` : ''
+    const blob = new Blob([shownText], { type: 'text/plain' })
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
     a.href = url
-    a.download = `${safe || 'client'}.txt`
+    a.download = `${safe || 'client'}${suffix}.txt`
     a.click()
     URL.revokeObjectURL(url)
   }
@@ -241,7 +272,7 @@ export function XrayClients({
     <>
       <p className="muted small">
         {t(
-          'XRay VLESS + REALITY (маскировка под TLS к настоящему сайту). Конфиг — ссылка vpn:// «Для приложения AmneziaVPN». Выдача/отзыв перезапускают xray (~2 сек, активные клиенты переподключатся).',
+          'XRay VLESS + REALITY (маскировка под TLS к настоящему сайту). Конфиг: ссылка vpn:// для AmneziaVPN или vless:// для Happ, v2rayN и других клиентов. Выдача/отзыв перезапускают xray (~2 сек, активные клиенты переподключатся).',
         )}
       </p>
 
@@ -421,20 +452,71 @@ export function XrayClients({
         </>
       )}
 
-      {view && (
+      {view && variant && (
         <div className="modal-backdrop">
           <div className="card modal" onClick={(e) => e.stopPropagation()}>
             <h3>{t('Конфиг клиента «{name}»', { name: view.name })}</h3>
+            {view.variants.length > 1 && (
+              <div className="tabs">
+                {view.variants.map((v, i) => (
+                  <button
+                    key={v.key}
+                    className={i === variantIdx ? 'tab tab-active' : 'tab'}
+                    onClick={() => {
+                      setVariantIdx(i)
+                      setCopied(false)
+                    }}
+                  >
+                    {v.label}
+                  </button>
+                ))}
+              </div>
+            )}
+            {variant.uri && (
+              <div className="tabs">
+                <button
+                  className={format === 'amnezia' ? 'tab tab-active' : 'tab'}
+                  onClick={() => {
+                    setFormat('amnezia')
+                    setCopied(false)
+                  }}
+                >
+                  {t('Для приложения AmneziaVPN')}
+                </button>
+                <button
+                  className={format === 'uri' ? 'tab tab-active' : 'tab'}
+                  onClick={() => {
+                    setFormat('uri')
+                    setCopied(false)
+                  }}
+                >
+                  {t('Ссылка vless://')}
+                </button>
+              </div>
+            )}
             <p className="muted small">
-              {t(
-                'Ссылка vpn:// — вставьте её в приложение AmneziaVPN («+» → вставить из буфера) или отсканируйте QR.',
-              )}
+              {format === 'uri' && variant.uri
+                ? t(
+                    'Ссылка vless:// для Happ, v2rayN, v2rayNG, INCY, Shadowrocket и других клиентов на Xray: импорт из буфера или по QR.',
+                  )
+                : t(
+                    'Ссылка vpn:// — вставьте её в приложение AmneziaVPN («+» → вставить из буфера) или отсканируйте QR.',
+                  )}
+              {variant.key === 'xhttp' &&
+                ' ' +
+                  t(
+                    'XHTTP - запасной вариант на том же порту: включайте, если Vision режут или он рвется.',
+                  )}
             </p>
 
             <div className="qr-wrap">
-              <AmneziaQr text={view.amnezia} format="vpn" />
+              {format === 'uri' && variant.uri ? (
+                <PlainQr text={variant.uri} />
+              ) : (
+                <AmneziaQr text={variant.amnezia} format="vpn" />
+              )}
             </div>
-            <pre className="script-box">{view.amnezia}</pre>
+            <pre className="script-box">{shownText}</pre>
             <div className="modal-actions">
               <button className="ghost" onClick={() => setView(null)}>
                 {t('Готово')}

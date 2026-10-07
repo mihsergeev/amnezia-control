@@ -113,7 +113,7 @@ async def create_client(
     try:
         async with _connect(server) as conn:
             container = await xray.detect_container(conn)
-            client, link = await xray.issue_client(
+            client, configs = await xray.issue_client(
                 conn, container, body.name, server.host, server.name, dns1, dns2,
             )
     except Exception as exc:  # noqa: BLE001
@@ -126,7 +126,8 @@ async def create_client(
     await audit.record(session, user.username, "xray_issue", server.name, body.name)
     return XrayCreateResponse(
         client=XrayClientOut(**client.__dict__, expires_at=body.expires_at),
-        config_amnezia=link,
+        config_amnezia=configs[0]["amnezia"],
+        configs=configs,
     )
 
 
@@ -145,15 +146,17 @@ async def get_client_config(
             )
             if match is None:
                 raise HTTPException(status.HTTP_404_NOT_FOUND, "Клиент не найден")
-            link = await xray.build_client_link(
+            configs = await xray.build_client_link(
                 conn, container, body.client_id,
-                server.host, server.name, dns1, dns2,
+                server.host, server.name, dns1, dns2, match.name,
             )
     except HTTPException:
         raise
     except Exception as exc:  # noqa: BLE001
         raise _xray_error(exc) from exc
-    return XrayConfigResponse(config_amnezia=link, name=match.name)
+    return XrayConfigResponse(
+        config_amnezia=configs[0]["amnezia"], name=match.name, configs=configs,
+    )
 
 
 @router.post("/pause", status_code=status.HTTP_204_NO_CONTENT)
@@ -260,7 +263,7 @@ async def reissue_client(
                 raise HTTPException(status.HTTP_404_NOT_FOUND, "Клиент не найден")
             name = target.name if target.name and target.name != "—" else "client"
             await xray.revoke_client(conn, container, body.client_id)
-            client, link = await xray.issue_client(
+            client, configs = await xray.issue_client(
                 conn, container, name, server.host, server.name, dns1, dns2,
             )
     except HTTPException:
@@ -279,7 +282,8 @@ async def reissue_client(
     await audit.record(session, user.username, "xray_reissue", server.name, client.name)
     return XrayCreateResponse(
         client=XrayClientOut(**client.__dict__, expires_at=old_exp, note=old_note),
-        config_amnezia=link,
+        config_amnezia=configs[0]["amnezia"],
+        configs=configs,
     )
 
 
