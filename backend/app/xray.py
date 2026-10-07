@@ -633,6 +633,11 @@ C=amnezia-xray
 BUILD=/opt/amnezia-build/xray
 D=/opt/amnezia/xray
 
+# Порт должен быть свободен ДО сборки и генерации ключей. Панель проверяет это
+# сама; здесь страховка на случай вызова в обход окна установки.
+OTHER=$(sudo docker ps --filter "publish=$XRAY_SERVER_PORT/tcp" --format '{{{{.Names}}}}' 2>/dev/null | grep -vx "$C" | head -1)
+[ -n "$OTHER" ] && fail "port $XRAY_SERVER_PORT/tcp busy: $OTHER"
+
 log "[1/5] docker"
 command -v docker >/dev/null 2>&1 || {{ curl -fsSL https://get.docker.com | sudo sh >/dev/null || fail "docker install"; }}
 
@@ -714,7 +719,8 @@ sudo docker rm -f "$C" >/dev/null 2>&1 || true
 sudo docker run -d --name "$C" --restart always --privileged --cap-add=NET_ADMIN \\
   -p ${{XRAY_SERVER_PORT}}:${{XRAY_SERVER_PORT}}/tcp \\
   -v "$D":/opt/amnezia/xray \\
-  --entrypoint sh "$IMG" -c "xray -config /opt/amnezia/xray/server.json" >/dev/null || fail run
+  --entrypoint sh "$IMG" -c "xray -config /opt/amnezia/xray/server.json" >/dev/null \\
+  || {{ sudo docker rm -f "$C" >/dev/null 2>&1; fail run; }}
 sleep 4
 sudo docker ps --format '{{{{.Names}}}}' | grep -Fx "$C" >/dev/null || {{ sudo docker logs "$C" 2>&1 | tail; fail notrunning; }}
 log "xray запущен на порту $XRAY_SERVER_PORT"

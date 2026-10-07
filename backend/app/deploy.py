@@ -458,13 +458,16 @@ def build_script(
         # Порт-совпадение сохраняет и фикс инцидента uz (клиентский контейнер на том
         # же порту, что разворачивает панель, всё так же удаляется).
         'RM="$(sudo docker ps -aq --filter "name=^${CONT}$" 2>/dev/null; '
-        'sudo docker ps -aq --filter "publish=$PORT" 2>/dev/null)"; '
+        'sudo docker ps -aq --filter "publish=$PORT/udp" 2>/dev/null)"; '
         'RM=$(printf "%s\\n" "$RM" | sort -u | grep . || true); '
         '[ -n "$RM" ] && sudo docker rm -f $RM >/dev/null 2>&1 || true',
         "sudo docker run -d --name $CONT --restart always --privileged \\",
         "  --cap-add NET_ADMIN --cap-add SYS_MODULE \\",
         "  --sysctl net.ipv4.conf.all.src_valid_mark=1 \\",
-        '  -v "$D":/opt/amnezia/awg -p $PORT:$PORT/udp $IMG >/dev/null',
+        '  -v "$D":/opt/amnezia/awg -p $PORT:$PORT/udp $IMG >/dev/null '
+        # не запустился - убираем созданный контейнер: иначе он висит в "created"
+        # с ошибкой (мониторинг алертит, а повтор упирается в занятое имя)
+        '|| { sudo docker rm -f $CONT >/dev/null 2>&1; echo "DEPLOY_ERROR: run"; exit 1; }',
         "sleep 5",
         "",
         'log "[6/6] подъём awg0 + NAT + systemd"',
@@ -576,13 +579,16 @@ def build_script_v3(mode: str, port: int, cfg: dict[str, str]) -> str:
         # сносим ТОЛЬКО свой контейнер 3.0 и то, что занимает наш порт: контейнеры
         # других протоколов (2.0/legacy) на этой ноде не трогаем
         'RM="$(sudo docker ps -aq --filter "name=^${CONT}$" 2>/dev/null; '
-        'sudo docker ps -aq --filter "publish=$PORT" 2>/dev/null)"; '
+        'sudo docker ps -aq --filter "publish=$PORT/udp" 2>/dev/null)"; '
         'RM=$(printf "%s\\n" "$RM" | sort -u | grep . || true); '
         '[ -n "$RM" ] && sudo docker rm -f $RM >/dev/null 2>&1 || true',
         "sudo docker run -d --name $CONT --restart always --privileged \\",
         "  --cap-add NET_ADMIN --cap-add SYS_MODULE \\",
         "  --sysctl net.ipv4.conf.all.src_valid_mark=1 \\",
-        '  -v "$D":/opt/amnezia/awg -p $PORT:$PORT/udp $IMG >/dev/null',
+        '  -v "$D":/opt/amnezia/awg -p $PORT:$PORT/udp $IMG >/dev/null '
+        # не запустился - убираем созданный контейнер: иначе он висит в "created"
+        # с ошибкой (мониторинг алертит, а повтор упирается в занятое имя)
+        '|| { sudo docker rm -f $CONT >/dev/null 2>&1; echo "DEPLOY_ERROR: run"; exit 1; }',
         "sleep 5",
         "",
         'log "[6/6] подъём awg0 + NAT + systemd"',
@@ -826,7 +832,8 @@ async def foreign_awg_container(conn: asyncssh.SSHClientConnection) -> str | Non
 
 
 async def container_on_port(
-    conn: asyncssh.SSHClientConnection, port: int, exclude: str = ""
+    conn: asyncssh.SSHClientConnection, port: int, exclude: str = "",
+    proto: str | None = None,
 ) -> str | None:
     """Имя контейнера, который уже публикует этот порт (кроме `exclude`).
 
@@ -839,10 +846,13 @@ async def container_on_port(
     # UDP-публикацией (проверено на ноде: awg2 на 47180/udp так не виден), а у
     # AmneziaWG порт как раз UDP. Поэтому спрашиваем оба протокола явно.
     p = int(port)
+    # proto сужает проверку до одного протокола: AmneziaWG на 443/udp и веб-сервер
+    # на 443/tcp друг другу не мешают, и такой порт ложно считался бы занятым
+    protos = [proto] if proto in ("tcp", "udp") else ["udp", "tcp"]
+    filters = " ".join(f'--filter "publish={p}/{x}"' for x in protos)
     cmd = (
         'D=$(docker info >/dev/null 2>&1 && echo docker || echo "sudo -n docker"); '
-        f'$D ps --filter "publish={p}/udp" --filter "publish={p}/tcp" '
-        '--format "{{.Names}}"'
+        f'$D ps {filters} --format "{{{{.Names}}}}"'
     )
     result = await conn.run(cmd, check=False)
     for line in (result.stdout or "").splitlines():
@@ -850,6 +860,46 @@ async def container_on_port(
         if name and name != exclude:
             return name
     return None
+
+
+async def port_owner(
+    conn: asyncssh.SSHClientConnection, port: int, proto: str, own: str = ""
+) -> str | None:
+    """Кто держит порт на ноде: контейнер или обычный процесс хоста. None - порт
+    свободен или его держит наш же контейнер `own` (переустановка поверх себя).
+
+    Без этой проверки установка упиралась в занятый порт только на последнем
+    шаге: образ собран, ключи сгенерированы, фаервол открыт, а `docker run`
+    падает с "port is already allocated" (так XRay на 443 налетел на caddy, через
+    который открывается сама панель). Процессы хоста тоже важны: nginx или
+    Caddy не в Docker держат 443 точно так же.
+    """
+    p = int(port)
+    name = await container_on_port(conn, p, exclude=own, proto=proto)
+    if name:
+        return f"контейнер «{name}»"
+    if own and await container_on_port(conn, p, proto=proto) == own:
+        return None
+    flag = "-lntpH" if proto == "tcp" else "-lnupH"
+    res = await conn.run(
+        f"sudo -n ss {flag} 'sport = :{p}' 2>/dev/null || ss {flag} 'sport = :{p}'",
+        check=False,
+    )
+    out = (res.stdout or "").strip()
+    if not out:
+        return None
+    m = re.search(r'users:\(\("([^"]+)"', out)
+    return f"процесс «{m.group(1)}»" if m else "другой процесс"
+
+
+def port_busy_detail(port: int, proto: str, owner: str, what: str) -> str:
+    """Текст ответа 409 при занятом порте. Окно установки по 409 показывает поле
+    выбора другого порта и сразу подставляет вариант."""
+    hint = ""
+    if int(port) == 443 and proto == "tcp":
+        hint = (" На 443 обычно работает веб-сервер, на этом же сервере может "
+                "жить и сама панель.")
+    return f"Порт {port}/{proto} уже занят: {owner}. Выберите для {what} другой порт.{hint}"
 
 
 async def awg3_containers(conn: asyncssh.SSHClientConnection) -> list[str]:
@@ -1162,7 +1212,10 @@ def build_script_upgrade31(conf_text: str) -> str:
         "sudo docker run -d --name $CONT --restart always --privileged \\",
         "  --cap-add NET_ADMIN --cap-add SYS_MODULE \\",
         "  --sysctl net.ipv4.conf.all.src_valid_mark=1 \\",
-        '  -v "$D":/opt/amnezia/awg -p $PORT:$PORT/udp $IMG >/dev/null',
+        '  -v "$D":/opt/amnezia/awg -p $PORT:$PORT/udp $IMG >/dev/null '
+        # не запустился - убираем созданный контейнер: иначе он висит в "created"
+        # с ошибкой (мониторинг алертит, а повтор упирается в занятое имя)
+        '|| { sudo docker rm -f $CONT >/dev/null 2>&1; echo "DEPLOY_ERROR: run"; exit 1; }',
         "sleep 5",
         "",
         'log "[5/5] подъём awg0 + NAT"',

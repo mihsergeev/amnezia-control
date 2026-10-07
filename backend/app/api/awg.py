@@ -333,6 +333,15 @@ async def deploy_awg(
     try:
         async with _connect(server) as conn:
             await _guard_foreign_awg(conn)
+            # Занятый порт ловим до запуска: сценарий сносит того, кто держит
+            # целевой UDP-порт (так заменяется свой же контейнер), и чужой рабочий
+            # протокол на этом порту погиб бы вместе с клиентами.
+            owner = await deploy.port_owner(conn, body.port, "udp", own=deploy.CONTAINER)
+            if owner:
+                raise HTTPException(
+                    status.HTTP_409_CONFLICT,
+                    deploy.port_busy_detail(body.port, "udp", owner, "AmneziaWG"),
+                )
             # пре-оп бэкап: если разворачиваем поверх существующего панельного
             # контейнера — снимем его конфиг до пересоздания
             await deploy.snapshot_all(conn, "awg")

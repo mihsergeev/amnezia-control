@@ -4,6 +4,27 @@ All notable changes to Amnezia Control are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.55.3] - 2026-10-08
+
+### Fixed
+- **Installing a protocol on a busy port no longer fails at the very end.** The
+  panel used to find out about a taken port only at `docker run`, after the image
+  was built, keys generated and the firewall opened. XRay on 443 next to the
+  panel's own web server ended with `port is already allocated`. Now the port is
+  checked before anything starts, for containers and for plain host processes
+  such as nginx alike, and the install window asks for another port right away
+  (for XRay with 443 taken it suggests 8443). Reinstalling over the panel's own
+  container on the same port still works.
+- **A container that fails to start is removed.** XRay, OpenVPN/Cloak and
+  AmneziaWG used to leave it in the `created` state with an error, which
+  monitoring reported as a broken container and a retry hit as a taken name.
+- **AmneziaWG install could remove a web server on the same port number.**
+  Clearing the target port used a Docker filter without a protocol, which
+  matches TCP only. AmneziaWG on 443/udp would have removed a web server
+  publishing 443/tcp, the panel's own entry point included. The scripts now
+  touch UDP holders only, and a UDP service next to a TCP web server on the
+  same port is no longer treated as a conflict.
+
 ## [0.55.2] - 2026-10-08
 
 ### Added

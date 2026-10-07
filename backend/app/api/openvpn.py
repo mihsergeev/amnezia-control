@@ -326,12 +326,23 @@ async def deploy_openvpn(
     script = openvpn.build_deploy_script(body.port, body.site, server.host)
     try:
         async with _connect(server) as conn:
+            # порт проверяем до сборки: иначе упираемся в него только на docker run
+            owner = await deploy.port_owner(
+                conn, body.port, "tcp", own=openvpn.CONTAINER_NAME
+            )
+            if owner:
+                raise HTTPException(
+                    status.HTTP_409_CONFLICT,
+                    deploy.port_busy_detail(body.port, "tcp", owner, "OpenVPN/Cloak"),
+                )
             # снимок конфига ДО (пере)развёртывания — для отката. Снимаем именно
             # тот контейнер, что реально запущен (в т.ч. родной, с другим именем),
             # иначе перед перезаписью PKI снимка бы не было.
             src = await deploy.detect_openvpn_container(conn)
             await deploy.snapshot_config(conn, "openvpn", container=src)
             await deploy.launch(conn, script, tag="openvpn")
+    except HTTPException:
+        raise
     except Exception as exc:  # noqa: BLE001
         raise _ovpn_error(exc) from exc
     deploywatch.spawn(request.app, server, "openvpn")
