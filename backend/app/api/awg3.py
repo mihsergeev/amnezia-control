@@ -344,15 +344,13 @@ async def deploy_awg3(
             # того, кто держит целевой порт (так он заменяет свой же при
             # пересборке), и рабочий протокол на этом порту погиб бы вместе с
             # клиентами. Лучше явная ошибка, чем «успешный» деплой ценой чужого.
-            busy = await deploy.container_on_port(
-                conn, body.port, exclude=deploy.CONTAINER_V3
+            owner = await deploy.port_owner(
+                conn, body.port, "udp", own=deploy.CONTAINER_V3
             )
-            if busy:
+            if owner:
                 raise HTTPException(
                     status.HTTP_409_CONFLICT,
-                    f"Порт {body.port} уже занят контейнером «{busy}». "
-                    "Выберите другой порт для AmneziaWG 3.0 — иначе развёртывание "
-                    "снесло бы работающий контейнер вместе с его клиентами.",
+                    deploy.port_busy_detail(body.port, "udp", owner, "AmneziaWG 3.1"),
                 )
             # Пре-оп бэкап ВСЕХ протоколов AmneziaWG на ноде (2.0/legacy и, если
             # уже есть, 3.0) — точка отката на случай, если что-то пойдёт не так.

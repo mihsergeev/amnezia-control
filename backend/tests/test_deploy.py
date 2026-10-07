@@ -309,11 +309,12 @@ def test_build_script_adopt_detects_port_and_removes_only_target():
     assert 'DPORT=$(sudo grep -iE "^ *ListenPort" "$D/awg0.conf"' in s
     assert "[ -n \"$DPORT\" ] && PORT=$DPORT" in s
     # снос по порту + своему имени, а НЕ по подстроке name=amnezia-awg
-    assert '--filter "publish=$PORT"' in s
+    # только UDP: TCP-контейнер на том же номере порта (веб-сервер) не наш
+    assert '--filter "publish=$PORT/udp"' in s
     assert '--filter "name=^${CONT}$"' in s
     assert 'docker ps -aq --filter "name=amnezia-awg"' not in s  # больше не сносим всё
     # снос идёт ДО docker run нового контейнера
-    assert s.index('--filter "publish=$PORT"') < s.index("docker run -d --name $CONT")
+    assert s.index('--filter "publish=$PORT/udp"') < s.index("docker run -d --name $CONT")
     # legacy-раскладка: если awg0.conf нет, нормализуем wg0.conf в awg0.conf
     assert 'cat "/opt/amnezia/awg/wg0.conf"' in s
     assert 'sudo tee "$D/awg0.conf"' in s

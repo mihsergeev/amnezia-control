@@ -56,12 +56,16 @@ export function DeployModal({
       // выбора порта, чтобы можно было повторить, а не упираться в тупик
       if (err instanceof ApiError && err.status === 409) {
         setPortBusy(true)
-        // подставляем соседний порт, чтобы не пришлось придумывать самому
-        setPort((prev) => (prev >= 65535 ? prev : prev + 1))
+        // подставляем соседний порт, чтобы не пришлось придумывать самому. Для
+        // XRay с занятым 443 (часто это веб-сервер или сама панель) сразу 8443:
+        // привычный TLS-порт выглядит естественнее, чем 444
+        setPort((prev) =>
+          protocol === 'xray' && prev === 443 ? 8443 : prev >= 65535 ? prev : prev + 1,
+        )
       }
       setError(err instanceof Error ? err.message : t('Ошибка'))
     },
-    [onUnauthorized, t],
+    [onUnauthorized, t, protocol],
   )
 
   const poll = useCallback(async () => {

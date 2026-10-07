@@ -301,9 +301,23 @@ async def deploy_xray(
     script = xray.build_deploy_script(body.port, body.site, release)
     try:
         async with _connect(server) as conn:
+            # Порт проверяем до сборки образа и генерации ключей. Раньше установка
+            # упиралась в него только на docker run: на ноде с панелью 443 держит
+            # caddy, и XRay падал с "port is already allocated", оставляя мертвый
+            # контейнер.
+            owner = await deploy.port_owner(
+                conn, body.port, "tcp", own=xray.CONTAINER_NAME
+            )
+            if owner:
+                raise HTTPException(
+                    status.HTTP_409_CONFLICT,
+                    deploy.port_busy_detail(body.port, "tcp", owner, "XRay"),
+                )
             # пре-оп бэкап: если разворачиваем поверх существующего — снимем конфиг
             await deploy.snapshot_all(conn, "xray")
             await deploy.launch(conn, script, tag="xray")
+    except HTTPException:
+        raise
     except Exception as exc:  # noqa: BLE001
         raise _xray_error(exc) from exc
     deploywatch.spawn(request.app, server, "xray")

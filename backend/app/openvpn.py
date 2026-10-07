@@ -632,7 +632,9 @@ def build_deploy_script(port: int, site: str, server_ip: str = "") -> str:
         '[ -n "$OLD" ] && sudo docker rm -f $OLD >/dev/null 2>&1 || true',
         'sudo docker rm -f "$C" >/dev/null 2>&1 || true',
         'sudo docker run -d --name "$C" --restart always --privileged --cap-add=NET_ADMIN \\',
-        '  -p "${PORT}":443/tcp -v "$D":/opt/amnezia "$IMG" >/dev/null || fail run',
+        '  -p "${PORT}":443/tcp -v "$D":/opt/amnezia "$IMG" >/dev/null '
+        # не запустился - убираем созданный контейнер, чтобы не висел в "created"
+        '|| { sudo docker rm -f "$C" >/dev/null 2>&1; fail run; }',
         "sleep 6",
         "sudo docker ps --format '{{.Names}}' | grep -Fx \"$C\" >/dev/null || "
         '{ sudo docker logs "$C" 2>&1 | tail -20; fail notrunning; }',
