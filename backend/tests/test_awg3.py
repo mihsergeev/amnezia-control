@@ -504,7 +504,7 @@ def test_update_migrates_30_config_to_31() -> None:
     assert '"^(RandomTrailers|DisableCookies)"' in script
     # вставка идёт в [Interface] — перед первым [Peer], иначе ключи попали бы
     # в секцию пира и awg-quick их не применил бы
-    assert '/^\[Peer\]/ && !d' in script
+    assert r'/^\[Peer\]/ && !d' in script
     assert 'print "RandomTrailers = on"' in script
     assert 'print "DisableCookies = on"' in script
     # конфиг без пиров тоже мигрируется (ветка END)

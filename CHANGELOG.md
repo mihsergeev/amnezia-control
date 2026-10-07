@@ -4,7 +4,7 @@ All notable changes to Amnezia Control are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
-## [0.55.2] - 2026-10-07
+## [0.55.2] - 2026-10-08
 
 ### Added
 - **The panel can be installed on a phone.** It now ships a web app manifest and
