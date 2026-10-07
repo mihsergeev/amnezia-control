@@ -12,13 +12,26 @@ def test_awg_params_constraints() -> None:
         assert p["S1"] != p["S2"]
         assert p["S1"] + 56 != p["S2"]
         assert p["S2"] + 56 != p["S1"]
-        # H1-H4 (2.0) — восходящие непересекающиеся диапазоны «low-high»
-        prev = 4
-        for h in ("H1", "H2", "H3", "H4"):
-            lo_s, dash, hi_s = str(p[h]).partition("-")
-            lo, hi = int(lo_s), int(hi_s)
-            assert dash and 4 < lo <= hi and lo >= prev
-            prev = hi
+        _assert_header_ranges(p)
+
+
+def _assert_header_ranges(p: dict) -> None:
+    # H1-H4 (2.0) - восходящие диапазоны "low-high" без общих значений: одно и
+    # то же значение заголовка не должно подходить под два типа пакетов
+    prev = 4
+    for h in ("H1", "H2", "H3", "H4"):
+        lo_s, dash, hi_s = str(p[h]).partition("-")
+        lo, hi = int(lo_s), int(hi_s)
+        assert dash and prev < lo < hi <= 2**31 - 1
+        prev = hi
+
+
+def test_awg_params_never_fail_under_stress() -> None:
+    """Старый генератор раз на ~50 тысяч вызовов падал с ValueError (пустой
+    диапазон у randint, когда граница упиралась в 2^31-1), а прогон всех тестов
+    ловил это примерно в 2% случаев. Теперь вызов не падает никогда."""
+    for _ in range(20000):
+        _assert_header_ranges(deploy.generate_awg_params())
 
 
 def test_server_config_shape() -> None:

@@ -4,6 +4,19 @@ All notable changes to Amnezia Control are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.55.2] - 2026-10-07
+
+### Fixed
+- **Rare deploy failure while generating AmneziaWG headers.** Each of the
+  `H1`-`H4` ranges started at the upper bound of the previous one, so when a
+  bound landed on 2^31-1 the next range was empty and the deploy failed with
+  `ValueError: empty range` (about once in 50,000 runs; the test suite caught
+  it in roughly 2% of runs). The same scheme sometimes let two neighbouring
+  ranges share a value, so one header matched two packet types. The bounds
+  are now eight distinct random numbers, sorted, which can neither fail nor
+  overlap. Applies to new AmneziaWG 2.0 and 3.1 configs; existing nodes keep
+  their headers.
+
 ## [0.55.1] - 2026-10-07
 
 ### Fixed

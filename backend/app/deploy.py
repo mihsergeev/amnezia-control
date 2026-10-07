@@ -181,16 +181,14 @@ def generate_awg_params() -> dict[str, object]:
             break
     s3 = random.randint(0, 64)
     s4 = random.randint(0, 20)  # у приложения bounded(0, 20)
-    # H1–H4: восходящие непересекающиеся диапазоны (каждый следующий стартует от
-    # верхней границы предыдущего) — как AwgInstaller::generateAwgParameters для 2.0
-    headers: list[str] = []
-    lo = 5
-    hi_max = 2**31 - 1
-    for _ in range(4):
-        first = random.randint(lo, hi_max - 1)
-        second = random.randint(first, hi_max)
-        lo = second
-        headers.append(f"{first}-{second}")
+    # H1-H4: восходящие непересекающиеся диапазоны, как у приложения. Границы
+    # берем восемью разными случайными числами и сортируем. Раньше каждый
+    # диапазон начинался с верхней границы предыдущего: соседние иногда делили
+    # одно значение (заголовок подходил под два типа), а если граница упиралась
+    # в 2^31-1, следующий randint получал пустой диапазон и деплой падал с
+    # ValueError (примерно раз на 50 тысяч вызовов).
+    bounds = sorted(random.sample(range(5, 2**31), 8))
+    headers = [f"{bounds[i]}-{bounds[i + 1]}" for i in range(0, 8, 2)]
     return {
         "Jc": jc, "Jmin": jmin, "Jmax": jmax,
         "S1": s1, "S2": s2, "S3": s3, "S4": s4,
