@@ -6,6 +6,14 @@ All notable changes to Amnezia Control are documented here. The format is based 
 
 ## [0.55.2] - 2026-10-07
 
+### Added
+- **The panel can be installed on a phone.** It now ships a web app manifest and
+  icons, so "Add to Home Screen" gives a proper app icon (the logo mark, without
+  the wordmark that turns into noise at icon size) and opens the panel in its own
+  window instead of a browser tab. Android gets a maskable icon that survives
+  round and squircle masks. nginx serves the manifest with the right content
+  type; its stock `mime.types` has none for `.webmanifest`.
+
 ### Fixed
 - **Rare deploy failure while generating AmneziaWG headers.** Each of the
   `H1`-`H4` ranges started at the upper bound of the previous one, so when a
@@ -61,16 +69,6 @@ All notable changes to Amnezia Control are documented here. The format is based 
   XRay configs. Since spring 2026 REALITY with the `chrome` fingerprint gets
   blocked more often in Russia. Configs already handed out keep working; the
   server does not check the fingerprint.
-
-## [0.54.2] - 2026-10-07
-
-### Added
-- **The panel can be installed on a phone.** It now ships a web app manifest and
-  icons, so "Add to Home Screen" gives a proper app icon (the logo mark, without
-  the wordmark that turns into noise at icon size) and opens the panel in its own
-  window instead of a browser tab. Android gets a maskable icon that survives
-  round and squircle masks. nginx serves the manifest with the right content
-  type; its stock `mime.types` has none for `.webmanifest`.
 
 ## [0.54.1] - 2026-09-29
 
