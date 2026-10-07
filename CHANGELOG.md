@@ -4,6 +4,27 @@ All notable changes to Amnezia Control are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.55.1] - 2026-10-07
+
+### Fixed
+- **AmneziaWG 3.1 nodes dropped 10-30% of packets.** The panel generated
+  different `S1`-`S4` together with `RandomTrailers = on`. With random trailers
+  the engine checks handshake sizes as "longer than", so a full data packet
+  passes them, and then reads the type field at the wrong offset: with the
+  wide `H1`-`H4` ranges the panel uses, a large share of data packets is taken
+  for handshakes and silently discarded (amneziawg-go PR #183). Every packet
+  reaches the node, yet TCP over the tunnel crawls at tens of KB/s, which
+  looks like the protocol being blocked. New 3.1 configs now use equal
+  `S1`-`S4` (12-20), as Amnezia's documentation recommends with random
+  trailers: loss drops to zero and the same node goes from ~40 KB/s to
+  50-100 Mbit/s. The 3.0 -> 3.1 rebuild sets `S1`-`S3` to the value of `S4`.
+
+### Upgrading
+- Nodes already on 3.1 keep their config. To fix one, set `S1`, `S2` and `S3`
+  to the value of `S4` in `/opt/amnezia/awg3/awg0.conf` (or the in-place
+  `amnezia-awg2` config), restart the container and reissue its clients: the
+  junk sizes are part of the client config.
+
 ## [0.55.0] - 2026-10-07
 
 ### Added

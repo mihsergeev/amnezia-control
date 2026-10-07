@@ -266,10 +266,17 @@ def generate_awg3_params() -> dict[str, object]:
     включены (defaultRandomTrailers / defaultDisableCookies).
     """
     p = dict(generate_awg_params())
-    # S3/S4 у 2.0 могут быть меньше 12 (0-64 и 0-20) — для 3.0 поднимаем порог,
-    # иначе защита заголовков не включится. S1/S2 и так генерятся от 15.
-    p["S3"] = random.randint(_AWG3_MIN_JUNK, 64)
-    p["S4"] = random.randint(_AWG3_MIN_JUNK, 20)
+    # S1-S4 одинаковые. С RandomTrailers приемник проверяет размер рукопожатия
+    # как "больше", а не "равно", и полный пакет данных проходит эту проверку;
+    # тип он читает по смещению S своего кандидата. При разных S там случайные
+    # байты, и пакет данных с вероятностью (ширина H1+H2+H3)/2^32 уходит в
+    # рукопожатия и выбрасывается молча (amneziawg-go PR #183). С широкими
+    # диапазонами H, как у приложения, это 10-20% потерь и TCP почти стоит.
+    # При равных S читается настоящее поле типа из H4, а H4 с H1-H3 не
+    # пересекается. Так же советует документация Amnezia. Порог 12 нужен защите
+    # заголовков, верх 20 держит накладные расходы на пакет данных как у S4 в 2.0.
+    s = random.randint(_AWG3_MIN_JUNK, 20)
+    p["S1"] = p["S2"] = p["S3"] = p["S4"] = s
     # ключ защиты заголовков — общий секрет сервера и клиента (как PSK), 32 байта
     p["HeaderProtectionKey"] = base64.b64encode(secrets.token_bytes(32)).decode()
     # добавочный паддинг держим скромным: конверт не должен упереться в MTU
@@ -546,14 +553,19 @@ def build_script_v3(mode: str, port: int, cfg: dict[str, str]) -> str:
         # бы на конфиге 3.0 — без ключей третьей-с-половиной версии, хотя ссылки
         # уже помечены protocol_version=3.1. Дописываем недостающие ключи в
         # секцию [Interface] (перед первым [Peer], либо в конец, если пиров нет).
+        # S1-S3 приравниваем к S4: с RandomTrailers при разных S теряются пакеты
+        # данных (см. generate_awg3_params). S4 у 3.0 уже не меньше 12. Клиентам
+        # перевыпуск нужен в любом случае, так что смена S ничего не ломает.
         'if sudo test -f "$D/awg0.conf" && ! sudo grep -qE '
         '"^(RandomTrailers|DisableCookies)" "$D/awg0.conf"; then',
-        '  sudo awk \'BEGIN{d=0} /^\\[Peer\\]/ && !d {print "RandomTrailers = on"; '
-        'print "DisableCookies = on"; d=1} {print} '
+        '  S4V=$(sudo grep -E "^ *S4 *=" "$D/awg0.conf" | head -1 | cut -d= -f2 | tr -dc "0-9")',
+        '  sudo awk -v s="$S4V" \'BEGIN{d=0} /^\\[Peer\\]/ && !d {print "RandomTrailers = on"; '
+        'print "DisableCookies = on"; d=1} '
+        '/^ *S[123] *=/ && s != "" && !d {sub(/=.*/, "= " s)} {print} '
         'END{if(!d){print "RandomTrailers = on"; print "DisableCookies = on"}}\' '
         '"$D/awg0.conf" > /tmp/awg0.mig && sudo cp /tmp/awg0.mig "$D/awg0.conf" '
         '&& rm -f /tmp/awg0.mig',
-        '  log "конфиг 3.0 дополнен ключами 3.1 (клиентам нужен перевыпуск)"',
+        '  log "конфиг 3.0 дополнен ключами 3.1, S1-S3 = S4 (клиентам нужен перевыпуск)"',
         "fi",
         # порт берём из конфига: при пересборке он должен остаться прежним, иначе
         # у выданных клиентов протухнет endpoint

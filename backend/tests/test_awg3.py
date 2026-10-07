@@ -21,6 +21,18 @@ def test_awg3_junk_sizes_allow_header_protection() -> None:
             assert int(p[key]) >= 12, f"{key}={p[key]} < 12 — защита заголовков не включится"
 
 
+def test_awg3_junk_sizes_are_equal_for_random_trailers() -> None:
+    """С RandomTrailers S1-S4 обязаны совпадать: иначе приемник читает поле
+    типа пакета данных не по тому смещению и часть данных принимает за
+    рукопожатия (amneziawg-go PR #183). На живой ноде с разными S терялось
+    10-30% пакетов, с равными 0%."""
+    for _ in range(200):
+        p = deploy.generate_awg3_params()
+        assert p["RandomTrailers"] == "on"
+        assert p["S1"] == p["S2"] == p["S3"] == p["S4"]
+        assert 12 <= int(p["S4"]) <= 20
+
+
 def test_awg3_header_protection_key_is_32_bytes() -> None:
     # ключ защиты заголовков — 32 байта (HeaderCipherKeySize), как PSK
     p = deploy.generate_awg3_params()
@@ -519,3 +531,41 @@ def test_link_version_follows_actual_server_config() -> None:
     # частичный случай (есть только один ключ) тоже не считаем 3.1
     conf_part = conf30 + "\nRandomTrailers = on"
     assert _link_version(conf_part) == "3"
+
+
+def test_update_migration_equalizes_junk_sizes(tmp_path) -> None:
+    """Прогоняем сам кусок скрипта миграции 3.0 -> 3.1 на образце конфига:
+    ключи 3.1 встают в [Interface], S1-S3 становятся равны S4, пиры целы."""
+    import shutil
+    import subprocess
+
+    import pytest
+
+    bash = shutil.which("bash")
+    if not bash or not shutil.which("awk"):
+        pytest.skip("нужны bash и awk")
+    cfg = deploy.generate_server_config_v3(47300)
+    lines = deploy.build_script_v3("update", 47300, cfg).splitlines()
+    start = next(
+        i for i, ln in enumerate(lines)
+        if ln.startswith('if sudo test -f "$D/awg0.conf" && ! sudo grep')
+    )
+    end = next(i for i in range(start, len(lines)) if lines[i] == "fi")
+    snippet = "\n".join(lines[start:end + 1]).replace("sudo ", "")
+    conf = tmp_path / "awg0.conf"
+    sample = (
+        "[Interface]\nPrivateKey = K\nAddress = 10.8.3.0/24\nListenPort = 47300\n"
+        "S1 = 116\nS2 = 40\nS3 = 33\nS4 = 14\nH1 = 5-10\n"
+        "\n[Peer]\nPublicKey = P\nAllowedIPs = 10.8.3.1/32\n"
+    )
+    conf.write_bytes(sample.encode())
+    run = subprocess.run(
+        [bash, "-c", 'log() { :; }; D="$1"; ' + snippet, "x", tmp_path.as_posix()],
+        capture_output=True, text=True,
+    )
+    assert run.returncode == 0, run.stderr
+    iface, peer = conf.read_bytes().decode().split("[Peer]", 1)
+    for key in ("S1", "S2", "S3", "S4"):
+        assert f"{key} = 14\n" in iface
+    assert "RandomTrailers = on" in iface and "DisableCookies = on" in iface
+    assert "PublicKey = P" in peer and "S1" not in peer
