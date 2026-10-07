@@ -62,6 +62,16 @@ All notable changes to Amnezia Control are documented here. The format is based 
   blocked more often in Russia. Configs already handed out keep working; the
   server does not check the fingerprint.
 
+## [0.54.2] - 2026-10-07
+
+### Added
+- **The panel can be installed on a phone.** It now ships a web app manifest and
+  icons, so "Add to Home Screen" gives a proper app icon (the logo mark, without
+  the wordmark that turns into noise at icon size) and opens the panel in its own
+  window instead of a browser tab. Android gets a maskable icon that survives
+  round and squircle masks. nginx serves the manifest with the right content
+  type; its stock `mime.types` has none for `.webmanifest`.
+
 ## [0.54.1] - 2026-09-29
 
 ### Fixed
