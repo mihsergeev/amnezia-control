@@ -16,7 +16,7 @@ from app.api.transfer import _selected_models, server_scoped_models
 from app.models import AwgConfig, AwgNote, ClientLimit, PausedClient
 
 SERVER = {
-    "name": "sample-exit-node",
+    "name": "vpn-f",
     "host": "203.0.113.77",
     "ssh_port": 2221,
     "ssh_user": "amn",

@@ -17,10 +17,10 @@ def _srv(containers: list[str], kinds: dict[str, str]) -> SimpleNamespace:
         {"amnezia_containers": containers, "protocols": kinds}))
 
 
-# sample-mixed-node: старая 3.0, 2.0 и Legacy на одной ноде
-sample_mixed = _srv(["amnezia-awg3", "amnezia-awg2", "amnezia-awg"],
+# vpn-corp: старая 3.0, 2.0 и Legacy на одной ноде
+CORP = _srv(["amnezia-awg3", "amnezia-awg2", "amnezia-awg"],
             {"amnezia-awg3": "awg3", "amnezia-awg2": "awg2", "amnezia-awg": "awg1"})
-# sample-developer-node: 3.1 рядом с 2.0 и xray
+# vpn-x-developer: 3.1 рядом с 2.0 и xray
 DEV = _srv(["amnezia-awg3", "amnezia-xray", "amnezia-awg2"],
            {"amnezia-awg3": "awg31", "amnezia-xray": "xray", "amnezia-awg2": "awg2"})
 # sample-legacy-node: контейнер назван amnezia-awg2, а внутри AmneziaWG 1.0
@@ -28,9 +28,9 @@ VULTR = _srv(["amnezia-awg2", "amnezia-xray"], {"amnezia-awg2": "awg1", "amnezia
 
 
 def test_three_versions_on_one_node() -> None:
-    assert protocol_label(sample_mixed, "awg") == "AmneziaWG 2.0"
-    assert protocol_label(sample_mixed, "awg3") == "AmneziaWG 3.0"  # правда 3.0, а не 3.1
-    assert protocol_label(sample_mixed, "awglegacy") == "AmneziaWG Legacy"
+    assert protocol_label(CORP, "awg") == "AmneziaWG 2.0"
+    assert protocol_label(CORP, "awg3") == "AmneziaWG 3.0"  # правда 3.0, а не 3.1
+    assert protocol_label(CORP, "awglegacy") == "AmneziaWG Legacy"
 
 
 def test_31_next_to_20() -> None:
@@ -66,4 +66,4 @@ def test_without_check_info_falls_back_sanely() -> None:
 
 
 def test_unknown_protocol_is_never_blank() -> None:
-    assert protocol_label(sample_mixed, "wireguard") == "wireguard"
+    assert protocol_label(CORP, "wireguard") == "wireguard"
