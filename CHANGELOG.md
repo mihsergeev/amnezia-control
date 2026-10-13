@@ -4,6 +4,16 @@ All notable changes to Amnezia Control are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.55.5] - 2026-10-13
+
+### Fixed
+- **AmneziaWG 3.1 also installs on early Docker 20.10 releases.** 0.55.4 chose
+  the build path by the Docker version, but ENOSYS for unknown system calls
+  needs runc 1.0.0-rc93 as well, and early 20.10.x shipped with rc92 (seen on
+  Docker 20.10.1), so the build failed the same way. The panel now runs a two
+  second probe instead, `make` in Alpine under the default seccomp profile, and
+  compiles without seccomp whenever the probe fails, whatever the version says.
+
 ## [0.55.4] - 2026-10-13
 
 ### Fixed

@@ -167,16 +167,25 @@ def _dockerfile_v3_final(go_src: str, awg_src: str, quick_src: str) -> str:
 def _v3_build_lines(tail: int) -> list[str]:
     """Сборка образа 3.x в $IMG из $BUILD (Dockerfile и start.sh уже там).
 
-    Docker до 20.10 в своем профиле seccomp отвечает на незнакомые ему системные
-    вызовы EPERM вместо ENOSYS. musl в Alpine 3.14+ пробует faccessat2 и
-    откатывается на старый вызов только по ENOSYS, поэтому make в сборке падает
-    с "/bin/sh: Operation not permitted" (поймано на Ubuntu 20.04 с Docker
-    19.03). Флага, отключающего seccomp для RUN, у docker build нет, а у docker
-    run есть: на старом Docker компилируем бинари в разовых контейнерах без
-    seccomp, а образ собираем поверх готовых бинарей. Скомпилированное хранится
-    в $BUILD/bin с тегами исходников, повторная установка не компилирует заново.
+    Старый seccomp отвечает на незнакомые ему системные вызовы EPERM вместо
+    ENOSYS. musl в Alpine 3.14+ пробует faccessat2 и откатывается на старый
+    вызов только по ENOSYS, поэтому make в сборке падает с "/bin/sh: Operation
+    not permitted". Флага, отключающего seccomp для RUN, у docker build нет, а у
+    docker run есть: на таком Docker компилируем бинари в разовых контейнерах
+    без seccomp, а образ собираем поверх готовых бинарей. Скомпилированное
+    хранится в $BUILD/bin с тегами исходников, повторная установка не
+    компилирует заново.
+
+    По номеру версии Docker это не определить: ENOSYS появился в Docker 20.10,
+    но работает только с runc от 1.0.0-rc93, а ранние 20.10.x шли с rc92
+    (поймано на Ubuntu 20.04 с Docker 19.03 и с 20.10.1). Поэтому проба: make в
+    Alpine под обычным seccomp, секунды две.
     """
     check = "[ ${PIPESTATUS[0]} -eq 0 ] || { echo DEPLOY_ERROR; exit 1; }"
+    probe = (
+        "apk add --no-cache make >/dev/null 2>&1; "
+        'printf "all:\\n\\t@true && true\\n" > /tmp/m; make -s -f /tmp/m'
+    )
     # bin/ хоста монтируется в /res: /out у тулзов занят под DESTDIR их make install
     run = 'sudo docker run --rm --security-opt seccomp=unconfined -v "$BIN":/res'
     want = f"go={AWG3_GO_TAG} tools={AWG3_TOOLS_TAG}"
@@ -189,10 +198,12 @@ def _v3_build_lines(tail: int) -> list[str]:
         "&& cp /out/usr/bin/awg /out/usr/bin/awg-quick /res/"
     )
     return [
-        "DV=$(sudo docker version --format '{{.Server.Version}}' 2>/dev/null || true)",
-        'case "$DV" in 1.*|1[0-9].*|20.0[0-9].*) OLDSC=1 ;; *) OLDSC=0 ;; esac',
+        f"if sudo docker run --rm {_V3_TOOLS_IMAGE} sh -c '{probe}' >/dev/null 2>&1; "
+        "then OLDSC=0; else OLDSC=1; fi",
         'if [ "$OLDSC" = 1 ]; then',
-        '  log "Docker $DV старше 20.10: компилирую в отдельных контейнерах без seccomp"',
+        "  DV=$(sudo docker version --format '{{.Server.Version}}' 2>/dev/null || true)",
+        '  log "Docker $DV: старый seccomp не дает собрать на Alpine, '
+        'компилирую в отдельных контейнерах без seccomp"',
         '  BIN="$BUILD/bin"; sudo mkdir -p "$BIN"',
         f'  if [ "$(cat "$BIN/.tags" 2>/dev/null)" != "{want}" ] '
         '|| [ ! -s "$BIN/amneziawg-go" ] || [ ! -s "$BIN/awg" ] '

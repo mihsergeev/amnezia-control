@@ -1,14 +1,16 @@
-"""Сборка AmneziaWG 3.x на Docker до 20.10.
+"""Сборка AmneziaWG 3.x на Docker со старым seccomp.
 
 Профиль seccomp старого Docker отвечает EPERM на незнакомые ему системные
 вызовы, а musl в Alpine 3.14+ откатывается с faccessat2 только по ENOSYS. В
 итоге make внутри docker build падал с "/bin/sh: Operation not permitted"
-(Ubuntu 20.04, Docker 19.03). На таком Docker бинари компилируются в docker run
-без seccomp, а образ собирается поверх готовых.
+(Ubuntu 20.04: Docker 19.03, а также 20.10.1 с runc 1.0.0-rc92). На таком
+Docker бинари компилируются в docker run без seccomp, а образ собирается
+поверх готовых.
 """
 
 import re
-from fnmatch import fnmatch
+import shutil
+import subprocess
 
 import pytest
 
@@ -22,25 +24,29 @@ def _scripts():
     ]
 
 
-def _old_patterns(script: str) -> list[str]:
-    m = re.search(r'case "\$DV" in (\S+)\) OLDSC=1', script)
-    assert m, "нет проверки версии Docker"
-    return m.group(1).split("|")
+def _probe_line(script: str) -> str:
+    line = next(x for x in script.splitlines() if "OLDSC=0" in x)
+    # проба - make в Alpine под обычным seccomp, а не номер версии Docker:
+    # 20.10.1 с runc rc92 ломается так же, как 19.03
+    assert line.startswith("if sudo docker run --rm alpine:")
+    assert "make -s -f /tmp/m" in line and "seccomp" not in line
+    return line
 
 
-@pytest.mark.parametrize("version,old", [
-    ("19.03.14", True),
-    ("18.09.1", True),
-    ("1.13.1", True),  # docker из старых RHEL/CentOS
-    ("20.10.0", False),  # с 20.10 незнакомые вызовы получают ENOSYS
-    ("20.10.24", False),
-    ("24.0.7", False),
-    ("28.5.1", False),
-    ("", False),  # версию не узнали - обычная сборка, как раньше
-])
-def test_old_docker_detection(version, old) -> None:
-    patterns = _old_patterns(_scripts()[0])
-    assert any(fnmatch(version, p) for p in patterns) is old
+@pytest.mark.skipif(shutil.which("bash") is None, reason="нужен bash")
+@pytest.mark.parametrize("probe_rc,old", [(0, "0"), (2, "1"), (127, "1")])
+def test_probe_decides_build_path(probe_rc, old) -> None:
+    # make упал (или его не поставить) - идем в сборку без seccomp
+    line = _probe_line(_scripts()[0])
+    prog = (
+        f'sudo() {{ "$@"; }}; docker() {{ return {probe_rc}; }}\n'
+        f"{line}\necho $OLDSC\n"
+    )
+    # полный путь: на Windows голое "bash" находит bash.exe из WSL в System32
+    out = subprocess.run(
+        [shutil.which("bash"), "-c", prog], capture_output=True, text=True
+    )
+    assert out.stdout.strip() == old, out.stderr
 
 
 @pytest.mark.parametrize("script", _scripts())
