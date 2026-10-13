@@ -103,27 +103,55 @@ def _dockerfile(base_ref: str) -> str:
     )
 
 # идемпотентный подъём интерфейса + NAT внутри контейнера
+_V3_GO_IMAGE = "golang:1.25-alpine"
+_V3_TOOLS_IMAGE = "alpine:3.22"
+_V3_GO_PKGS = "git make"
+_V3_TOOLS_PKGS = "git make build-base linux-headers bash"
+_V3_GO_MAKE = (
+    f"git clone --depth 1 --branch {AWG3_GO_TAG} "
+    "https://github.com/amnezia-vpn/amneziawg-go /src && make -C /src"
+)
+_V3_TOOLS_MAKE = (
+    f"git clone --depth 1 --branch {AWG3_TOOLS_TAG} "
+    "https://github.com/amnezia-vpn/amneziawg-tools /src && "
+    "make -C /src/src install DESTDIR=/out PREFIX=/usr WITH_WGQUICK=yes"
+)
+
+
 def _dockerfile_v3() -> str:
     """Образ AmneziaWG 3.0: движок и тулзы собираются из исходников по
     закреплённым тегам (готового образа с бинарями 3.0 в природе пока нет).
     Многостадийная сборка — в финальном образе только бинари, без тулчейнов."""
     return (
-        f"FROM golang:1.25-alpine AS go-build\n"
-        "RUN apk add --no-cache git make\n"
-        f"RUN git clone --depth 1 --branch {AWG3_GO_TAG} "
-        "https://github.com/amnezia-vpn/amneziawg-go /src && make -C /src\n"
+        f"FROM {_V3_GO_IMAGE} AS go-build\n"
+        f"RUN apk add --no-cache {_V3_GO_PKGS}\n"
+        f"RUN {_V3_GO_MAKE}\n"
         "\n"
-        "FROM alpine:3.22 AS tools-build\n"
-        "RUN apk add --no-cache git make build-base linux-headers bash\n"
-        f"RUN git clone --depth 1 --branch {AWG3_TOOLS_TAG} "
-        "https://github.com/amnezia-vpn/amneziawg-tools /src && "
-        "make -C /src/src install DESTDIR=/out PREFIX=/usr WITH_WGQUICK=yes\n"
+        f"FROM {_V3_TOOLS_IMAGE} AS tools-build\n"
+        f"RUN apk add --no-cache {_V3_TOOLS_PKGS}\n"
+        f"RUN {_V3_TOOLS_MAKE}\n"
         "\n"
+        + _dockerfile_v3_final(
+            "--from=go-build /src/amneziawg-go",
+            "--from=tools-build /out/usr/bin/awg",
+            "--from=tools-build /out/usr/bin/awg-quick",
+        )
+    )
+
+
+def _dockerfile_v3_prebuilt() -> str:
+    """Тот же финальный образ, но над бинарями, уже лежащими в контексте сборки
+    (bin/). Нужен для Docker до 20.10, см. _v3_build_lines."""
+    return _dockerfile_v3_final("bin/amneziawg-go", "bin/awg", "bin/awg-quick")
+
+
+def _dockerfile_v3_final(go_src: str, awg_src: str, quick_src: str) -> str:
+    return (
         "FROM alpine:3.22\n"
         "RUN apk add --no-cache bash iptables iproute2 openresolv\n"
-        "COPY --from=go-build /src/amneziawg-go /usr/bin/amneziawg-go\n"
-        "COPY --from=tools-build /out/usr/bin/awg /usr/bin/awg\n"
-        "COPY --from=tools-build /out/usr/bin/awg-quick /usr/bin/awg-quick\n"
+        f"COPY {go_src} /usr/bin/amneziawg-go\n"
+        f"COPY {awg_src} /usr/bin/awg\n"
+        f"COPY {quick_src} /usr/bin/awg-quick\n"
         # amneziawg-tools — форк wireguard-tools, и панель читает состояние нод
         # командами `wg show/set`. В базовом образе Amnezia `wg` есть, в собранном
         # из исходников — нет, поэтому даём алиасы: иначе все клиентские операции
@@ -134,6 +162,55 @@ def _dockerfile_v3() -> str:
         "RUN chmod +x /opt/amnezia/start.sh\n"
         'ENTRYPOINT ["/opt/amnezia/start.sh"]\n'
     )
+
+
+def _v3_build_lines(tail: int) -> list[str]:
+    """Сборка образа 3.x в $IMG из $BUILD (Dockerfile и start.sh уже там).
+
+    Docker до 20.10 в своем профиле seccomp отвечает на незнакомые ему системные
+    вызовы EPERM вместо ENOSYS. musl в Alpine 3.14+ пробует faccessat2 и
+    откатывается на старый вызов только по ENOSYS, поэтому make в сборке падает
+    с "/bin/sh: Operation not permitted" (поймано на Ubuntu 20.04 с Docker
+    19.03). Флага, отключающего seccomp для RUN, у docker build нет, а у docker
+    run есть: на старом Docker компилируем бинари в разовых контейнерах без
+    seccomp, а образ собираем поверх готовых бинарей. Скомпилированное хранится
+    в $BUILD/bin с тегами исходников, повторная установка не компилирует заново.
+    """
+    check = "[ ${PIPESTATUS[0]} -eq 0 ] || { echo DEPLOY_ERROR; exit 1; }"
+    # bin/ хоста монтируется в /res: /out у тулзов занят под DESTDIR их make install
+    run = 'sudo docker run --rm --security-opt seccomp=unconfined -v "$BIN":/res'
+    want = f"go={AWG3_GO_TAG} tools={AWG3_TOOLS_TAG}"
+    go = (
+        f"apk add --no-cache {_V3_GO_PKGS} >/dev/null && {_V3_GO_MAKE} "
+        "&& cp /src/amneziawg-go /res/"
+    )
+    tools = (
+        f"apk add --no-cache {_V3_TOOLS_PKGS} >/dev/null && {_V3_TOOLS_MAKE} "
+        "&& cp /out/usr/bin/awg /out/usr/bin/awg-quick /res/"
+    )
+    return [
+        "DV=$(sudo docker version --format '{{.Server.Version}}' 2>/dev/null || true)",
+        'case "$DV" in 1.*|1[0-9].*|20.0[0-9].*) OLDSC=1 ;; *) OLDSC=0 ;; esac',
+        'if [ "$OLDSC" = 1 ]; then',
+        '  log "Docker $DV старше 20.10: компилирую в отдельных контейнерах без seccomp"',
+        '  BIN="$BUILD/bin"; sudo mkdir -p "$BIN"',
+        f'  if [ "$(cat "$BIN/.tags" 2>/dev/null)" != "{want}" ] '
+        '|| [ ! -s "$BIN/amneziawg-go" ] || [ ! -s "$BIN/awg" ] '
+        '|| [ ! -s "$BIN/awg-quick" ]; then',
+        '    sudo rm -rf "$BIN"; sudo mkdir -p "$BIN"',
+        f"    {run} {_V3_GO_IMAGE} sh -c '{go}' 2>&1 | tail -{tail}; {check}",
+        f"    {run} {_V3_TOOLS_IMAGE} sh -c '{tools}' 2>&1 | tail -{tail}; {check}",
+        f'    echo "{want}" | sudo tee "$BIN/.tags" >/dev/null',
+        "  fi",
+        f'  echo {_b64(_dockerfile_v3_prebuilt())} | base64 -d '
+        '| sudo tee "$BUILD/Dockerfile.prebuilt" >/dev/null',
+        '  sudo docker build --force-rm -f "$BUILD/Dockerfile.prebuilt" -t $IMG "$BUILD" '
+        f"2>&1 | tail -{tail}; {check}",
+        "else",
+        # без --pull: тулчейн-образы кешируются, повторная сборка быстрая
+        f'  sudo docker build -t $IMG "$BUILD" 2>&1 | tail -{tail}; {check}',
+        "fi",
+    ]
 
 
 def _bringup(subnet: str = SUBNET) -> str:
@@ -530,9 +607,7 @@ def build_script_v3(mode: str, port: int, cfg: dict[str, str]) -> str:
         "",
         f'log "[4/6] сборка из исходников: go {AWG3_GO_TAG} + tools {AWG3_TOOLS_TAG}"',
         'log "(первая сборка тянет тулчейны и компилирует — это несколько минут)"',
-        # без --pull: тулчейн-образы кешируются, повторная сборка быстрая
-        'sudo docker build -t $IMG "$BUILD" 2>&1 | tail -5; '
-        '[ ${PIPESTATUS[0]} -eq 0 ] || { echo DEPLOY_ERROR; exit 1; }',
+        *_v3_build_lines(5),
         f'printf "go={AWG3_GO_TAG}\\ntools={AWG3_TOOLS_TAG}\\n" '
         f'| sudo tee {AWG3_VERSION_MARKER} >/dev/null || true',
         "",
@@ -1193,8 +1268,7 @@ def build_script_upgrade31(conf_text: str) -> str:
         'sudo mkdir -p "$BUILD" "$D"',
         f'echo {_b64(_dockerfile_v3())} | base64 -d | sudo tee "$BUILD/Dockerfile" >/dev/null',
         f'echo {_b64(_start_sh(subnet))} | base64 -d | sudo tee "$BUILD/start.sh" >/dev/null',
-        'sudo docker build -t $IMG "$BUILD" 2>&1 | tail -3; '
-        '[ ${PIPESTATUS[0]} -eq 0 ] || { echo DEPLOY_ERROR; exit 1; }',
+        *_v3_build_lines(3),
         "",
         'log "[3/5] вытаскиваю ключи и таблицу клиентов из живого контейнера"',
         # конфиг мог лежать ВНУТРИ контейнера, а не на хост-маунте — забираем
