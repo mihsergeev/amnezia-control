@@ -4,6 +4,20 @@ All notable changes to Amnezia Control are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.55.4] - 2026-10-13
+
+### Fixed
+- **AmneziaWG 3.1 installs on Docker older than 20.10.** The build stopped at
+  `make: /bin/sh: Operation not permitted`. The seccomp profile of those Docker
+  versions answers system calls it does not know with EPERM, while musl in
+  Alpine 3.14+ falls back from `faccessat2` only on ENOSYS. `docker build` has
+  no way to lift seccomp for its steps, so on such Docker the panel now compiles
+  the binaries in one-off `docker run` containers without seccomp and builds the
+  same final image on top of them. The binaries are kept together with their
+  source tags, so a reinstall does not compile again. Docker 20.10 and newer
+  build exactly as before. Covers fresh installs, updates and the in-place
+  upgrade to 3.1.
+
 ## [0.55.3] - 2026-10-08
 
 ### Fixed
