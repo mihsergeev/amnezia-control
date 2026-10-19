@@ -172,29 +172,29 @@ async def test_bulk_revoke_reports_each_item(client, auth_headers, session_facto
 async def test_search_does_not_match_random_key_substring(
     client, auth_headers, session_factory
 ):
-    """Регресс с боевого парка: запрос «samp» (фамилия) вытащил ЧУЖОГО клиента
-    example-other-client — в его случайном base64-ключе оказалось «SamP». Строки в выдаче
+    """Регресс с боевого парка: запрос "alic" (начало имени) вытащил ЧУЖОГО клиента
+    bob - в его случайном base64-ключе оказалось "AliC". Строки в выдаче
     отмечены по умолчанию, поэтому такой ложный хит вёл прямо к отзыву доступа
     постороннему. По ключу ищем с учётом регистра и только от 8 символов."""
     ids = await _seed(client, auth_headers)
     async with session_factory() as s:
         s.add(ClientName(server_id=ids["srv-a"], protocol="awg",
-                         client_id="k2xA8cL5/SamP531abcdef=", name="example-other-client"))
+                         client_id="z6rcBnx9/AliC757abcdef=", name="bob"))
         s.add(ClientName(server_id=ids["srv-b"], protocol="awg",
-                         client_id="cXYo8rB9GlvCvGtHuw=", name="sample-client"))
+                         client_id="WJtHmYYBiH77JXJaZZ=", name="alice"))
         await s.commit()
 
-    hits = (await client.get("/api/clients/search?q=samp", headers=auth_headers)).json()
-    assert [h["name"] for h in hits] == ["sample-client"], hits
+    hits = (await client.get("/api/clients/search?q=alic", headers=auth_headers)).json()
+    assert [h["name"] for h in hits] == ["alice"], hits
 
     # поиск ПО КЛЮЧУ по-прежнему работает: точный фрагмент с регистром
     hits = (await client.get(
-        "/api/clients/search?q=k2xA8cL5/SamP", headers=auth_headers
+        "/api/clients/search?q=z6rcBnx9/AliC", headers=auth_headers
     )).json()
-    assert [h["name"] for h in hits] == ["example-other-client"]
+    assert [h["name"] for h in hits] == ["bob"]
 
     # а тот же фрагмент в другом регистре — не совпадение (ключи регистрозависимы)
     hits = (await client.get(
-        "/api/clients/search?q=K2XA8CL5/SAMP", headers=auth_headers
+        "/api/clients/search?q=Z6RCBNX9/IFED", headers=auth_headers
     )).json()
     assert hits == []
