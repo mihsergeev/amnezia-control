@@ -23,8 +23,8 @@ CORP = _srv(["amnezia-awg3", "amnezia-awg2", "amnezia-awg"],
 # vpn-x-developer: 3.1 рядом с 2.0 и xray
 DEV = _srv(["amnezia-awg3", "amnezia-xray", "amnezia-awg2"],
            {"amnezia-awg3": "awg31", "amnezia-xray": "xray", "amnezia-awg2": "awg2"})
-# se-vultr-vpn: контейнер назван amnezia-awg2, а внутри AmneziaWG 1.0
-VULTR = _srv(["amnezia-awg2", "amnezia-xray"], {"amnezia-awg2": "awg1", "amnezia-xray": "xray"})
+# vpn-g: контейнер назван amnezia-awg2, а внутри AmneziaWG 1.0
+MISNAMED = _srv(["amnezia-awg2", "amnezia-xray"], {"amnezia-awg2": "awg1", "amnezia-xray": "xray"})
 
 
 def test_three_versions_on_one_node() -> None:
@@ -40,7 +40,7 @@ def test_31_next_to_20() -> None:
 
 
 def test_version_comes_from_config_not_container_name() -> None:
-    assert protocol_label(VULTR, "awg") == "AmneziaWG 1.0"
+    assert protocol_label(MISNAMED, "awg") == "AmneziaWG 1.0"
 
 
 def test_upgraded_in_place_to_31() -> None:

@@ -172,26 +172,26 @@ async def test_bulk_revoke_reports_each_item(client, auth_headers, session_facto
 async def test_search_does_not_match_random_key_substring(
     client, auth_headers, session_factory
 ):
-    """Регресс с боевого парка: запрос «ifed» (фамилия) вытащил ЧУЖОГО клиента
-    Den4ick24 — в его случайном base64-ключе оказалось «IfeD». Строки в выдаче
+    """Регресс с боевого парка: запрос "alic" (начало имени) вытащил ЧУЖОГО клиента
+    bob - в его случайном base64-ключе оказалось "AliC". Строки в выдаче
     отмечены по умолчанию, поэтому такой ложный хит вёл прямо к отзыву доступа
     постороннему. По ключу ищем с учётом регистра и только от 8 символов."""
     ids = await _seed(client, auth_headers)
     async with session_factory() as s:
         s.add(ClientName(server_id=ids["srv-a"], protocol="awg",
-                         client_id="z6rcBnx9/IfeD757abcdef=", name="Den4ick24"))
+                         client_id="z6rcBnx9/AliC757abcdef=", name="bob"))
         s.add(ClientName(server_id=ids["srv-b"], protocol="awg",
-                         client_id="WJtHmYYBiH77JXJaZZ=", name="ifedorof"))
+                         client_id="WJtHmYYBiH77JXJaZZ=", name="alice"))
         await s.commit()
 
-    hits = (await client.get("/api/clients/search?q=ifed", headers=auth_headers)).json()
-    assert [h["name"] for h in hits] == ["ifedorof"], hits
+    hits = (await client.get("/api/clients/search?q=alic", headers=auth_headers)).json()
+    assert [h["name"] for h in hits] == ["alice"], hits
 
     # поиск ПО КЛЮЧУ по-прежнему работает: точный фрагмент с регистром
     hits = (await client.get(
-        "/api/clients/search?q=z6rcBnx9/IfeD", headers=auth_headers
+        "/api/clients/search?q=z6rcBnx9/AliC", headers=auth_headers
     )).json()
-    assert [h["name"] for h in hits] == ["Den4ick24"]
+    assert [h["name"] for h in hits] == ["bob"]
 
     # а тот же фрагмент в другом регистре — не совпадение (ключи регистрозависимы)
     hits = (await client.get(
