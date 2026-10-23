@@ -1,5 +1,4 @@
 import asyncssh
-import httpx
 from fastapi import APIRouter, HTTPException, Request, status
 from sqlalchemy import delete
 
@@ -293,12 +292,8 @@ async def deploy_xray(
     request: Request,
 ) -> dict:
     server = await _get_or_404(server_id, session)
-    # ставим последнюю версию xray-core; если GitHub недоступен — закреплённую
-    try:
-        release = (await xray.latest_release())["tag"] or xray.XRAY_RELEASE
-    except (httpx.HTTPError, ValueError):
-        release = xray.XRAY_RELEASE
-    script = xray.build_deploy_script(body.port, body.site, release)
+    # закрепленная версия, а не последний релиз: см. xray.XRAY_RELEASE
+    script = xray.build_deploy_script(body.port, body.site, xray.XRAY_RELEASE)
     try:
         async with _connect(server) as conn:
             # Порт проверяем до сборки образа и генерации ключей. Раньше установка
@@ -388,19 +383,17 @@ async def xray_version(
             current = await xray.node_version(conn, container)
     except Exception as exc:  # noqa: BLE001
         raise _xray_error(exc) from exc
-    try:
-        latest = await xray.latest_release()
-    except (httpx.HTTPError, ValueError) as exc:
-        raise HTTPException(
-            status.HTTP_502_BAD_GATEWAY, f"Не удалось запросить GitHub: {exc}"
-        ) from exc
+    # "обновление" - только до закрепленной версии и только вверх. Нода, на
+    # которой уже стоит что-то новее (поставили руками), не зовется обновлять:
+    # переустановка вернет ее на закрепленную
+    target = xray.XRAY_RELEASE.lstrip("v")
     return XrayVersionOut(
         deployed=current is not None,
         current_version=current,
-        latest_version=latest["version"] or None,
-        latest_updated=latest["updated"],
+        latest_version=target,
+        latest_updated="",
         update_available=bool(
-            current and latest["version"] and current != latest["version"]
+            current and xray.version_tuple(current) < xray.version_tuple(target)
         ),
     )
 
@@ -410,17 +403,12 @@ async def update_xray(
     server_id: int, user: CurrentUser, session: SessionDep, request: Request
 ) -> dict:
     server = await _get_or_404(server_id, session)
-    try:
-        latest = await xray.latest_release()
-    except (httpx.HTTPError, ValueError) as exc:
-        raise HTTPException(
-            status.HTTP_502_BAD_GATEWAY, f"Не удалось запросить GitHub: {exc}"
-        ) from exc
+    release = xray.XRAY_RELEASE
     try:
         async with _connect(server) as conn:
             container = await xray.detect_container(conn)
             bits = await xray.read_server_bits(conn, container)
-            script = xray.build_deploy_script(bits["port"], bits["site"], latest["tag"])
+            script = xray.build_deploy_script(bits["port"], bits["site"], release)
             # включаем статистику в живом конфиге ДО пересборки — иначе rebuild
             # сохранил бы старый конфиг без stats (на существующих серверах)
             await xray.enable_stats(conn, container)
@@ -431,6 +419,6 @@ async def update_xray(
         raise _xray_error(exc) from exc
     deploywatch.spawn(request.app, server, "xray")
     await audit.record(
-        session, user.username, "xray_update", server.name, latest["tag"]
+        session, user.username, "xray_update", server.name, release
     )
     return {"started": True}

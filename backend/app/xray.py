@@ -21,9 +21,16 @@ from dataclasses import dataclass
 from urllib.parse import quote
 
 import asyncssh
-import httpx
 
-XRAY_RELEASE = "v26.3.27"  # фолбэк-версия xray-core, если GitHub недоступен
+# Версия xray-core, которую ставит панель: установка, обновление и переустановка.
+# Закреплена, а не releases/latest. С 26.9.8 REALITY-сервер отвергает ClientHello
+# без ключа X25519MLKEM768, и клиенты, которые его не шлют, молча перестают
+# подключаться: все на sing-box (Hiddify, Karing, NekoBox) с любым отпечатком,
+# старые сборки на ядре Xray с отпечатком firefox, а его панель и выдает
+# (SagerNet/sing-box#4520). 22.10.2026 latest на GitHub стал 26.10.21 с этой
+# проверкой. Поднимать, когда клиенты догонят, проверив ссылки панели на новом
+# сервере.
+XRAY_RELEASE = "v26.3.27"
 XRAY_DIR = "/opt/amnezia/xray"
 SERVER_JSON = f"{XRAY_DIR}/server.json"
 CLIENTS_TABLE = f"{XRAY_DIR}/clientsTable"
@@ -340,21 +347,9 @@ async def node_version(conn, container) -> str | None:
     return m.group(1) if m else None
 
 
-async def latest_release() -> dict:
-    """Последний релиз XTLS/Xray-core с GitHub: {version, tag, updated}."""
-    async with httpx.AsyncClient(timeout=15) as client:
-        r = await client.get(
-            "https://api.github.com/repos/XTLS/Xray-core/releases/latest",
-            headers={"Accept": "application/vnd.github+json"},
-        )
-        r.raise_for_status()
-        data = r.json()
-    tag = data.get("tag_name", "") or ""
-    return {
-        "version": tag.lstrip("v"),
-        "tag": tag,
-        "updated": data.get("published_at", "") or "",
-    }
+def version_tuple(version: str) -> tuple[int, ...]:
+    """'v26.3.27' / '26.3.27' -> (26, 3, 27) для сравнения версий xray-core."""
+    return tuple(int(x) for x in re.findall(r"\d+", version or "")[:3])
 
 
 def assemble_xray_link(
