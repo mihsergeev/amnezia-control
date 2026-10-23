@@ -4,6 +4,28 @@ All notable changes to Amnezia Control are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.55.7] - 2026-10-23
+
+### Fixed
+- **Rebuilding an AmneziaWG 2.0 container that was upgraded to 3.1 in place no
+  longer takes the node down.** The button on the 2.0 tab rebuilt the container
+  from the 2.x image but kept the config, which after an in-place upgrade is a
+  3.1 config the 2.x engine cannot bring up, so every client on the node lost
+  the connection. Such a container is now rebuilt with the 3.1 engine and its
+  current config as is: keys, port and clients stay, and the node gets the
+  current 3.1 engine. The button reads **Rebuild** there, and the 2.x
+  "update available" hint is no longer shown for it.
+
+### Added
+- **The previous engine image is kept for rollback.** Rebuilding AmneziaWG 3.1
+  (the 3.1 tab, or the in-place upgrade and rebuild on the 2.0 tab) first tags
+  the image the container was running as `acontrol-awg3:prev` /
+  `acontrol-awg31:prev`, instead of leaving it unnamed for the next cleanup.
+
+### Notes
+- After a rebuild some clients show "Connected" without traffic until they
+  reconnect; turning the VPN off and on again fixes it. Configs stay valid.
+
 ## [0.55.6] - 2026-10-23
 
 ### Fixed
