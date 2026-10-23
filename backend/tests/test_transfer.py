@@ -21,7 +21,7 @@ SERVER = {
     "ssh_port": 2221,
     "ssh_user": "amn",
     "note": "боевой узел",
-    "group_name": "perfluence",
+    "group_name": "acme-corp",
 }
 
 
@@ -82,7 +82,7 @@ async def test_export_carries_panel_side_data(
     assert data["format"] == "acontrol-server-export"
     assert data["server"]["host"] == "203.0.113.77"
     assert data["server"]["ssh_user"] == "amn"
-    assert data["server"]["group_name"] == "perfluence"
+    assert data["server"]["group_name"] == "acme-corp"
     # именно то, чего нет на ноде
     assert data["tables"]["awg_configs"][0]["name"] == "phone-max"
     assert "PrivateKey" in data["tables"]["awg_configs"][0]["config"]
