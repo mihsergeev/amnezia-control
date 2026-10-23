@@ -463,7 +463,7 @@ class XrayDeployRequest(BaseModel):
 class XrayVersionOut(BaseModel):
     deployed: bool
     current_version: str | None  # версия xray-core в контейнере, напр. "25.8.3"
-    latest_version: str | None  # последний релиз XTLS/Xray-core
+    latest_version: str | None  # версия, которую ставит панель (xray.XRAY_RELEASE)
     latest_updated: str
     update_available: bool
 

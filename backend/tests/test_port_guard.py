@@ -130,9 +130,6 @@ async def test_xray_deploy_on_busy_port_is_refused_before_anything(
     }, headers=auth_headers)
     sid = r.json()["id"]
 
-    async def fake_release():
-        return {"tag": "v26.3.27"}
-
     async def fake_owner(conn, port, proto, own=""):
         return "контейнер «caddy-proxy-caddy-1»"
 
@@ -140,7 +137,6 @@ async def test_xray_deploy_on_busy_port_is_refused_before_anything(
         raise AssertionError("при занятом порте установка не должна стартовать")
 
     monkeypatch.setattr(xray_api, "_connect", lambda server: _DummyConn())
-    monkeypatch.setattr(xray, "latest_release", fake_release)
     monkeypatch.setattr(deploy, "port_owner", fake_owner)
     monkeypatch.setattr(deploy, "snapshot_all", must_not_run)
     monkeypatch.setattr(deploy, "launch", must_not_run)
