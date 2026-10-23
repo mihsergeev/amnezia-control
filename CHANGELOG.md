@@ -4,6 +4,33 @@ All notable changes to Amnezia Control are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.55.6] - 2026-10-23
+
+### Fixed
+- **XRay installs and updates no longer pull a version that locks clients
+  out.** The panel installed whatever GitHub marked as the latest Xray-core
+  release. On 2026-10-22 that became v26.10.21, which carries the REALITY change
+  from v26.9.8: the server rejects a ClientHello without an X25519MLKEM768 key
+  share, and clients that do not send one stop connecting with nothing more than
+  `reality verification failed`. That is every sing-box based client (Hiddify,
+  Karing, NekoBox), whatever the fingerprint (SagerNet/sing-box#4520). Install,
+  "Update core" and "Reinstall" now all use a pinned, tested version, v26.3.27,
+  and "update available" only points up to it. The pin moves once the clients
+  catch up. v26.10.21 is also an urgent fix for compromised root certificates;
+  that matters where Xray verifies outgoing TLS, and the server config the panel
+  writes only has a direct (`freedom`) outbound. The XRay tab no longer asks
+  GitHub for the latest release either, so it works where GitHub is unreachable.
+- **AmneziaWG 3.1 engine moves to amneziawg-go v3.1.20260828.** With
+  `DisableCookies = on`, which the panel sets, a busy server silently dropped
+  handshakes: under load it still checked MAC2 but could not answer with a
+  cookie. Random content padding could also push a packet past the UDP window.
+  New installs get the new engine; existing nodes get it with **Rebuild** on
+  the 3.1 tab, which keeps the config and clients.
+
+### Docs
+- The READMEs describe AmneziaWG 3.1 instead of 3.0, the in-place upgrade from
+  2.0, the port check before install and support for old Docker.
+
 ## [0.55.5] - 2026-10-13
 
 ### Fixed
