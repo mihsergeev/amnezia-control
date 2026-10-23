@@ -201,6 +201,12 @@ def _v3_build_lines(tail: int) -> list[str]:
         "&& cp /out/usr/bin/awg /out/usr/bin/awg-quick /res/"
     )
     return [
+        # образ, на котором контейнер работал до пересборки, держим под тегом
+        # :prev - иначе после сборки он становится безымянным и уходит при чистке,
+        # а откатить движок, если новый не понравится клиентам, уже не на что
+        "PREV=$(sudo docker inspect -f '{{.Image}}' \"$CONT\" 2>/dev/null || true)",
+        'if [ -n "$PREV" ]; then sudo docker tag "$PREV" "$IMG:prev" '
+        '&& log "прежний образ сохранен как $IMG:prev"; fi',
         f"if sudo docker run --rm {_V3_TOOLS_IMAGE} sh -c '{probe}' >/dev/null 2>&1; "
         "then OLDSC=0; else OLDSC=1; fi",
         'if [ "$OLDSC" = 1 ]; then',
@@ -1249,13 +1255,26 @@ def subnet_from_conf(conf_text: str, default: str = SUBNET) -> str:
         return default
 
 
-def build_script_upgrade31(conf_text: str) -> str:
+def build_script_upgrade31(conf_text: str, *, rebuild: bool = False) -> str:
     """Скрипт обновления контейнера amnezia-awg2 до протокола 3.1 на месте.
 
     Образ собирается из исходников 3.1 (в готовом образе Amnezia бинарей 3.1
     нет), конфиг подставляется уже готовым — его собрал upgrade_conf_to_31,
     сохранив ключ сервера, порт и всех пиров.
+
+    rebuild=True - контейнер уже на 3.1, conf_text - его текущий конфиг как
+    есть: пересобираем движок, клиенты остаются рабочими.
     """
+    if rebuild:
+        done = [
+            'log "готово: amnezia-awg2 пересобран, конфиг 3.1 прежний"',
+            'log "клиенты остаются рабочими; если висит без интернета - переподключиться"',
+        ]
+    else:
+        done = [
+            'log "готово: контейнер amnezia-awg2 теперь на протоколе 3.1"',
+            'log "ВНИМАНИЕ: клиентам нужен перевыпуск — старые конфиги не подключатся"',
+        ]
     subnet = subnet_from_conf(conf_text)
     bringup = _bringup(subnet)
     return "\n".join([
@@ -1312,7 +1331,6 @@ def build_script_upgrade31(conf_text: str) -> str:
         'if ! printf "%s" "$AWGSHOW" | grep -qE "listening port"; then '
         'echo "READBACK: awg0 не поднялся"; echo DEPLOY_ERROR; exit 1; fi',
         'printf "%s" "$AWGSHOW" | grep -E "interface|listening" || true',
-        'log "готово: контейнер amnezia-awg2 теперь на протоколе 3.1"',
-        'log "ВНИМАНИЕ: клиентам нужен перевыпуск — старые конфиги не подключатся"',
+        *done,
         "echo DEPLOY_DONE",
     ]) + "\n"

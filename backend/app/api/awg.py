@@ -375,9 +375,21 @@ async def update_awg(
     except (httpx.HTTPError, ValueError):
         base_ref = None
     script = deploy.build_script("update", 47180, cfg, base_ref=base_ref)
+    detail = ""
     try:
         async with _connect(server) as conn:
             await _guard_foreign_awg(conn)
+            # amnezia-awg2, обновленный до 3.1 на месте, пересобирать образом 2.x
+            # нельзя: конфиг сохранится, а движок 2.x его не поднимет, и отвалятся
+            # все клиенты ноды. Такой контейнер пересобираем движком 3.1 с тем же
+            # конфигом - заодно он получает свежий движок.
+            conts = await awg.detect_awg_containers(conn)
+            if conts["new"] == deploy.CONTAINER:
+                state = await awg.read_state(conn, server.host, container=deploy.CONTAINER)
+                if all(state.params.get(k) for k in ("RandomTrailers", "DisableCookies")):
+                    conf = await awg.read_awg_conf(conn, state.container, state.interface)
+                    script = deploy.build_script_upgrade31(conf, rebuild=True)
+                    detail = "rebuild 3.1"
             # пре-оп бэкап: снимок КАЖДОГО awg-контейнера ДО пересборки — для отката
             await deploy.snapshot_all(conn, "awg")
             await deploy.launch(conn, script, tag="awg")
@@ -386,7 +398,7 @@ async def update_awg(
     except Exception as exc:  # noqa: BLE001
         raise _ssh_error(exc) from exc
     deploywatch.spawn(request.app, server, "awg")
-    await audit.record(session, user.username, "awg_update", server.name)
+    await audit.record(session, user.username, "awg_update", server.name, detail)
     return {"started": True}
 
 

@@ -437,12 +437,13 @@ export function ClientsModal({
               <span className="mono">
                 {version.current_version ?? version.current_awg_go ?? '—'}
               </span>
-              {version.deployed && version.update_available && (
+              {/* после обновления на месте версии 2.x к контейнеру не относятся */}
+              {state?.params_v31 !== true && version.deployed && version.update_available && (
                 <span className="update-badge">
                   {t('есть')} {version.latest_version ?? t('новее')}
                 </span>
               )}
-              {version.deployed && !version.update_available && (
+              {state?.params_v31 !== true && version.deployed && !version.update_available && (
                 <span className="version-ok"> {t('актуальна')}</span>
               )}
               {state?.params_v31 === true && (
@@ -497,10 +498,13 @@ export function ClientsModal({
                     )
                   : null
               ) : (
+                // на 3.1 бэкенд пересобирает движком 3.1 с тем же конфигом
                 <button className="ghost" onClick={() => onRequestUpdate('awg')}>
-                  {version.deployed && version.update_available
-                    ? t('Обновить')
-                    : t('Переустановить')}
+                  {state?.params_v31 === true
+                    ? t('Пересобрать')
+                    : version.deployed && version.update_available
+                      ? t('Обновить')
+                      : t('Переустановить')}
                 </button>
               )}
             </div>
