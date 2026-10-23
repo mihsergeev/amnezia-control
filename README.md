@@ -20,7 +20,7 @@
 
 ![Amnezia Control demo](docs/demo.gif)
 
-Nodes are managed over plain SSH (no agent installed on them). Four protocols are supported side by side: **AmneziaWG**, **AmneziaWG 3.0**, **OpenVPN over Cloak**, and **XRay / REALITY**. Clients are issued in the AmneziaVPN `vpn://` format (with a scannable animated QR) and, for WireGuard, as a plain `.conf`.
+Nodes are managed over plain SSH (no agent installed on them). Four protocols are supported side by side: **AmneziaWG**, **AmneziaWG 3.1**, **OpenVPN over Cloak**, and **XRay / REALITY**. Clients are issued in the AmneziaVPN `vpn://` format (with a scannable animated QR) and, for WireGuard, as a plain `.conf`.
 
 ## Why Amnezia Control
 
@@ -48,8 +48,10 @@ The [AmneziaVPN desktop client](https://amnezia.org) is great for personal use �
 **Servers & nodes**
 - Add servers with one-command onboarding (auto-setup over SSH password, or a copy-paste root script)
 - Import already-deployed servers from an AmneziaVPN "full access" `vpn://` link or a bulk host list
-- Deploy AmneziaWG / AmneziaWG 3.0 / XRay / OpenVPN-over-Cloak to a clean server (build-on-target, config-preserving)
-- **AmneziaWG 3.0** as a separate protocol next to 2.0 and legacy — own container, port and subnet, so both versions run on one node
+- Deploy AmneziaWG / AmneziaWG 3.1 / XRay / OpenVPN-over-Cloak to a clean server (build-on-target, config-preserving); a busy port is caught before the install starts, and the install window offers another one
+- **AmneziaWG 3.1** as a separate protocol next to 2.0 and legacy: own container, port and subnet, so both versions run on one node. The AmneziaVPN app labels these connections "version 3.1"
+- **In-place upgrade from 2.0 to 3.1** ("Upgrade to 3.1" on the 2.0 tab): same container, port, server key and subnet, with a snapshot taken first for rollback. 2.0 clients stop connecting afterwards and have to be reissued. Nodes installed back on 3.0 move to 3.1 with **Rebuild**
+- AmneziaWG 3.1 is built from source at pinned tags and installs on old Docker too (19.03 and early 20.10)
 - Update the server core in one click; live deploy log
 - Per-node resource monitoring: CPU load, RAM, disk, uptime — right on the card
 - Organize servers into collapsible **groups** (folders) — by company, location, etc.
@@ -245,27 +247,27 @@ fetch, revoke, pause and resume clients — it **cannot** deploy or delete serve
 change settings, export full access, or create further keys. Revoke a key at any
 time from the same page; everything it did is in the audit log as `apikey:<name>`.
 
-### Rolling back AmneziaWG 3.0
+### Rolling back AmneziaWG 3.1
 
-Installing 3.0 is **additive**: it brings up a separate container
+Installing 3.1 is **additive**: it brings up a separate container
 (`amnezia-awg3`) with its own port, subnet and config directory. Running
-2.0/legacy containers are neither recreated nor reconfigured — verified on a live
-production node: after a 3.0 install the 2.0 container kept the same container ID,
+2.0/legacy containers are neither recreated nor reconfigured. Verified on a live
+production node: after the install the 2.0 container kept the same container ID,
 the same config hash, the same clients and live handshakes.
 
 Before installing, the panel snapshots **every AmneziaWG container on the node**
-(`~/.acontrol/snapshots/…`), and the target port is checked up front: if another
-container already holds it, the deploy refuses to start (otherwise the script
-would remove whoever occupies that port).
+(`~/.acontrol/snapshots/...`), and the target port is checked up front: if another
+container or a host process already holds it, the deploy refuses to start
+(otherwise the script would remove whoever occupies that port).
 
-To roll 3.0 back completely, on the node:
+To roll 3.1 back completely, on the node:
 
 ```bash
 sudo docker rm -f amnezia-awg3
 sudo systemctl disable --now awg3-up.service && sudo rm -f /etc/systemd/system/awg3-up.service && sudo systemctl daemon-reload
 sudo rm -rf /opt/amnezia/awg3 /opt/acontrol/build-awg3 /opt/acontrol/awg3-version
 sudo docker rmi acontrol-awg3
-sudo ufw delete allow <3.0 port>/udp   # if you use ufw
+sudo ufw delete allow <3.1 port>/udp   # if you use ufw
 ```
 
 None of this touches 2.0 clients. To restore a **config** (rather than remove the
