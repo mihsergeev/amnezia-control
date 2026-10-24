@@ -54,8 +54,11 @@ async def send_alert(cfg: dict, text: str, *, html_text: str | None = None) -> l
                 r = await http.post(url, json=payload)
                 r.raise_for_status()
         except Exception as exc:  # noqa: BLE001 — алерт не должен ронять цикл
-            errors.append(f"Telegram: {exc}")
-            log.warning("Telegram-алерт не отправлен: %s", exc)
+            # текст ошибки httpx содержит URL запроса, а в нем токен бота -
+            # в журнал и лог он попадать не должен
+            msg = str(exc).replace(token, "***") if token else str(exc)
+            errors.append(f"Telegram: {msg}")
+            log.warning("Telegram-алерт не отправлен: %s", msg)
 
     if cfg.get("webhook"):
         try:

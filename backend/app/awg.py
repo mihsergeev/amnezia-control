@@ -548,12 +548,16 @@ async def create_client(
     name: str,
     dns: str,
     fixed_ip: str | None = None,
+    reserved: set[str] | None = None,
 ) -> tuple[AwgClient, str]:
+    """reserved - адреса, занятые не живыми пирами (клиенты на паузе): их нет
+    в awg show, и без этого адрес клиента на паузе уходил новому, а при
+    возобновлении wg set забирал его обратно."""
     if fixed_ip:
         ip = _safe_ip(fixed_ip)
     else:
         used = {c.address.split("/")[0] for c in state.clients if c.address}
-        ip = allocate_ip(state.address, used)
+        ip = allocate_ip(state.address, used | (reserved or set()))
     client_priv, client_pub = generate_keypair()
 
     # PSK читаем на ноде, чтобы не гонять секрет через панель
@@ -633,8 +637,23 @@ async def resume_client(
     conn: asyncssh.SSHClientConnection, state: "AwgState",
     public_key: str, name: str, ip: str,
 ) -> None:
-    """Возобновляет клиента: возвращает пира с прежним pubkey/IP/PSK."""
+    """Возобновляет клиента: возвращает пира с прежним pubkey/IP/PSK.
+
+    Повторно не добавляет (двойной resume или пир, оживший после отката снимка,
+    дублировал [Peer] и строку clientsTable) и не отбирает адрес у живого клиента.
+    """
     ip = _safe_ip(ip)
+    if any(c.public_key == public_key for c in state.clients):
+        return
+    holder = next(
+        (c for c in state.clients if c.address and c.address.split("/")[0] == ip),
+        None,
+    )
+    if holder is not None:
+        raise AwgError(
+            f"адрес {ip} занят клиентом «{holder.name or holder.public_key[:8]}», "
+            "возобновить нельзя: перевыпустите конфиг"
+        )
     inner = (
         f'PSK=$(cat {AWG_DIR}/wireguard_psk.key); '
         f"wg set {state.interface} peer {shlex.quote(public_key)} "

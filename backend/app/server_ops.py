@@ -40,6 +40,7 @@ async def bootstrap_and_check(
     Возвращает (успех, сообщение об ошибке).
     """
     public_key = ensure_panel_key(settings.data_dir)
+    key_path, _pub = key_paths(settings.data_dir)
     result = await sshops.bootstrap_server(
         server.host,
         server.ssh_port,
@@ -49,6 +50,7 @@ async def bootstrap_and_check(
         settings.panel_ip,
         become_password,
         settings.ssh_connect_timeout,
+        key_path=key_path,
     )
     if not result.ok:
         detail = result.error

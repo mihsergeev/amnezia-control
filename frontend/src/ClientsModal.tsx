@@ -57,8 +57,15 @@ export function ClientsModal({
   const isAwg = proto === 'awg' || proto === 'awglegacy' || proto === 'awg3'
   const awgBase =
     proto === 'awglegacy' ? 'awg-legacy' : proto === 'awg3' ? 'awg3' : 'awg'
+  // ключ протокола для сроков и истории трафика: бэкенд хранит их отдельно для
+  // 2.0, 3.1 и Legacy, а раньше сюда всегда уходило 'awg'
+  const limitProto: 'awg' | 'awg3' | 'awglegacy' =
+    proto === 'awg3' ? 'awg3' : proto === 'awglegacy' ? 'awglegacy' : 'awg'
   const [state, setState] = useState<AwgState | null>(null)
   const [version, setVersion] = useState<VersionInfo | null>(null)
+  // /awg/version падает, если недоступен Docker Hub; откат и пересборка при
+  // этом нужны как раз сильнее всего, поэтому блок показываем и без версии
+  const [versionFailed, setVersionFailed] = useState(false)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [addOpen, setAddOpen] = useState(false)
@@ -83,6 +90,12 @@ export function ClientsModal({
   const [editKey, setEditKey] = useState<string | null>(null)
   const [draft, setDraft] = useState('')
   const escaping = useRef(false)
+  // номер последней загрузки: поздний ответ прошлой вкладки (2.0/3.1/Legacy) не
+  // должен перетирать текущую, иначе "Отозвать" ушел бы не в тот протокол
+  const loadSeq = useRef(0)
+  // защита от двойного Enter: флаг creating в состоянии обновляется не сразу,
+  // и второй запрос успевал уйти, выдав двум клиентам один IP
+  const creatingRef = useRef(false)
 
   const handleError = useCallback(
     (err: unknown) => {
@@ -102,13 +115,17 @@ export function ClientsModal({
     // — вкладка «AmneziaWG 3.0» показывала endpoint, подсеть и клиентов от 2.0
     // вместе с ошибкой «не развёрнут», и выглядело это так, будто 3.0 стоит.
     setState(null)
+    const seq = ++loadSeq.current
     try {
-      setState(await api<AwgState>(`/api/servers/${server.id}/${awgBase}`))
+      const st = await api<AwgState>(`/api/servers/${server.id}/${awgBase}`)
+      if (seq !== loadSeq.current) return
+      setState(st)
       setError(null)
     } catch (err) {
+      if (seq !== loadSeq.current) return
       handleError(err)
     } finally {
-      setLoading(false)
+      if (seq === loadSeq.current) setLoading(false)
     }
   }, [server.id, awgBase, handleError])
 
@@ -118,10 +135,14 @@ export function ClientsModal({
     // версия/обновление — только у нового AmneziaWG; legacy панель не пересобирает.
     // Сбрасываем перед запросом, чтобы версия 2.0 не «переезжала» на другую вкладку.
     setVersion(null)
+    setVersionFailed(false)
     if (proto === 'awg') {
       api<VersionInfo>(`/api/servers/${server.id}/awg/version`)
         .then(setVersion)
-        .catch(() => setVersion(null))
+        .catch(() => {
+          setVersion(null)
+          setVersionFailed(true)
+        })
     }
   }, [load, server.id, isAwg, proto])
 
@@ -164,7 +185,8 @@ export function ClientsModal({
   }
 
   async function addClient() {
-    if (!newName.trim()) return
+    if (!newName.trim() || creatingRef.current) return
+    creatingRef.current = true
     setCreating(true)
     setError(null)
     try {
@@ -185,6 +207,7 @@ export function ClientsModal({
     } catch (err) {
       handleError(err)
     } finally {
+      creatingRef.current = false
       setCreating(false)
     }
   }
@@ -309,7 +332,7 @@ export function ClientsModal({
 
   async function changeLimit(client: AwgClient, iso: string | null) {
     try {
-      await setClientLimit(server.id, 'awg', client.public_key, client.name, iso)
+      await setClientLimit(server.id, limitProto, client.public_key, client.name, iso)
       await load()
     } catch (err) {
       handleError(err)
@@ -430,34 +453,34 @@ export function ClientsModal({
           </div>
         )}
 
-        {proto === 'awg' && version && (
+        {proto === 'awg' && (version || versionFailed) && (
           <div className="version-line">
             <span className="muted small">
               AmneziaWG:{' '}
               <span className="mono">
-                {version.current_version ?? version.current_awg_go ?? '—'}
+                {version?.current_version ?? version?.current_awg_go ?? t('не удалось узнать')}
               </span>
               {/* после обновления на месте версии 2.x к контейнеру не относятся */}
-              {state?.params_v31 !== true && version.deployed && version.update_available && (
+              {state?.params_v31 !== true && version?.deployed && version?.update_available && (
                 <span className="update-badge">
-                  {t('есть')} {version.latest_version ?? t('новее')}
+                  {t('есть')} {version?.latest_version ?? t('новее')}
                 </span>
               )}
-              {state?.params_v31 !== true && version.deployed && !version.update_available && (
+              {state?.params_v31 !== true && version?.deployed && !version?.update_available && (
                 <span className="version-ok"> {t('актуальна')}</span>
               )}
               {state?.params_v31 === true && (
                 <span className="muted"> · {t('протокол обновлён до 3.1')}</span>
               )}
-              {version.foreign_container ? (
+              {version?.foreign_container ? (
                 <span className="muted">
                   {' '}·{' '}
-                  {version.adoptable
+                  {version?.adoptable
                     ? t('образ собран не панелью')
                     : t('внешний образ (не AmneziaWG) — перенос недоступен')}
                 </span>
               ) : (
-                !version.deployed && (
+                version && !version.deployed && (
                   <span className="muted">
                     {' '}· {t('базовый образ не считывается')}
                   </span>
@@ -489,8 +512,8 @@ export function ClientsModal({
                   {t('Обновить до 3.1')}
                 </button>
               )}
-              {version.foreign_container ? (
-                version.adoptable
+              {version?.foreign_container ? (
+                version?.adoptable
                   ? onRequestAdopt && (
                       <button className="ghost" onClick={onRequestAdopt}>
                         {t('Взять под управление')}
@@ -502,8 +525,8 @@ export function ClientsModal({
                 <button className="ghost" onClick={() => onRequestUpdate('awg')}>
                   {state?.params_v31 === true
                     ? t('Пересобрать')
-                    : version.deployed && version.update_available
-                      ? t('Обновить')
+                    : version?.deployed && version?.update_available
+                      ? t('Обновить версию')
                       : t('Переустановить')}
                 </button>
               )}
@@ -825,7 +848,7 @@ export function ClientsModal({
         {statsFor && (
           <ClientStatsModal
             serverId={server.id}
-            protocol="awg"
+            protocol={limitProto}
             clientId={statsFor.public_key}
             name={statsFor.name}
             onClose={() => setStatsFor(null)}

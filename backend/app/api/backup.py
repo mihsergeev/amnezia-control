@@ -10,9 +10,12 @@ from fastapi import APIRouter, HTTPException, Request, status
 from fastapi.responses import Response
 from sqlalchemy import DateTime, delete, insert, select, text
 
+from app import alerts, audit, sshops, stepup
+from app.clientip import client_ip
 from app.config import get_settings
 from app.deps import CurrentUser, SessionDep
 from app.models import (
+    ApiKey,
     AppSetting,
     AuditLog,
     AwgConfig,
@@ -22,11 +25,13 @@ from app.models import (
     ClientTrafficSample,
     NodeMetric,
     OvpnConfig,
+    PausedClient,
     Server,
     ServerStatus,
     TrafficSample,
     User,
 )
+from app.schemas import StepUpRequest
 
 router = APIRouter(prefix="/backup", tags=["backup"])
 
@@ -45,6 +50,8 @@ _MODELS = [
     AppSetting,
     AuditLog,
     ClientName,
+    PausedClient,
+    ApiKey,
     ServerStatus,
     NodeMetric,
     TrafficSample,
@@ -182,14 +189,42 @@ async def _build_archive(
     return buf.getvalue()
 
 
-@router.get("")
-async def download_backup(_: CurrentUser, session: SessionDep) -> Response:
+async def _confirm(user, password: str, request: Request, session, what: str) -> None:
+    """Повторный ввод пароля перед выдачей или заменой всей панели. В бэкапе
+    SSH-ключ ко всем нодам, секрет 2FA и приватные ключи клиентов: по одному
+    токену он превращал украденную сессию в постоянный доступ к нодам."""
+    try:
+        await stepup.verify(user, password, request)
+    except HTTPException as exc:
+        if exc.status_code == status.HTTP_403_FORBIDDEN:
+            await audit.record(
+                session, user.username, f"{what}_denied", "", "неверный пароль"
+            )
+        raise
+
+
+async def _announce(session, user, request: Request, action: str, text: str) -> None:
+    await audit.record(session, user.username, action, "", client_ip(request))
+    await alerts.security_alert(
+        session, get_settings(),
+        f"{text} (пользователь «{user.username}», IP {client_ip(request)}).",
+    )
+
+
+@router.post("/download")
+async def download_backup(
+    body: StepUpRequest, request: Request, user: CurrentUser, session: SessionDep
+) -> Response:
+    await _confirm(user, body.password, request, session, "backup_download")
     settings = get_settings()
     archive = await _build_archive(
         session, settings.data_dir, settings.version, settings.backup_include_traffic
     )
     stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
     filename = f"acontrol-backup-{stamp}.tar.gz"
+    await _announce(
+        session, user, request, "backup_download", "💾 Amnezia Control: скачан бэкап панели"
+    )
     return Response(
         content=archive,
         media_type="application/gzip",
@@ -232,17 +267,24 @@ async def backup_now(_: CurrentUser, session: SessionDep) -> dict:
         session, settings.data_dir, settings.version, settings.backup_include_traffic
     )
     stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
-    path = os.path.join(d, f"acontrol-backup-{stamp}.tar.gz")
-    with open(path, "wb") as fh:
-        fh.write(archive)
+    path, problems = autobackup.save_checked(d, f"acontrol-backup-{stamp}.tar.gz", archive)
+    if problems:
+        raise HTTPException(
+            status.HTTP_500_INTERNAL_SERVER_ERROR,
+            "бэкап не записан: " + "; ".join(problems),
+        )
     autobackup._prune(d, settings.backup_keep)
     return {"filename": os.path.basename(path)}
 
 
-@router.get("/file/{filename}")
-async def download_saved_backup(filename: str, _: CurrentUser) -> Response:
+@router.post("/file/{filename}")
+async def download_saved_backup(
+    filename: str, body: StepUpRequest, request: Request, user: CurrentUser,
+    session: SessionDep,
+) -> Response:
     from app import autobackup
 
+    await _confirm(user, body.password, request, session, "backup_download")
     settings = get_settings()
     if not autobackup.is_backup_name(filename):
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "некорректное имя файла")
@@ -251,6 +293,10 @@ async def download_saved_backup(filename: str, _: CurrentUser) -> Response:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "бэкап не найден")
     with open(path, "rb") as fh:
         data = fh.read()
+    await _announce(
+        session, user, request, "backup_download",
+        f"💾 Amnezia Control: скачан бэкап панели {filename}",
+    )
     return Response(
         content=data,
         media_type="application/gzip",
@@ -262,10 +308,16 @@ async def download_saved_backup(filename: str, _: CurrentUser) -> Response:
 async def restore_backup(
     request: Request, user: CurrentUser, session: SessionDep
 ) -> dict:
-    """Восстановление из архива (тело запроса = tar.gz от GET /backup).
+    """Восстановление из архива (тело запроса = tar.gz от POST /backup/download).
 
-    ПЕРЕЗАПИСЫВАЕТ все таблицы и SSH-ключ панели данными из архива.
+    ПЕРЕЗАПИСЫВАЕТ все таблицы, включая учетку админа, и SSH-ключ панели
+    данными из архива, поэтому нужен пароль: тело занято архивом, и он идет
+    заголовком X-Confirm-Password (в URL пароль попал бы в логи прокси).
     """
+    await _confirm(
+        user, request.headers.get("x-confirm-password", ""), request, session,
+        "restore",
+    )
     # ограничение размера тела (бэкапы маленькие; защита от memory-DoS)
     cl = request.headers.get("content-length")
     if cl and cl.isdigit() and int(cl) > _MAX_RESTORE_BYTES:
@@ -300,6 +352,14 @@ async def restore_backup(
     # восстанавливаем ТОЛЬКО таблицы, присутствующие в db.json. Отсутствующие
     # (напр. история трафика в лёгком бэкапе) не трогаем — иначе restore затёр бы
     # их существующие строки пустотой.
+    # имя SSH-пользователя уходит в скрипт настройки под root - чужой архив не
+    # должен протаскивать туда команды. Проверяем ДО очистки таблиц.
+    for row in dump.get(Server.__tablename__) or []:
+        if isinstance(row, dict) and not sshops.valid_ssh_user(row.get("ssh_user")):
+            raise HTTPException(
+                status.HTTP_400_BAD_REQUEST,
+                f"в архиве недопустимое имя SSH-пользователя: {row.get('ssh_user')!r}",
+            )
     present = [m for m in _MODELS if m.__tablename__ in dump]
     restored: dict[str, int] = {}
     for model in reversed(present):  # чистим в обратном порядке (FK нет)
@@ -361,9 +421,12 @@ async def restore_backup(
             except OSError:
                 pass
 
-    from app import audit
-
     await audit.record(
         session, user.username, "restore", "", f"строк: {sum(restored.values())}"
+    )
+    await alerts.security_alert(
+        session, get_settings(),
+        f"♻️ Amnezia Control: панель восстановлена из бэкапа "
+        f"(пользователь «{user.username}», IP {client_ip(request)}).",
     )
     return {"restored": restored}

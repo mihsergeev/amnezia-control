@@ -2,7 +2,7 @@ import asyncssh
 from fastapi import APIRouter, HTTPException, Request, status
 from sqlalchemy import delete, select
 
-from app import audit, awg, deploy, deploywatch, limits, notes, openvpn, pausestore, sshops
+from app import audit, awg, deploy, deploywatch, limits, nodelock, notes, openvpn, pausestore, sshops
 from app.config import get_settings
 from app.deps import CurrentUser, SessionDep
 from app.models import ClientLimit, OvpnConfig, Server
@@ -37,10 +37,11 @@ def _connect(server: Server):
     settings = get_settings()
     ensure_panel_key(settings.data_dir)
     key_path, _pub = key_paths(settings.data_dir)
-    return sshops.connect(
+    # одна операция на ноде за раз, см. nodelock
+    return nodelock.connect("openvpn", server.id, sshops.connect(
         server.host, server.ssh_port, server.ssh_user, key_path,
         settings.ssh_connect_timeout,
-    )
+    ))
 
 
 def _dns_pair() -> tuple[str, str]:

@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import QRCode from 'qrcode'
 import {
+  ApiError,
   disable2FA,
   enable2FA,
   get2FA,
@@ -22,14 +23,19 @@ export function TwoFAModal({ onClose, onUnauthorized }: Props) {
   const [setup, setSetup] = useState<TwoFASetup | null>(null)
   const [qr, setQr] = useState<string | null>(null)
   const [otp, setOtp] = useState('')
+  // пароль нужен и для включения, и для выключения 2FA
+  const [password, setPassword] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
     get2FA()
       .then((s) => setEnabled(s.enabled))
-      .catch(() => onUnauthorized())
-  }, [onUnauthorized])
+      .catch((err) => {
+        if (err instanceof ApiError && err.status === 401) onUnauthorized()
+        else setError(err instanceof Error ? err.message : t('Ошибка'))
+      })
+  }, [onUnauthorized, t])
 
   useEffect(() => {
     if (!setup) {
@@ -49,7 +55,7 @@ export function TwoFAModal({ onClose, onUnauthorized }: Props) {
     setBusy(true)
     setError(null)
     try {
-      setSetup(await setup2FA())
+      setSetup(await setup2FA(password))
       setOtp('')
     } catch (err) {
       setError(err instanceof Error ? err.message : t('Ошибка'))
@@ -62,10 +68,11 @@ export function TwoFAModal({ onClose, onUnauthorized }: Props) {
     setBusy(true)
     setError(null)
     try {
-      const s = await enable2FA(otp.trim())
+      const s = await enable2FA(otp.trim(), password)
       setEnabled(s.enabled)
       setSetup(null)
       setOtp('')
+      setPassword('')
     } catch (err) {
       setError(err instanceof Error ? err.message : t('Неверный код'))
     } finally {
@@ -77,9 +84,10 @@ export function TwoFAModal({ onClose, onUnauthorized }: Props) {
     setBusy(true)
     setError(null)
     try {
-      const s = await disable2FA(otp.trim())
+      const s = await disable2FA(otp.trim(), password)
       setEnabled(s.enabled)
       setOtp('')
+      setPassword('')
     } catch (err) {
       setError(err instanceof Error ? err.message : t('Неверный код'))
     } finally {
@@ -103,8 +111,17 @@ export function TwoFAModal({ onClose, onUnauthorized }: Props) {
           <>
             <p className="form-ok">{t('2FA включена. Вход требует код из приложения.')}</p>
             <p className="muted small">
-              {t('Чтобы отключить, введите текущий код из приложения-аутентификатора.')}
+              {t('Чтобы отключить, введите пароль от панели и текущий код из приложения-аутентификатора.')}
             </p>
+            <label className="field">
+              <span>{t('Пароль')}</span>
+              <input
+                type="password"
+                autoComplete="current-password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+              />
+            </label>
             <label className="field">
               <span>{t('Код из приложения (2FA)')}</span>
               <input
@@ -119,7 +136,7 @@ export function TwoFAModal({ onClose, onUnauthorized }: Props) {
               <button
                 className="danger-solid"
                 onClick={turnOff}
-                disabled={busy || !otp.trim()}
+                disabled={busy || !otp.trim() || !password}
               >
                 {busy ? t('…') : t('Отключить 2FA')}
               </button>
@@ -169,9 +186,18 @@ export function TwoFAModal({ onClose, onUnauthorized }: Props) {
                 'Добавьте второй фактор к входу в панель — одноразовый код из приложения-аутентификатора (TOTP).',
               )}
             </p>
+            <label className="field">
+              <span>{t('Пароль')}</span>
+              <input
+                type="password"
+                autoComplete="current-password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+              />
+            </label>
             {error && <p className="form-error">{error}</p>}
             <div className="modal-actions">
-              <button onClick={startSetup} disabled={busy}>
+              <button onClick={startSetup} disabled={busy || !password}>
                 {busy ? t('…') : t('Включить 2FA')}
               </button>
             </div>

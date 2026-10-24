@@ -69,6 +69,21 @@ def _docker_exec_i(container: str, inner: str) -> str:
     return _DOCKER + f"$DOCKER exec -i {shlex.quote(container)} sh -c {shlex.quote(inner)}"
 
 
+async def _write_file(conn, container: str, path: str, payload: str) -> None:
+    """Пишет файл в контейнер через временный и mv: при ошибке (например, диск
+    полон) старый файл остается целым, а ошибка доходит до вызывающего. Если
+    файл смонтирован и mv на него нельзя, переписываем содержимым временного."""
+    tmp = f"{path}.acontrol-tmp"
+    inner = (
+        f"cat > {tmp} && {{ mv -f {tmp} {path} 2>/dev/null || "
+        f"{{ cat {tmp} > {path} && rm -f {tmp}; }}; }}"
+    )
+    result = await conn.run(_docker_exec_i(container, inner), input=payload, check=False)
+    if result.exit_status != 0:
+        err = (result.stderr or "").strip() or f"код {result.exit_status}"
+        raise XrayError(f"не удалось записать {path}: {err}")
+
+
 async def detect_container(conn: asyncssh.SSHClientConnection) -> str:
     cmd = _DOCKER + "$DOCKER ps --format '{{.Names}}' | grep -m1 amnezia-xray"
     out = (await _run(conn, cmd)).strip()
@@ -87,9 +102,7 @@ async def _read_server(conn, container) -> dict:
 
 async def _write_server(conn, container, data: dict) -> None:
     payload = json.dumps(data, indent=4, ensure_ascii=False) + "\n"
-    await conn.run(
-        _docker_exec_i(container, f"cat > {SERVER_JSON}"), input=payload, check=False
-    )
+    await _write_file(conn, container, SERVER_JSON, payload)
 
 
 async def _read_table(conn, container) -> list:
@@ -103,9 +116,7 @@ async def _read_table(conn, container) -> list:
 
 async def _write_table(conn, container, data: list) -> None:
     payload = json.dumps(data, indent=4, ensure_ascii=False) + "\n"
-    await conn.run(
-        _docker_exec_i(container, f"cat > {CLIENTS_TABLE}"), input=payload, check=False
-    )
+    await _write_file(conn, container, CLIENTS_TABLE, payload)
 
 
 async def _default_uuid(conn, container) -> str:
@@ -547,8 +558,14 @@ async def resume_client(
 ) -> None:
     """Возобновляет клиента: возвращает его dict в clients[] + clientsTable."""
     cid = client_entry.get("id")
-    if not cid:
+    if not cid or not isinstance(cid, str):
         raise XrayError("некорректные данные паузы")
+    # данные паузы могли приехать из файла переноса: в server.json пускаем
+    # только поля клиента VLESS, а не любой объект из файла
+    client_entry = {
+        k: v for k, v in client_entry.items()
+        if k in ("id", "flow", "email", "level") and isinstance(v, (str, int))
+    }
     server = await _read_server(conn, container)
     if not any(
         isinstance(c, dict) and c.get("id") == cid for c in _client_list(server)

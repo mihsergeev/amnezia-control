@@ -20,6 +20,9 @@ class TwoFASetupOut(BaseModel):
 
 class TwoFAVerifyRequest(BaseModel):
     otp: str = Field(min_length=1, max_length=16)
+    # включение и выключение 2FA - с повторным вводом пароля: иначе укравший
+    # токен включил бы 2FA со своим секретом и запер настоящего админа
+    password: str = Field(min_length=1, max_length=128)
 
 
 class PasswordChangeRequest(BaseModel):
@@ -149,9 +152,15 @@ class AwgStateOut(BaseModel):
     params_v31: bool | None = None
 
 
+# DNS уходит строкой "DNS = ..." в конфиг клиента: перевод строки дописал бы
+# туда любые директивы (PostUp = ... выполнит awg-quick от root). Только адреса
+# IPv4/IPv6 через запятую.
+_DNS_PATTERN = r"^[0-9A-Fa-f:.]+(\s*,\s*[0-9A-Fa-f:.]+){0,3}$"
+
+
 class CreateClientRequest(BaseModel):
     name: str = Field(min_length=1, max_length=128)
-    dns: str | None = None
+    dns: str | None = Field(default=None, max_length=200, pattern=_DNS_PATTERN)
     note: str = Field(default="", max_length=512)
     expires_at: datetime | None = None
 
@@ -494,7 +503,7 @@ class AlertTestResult(BaseModel):
 
 
 class SetLimitRequest(BaseModel):
-    protocol: str = Field(pattern="^(awg|openvpn|xray)$")
+    protocol: str = Field(pattern="^(awg|awg3|awglegacy|openvpn|xray)$")
     client_id: str = Field(min_length=1)
     name: str = Field(default="", max_length=128)
     expires_at: datetime | None = None

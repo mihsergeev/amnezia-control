@@ -43,6 +43,26 @@ type Props = {
   onUnauthorized: () => void
 }
 
+// Полный доступ умеет только то, что знает приложение AmneziaVPN (как
+// fullaccess._canonical на бэкенде): amnezia-awg3 туда не попадает. Если на
+// ноде кроме него ничего нет, пункт меню бесполезен. Пока проверки нет
+// (список пуст) - показываем, решит бэкенд.
+function fullAccessSupported(containers: string[]): boolean {
+  if (!containers.length) return true
+  return containers.some(
+    (c) => /^amnezia-(awg|openvpn|xray|wireguard)/.test(c) && !/^amnezia-awg3/.test(c),
+  )
+}
+
+// по последней проверке ноды: контейнер amnezia-awg3 с конфигом 3.0 (kind awg3,
+// у 3.1 kind awg31)
+function isAwg30Node(info: ReturnType<typeof parseCheckInfo>): boolean {
+  const kinds = info?.protocols ?? {}
+  return (info?.amnezia_containers ?? []).some(
+    (c) => /^amnezia-awg3/.test(c) && kinds[c] === 'awg3',
+  )
+}
+
 // ISO-код страны → эмодзи-флаг (KZ → 🇰🇿) через regional indicator symbols
 function countryFlag(code: string): string {
   const cc = (code || '').toUpperCase()
@@ -168,7 +188,8 @@ export function ServersPage({ onUnauthorized }: Props) {
   const [editingId, setEditingId] = useState<number | null>(null)
   const [formOpen, setFormOpen] = useState(false)
   const [busy, setBusy] = useState(false)
-  const [busyLabel, setBusyLabel] = useState(t('Сохранить'))
+  // храним ключ, а не перевод: подпись должна меняться вместе с языком
+  const [busyLabel, setBusyLabel] = useState('Сохранить')
 
   // автонастройка по паролю (только при создании)
   const [useBootstrap, setUseBootstrap] = useState(true)
@@ -208,7 +229,7 @@ export function ServersPage({ onUnauthorized }: Props) {
   // ClientsModal/DeployModal и т.п. — обрабатывают Escape сами)
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
-      if (e.key !== 'Escape') return
+      if (e.key !== 'Escape' || e.defaultPrevented) return
       if (faStepUp) setFaStepUp(null)
       else if (fullAccess) setFullAccess(null)
       else if (scriptFor) setScriptFor(null)
@@ -338,7 +359,7 @@ export function ServersPage({ onUnauthorized }: Props) {
     setNotice(null)
     try {
       if (editingId !== null) {
-        setBusyLabel(t('Сохранение…'))
+        setBusyLabel('Сохранение…')
         await api<Server>(`/api/servers/${editingId}`, {
           method: 'PATCH',
           body: JSON.stringify(form),
@@ -348,7 +369,7 @@ export function ServersPage({ onUnauthorized }: Props) {
         return
       }
 
-      setBusyLabel(t('Создание…'))
+      setBusyLabel('Создание…')
       const created = await api<Server>('/api/servers', {
         method: 'POST',
         body: JSON.stringify(form),
@@ -356,7 +377,7 @@ export function ServersPage({ onUnauthorized }: Props) {
 
       if (useBootstrap && password) {
         // панель сама зайдёт по паролю, поставит ключ и настроит фаервол
-        setBusyLabel(t('Подключаюсь и настраиваю…'))
+        setBusyLabel('Подключаюсь и настраиваю…')
         try {
           await api<Server>(`/api/servers/${created.id}/bootstrap`, {
             method: 'POST',
@@ -387,7 +408,7 @@ export function ServersPage({ onUnauthorized }: Props) {
       handleError(err)
     } finally {
       setBusy(false)
-      setBusyLabel(t('Сохранить'))
+      setBusyLabel('Сохранить')
     }
   }
 
@@ -608,7 +629,7 @@ export function ServersPage({ onUnauthorized }: Props) {
               onClick: () => setDeployFor({ server: s, mode: 'deploy', protocol: 'openvpn' }),
             })
           }
-          if (online) {
+          if (online && fullAccessSupported(info?.amnezia_containers ?? [])) {
             moreItems.push({
               label:
                 faBusyId === s.id ? t('Генерация…') : t('Полный доступ'),
@@ -971,7 +992,7 @@ export function ServersPage({ onUnauthorized }: Props) {
                 {t('Отмена')}
               </button>
               <button type="submit" disabled={busy}>
-                {busy ? busyLabel : t('Сохранить')}
+                {busy ? t(busyLabel) : t('Сохранить')}
               </button>
             </div>
           </form>
@@ -990,12 +1011,20 @@ export function ServersPage({ onUnauthorized }: Props) {
           onRequestUpdate={(protocol) => {
             const srv = clientsFor
             if (!srv) return
+            // на ноде с AmneziaWG 3.0 пересборка мигрирует конфиг до 3.1, и старые
+            // клиентские конфиги перестают работать
+            const migrates30 = protocol === 'awg3' && isAwg30Node(parseCheckInfo(srv))
             if (
               !window.confirm(
-                t(
-                  'Пересобрать образ на «{name}»? Текущие клиенты и ключи сохраняются.',
-                  { name: srv.name },
-                ),
+                migrates30
+                  ? t(
+                      'Пересобрать "{name}"? На ноде стоит AmneziaWG 3.0: конфиг мигрирует до 3.1, ключ сервера и порт сохраняются, но выданные конфиги клиентов работать перестанут, всех клиентов придется перевыпустить. Перед пересборкой снимается снимок для отката.',
+                      { name: srv.name },
+                    )
+                  : t(
+                      'Пересобрать образ на «{name}»? Текущие клиенты и ключи сохраняются.',
+                      { name: srv.name },
+                    ),
               )
             )
               return

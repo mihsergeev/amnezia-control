@@ -140,10 +140,22 @@ def _key_options(panel_ip: str) -> str:
     return "restrict "
 
 
+# Имя SSH-пользователя уходит в скрипт, который админ выполняет под root.
+# Форма проверяла его, а импорт ссылки, файла переноса и бэкапа - нет, и чужая
+# ссылка с userName вида x';curl ...|sh;' выполнялась бы под root на ноде.
+SSH_USER_PATTERN = r"^[A-Za-z_][A-Za-z0-9_-]{0,63}$"
+
+
+def valid_ssh_user(name: object) -> bool:
+    return isinstance(name, str) and re.fullmatch(SSH_USER_PATTERN, name) is not None
+
+
 def build_setup_script(
     public_key: str, ssh_user: str, ssh_port: int, panel_ip: str
 ) -> str:
     """Скрипт для ручного запуска админом под root на новой ноде."""
+    if not valid_ssh_user(ssh_user):
+        raise ValueError(f"недопустимое имя SSH-пользователя: {ssh_user!r}")
     firewall = _firewall_snippet(panel_ip, ssh_port, sudo="")
     opts = _key_options(panel_ip)
     return f"""#!/bin/sh

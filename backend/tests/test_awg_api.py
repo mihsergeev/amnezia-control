@@ -53,7 +53,7 @@ async def test_create_stores_config_and_has_config_flag(
     new_client = awg.AwgClient(name="phone", public_key="NEWPUB", address="10.8.1.2/32")
     monkeypatch.setattr(
         awg, "create_client",
-        lambda conn, state, name, dns, fixed_ip=None: _wrap((new_client, "CONFIG-TEXT")),
+        lambda conn, state, name, dns, fixed_ip=None, reserved=None: _wrap((new_client, "CONFIG-TEXT")),
     )
 
     r = await client.post(
@@ -83,7 +83,7 @@ async def test_get_stored_config(
     nc = awg.AwgClient(name="pc", public_key="PCPUB", address="10.8.1.5/32")
     monkeypatch.setattr(
         awg, "create_client",
-        lambda conn, state, name, dns, fixed_ip=None: _wrap((nc, "PC-CONFIG")),
+        lambda conn, state, name, dns, fixed_ip=None, reserved=None: _wrap((nc, "PC-CONFIG")),
     )
     await client.post(
         f"/api/servers/{sid}/awg/clients", json={"name": "pc"}, headers=auth_headers
@@ -112,7 +112,7 @@ async def test_revoke_removes_stored_config(
     nc = awg.AwgClient(name="x", public_key="XPUB", address="10.8.1.9/32")
     monkeypatch.setattr(
         awg, "create_client",
-        lambda conn, state, name, dns, fixed_ip=None: _wrap((nc, "XCONF")),
+        lambda conn, state, name, dns, fixed_ip=None, reserved=None: _wrap((nc, "XCONF")),
     )
     monkeypatch.setattr(
         awg, "revoke_client", lambda conn, c, i, pub: _wrap(None)
@@ -174,7 +174,7 @@ async def test_create_with_note(
     nc = awg.AwgClient(name="tab", public_key="TABPUB", address="10.8.1.7/32")
     monkeypatch.setattr(
         awg, "create_client",
-        lambda conn, state, name, dns, fixed_ip=None: _wrap((nc, "TABCONF")),
+        lambda conn, state, name, dns, fixed_ip=None, reserved=None: _wrap((nc, "TABCONF")),
     )
     r = await client.post(
         f"/api/servers/{sid}/awg/clients",

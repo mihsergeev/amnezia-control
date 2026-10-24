@@ -42,8 +42,10 @@ def _reset_ratelimit():
     from app import ratelimit
 
     ratelimit._failures.clear()
+    ratelimit._locked_until.clear()
     yield
     ratelimit._failures.clear()
+    ratelimit._locked_until.clear()
 
 
 @pytest.fixture

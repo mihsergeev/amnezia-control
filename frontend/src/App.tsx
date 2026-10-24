@@ -1,5 +1,12 @@
 import { useEffect, useRef, useState } from 'react'
-import { ApiError, downloadBackup, getToken, restoreBackup, setToken } from './api'
+import {
+  ApiError,
+  downloadBackup,
+  getToken,
+  logoutServer,
+  restoreBackup,
+  setToken,
+} from './api'
 import { LoginPage } from './LoginPage'
 import { ServersPage } from './ServersPage'
 import { Dashboard } from './Dashboard'
@@ -11,6 +18,7 @@ import { BackupsModal } from './BackupsModal'
 import { AlertsModal } from './AlertsModal'
 import { TwoFAModal } from './TwoFAModal'
 import { PasswordModal } from './PasswordModal'
+import { StepUpModal } from './StepUpModal'
 import { useI18n } from './i18n'
 import './App.css'
 
@@ -21,7 +29,10 @@ function App() {
   const [authed, setAuthed] = useState(() => getToken() !== null)
   const [view, setView] = useState<View>('servers')
   const [version, setVersion] = useState<string | null>(null)
-  const [backingUp, setBackingUp] = useState(false)
+  // подтверждение паролем перед скачиванием бэкапа или восстановлением
+  const [stepUp, setStepUp] = useState<
+    { kind: 'backup' } | { kind: 'restore'; file: File } | null
+  >(null)
   const [backupsOpen, setBackupsOpen] = useState(false)
   const [alertsOpen, setAlertsOpen] = useState(false)
   const [twoFaOpen, setTwoFaOpen] = useState(false)
@@ -44,23 +55,43 @@ function App() {
     localStorage.setItem('acontrol_theme', next)
   }
 
-  async function backup() {
-    setBackingUp(true)
+  async function backup(password: string) {
     try {
-      await downloadBackup()
+      await downloadBackup(password)
+      setStepUp(null)
     } catch (err) {
       if (err instanceof ApiError && err.status === 401) {
         logout()
-      } else {
-        window.alert(
-          t('Не удалось скачать бэкап: {msg}', {
-            msg: err instanceof Error ? err.message : t('неизвестно'),
-          }),
-        )
+        return
       }
-    } finally {
-      setBackingUp(false)
+      // неверный пароль и прочее покажет окно подтверждения
+      throw new Error(
+        t('Не удалось скачать бэкап: {msg}', {
+          msg: err instanceof Error ? err.message : t('неизвестно'),
+        }),
+      )
     }
+  }
+
+  async function restore(file: File, password: string) {
+    let total: number
+    try {
+      const r = await restoreBackup(file, password)
+      total = Object.values(r.restored).reduce((a, b) => a + b, 0)
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 401) {
+        logout()
+        return
+      }
+      throw new Error(
+        t('Ошибка восстановления: {msg}', {
+          msg: err instanceof Error ? err.message : t('неизвестно'),
+        }),
+      )
+    }
+    setStepUp(null)
+    window.alert(t('Восстановлено записей: {n}. Страница перезагрузится.', { n: total }))
+    window.location.reload()
   }
 
   async function onRestoreFile(e: React.ChangeEvent<HTMLInputElement>) {
@@ -76,20 +107,7 @@ function App() {
       )
     )
       return
-    try {
-      const r = await restoreBackup(file)
-      const total = Object.values(r.restored).reduce((a, b) => a + b, 0)
-      window.alert(
-        t('Восстановлено записей: {n}. Страница перезагрузится.', { n: total }),
-      )
-      window.location.reload()
-    } catch (err) {
-      window.alert(
-        t('Ошибка восстановления: {msg}', {
-          msg: err instanceof Error ? err.message : t('неизвестно'),
-        }),
-      )
-    }
+    setStepUp({ kind: 'restore', file })
   }
 
   useEffect(() => {
@@ -99,9 +117,22 @@ function App() {
       .catch(() => setVersion(null))
   }, [])
 
+  // Локальный выход (токен истек или отозван). Окна закрываем, иначе они
+  // оставались висеть поверх формы входа.
   function logout() {
     setToken(null)
     setAuthed(false)
+    setStepUp(null)
+    setBackupsOpen(false)
+    setAlertsOpen(false)
+    setTwoFaOpen(false)
+    setPwOpen(false)
+  }
+
+  // Выход по кнопке: токен отзывается и на сервере
+  async function logoutClick() {
+    await logoutServer()
+    logout()
   }
 
   return (
@@ -197,8 +228,8 @@ function App() {
                   { label: t('Сменить пароль'), onClick: () => setPwOpen(true) },
                   { divider: true },
                   {
-                    label: backingUp ? t('Бэкап…') : t('Скачать бэкап'),
-                    onClick: backup,
+                    label: t('Скачать бэкап'),
+                    onClick: () => setStepUp({ kind: 'backup' }),
                   },
                   { label: t('Авто-бэкапы…'), onClick: () => setBackupsOpen(true) },
                   {
@@ -206,7 +237,7 @@ function App() {
                     onClick: () => fileRef.current?.click(),
                   },
                   { divider: true },
-                  { label: t('Выйти'), danger: true, onClick: logout },
+                  { label: t('Выйти'), danger: true, onClick: logoutClick },
                 ]}
               />
             </>
@@ -248,6 +279,20 @@ function App() {
         <TwoFAModal
           onClose={() => setTwoFaOpen(false)}
           onUnauthorized={logout}
+        />
+      )}
+
+      {stepUp && (
+        <StepUpModal
+          text={
+            stepUp.kind === 'backup'
+              ? t('В бэкапе SSH-ключ панели ко всем нодам, секрет 2FA и ключи клиентов. Введите пароль от панели, чтобы скачать его.')
+              : t('Восстановление заменит все данные панели, включая учетную запись администратора. Введите пароль от панели, чтобы продолжить.')
+          }
+          onSubmit={(pw) =>
+            stepUp.kind === 'backup' ? backup(pw) : restore(stepUp.file, pw)
+          }
+          onCancel={() => setStepUp(null)}
         />
       )}
 
