@@ -26,7 +26,7 @@ from fastapi import APIRouter, HTTPException, Request, status
 from fastapi.responses import Response
 from sqlalchemy import DateTime, func, insert, select
 
-from app import audit
+from app import audit, sshops
 from app.config import get_settings
 from app.db import Base
 from app.deps import CurrentUser, SessionDep
@@ -191,6 +191,12 @@ async def import_server_file(
     if not host or not name:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "в файле нет адреса сервера")
 
+    ssh_user = spec.get("ssh_user") or "root"
+    if not sshops.valid_ssh_user(ssh_user):
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            f"недопустимое имя SSH-пользователя в файле: {ssh_user!r}",
+        )
     ssh_port = int(spec.get("ssh_port") or 22)
     # тот же адрес и порт = тот же сервер. Молча заводить дубль нельзя: две
     # карточки начали бы независимо править один и тот же конфиг на ноде
@@ -209,7 +215,7 @@ async def import_server_file(
         name=name[:128],
         host=host[:255],
         ssh_port=ssh_port,
-        ssh_user=(spec.get("ssh_user") or "root")[:64],
+        ssh_user=ssh_user,
         note=spec.get("note") or "",
         group_name=(spec.get("group_name") or "")[:64],
         country=(spec.get("country") or "")[:2],
@@ -221,8 +227,12 @@ async def import_server_file(
     by_table = {m.__tablename__: m for m in server_scoped_models()}
     imported: dict[str, int] = {}
     skipped: list[str] = []
+    now = datetime.now(timezone.utc)
     for table, rows in (payload.get("tables") or {}).items():
         model = by_table.get(table)
+        if table in _RUNTIME_TABLES:
+            # статус и метрики панель наберет сама, из файла их не берем
+            continue
         if model is None or not rows:
             # таблица из более новой панели — пропускаем, но говорим об этом
             # вслух: тихо потерянные данные хуже, чем явно названные
@@ -235,10 +245,25 @@ async def import_server_file(
                 continue
             clean = _coerce_row(model, row)
             clean.pop("id", None)
+            exp = clean.get("expires_at") if table == "client_limits" else None
+            if isinstance(exp, datetime):
+                if exp.tzinfo is None:
+                    exp = exp.replace(tzinfo=timezone.utc)
+                if exp <= now:
+                    # прошедший срок отзыв по сроку исполнил бы сразу после
+                    # загрузки, на живом клиенте ноды; такие не переносим
+                    continue
             clean["server_id"] = server.id
             values.append(clean)
         if values:
-            await session.execute(insert(model), values)
+            try:
+                await session.execute(insert(model), values)
+            except Exception as exc:  # noqa: BLE001 - кривые значения в файле
+                await session.rollback()
+                raise HTTPException(
+                    status.HTTP_400_BAD_REQUEST,
+                    f"не удалось загрузить таблицу {table} из файла",
+                ) from exc
             imported[table] = len(values)
 
     await session.commit()

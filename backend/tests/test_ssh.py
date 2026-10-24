@@ -95,7 +95,7 @@ async def test_bootstrap_success(
 
     async def fake_bootstrap(
         host, port, username, password, public_key, panel_ip,
-        become_password=None, timeout=10,
+        become_password=None, timeout=10, key_path=None,
     ):
         captured["password"] = password
         captured["panel_ip"] = panel_ip

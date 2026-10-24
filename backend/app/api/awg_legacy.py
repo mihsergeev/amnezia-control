@@ -114,15 +114,20 @@ async def create_client(
 ) -> CreateClientResponse:
     server = await _get_or_404(server_id, session)
     dns = body.dns or get_settings().awg_client_dns
+    reserved = await pausestore.paused_ips(session, server_id, PROTO)
     try:
         async with _connect(server) as conn:
             state = await _legacy_state(conn, server.host)
-            client, config = await awg.create_client(conn, state, body.name, dns)
+            client, config = await awg.create_client(
+                conn, state, body.name, dns, reserved=reserved
+            )
     except HTTPException:
         raise
     except Exception as exc:  # noqa: BLE001
         raise _ssh_error(exc) from exc
-    await _store_config(session, server_id, client.public_key, client.name, config)
+    await _store_config(
+        session, server_id, client.public_key, client.name, config, PROTO
+    )
     if body.note:
         await _set_note(session, server_id, client.public_key, body.note)
     if body.expires_at:
@@ -187,11 +192,13 @@ async def reissue_client(
                 raise HTTPException(status.HTTP_404_NOT_FOUND, "Клиент не найден")
             name = target.name if target.name and target.name != "—" else "client"
             fixed_ip = target.address.split("/")[0] if target.address else None
-            await awg.revoke_client(
-                conn, state.container, state.interface, body.public_key
-            )
+            # сначала новый ключ на тот же адрес, потом снимаем старый: если
+            # выдача упадет (оборвался SSH), старый клиент останется рабочим
             client, config = await awg.create_client(
                 conn, state, name, dns, fixed_ip=fixed_ip
+            )
+            await awg.revoke_client(
+                conn, state.container, state.interface, body.public_key
             )
     except HTTPException:
         raise
@@ -203,7 +210,9 @@ async def reissue_client(
             AwgConfig.public_key == body.public_key,
         )
     )
-    await _store_config(session, server_id, client.public_key, client.name, config)
+    await _store_config(
+        session, server_id, client.public_key, client.name, config, PROTO
+    )
     await _set_note(session, server_id, body.public_key, "")
     if old_note:
         await _set_note(session, server_id, client.public_key, old_note)
@@ -278,16 +287,19 @@ async def revoke_client(
 ) -> None:
     server = await _get_or_404(server_id, session)
     is_paused = body.public_key in await pausestore.list_paused(session, server_id, PROTO)
-    if not is_paused:
-        try:
-            async with _connect(server) as conn:
-                state = await _legacy_state(conn, server.host)
-                await awg.revoke_client(
-                    conn, state.container, state.interface, body.public_key
-                )
-        except HTTPException:
-            raise
-        except Exception as exc:  # noqa: BLE001
+    # клиент на паузе снят с сервера, но пира снимаем все равно (это
+    # идемпотентно): после отката снимка он мог ожить, и отзыв по одной
+    # записи о паузе оставлял его работать. Для паузы ошибка ноды не мешает.
+    try:
+        async with _connect(server) as conn:
+            state = await _legacy_state(conn, server.host)
+            await awg.revoke_client(
+                conn, state.container, state.interface, body.public_key
+            )
+    except HTTPException:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        if not is_paused:
             raise _ssh_error(exc) from exc
     await session.execute(
         delete(AwgConfig).where(

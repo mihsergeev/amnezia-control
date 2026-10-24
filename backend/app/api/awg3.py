@@ -144,15 +144,20 @@ async def create_client(
 ) -> CreateClientResponse:
     server = await _get_or_404(server_id, session)
     dns = body.dns or get_settings().awg_client_dns
+    reserved = await pausestore.paused_ips(session, server_id, PROTO)
     try:
         async with _connect(server) as conn:
             state = await _state(conn, server.host)
-            client, config = await awg.create_client(conn, state, body.name, dns)
+            client, config = await awg.create_client(
+                conn, state, body.name, dns, reserved=reserved
+            )
     except HTTPException:
         raise
     except Exception as exc:  # noqa: BLE001
         raise _ssh_error(exc) from exc
-    await _store_config(session, server_id, client.public_key, client.name, config)
+    await _store_config(
+        session, server_id, client.public_key, client.name, config, PROTO
+    )
     if body.note:
         await _set_note(session, server_id, client.public_key, body.note)
     if body.expires_at:
@@ -207,6 +212,7 @@ async def reissue_client(
     server = await _get_or_404(server_id, session)
     dns = get_settings().awg_client_dns
     note = (await notes.notes_map(session, server_id, PROTO)).get(body.public_key, "")
+    old_exp = (await limits.limits_map(session, server_id, PROTO)).get(body.public_key)
     try:
         async with _connect(server) as conn:
             state = await _state(conn, server.host)
@@ -217,12 +223,13 @@ async def reissue_client(
                 raise HTTPException(status.HTTP_404_NOT_FOUND, "Клиент не найден")
             name = target.name
             ip = target.address.split("/")[0]
-            await awg.revoke_client(
-                conn, state.container, state.interface, body.public_key
-            )
-            state = await _state(conn, server.host)
+            # сначала новый ключ на тот же адрес, потом снимаем старый: если
+            # выдача упадет (оборвался SSH), старый клиент останется рабочим
             client, config = await awg.create_client(
                 conn, state, name, dns, fixed_ip=ip or None
+            )
+            await awg.revoke_client(
+                conn, state.container, state.interface, body.public_key
             )
     except HTTPException:
         raise
@@ -234,13 +241,23 @@ async def reissue_client(
             AwgConfig.public_key == body.public_key,
         )
     )
-    await _store_config(session, server_id, client.public_key, client.name, config)
+    await _store_config(
+        session, server_id, client.public_key, client.name, config, PROTO
+    )
+    await _set_note(session, server_id, body.public_key, "")
     if note:
         await _set_note(session, server_id, client.public_key, note)
-    await notes.set_note(session, server_id, PROTO, body.public_key, "")
+    # срок переносится на новый ключ, как в 2.0: раньше перевыпущенный клиент
+    # 3.1 становился бессрочным
+    await limits.drop_limit(session, server_id, PROTO, body.public_key)
+    if old_exp:
+        await limits.set_limit(
+            session, server_id, PROTO, client.public_key, client.name, old_exp
+        )
     await audit.record(session, user.username, "awg3_reissue", server.name, name)
     return CreateClientResponse(
-        client=client.__dict__ | {"has_config": True, "note": note},
+        client=client.__dict__
+        | {"has_config": True, "note": note, "expires_at": old_exp},
         config=config,
         config_amnezia=_amnezia_link(config, server, protocol_version=None),
     )
@@ -302,16 +319,19 @@ async def revoke_client(
     is_paused = body.public_key in await pausestore.list_paused(
         session, server_id, PROTO
     )
-    if not is_paused:
-        try:
-            async with _connect(server) as conn:
-                state = await _state(conn, server.host)
-                await awg.revoke_client(
-                    conn, state.container, state.interface, body.public_key
-                )
-        except HTTPException:
-            raise
-        except Exception as exc:  # noqa: BLE001
+    # клиент на паузе снят с сервера, но пира снимаем все равно (это
+    # идемпотентно): после отката снимка он мог ожить, и отзыв по одной
+    # записи о паузе оставлял его работать. Для паузы ошибка ноды не мешает.
+    try:
+        async with _connect(server) as conn:
+            state = await _state(conn, server.host)
+            await awg.revoke_client(
+                conn, state.container, state.interface, body.public_key
+            )
+    except HTTPException:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        if not is_paused:
             raise _ssh_error(exc) from exc
     await audit.record(
         session, user.username, "awg3_revoke", server.name, body.public_key

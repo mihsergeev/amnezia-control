@@ -3,6 +3,7 @@ import logging
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from app import alerts, audit
 from app.config import Settings
 from app.models import User
 from app.security import hash_password
@@ -27,6 +28,23 @@ async def ensure_admin(
             select(User).where(User.username == settings.admin_user)
         )
         if user is None:
+            # Сменили ACONTROL_ADMIN_USER на уже работающей панели: переименовываем
+            # единственного пользователя, а не заводим второго админа с паролем из .env
+            users = list((await session.scalars(select(User))).all())
+            if len(users) == 1:
+                old = users[0].username
+                users[0].username = settings.admin_user
+                await session.commit()
+                log.warning("админ %s переименован в %s по .env", old, settings.admin_user)
+                user = users[0]
+            elif users:
+                log.warning(
+                    "пользователя %s нет, в базе их %d, новый админ не создан",
+                    settings.admin_user,
+                    len(users),
+                )
+                return
+        if user is None:
             session.add(
                 User(
                     username=settings.admin_user,
@@ -41,6 +59,14 @@ async def ensure_admin(
             user.token_version += 1  # инвалидируем все старые токены
             await session.commit()
             log.warning(
-                "АВАРИЙНЫЙ СБРОС пароля админа выполнен — удалите "
-                "VPNPANEL_ADMIN_PASSWORD_RESET из .env и перезапустите"
+                "АВАРИЙНЫЙ СБРОС пароля админа выполнен - уберите "
+                "ACONTROL_ADMIN_PASSWORD_RESET из .env и пересоздайте контейнер"
+            )
+            # забытый флаг сбрасывает пароль и 2FA на каждом рестарте, пусть это видно
+            await audit.record(session, "system", "admin_password_reset", user.username)
+            await alerts.security_alert(
+                session, settings,
+                f"⚠️ Amnezia Control: пароль «{user.username}» сброшен из .env и 2FA "
+                "отключена. Если флаг сброса остался в .env, это повторится при "
+                "каждом перезапуске.",
             )

@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { getAlerts, putAlerts, testAlerts } from './api'
+import { ApiError, getAlerts, putAlerts, testAlerts } from './api'
 import { useI18n } from './i18n'
 import { useModalDismiss } from './useModalDismiss'
 
@@ -20,6 +20,7 @@ export function AlertsModal({ onClose, onUnauthorized }: Props) {
   const [testing, setTesting] = useState(false)
   const [msg, setMsg] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [loadError, setLoadError] = useState<string | null>(null)
 
   useEffect(() => {
     getAlerts()
@@ -29,9 +30,13 @@ export function AlertsModal({ onClose, onUnauthorized }: Props) {
         setApiUrl(c.telegram_api)
         setWebhook(c.webhook)
       })
-      .catch(() => onUnauthorized())
+      .catch((err) => {
+        if (err instanceof ApiError && err.status === 401) onUnauthorized()
+        // форму не показываем: сохранение пустых полей стерло бы настройки
+        else setLoadError(err instanceof Error ? err.message : t('Ошибка'))
+      })
       .finally(() => setLoading(false))
-  }, [onUnauthorized])
+  }, [onUnauthorized, t])
 
   async function save() {
     setSaving(true)
@@ -90,6 +95,8 @@ export function AlertsModal({ onClose, onUnauthorized }: Props) {
 
         {loading ? (
           <p className="muted">{t('загрузка…')}</p>
+        ) : loadError ? (
+          <p className="form-error">{loadError}</p>
         ) : (
           <>
             <div className="settings-group">

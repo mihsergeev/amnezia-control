@@ -8,5 +8,6 @@ window.ui = SwaggerUIBundle({
   presets: [SwaggerUIBundle.presets.apis],
   layout: 'BaseLayout',
   deepLinking: true,
-  persistAuthorization: true,
+  // не хранить введенный API-ключ в localStorage браузера
+  persistAuthorization: false,
 })

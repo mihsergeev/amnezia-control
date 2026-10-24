@@ -454,6 +454,14 @@ const EN: Record<string, string> = {
   'не удалось скачать копию': 'failed to download the backup',
   'Не удалось скачать бэкап: {msg}': 'Failed to download backup: {msg}',
   'Подтвердите пароль': 'Confirm your password',
+  'В бэкапе SSH-ключ панели ко всем нодам, секрет 2FA и ключи клиентов. Введите пароль от панели, чтобы скачать его.':
+    'The backup holds the panel SSH key to every node, the 2FA secret and client keys. Enter your panel password to download it.',
+  'Восстановление заменит все данные панели, включая учетную запись администратора. Введите пароль от панели, чтобы продолжить.':
+    'Restoring replaces all panel data, including the admin account. Enter your panel password to continue.',
+  'Продолжить': 'Continue',
+  'Чтобы отключить, введите пароль от панели и текущий код из приложения-аутентификатора.':
+    'To turn it off, enter your panel password and the current code from the authenticator app.',
+  'не удалось узнать': 'unknown',
   'Подтвердить': 'Confirm',
   'Ссылка «Полного доступа» содержит SSH-ключ управления сервером (по сути root). Введите пароль от панели, чтобы продолжить.':
     'The full-access link contains the server management SSH key (effectively root). Enter your panel password to continue.',
@@ -595,6 +603,61 @@ const EN: Record<string, string> = {
   'необязательно': 'optional',
   'неизвестно': 'unknown',
   'новее': 'newer',
+  // кнопка обновления версии контейнера (а не "Обновить" = Refresh у списков)
+  'Обновить версию': 'Update',
+
+  // --- format.ts: рукопожатие и аптайм ---
+  'нет': 'never',
+  'только что': 'just now',
+  '{n} с назад': '{n}s ago',
+  '{n} мин назад': '{n} min ago',
+  '{n} ч назад': '{n} h ago',
+  '{n} дн назад': '{n} d ago',
+  '{d}д {h}ч': '{d}d {h}h',
+  '{h}ч {m}м': '{h}h {m}m',
+  '{m}м': '{m}m',
+  // вкладки периода в окне трафика клиента
+  '24ч': '24h',
+  '7д': '7d',
+  '14д': '14d',
+
+  // --- установка / пересборка / откат ---
+  'Не удалось получить статус, повторяем запрос...': 'Could not get the status, retrying...',
+  'Не удалось получить статус, установка на ноде может продолжаться. Проверьте позже: {err}':
+    'Could not get the status, the installation may still be running on the node. Check again later: {err}',
+  'Пересобрать "{name}"? На ноде стоит AmneziaWG 3.0: конфиг мигрирует до 3.1, ключ сервера и порт сохраняются, но выданные конфиги клиентов работать перестанут, всех клиентов придется перевыпустить. Перед пересборкой снимается снимок для отката.':
+    'Rebuild "{name}"? The node runs AmneziaWG 3.0: the config migrates to 3.1, the server key and port are kept, but issued client configs will stop working and all clients will need reissuing. A snapshot is taken before the rebuild for rollback.',
+  'Не удалось скопировать, выделите ключ и скопируйте вручную':
+    'Could not copy, select the key and copy it manually',
+
+  // --- журнал действий: подписи действий ---
+  'AmneziaWG обновлен до 3.1': 'AmneziaWG upgraded to 3.1',
+  'Выдан AmneziaWG 3.1': 'AmneziaWG 3.1 issued',
+  'Перевыпущен AmneziaWG 3.1': 'AmneziaWG 3.1 reissued',
+  'Отозван AmneziaWG 3.1': 'AmneziaWG 3.1 revoked',
+  'AmneziaWG 3.1 на паузе': 'AmneziaWG 3.1 paused',
+  'AmneziaWG 3.1 возобновлен': 'AmneziaWG 3.1 resumed',
+  'Развернут AmneziaWG 3.1': 'AmneziaWG 3.1 deployed',
+  'Пересобран AmneziaWG 3.1': 'AmneziaWG 3.1 rebuilt',
+  'Откат конфига AmneziaWG 3.1': 'AmneziaWG 3.1 config rollback',
+  'Откат движка 3.1': '3.1 engine rollback',
+  'Истек срок AmneziaWG': 'AmneziaWG expired',
+  'Истек срок AmneziaWG 3.1': 'AmneziaWG 3.1 expired',
+  'Истек срок AmneziaWG Legacy': 'AmneziaWG Legacy expired',
+  'Истек срок OpenVPN': 'OpenVPN expired',
+  'Истек срок XRay': 'XRay expired',
+  'Задан срок клиента': 'Client expiry set',
+  'Снят срок клиента': 'Client expiry cleared',
+  'Массовый отзыв клиентов': 'Bulk client revoke',
+  'Сервер выгружен в файл': 'Server exported to file',
+  'Сервер загружен из файла': 'Server imported from file',
+  'Изменены настройки алертов': 'Alert settings changed',
+  'Тестовый алерт': 'Test alert',
+  'Восстановление из бэкапа отклонено': 'Backup restore denied',
+  'Скачан бэкап': 'Backup downloaded',
+  'Скачивание бэкапа отклонено': 'Backup download denied',
+  'Выход': 'Logout',
+  'Аварийный сброс пароля из .env': 'Emergency password reset from .env',
 }
 
 type Ctx = {
@@ -616,12 +679,35 @@ function fill(s: string, params?: Record<string, string | number>): string {
   )
 }
 
+function storedLang(): Lang {
+  try {
+    return (localStorage.getItem('acontrol_lang') as Lang) || 'ru'
+  } catch {
+    return 'ru'
+  }
+}
+
+// текущий язык для кода вне React (format.ts). Обновляется провайдером при
+// отрисовке, а компоненты с useI18n и так перерисовываются при смене языка
+let currentLang: Lang = storedLang()
+
+// eslint-disable-next-line react-refresh/only-export-components
+export function getLang(): Lang {
+  return currentLang
+}
+
+/** t() вне React: перевод по текущему языку (см. getLang). */
+// eslint-disable-next-line react-refresh/only-export-components
+export function translate(s: string, params?: Record<string, string | number>): string {
+  return fill(currentLang === 'en' ? EN[s] ?? s : s, params)
+}
+
 export function I18nProvider({ children }: { children: ReactNode }) {
-  const [lang, setLangState] = useState<Lang>(
-    () => (localStorage.getItem('acontrol_lang') as Lang) || 'ru',
-  )
+  const [lang, setLangState] = useState<Lang>(storedLang)
+  currentLang = lang
   const setLang = useCallback((l: Lang) => {
     localStorage.setItem('acontrol_lang', l)
+    currentLang = l
     setLangState(l)
   }, [])
   const t = useCallback(

@@ -61,6 +61,8 @@ export function RollbackMenu({
       reload()
     } catch (err) {
       if (err instanceof ApiError && err.status === 401) onUnauthorized()
+      // места под ошибку в меню нет, но молча глотать сбой отката нельзя
+      else window.alert(err instanceof Error ? err.message : t('Ошибка'))
     }
   }
 

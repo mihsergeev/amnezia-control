@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { ApiError, createApiKey, listApiKeys, revokeApiKey, type ApiKey } from './api'
+import { copyText } from './clipboard'
 import { useI18n } from './i18n'
 
 type Props = { onUnauthorized: () => void }
@@ -47,7 +48,7 @@ export function ApiKeysPage({ onUnauthorized }: Props) {
   }
 
   async function revoke(item: ApiKey) {
-    if (!confirm(t('Отозвать ключ «{name}»? Интеграция сразу перестанет работать.').replace('{name}', item.name))) {
+    if (!confirm(t('Отозвать ключ «{name}»? Интеграция сразу перестанет работать.', { name: item.name }))) {
       return
     }
     try {
@@ -104,8 +105,11 @@ export function ApiKeysPage({ onUnauthorized }: Props) {
             <code className="mono">{fresh.key}</code>
             <button
               onClick={() => {
-                void navigator.clipboard.writeText(fresh.key)
-                setCopied(true)
+                // по http navigator.clipboard недоступен, copyText падает на execCommand
+                void copyText(fresh.key).then((ok) => {
+                  setCopied(ok)
+                  if (!ok) setError(t('Не удалось скопировать, выделите ключ и скопируйте вручную'))
+                })
               }}
             >
               {copied ? t('Скопировано ✓') : t('Копировать')}

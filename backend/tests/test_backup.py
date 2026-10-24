@@ -48,7 +48,7 @@ def test_verify_archive_catches_problems():
 async def test_light_backup_omits_traffic_history(client, auth_headers):
     """По умолчанию бэкап лёгкий: историю трафика не тащим, конфиг-таблицы — да."""
     await _make_state(client, auth_headers)
-    dump = _read_db_json((await client.get("/api/backup", headers=auth_headers)).content)
+    dump = _read_db_json((await client.post("/api/backup/download", headers=auth_headers, json={"password": "testpass"})).content)
     assert "client_traffic_samples" not in dump
     assert "traffic_samples" not in dump
     assert dump["servers"] and "app_settings" in dump  # конфиг на месте
@@ -99,7 +99,7 @@ def _read_db_json(archive: bytes) -> dict:
 
 async def test_backup_includes_previously_dropped_tables(client, auth_headers):
     await _make_state(client, auth_headers)
-    r = await client.get("/api/backup", headers=auth_headers)
+    r = await client.post("/api/backup/download", headers=auth_headers, json={"password": "testpass"})
     assert r.status_code == 200
     dump = _read_db_json(r.content)
 
@@ -116,7 +116,7 @@ async def test_backup_restore_roundtrip_preserves_expiry_and_alerts(
     client, auth_headers
 ):
     await _make_state(client, auth_headers)
-    archive = (await client.get("/api/backup", headers=auth_headers)).content
+    archive = (await client.post("/api/backup/download", headers=auth_headers, json={"password": "testpass"})).content
 
     # сносим срок клиента и настройки алертов
     r = await client.get("/api/servers", headers=auth_headers)
@@ -136,7 +136,8 @@ async def test_backup_restore_roundtrip_preserves_expiry_and_alerts(
 
     # восстановление из архива
     r = await client.post(
-        "/api/backup/restore", headers=auth_headers, content=archive
+        "/api/backup/restore", content=archive,
+        headers={**auth_headers, "X-Confirm-Password": "testpass"}
     )
     assert r.status_code == 200, r.text
     restored = r.json()["restored"]
@@ -145,7 +146,7 @@ async def test_backup_restore_roundtrip_preserves_expiry_and_alerts(
 
     # срок клиента вернулся (иначе истёкшие клиенты никогда не отзовутся)
     dump = _read_db_json(
-        (await client.get("/api/backup", headers=auth_headers)).content
+        (await client.post("/api/backup/download", headers=auth_headers, json={"password": "testpass"})).content
     )
     assert any(
         cl["client_id"] == "PUBKEY123" and cl["expires_at"]
@@ -158,7 +159,7 @@ async def test_backup_restore_roundtrip_preserves_expiry_and_alerts(
 
 
 async def test_backup_archive_is_gzip(client, auth_headers):
-    r = await client.get("/api/backup", headers=auth_headers)
+    r = await client.post("/api/backup/download", headers=auth_headers, json={"password": "testpass"})
     assert r.headers["content-type"] == "application/gzip"
     # реально распаковывается
     assert gzip.decompress(r.content)[:2] != b""

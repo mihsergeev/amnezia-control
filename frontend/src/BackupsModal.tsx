@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { ApiError, api, downloadSavedBackup, type BackupItem } from './api'
 import { formatBytes } from './format'
+import { StepUpModal } from './StepUpModal'
 import { useI18n } from './i18n'
 import { useModalDismiss } from './useModalDismiss'
 
@@ -14,6 +15,8 @@ export function BackupsModal({ onClose, onUnauthorized }: Props) {
   const [items, setItems] = useState<BackupItem[] | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  // копия, которую скачиваем: перед скачиванием нужен пароль
+  const [pending, setPending] = useState<string | null>(null)
   const dismiss = useModalDismiss(onClose)
 
   const load = useCallback(async () => {
@@ -43,12 +46,16 @@ export function BackupsModal({ onClose, onUnauthorized }: Props) {
     }
   }
 
-  async function download(name: string) {
+  async function download(name: string, password: string) {
     try {
-      await downloadSavedBackup(name)
+      await downloadSavedBackup(name, password)
+      setPending(null)
     } catch (err) {
-      if (err instanceof ApiError && err.status === 401) onUnauthorized()
-      else setError(t('не удалось скачать копию'))
+      if (err instanceof ApiError && err.status === 401) {
+        onUnauthorized()
+        return
+      }
+      throw err
     }
   }
 
@@ -101,7 +108,7 @@ export function BackupsModal({ onClose, onUnauthorized }: Props) {
                     <td>{fmtDate(b.created)}</td>
                     <td className="muted mono">{formatBytes(b.size)}</td>
                     <td className="row-actions">
-                      <button className="ghost" onClick={() => download(b.filename)}>
+                      <button className="ghost" onClick={() => setPending(b.filename)}>
                         {t('Скачать')}
                       </button>
                     </td>
@@ -112,6 +119,13 @@ export function BackupsModal({ onClose, onUnauthorized }: Props) {
           </div>
         )}
       </div>
+      {pending && (
+        <StepUpModal
+          text={t('В бэкапе SSH-ключ панели ко всем нодам, секрет 2FA и ключи клиентов. Введите пароль от панели, чтобы скачать его.')}
+          onSubmit={(pw) => download(pending, pw)}
+          onCancel={() => setPending(null)}
+        />
+      )}
     </div>
   )
 }

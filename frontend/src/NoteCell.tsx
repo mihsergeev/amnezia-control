@@ -61,7 +61,12 @@ export function NoteCell({ name, note, online, onSave }: Props) {
           onChange={(e) => setDraft(e.target.value)}
           onKeyDown={(e) => {
             if (e.key === 'Enter') commit()
-            if (e.key === 'Escape') cancel()
+            if (e.key === 'Escape') {
+              // Escape отменяет правку, а не закрывает окно вокруг
+              e.preventDefault()
+              e.stopPropagation()
+              cancel()
+            }
           }}
           onBlur={commit}
         />

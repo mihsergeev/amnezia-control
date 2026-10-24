@@ -28,6 +28,13 @@ async def list_paused(
     return out
 
 
+async def paused_ips(session: AsyncSession, server_id: int, protocol: str) -> set[str]:
+    """Адреса клиентов AWG на паузе: их нет среди живых пиров, но выдавать их
+    новым клиентам нельзя - возобновление вернет адрес прежнему."""
+    paused = await list_paused(session, server_id, protocol)
+    return {ip for rec in paused.values() if (ip := rec["data"].get("ip"))}
+
+
 async def add(
     session: AsyncSession, server_id: int, protocol: str,
     client_id: str, name: str, data: dict,

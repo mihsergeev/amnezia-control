@@ -54,19 +54,24 @@ export function Menu({
     function onDoc(e: MouseEvent) {
       if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false)
     }
+    // в фазе захвата, чтобы успеть раньше закрытия модалки по Escape
+    // (useModalDismiss слушает document на всплытии): закрываем только меню
     function onKey(e: KeyboardEvent) {
-      if (e.key === 'Escape') setOpen(false)
+      if (e.key !== 'Escape') return
+      e.preventDefault()
+      e.stopPropagation()
+      setOpen(false)
     }
     // при скролле fixed-координаты устаревают — проще закрыть
     function onScroll() {
       setOpen(false)
     }
     document.addEventListener('mousedown', onDoc)
-    document.addEventListener('keydown', onKey)
+    document.addEventListener('keydown', onKey, true)
     if (fixed) window.addEventListener('scroll', onScroll, true)
     return () => {
       document.removeEventListener('mousedown', onDoc)
-      document.removeEventListener('keydown', onKey)
+      document.removeEventListener('keydown', onKey, true)
       if (fixed) window.removeEventListener('scroll', onScroll, true)
     }
   }, [open, fixed])

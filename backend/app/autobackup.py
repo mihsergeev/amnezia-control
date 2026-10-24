@@ -80,12 +80,35 @@ async def write_backup(
             session, settings.data_dir, settings.version, settings.backup_include_traffic
         )
     stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
-    path = os.path.join(d, f"acontrol-backup-{stamp}.tar.gz")
-    with open(path, "wb") as fh:
-        fh.write(archive)
-    _prune(d, settings.backup_keep)
-    with open(path, "rb") as fh:  # перечитываем с диска, не из памяти
-        problems = verify_archive(fh.read())
+    path, problems = save_checked(d, f"acontrol-backup-{stamp}.tar.gz", archive)
+    if not problems:
+        # старые копии чистим только после проверенной новой: при нехватке
+        # места битый файл раньше оставался в ротации, а целый старый уже удален
+        _prune(d, settings.backup_keep)
+    return path, problems
+
+
+def save_checked(d: str, name: str, archive: bytes) -> tuple[str, list[str]]:
+    """Пишет архив во временный файл, перечитывает с диска и проверяет, и только
+    целый переименовывает в настоящее имя. Битый удаляется."""
+    path = os.path.join(d, name)
+    tmp = path + ".part"
+    try:
+        with open(tmp, "wb") as fh:
+            fh.write(archive)
+            fh.flush()
+            os.fsync(fh.fileno())
+        with open(tmp, "rb") as fh:  # перечитываем с диска, не из памяти
+            problems = verify_archive(fh.read())
+    except OSError as exc:
+        problems = [f"не удалось записать бэкап: {exc}"]
+    if problems:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+        return path, problems
+    os.replace(tmp, path)
     return path, problems
 
 

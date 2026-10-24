@@ -210,3 +210,38 @@ async def test_import_names_tables_it_could_not_take(
     )
     assert r.status_code == 200, r.text
     assert r.json()["skipped_tables"] == ["future_widgets"]
+
+
+async def test_import_drops_past_limits_and_runtime(
+    client: httpx.AsyncClient, auth_headers, session_factory
+) -> None:
+    # прошедший срок отозвал бы живого клиента сразу после загрузки
+    body = json.dumps({
+        "format": "acontrol-server-export", "format_version": 1,
+        "server": {"name": "srv", "host": "203.0.113.9", "ssh_port": 22,
+                   "ssh_user": "amn"},
+        "tables": {
+            "client_limits": [
+                {"protocol": "awg", "client_id": "old", "name": "a",
+                 "expires_at": "2020-01-01T00:00:00+00:00"},
+                {"protocol": "awg", "client_id": "new", "name": "b",
+                 "expires_at": "2099-01-01T00:00:00+00:00"},
+            ],
+            "server_status": [{"online": True}],
+        },
+    })
+    r = await client.post(
+        "/api/servers/import-file", content=body, headers=auth_headers
+    )
+    assert r.status_code == 200, r.text
+    res = r.json()
+    assert res["imported"] == {"client_limits": 1}
+    assert res["skipped_tables"] == []
+    async with session_factory() as session:
+        ids = [
+            lim.client_id
+            for lim in await session.scalars(
+                select(ClientLimit).where(ClientLimit.server_id == res["server_id"])
+            )
+        ]
+    assert ids == ["new"]

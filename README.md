@@ -102,8 +102,8 @@ The [AmneziaVPN desktop client](https://amnezia.org) is great for personal use �
 
 ## Architecture
 
-- **Backend** — Python 3.12, FastAPI, SQLAlchemy (async) + Alembic, node management over SSH via `asyncssh`
-- **Database** — PostgreSQL 17 (SQLite in tests)
+- **Backend** — Python 3.14, FastAPI, SQLAlchemy (async) + Alembic, node management over SSH via `asyncssh`
+- **Database** — PostgreSQL 18 (SQLite in tests)
 - **Frontend** — React + Vite + TypeScript, hand-rolled SVG charts, no UI framework
 - **Delivery** — Docker Compose on a single host; the panel builds protocol images *on the target node* from the official `amneziavpn/*` base images, so only a tiny script travels over SSH
 
@@ -128,7 +128,8 @@ The panel holds its own SSH keypair and connects to each node as an unprivileged
 ```bash
 git clone https://github.com/mihsergeev/amnezia-control.git acontrol && cd acontrol
 cp .env.example .env
-# edit .env — set ADMIN_PASSWORD, DB_PASSWORD, JWT_SECRET, PANEL_IP
+# edit .env: set ACONTROL_ADMIN_PASSWORD, ACONTROL_DB_PASSWORD,
+# ACONTROL_JWT_SECRET (openssl rand -hex 32) and ACONTROL_PANEL_IP
 docker compose pull && docker compose up -d
 ```
 
@@ -213,21 +214,34 @@ Set in `.env` (see [`.env.example`](.env.example)):
 | `ACONTROL_DB_PASSWORD` | — | PostgreSQL password (internal) |
 | `ACONTROL_JWT_SECRET` | — | JWT signing secret (32+ random bytes) |
 | `ACONTROL_PANEL_IP` | — | Public IP of the panel (written into node firewall rules) |
+| `ACONTROL_BIND` | `127.0.0.1:8080` | Host address and port the panel is published on in standalone mode (`0.0.0.0:8080` = all interfaces, plain HTTP) |
+| `ACONTROL_VERSION` | `latest` | Image tag for prebuilt GHCR images; pin an exact version (e.g. `0.55.7`) for reproducible deploys |
+| `ACONTROL_DOMAIN` | (empty) | Panel domain for edge TLS (`compose.tls.yml` / `compose.caddy.yml`); leave empty in standalone mode |
+| `ACONTROL_ALLOW_IPS` | (empty) | Edge IP allow-list, space-separated IPs/CIDRs (empty = open to everyone) |
+| `ACONTROL_CADDY_NETWORK` | `caddy` | Docker network of an existing caddy-docker-proxy (`compose.caddy.yml` only) |
+| `ACONTROL_PANEL_URL` | `https://<ACONTROL_DOMAIN>` | Public URL of the panel for links in alerts and the watchdog heartbeat; empty when no domain is set |
+| `ACONTROL_API_DOCS` | `1` | Swagger/OpenAPI at `/api/docs` (0 = off) |
 | `ACONTROL_DEFAULT_SSH_USER` | `acontrol` | Prefilled SSH user for new servers |
 | `ACONTROL_STATS_INTERVAL` | `300` | Metrics/monitoring interval, seconds (0 = off) |
 | `ACONTROL_EXPIRY_INTERVAL` | `300` | Expired-client auto-revoke scan, seconds (0 = off) |
 | `ACONTROL_DISK_ALERT_PERCENT` | `90` | Low-disk alert threshold, % (0 = off) |
 | `ACONTROL_BACKUP_INTERVAL_HOURS` | `24` | Auto-backup interval (0 = off) |
 | `ACONTROL_BACKUP_KEEP` | `14` | Auto-backups to keep |
+| `ACONTROL_BACKUP_INCLUDE_TRAFFIC` | `0` | 1 = include traffic history in backups (can be hundreds of MB) |
+| `ACONTROL_PG_SHARED_BUFFERS` / `ACONTROL_PG_EFFECTIVE_CACHE` | `256MB` / `1536MB` | PostgreSQL `shared_buffers` / `effective_cache_size` |
+| `ACONTROL_PG_WORK_MEM` / `ACONTROL_PG_MAINT_MEM` | `16MB` / `128MB` | PostgreSQL `work_mem` / `maintenance_work_mem` |
+| `ACONTROL_ADMIN_PASSWORD_RESET` | `0` | Break-glass reset of the admin password and 2FA (see *Security notes*) |
+| `COMPOSE_FILE` | (empty) | Compose files a plain `docker compose` uses, e.g. `compose.yml:compose.tls.yml` |
 
-Telegram / webhook alert channels are configured **from the UI** (🔔 button) and stored in the DB.
+The `ACONTROL_PG_*` defaults suit a small cloud VM; raise them on a bigger host. Telegram / webhook alert channels are configured **from the UI** (⚙ > Alerts) and stored in the DB.
 
 ---
 
 ## Integration API
 
 Other systems (a billing panel, your own portal) can manage AmneziaWG clients over
-a versioned HTTP API at `/api/v1`. Interactive docs: **`/api/docs`**.
+a versioned HTTP API at `/api/v1`. Interactive docs: **`/api/docs`** (set
+`ACONTROL_API_DOCS=0` in `.env` to turn off Swagger/OpenAPI; the API itself keeps working).
 
 Create a key in the panel under **API keys**. It is shown once — store it right
 away, only a hash is kept. Send it in the `X-API-Key` header:
@@ -276,37 +290,52 @@ protocol), use "Roll back" on the protocol tab in the panel — it lists snapsho
 ## Security notes
 
 - Set a strong `ACONTROL_JWT_SECRET` (`openssl rand -hex 32`) and admin password — **the panel refuses to start** on empty/default values.
-- Change the admin password from the UI (🔑); it invalidates all existing sessions. Enable **2FA** (🔒).
+- Change the admin password from the UI (⚙ > Change password); it invalidates all existing sessions. Enable **2FA** (⚙ > Two-factor authentication).
 - The panel **pins each node's SSH host key** on first connect (TOFU) and verifies it after. If you rebuild a node, delete its line from `data/ssh/known_hosts` so the new key can be pinned.
 - Keep the edge **IP allow-list** tight (Caddy labels) — an **empty** `ACONTROL_ALLOW_IPS` means "allow all", leaving only the login in front.
 - Never put Docker subnets (`172.16.0.0/12`) or private ranges into `ACONTROL_ALLOW_IPS`. On a host with IPv6 they let every IPv6 client in (see *IPv6 and the allow-list* above).
 - Put **HTTPS** in front (Caddy edge or your own proxy) — the full-access link and QR configs are secrets in transit.
 - The **"Full access" export** produces a `vpn://` link containing a private SSH key that is root-equivalent on the node — treat it like a secret. It uses a dedicated key; regenerating invalidates the old one.
 - DB backups (`db.json`) contain secrets (password hash, client private keys, panel SSH key) — store them safely; the auto-backups dir is `0700`.
-- **Security events** — brute-force lockout, a node's host key changing (possible MITM), and password change are written to the **audit log** and sent to your **Telegram/webhook alerts** (🔔) if configured. Watch for them.
-- **Lost the password *and* 2FA?** Set `ACONTROL_ADMIN_PASSWORD_RESET=1` (with a new `ACONTROL_ADMIN_PASSWORD`), restart once to reset the password and disable 2FA, then set it back to `0` and restart.
+- **Security events** — brute-force lockout, a node's host key changing (possible MITM), and password change are written to the **audit log** and sent to your **Telegram/webhook alerts** (⚙ > Alerts) if configured. Watch for them.
+- **Lost the password *and* 2FA?** Set `ACONTROL_ADMIN_PASSWORD_RESET=1` (with a new `ACONTROL_ADMIN_PASSWORD`) and run `docker compose up -d` once to reset the password and disable 2FA, then set it back to `0` and run `docker compose up -d` again. A plain `docker compose restart` does not re-read `.env`, so it won't apply the flag.
 
 ---
 
 ## Backups
 
-- **Backup → Download** grabs a `tar.gz` with a JSON dump of all tables plus the panel's SSH key.
-- **Backup → Restore from file** replaces the current state from such an archive.
-- Scheduled auto-backups are written to `./data/backups` with rotation; browse and download them from **Backup → Auto-backups**.
+All backup actions are in the ⚙ menu in the header.
+
+- **⚙ > Download backup** grabs a `tar.gz` with a JSON dump of all tables plus the panel's SSH key.
+- **⚙ > Restore from file** replaces the current state from such an archive.
+- Scheduled auto-backups are written to `./data/backups` with rotation; browse and download them from **⚙ > Auto backups**.
 
 ---
 
 ## Updating
 
-The panel is a normal git checkout — pull and rebuild:
+Grab a DB backup first (**⚙ > Download backup**) as a restore point, and read the [CHANGELOG](CHANGELOG.md) for the versions you skip.
+
+**Prebuilt images (default).** Update the checkout so the compose files match the release, then pull the new images. With `ACONTROL_VERSION=latest` in `.env` this takes the newest release; if you pinned a version, change `ACONTROL_VERSION` to the one you want first:
 
 ```bash
 cd acontrol
 git pull
+docker compose pull && docker compose up -d
+```
+
+**Build from source.** Check out the release tag and rebuild:
+
+```bash
+cd acontrol
+git fetch --tags && git checkout vX.Y.Z
 docker compose up -d --build
 ```
 
-Database migrations run automatically on backend startup. If you use the caddy override, keep `COMPOSE_FILE` in `.env` (or add `-f compose.yml -f compose.caddy.yml`). Grab a DB backup first (**Backup → Download**) as a restore point.
+Database migrations run automatically on backend startup.
+
+- **Overrides.** If you run the panel with `compose.tls.yml` or `compose.caddy.yml`, keep it in `COMPOSE_FILE` in `.env` (e.g. `COMPOSE_FILE=compose.yml:compose.tls.yml`), otherwise a plain `docker compose up -d` brings the panel up from `compose.yml` alone, without the proxy. Or pass the files every time: `docker compose -f compose.yml -f compose.tls.yml ...`.
+- **PostgreSQL major upgrades.** A new PostgreSQL major version can't open the old data directory as is. Before an update that changes the `db` image major version, read the CHANGELOG entry for it and follow its migration steps.
 
 ## Development
 
