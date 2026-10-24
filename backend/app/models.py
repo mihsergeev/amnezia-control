@@ -291,3 +291,18 @@ class ApiKey(Base):
         DateTime(timezone=True), nullable=True, default=None
     )
     revoked: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Ограничения ключа: срок действия (None = бессрочно) и серверы, с которыми
+    # он работает (id через запятую, пусто = все). Без них ключ интеграции
+    # видел все серверы и все приватные конфиги и жил вечно.
+    expires_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, default=None
+    )
+    servers: Mapped[str] = mapped_column(Text, default="", server_default="")
+
+    @property
+    def server_ids(self) -> list[int]:
+        return [int(x) for x in (self.servers or "").split(",") if x.strip().isdigit()]
+
+    def allows(self, server_id: int) -> bool:
+        ids = self.server_ids
+        return not ids or int(server_id) in ids

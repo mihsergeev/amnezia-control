@@ -89,6 +89,7 @@ const LABELS: Record<string, string> = {
   '2fa_disable': 'Отключена 2FA',
   apikey_create: 'Создан API-ключ',
   apikey_revoke: 'Отозван API-ключ',
+  apikey_update: 'Изменен API-ключ',
 }
 
 export function AuditPage({ onUnauthorized }: Props) {

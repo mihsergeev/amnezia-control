@@ -55,6 +55,15 @@ services:
     logging: *default-logging
     security_opt:
       - no-new-privileges:true
+    # Процесс работает от uid 10001 без прав. Root на старте нужен entrypoint'у
+    # только чтобы отдать /data этому пользователю, отсюда четыре права ниже.
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - DAC_READ_SEARCH
+      - SETUID
+      - SETGID
     environment:
       VPNPANEL_DB_URL: postgresql+asyncpg://acontrol:${ACONTROL_DB_PASSWORD}@db:5432/acontrol
       VPNPANEL_JWT_SECRET: ${ACONTROL_JWT_SECRET}
@@ -70,6 +79,9 @@ services:
       VPNPANEL_PANEL_URL: ${ACONTROL_PANEL_URL:-${ACONTROL_DOMAIN:+https://${ACONTROL_DOMAIN}}}
       # Swagger/OpenAPI на /api/docs (0 = выключить)
       VPNPANEL_API_DOCS: ${ACONTROL_API_DOCS:-1}
+      # Адреса своих прокси, которым верим в X-Forwarded-For (пусто = loopback
+      # и docker-сети). Свой внешний прокси в другой сети добавьте сюда.
+      VPNPANEL_TRUSTED_PROXIES: ${ACONTROL_TRUSTED_PROXIES:-}
       VPNPANEL_DEFAULT_SSH_USER: ${ACONTROL_DEFAULT_SSH_USER:-acontrol}
       VPNPANEL_STATS_INTERVAL: ${ACONTROL_STATS_INTERVAL:-300}
       VPNPANEL_EXPIRY_INTERVAL: ${ACONTROL_EXPIRY_INTERVAL:-300}

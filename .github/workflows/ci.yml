@@ -28,6 +28,8 @@ jobs:
         run: |
           pip install pip-audit
           pip-audit
+          # то, что реально едет в образ
+          pip-audit --require-hashes -r requirements.lock
 
   frontend:
     runs-on: ubuntu-latest

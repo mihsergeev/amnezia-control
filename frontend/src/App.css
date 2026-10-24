@@ -1845,6 +1845,7 @@ body {
   word-break: break-all;
 }
 .row-muted td { opacity: 0.55; }
+.apikey-server { display: block; white-space: nowrap; }
 
 /* --- перенос сервера между панелями --- */
 .transfer-head {

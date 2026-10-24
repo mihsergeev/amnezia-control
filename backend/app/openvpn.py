@@ -367,6 +367,17 @@ async def revoke_client(
     data = [e for e in data if e.get("clientId") != client_id]
     await _write_table(conn, container, data)
 
+    # CRL проверяется только на новом TLS-рукопожатии, и подключенный клиент
+    # работал бы после отзыва еще до часа. Management-интерфейса в контейнере
+    # нет, поэтому рвем сессию рестартом, и только если клиент сейчас онлайн:
+    # остальные переподключатся сами, а отозванного уже не пустит CRL.
+    try:
+        online = client_id in await read_status_map(conn, container)
+    except Exception:  # noqa: BLE001 - статус не прочитался, рестарт не обязателен
+        online = False
+    if online:
+        await _restart_ovpn(conn, container)
+
 
 async def _restart_ovpn(conn, container) -> None:
     await _run(conn, _DOCKER + f"$DOCKER restart {shlex.quote(container)} >/dev/null")

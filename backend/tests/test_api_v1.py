@@ -125,3 +125,56 @@ async def test_docs_page_survives_strict_csp(client):
     for asset in ("/swagger/swagger-ui.css", "/swagger/swagger-ui-bundle.js",
                   "/swagger/swagger-init.js"):
         assert asset in html
+
+
+async def _server(client, headers, host) -> int:
+    r = await client.post(
+        "/api/servers",
+        json={"name": host, "host": host, "ssh_port": 22, "ssh_user": "amn"},
+        headers=headers,
+    )
+    assert r.status_code == 201, r.text
+    return r.json()["id"]
+
+
+async def test_key_limited_to_servers(client, auth_headers):
+    """Ключ с серверами видит только их, чужой сервер для него как несуществующий."""
+    a = await _server(client, auth_headers, "203.0.113.21")
+    b = await _server(client, auth_headers, "203.0.113.22")
+    key = await _make_key(client, auth_headers)
+    key_id = (await client.get("/api/apikeys", headers=auth_headers)).json()[0]["id"]
+    h = {"X-API-Key": key}
+    assert len((await client.get("/api/v1/servers", headers=h)).json()) == 2
+
+    r = await client.put(
+        f"/api/apikeys/{key_id}", json={"server_ids": [a]}, headers=auth_headers
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["server_ids"] == [a]
+    assert [s["id"] for s in (await client.get("/api/v1/servers", headers=h)).json()] == [a]
+    r = await client.get(f"/api/v1/servers/{b}/clients", headers=h)
+    assert r.status_code == 404
+
+    bad = await client.put(
+        f"/api/apikeys/{key_id}", json={"server_ids": [9999]}, headers=auth_headers
+    )
+    assert bad.status_code == 400
+
+
+async def test_expired_key_rejected(client, auth_headers):
+    key = await _make_key(client, auth_headers)
+    key_id = (await client.get("/api/apikeys", headers=auth_headers)).json()[0]["id"]
+    h = {"X-API-Key": key}
+    r = await client.put(
+        f"/api/apikeys/{key_id}",
+        json={"expires_at": "2099-01-01T00:00:00+00:00"},
+        headers=auth_headers,
+    )
+    assert r.status_code == 200
+    assert (await client.get("/api/v1/servers", headers=h)).status_code == 200
+    await client.put(
+        f"/api/apikeys/{key_id}",
+        json={"expires_at": "2020-01-01T00:00:00+00:00"},
+        headers=auth_headers,
+    )
+    assert (await client.get("/api/v1/servers", headers=h)).status_code == 401
