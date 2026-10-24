@@ -2,17 +2,31 @@ from datetime import datetime, timedelta, timezone
 
 import bcrypt
 import jwt
+from starlette.concurrency import run_in_threadpool
+
+
+def _pw(password: str) -> bytes:
+    # bcrypt учитывает только первые 72 байта. До 5.0 он молча обрезал длиннее,
+    # с 5.0 бросает ValueError, и длинный пароль из .env ронял старт панели.
+    # Обрезаем сами - так же, как раньше, поэтому старые хэши остаются валидными.
+    return password.encode()[:72]
 
 
 def hash_password(password: str) -> str:
-    return bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
+    return bcrypt.hashpw(_pw(password), bcrypt.gensalt()).decode()
 
 
 def verify_password(password: str, password_hash: str) -> bool:
     try:
-        return bcrypt.checkpw(password.encode(), password_hash.encode())
+        return bcrypt.checkpw(_pw(password), password_hash.encode())
     except ValueError:
         return False
+
+
+async def averify_password(password: str, password_hash: str) -> bool:
+    """verify_password вне event loop: bcrypt считает ~0.2 с, и поток входов
+    иначе тормозил бы всю панель вместе с фоновыми задачами."""
+    return await run_in_threadpool(verify_password, password, password_hash)
 
 
 def create_access_token(

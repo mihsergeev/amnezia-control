@@ -176,6 +176,21 @@ def _docker_exec_i(container: str, inner: str) -> str:
     return _DOCKER + f"$DOCKER exec -i {shlex.quote(container)} sh -c {shlex.quote(inner)}"
 
 
+async def _write_file(conn, container: str, path: str, payload: str) -> None:
+    """Пишет файл в контейнер через временный и mv: при ошибке (например, диск
+    полон) старый файл остается целым, а ошибка доходит до вызывающего. Если
+    файл смонтирован и mv на него нельзя, переписываем содержимым временного."""
+    tmp = f"{path}.acontrol-tmp"
+    inner = (
+        f"cat > {tmp} && {{ mv -f {tmp} {path} 2>/dev/null || "
+        f"{{ cat {tmp} > {path} && rm -f {tmp}; }}; }}"
+    )
+    result = await conn.run(_docker_exec_i(container, inner), input=payload, check=False)
+    if result.exit_status != 0:
+        err = (result.stderr or "").strip() or f"код {result.exit_status}"
+        raise OpenVpnError(f"не удалось записать {path}: {err}")
+
+
 async def _read_table(conn, container) -> list:
     text = await _run(conn, _docker_exec(container, f"cat {OVPN_DIR}/clientsTable"))
     try:
@@ -186,10 +201,7 @@ async def _read_table(conn, container) -> list:
 
 async def _write_table(conn, container, data: list) -> None:
     payload = json.dumps(data, indent=4, ensure_ascii=False) + "\n"
-    await conn.run(
-        _docker_exec_i(container, f"cat > {OVPN_DIR}/clientsTable"),
-        input=payload, check=False,
-    )
+    await _write_file(conn, container, f"{OVPN_DIR}/clientsTable", payload)
 
 
 def _section(bundle: str, name: str) -> str:
@@ -376,10 +388,7 @@ async def _ensure_ccd(conn, container) -> None:
     if "client-config-dir" in conf:
         return
     new_conf = conf.rstrip("\n") + f"\nclient-config-dir {CCD_DIR}\n"
-    await conn.run(
-        _docker_exec_i(container, f"cat > {OVPN_DIR}/server.conf"),
-        input=new_conf, check=False,
-    )
+    await _write_file(conn, container, f"{OVPN_DIR}/server.conf", new_conf)
 
 
 async def pause_client(conn, container, client_id: str) -> None:

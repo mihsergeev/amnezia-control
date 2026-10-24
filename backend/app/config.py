@@ -35,6 +35,8 @@ class Settings(BaseSettings):
     stats_retention_days: int = 90
     # Хранение пер-клиентских снимков трафика (их много) — короче общего
     client_stats_retention_days: int = 14
+    # Хранение журнала действий в днях (0 = вечно)
+    audit_retention_days: int = 365
 
     # Авто-бэкап БД: интервал в часах (0 = выключить), сколько копий хранить
     backup_interval_hours: int = 24

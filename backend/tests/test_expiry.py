@@ -98,3 +98,35 @@ async def test_unreachable_node_keeps_limit(factory, monkeypatch):
     async with factory() as session:
         # лимит остаётся — повторим на следующем цикле
         assert (await session.get(ClientLimit, 1)) is not None
+
+
+async def test_protocol_gone_drops_limit(factory, monkeypatch):
+    """Протокол удалили с ноды: срок снимаем, а не откладываем каждый день."""
+    settings = config.get_settings()
+    await _seed(factory, datetime.now(timezone.utc) - timedelta(hours=1))
+
+    async def gone(*a, **k):
+        raise expiry.ProtocolGone("контейнер AmneziaWG 2.0 не запущен")
+
+    monkeypatch.setattr(expiry, "revoke_on_node", gone)
+    assert await expiry.expiry_once(factory, settings) == 1
+    async with factory() as session:
+        assert (await session.get(ClientLimit, 1)) is None
+
+
+class _PsConn:
+    def __init__(self, names: str):
+        self.names = names
+
+    async def run(self, cmd, check=False):  # noqa: A002
+        return type("R", (), {"exit_status": 0, "stdout": self.names})()
+
+
+async def test_not_ready_vs_gone():
+    # остановленный контейнер поднимется и вернет клиента: отзыв только откладываем
+    err = await expiry._not_ready(_PsConn("amnezia-awg2\n"), "awg", "x")
+    assert isinstance(err, expiry.NodeNotReady)
+    err = await expiry._not_ready(_PsConn("amnezia-awg3\namnezia-xray\n"), "awg", "x")
+    assert isinstance(err, expiry.ProtocolGone)
+    err = await expiry._not_ready(_PsConn("amnezia-awg2\n"), "awg3", "x")
+    assert isinstance(err, expiry.ProtocolGone)

@@ -346,3 +346,25 @@ async def test_snapshot_helpers_all_protocols():
         {"id": "20260710-023528", "clients": 3},
         {"id": "20260709-010101", "clients": 0},
     ]
+
+
+async def test_snapshot_remembers_container():
+    """Снимок Legacy (amnezia-awg) откатывается в amnezia-awg, а не в штатный
+    amnezia-awg2: контейнер пишется рядом со снимком в .c."""
+    cmds: list[str] = []
+
+    class C:
+        def __init__(self, out=""):
+            self.out = out
+
+        async def run(self, cmd, check=False):  # noqa: A002
+            cmds.append(cmd)
+            return type("R", (), {"stdout": self.out})()
+
+    await deploy.snapshot_config(C("SNAP 20260710-023528\n"), "awg", container="amnezia-awg")
+    assert 'echo "$C" > "$R/$TS.c"' in cmds[-1]
+    assert await deploy.restore_snapshot(C("NO_CONT\n"), "awg", "20260710-023528") is False
+    cmd = cmds[-1]
+    assert '.c" 2>/dev/null); C=${C:-amnezia-awg2}' in cmd
+    assert 'grep -qxF -- "$C" || { echo NO_CONT; exit 0; }' in cmd
+    assert 'sudo docker restart "$C"' in cmd

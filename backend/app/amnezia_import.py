@@ -10,6 +10,8 @@ import json
 import zlib
 from dataclasses import dataclass, field
 
+from app import sshops
+
 
 class ImportParseError(Exception):
     pass
@@ -137,6 +139,8 @@ def parse_amnezia_link(text: str) -> ServerSpec:
         or creds.get("login")
         or "root"
     )
+    if not sshops.valid_ssh_user(user):
+        raise ImportParseError(f"недопустимое имя SSH-пользователя в конфиге: {user!r}")
     port = int(creds.get("port") or 22)
     secret = (
         creds.get("password")
@@ -178,6 +182,8 @@ def parse_bulk(text: str, default_user: str = "root") -> list[ServerSpec]:
         except ValueError:
             raise ImportParseError(f"некорректный порт в строке: {line}")
         user = parts[1] if len(parts) > 1 else default_user
+        if not sshops.valid_ssh_user(user):
+            raise ImportParseError(f"недопустимое имя SSH-пользователя в строке: {line}")
         password = parts[2] if len(parts) > 2 else None
         specs.append(
             ServerSpec(

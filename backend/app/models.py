@@ -73,6 +73,9 @@ class AwgConfig(Base):
     public_key: Mapped[str] = mapped_column(String(64))
     name: Mapped[str] = mapped_column(String(128))
     config: Mapped[str] = mapped_column(Text)
+    # awg | awg3 | awglegacy: таблица общая для всех AWG, и без протокола поиск
+    # и массовый отзыв считали клиента 3.1/Legacy клиентом 2.0
+    protocol: Mapped[str] = mapped_column(String(16), default="awg", server_default="awg")
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )

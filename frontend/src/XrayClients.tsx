@@ -283,7 +283,7 @@ export function XrayClients({
             <span className="mono">{version.current_version ?? '—'}</span>
             {version.update_available && (
               <span className="update-badge">
-                {t('есть {ver}', { ver: version.latest_version ?? 'новее' })}
+                {t('есть {ver}', { ver: version.latest_version ?? t('новее') })}
               </span>
             )}
             {!version.update_available && version.current_version && (

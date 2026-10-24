@@ -98,3 +98,50 @@ async def test_docker_down_keeps_protocol(factory, monkeypatch):
     await _run(factory, monkeypatch, _sample(sid, chk))
     info = await _info(factory, sid)
     assert info["amnezia_containers"] == ["amnezia-awg2"]
+
+
+async def test_server_sample_skipped_while_protocol_set_changes(factory, monkeypatch):
+    """Протокол не прочитался в одном цикле: снимки сервера с другим набором
+    протоколов не пишем, иначе на графике ложный пик."""
+    from sqlalchemy import select
+
+    from app.models import TrafficSample
+
+    sid = await _seed(factory, ["amnezia-awg2"])
+    collector._last_parts.clear()
+    for parts in ({"awg", "xray"}, {"awg"}, {"awg", "xray"}, {"awg", "xray"}):
+        sample = {**_sample(sid, None), "parts": frozenset(parts)}
+        await _run(factory, monkeypatch, sample)
+    async with factory() as s:
+        n = len(list(await s.scalars(select(TrafficSample))))
+    assert n == 2  # первый и последний циклы
+    collector._last_parts.clear()
+
+
+async def test_client_names_of_revoked_are_dropped(factory, monkeypatch):
+    """Клиента отозвали: его имя уходит из кэша, иначе поиск показывает его
+    годами. Протокол, который не прочитался, не трогаем."""
+    from sqlalchemy import select
+
+    from app.models import ClientName
+
+    sid = await _seed(factory, ["amnezia-awg2"])
+    async with factory() as s:
+        s.add_all([
+            ClientName(server_id=sid, protocol="awg", client_id="gone", name="old"),
+            ClientName(server_id=sid, protocol="awg", client_id="live", name="a"),
+            ClientName(server_id=sid, protocol="xray", client_id="x1", name="x"),
+        ])
+        await s.commit()
+    collector._last_parts.clear()
+    sample = {
+        **_sample(sid, None),
+        "parts": frozenset({"awg:amnezia-awg2"}),
+        "known": [("awg", "live")],
+        "clients": [{"protocol": "awg", "client_id": "live", "rx": 0, "tx": 0, "name": "a"}],
+    }
+    await _run(factory, monkeypatch, sample)
+    async with factory() as s:
+        left = sorted(r.client_id for r in await s.scalars(select(ClientName)))
+    assert left == ["live", "x1"]
+    collector._last_parts.clear()

@@ -15,27 +15,27 @@ def _req(ip="1.2.3.4"):
     return SimpleNamespace(client=SimpleNamespace(host=ip))
 
 
-def test_stepup_verify_and_lockout():
-    ratelimit._failures.clear()
+async def test_stepup_verify_and_lockout():
+    ratelimit.clear("stepup:1.2.3.4")
     user = SimpleNamespace(password_hash=hash_password("correct-pass"))
     req = _req()
 
-    stepup.verify(user, "correct-pass", req)  # верный пароль — без исключения
+    await stepup.verify(user, "correct-pass", req)  # верный пароль - без исключения
 
     with pytest.raises(HTTPException) as ei:
-        stepup.verify(user, "wrong", req)
+        await stepup.verify(user, "wrong", req)
     assert ei.value.status_code == 403  # неверный пароль
 
     # добиваем до блокировки — дальше даже верный пароль даёт 429
     for _ in range(ratelimit.MAX_FAILURES):
         try:
-            stepup.verify(user, "wrong", req)
+            await stepup.verify(user, "wrong", req)
         except HTTPException:
             pass
     with pytest.raises(HTTPException) as ei2:
-        stepup.verify(user, "correct-pass", req)
+        await stepup.verify(user, "correct-pass", req)
     assert ei2.value.status_code == 429
-    ratelimit._failures.clear()
+    ratelimit.clear("stepup:1.2.3.4")
 
 
 async def test_fullaccess_requires_password(

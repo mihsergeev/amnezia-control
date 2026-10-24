@@ -37,20 +37,20 @@ async def test_2fa_full_flow(client: httpx.AsyncClient, auth_headers):
     assert r.status_code == 200 and r.json()["enabled"] is False
 
     # setup → секрет
-    r = await client.post("/api/auth/2fa/setup", headers=auth_headers)
+    r = await client.post("/api/auth/2fa/setup", headers=auth_headers, json={"password": "testpass"})
     assert r.status_code == 200
     secret = r.json()["secret"]
     assert r.json()["otpauth_uri"].startswith("otpauth://")
 
     # enable с неверным кодом → 400
     r = await client.post(
-        "/api/auth/2fa/enable", headers=auth_headers, json={"otp": "000000"}
+        "/api/auth/2fa/enable", headers=auth_headers, json={"otp": "000000", "password": "testpass"}
     )
     assert r.status_code == 400
 
     # enable с верным кодом → включено
     r = await client.post(
-        "/api/auth/2fa/enable", headers=auth_headers, json={"otp": _code(secret)}
+        "/api/auth/2fa/enable", headers=auth_headers, json={"otp": _code(secret), "password": "testpass"}
     )
     assert r.status_code == 200 and r.json()["enabled"] is True
 
@@ -76,7 +76,10 @@ async def test_2fa_full_flow(client: httpx.AsyncClient, auth_headers):
 
     # disable с верным кодом
     r = await client.post(
-        "/api/auth/2fa/disable", headers=auth_headers, json={"otp": _code(secret)}
+        "/api/auth/2fa/disable", headers=auth_headers,
+        # код из следующего окна: текущий уже потрачен на вход, а повтор кода
+        # отвергается и при выключении 2FA
+        json={"otp": totp._hotp(secret, int(time.time() // 30) + 1), "password": "testpass"},
     )
     assert r.status_code == 200 and r.json()["enabled"] is False
 

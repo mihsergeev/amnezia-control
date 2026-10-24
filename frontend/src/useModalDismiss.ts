@@ -7,8 +7,11 @@ const stack: Array<() => void> = []
 const prevFocus: Array<HTMLElement | null> = []
 let escBound = false
 
+// слушаем на document в фазе всплытия: поле заметки или открытое меню, которые
+// сами обработали Escape (stopPropagation/preventDefault), окно не закрывают
 function onEsc(e: KeyboardEvent) {
-  if (e.key === 'Escape' && stack.length) stack[stack.length - 1]()
+  if (e.key !== 'Escape' || e.defaultPrevented) return
+  if (stack.length) stack[stack.length - 1]()
 }
 
 const FOCUSABLE =

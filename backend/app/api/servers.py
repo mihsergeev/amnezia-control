@@ -151,9 +151,15 @@ async def setup_script(
     server = await _get_or_404(server_id, session)
     settings = get_settings()
     public_key = ensure_panel_key(settings.data_dir)
-    script = sshops.build_setup_script(
-        public_key, server.ssh_user, server.ssh_port, settings.panel_ip
-    )
+    try:
+        script = sshops.build_setup_script(
+            public_key, server.ssh_user, server.ssh_port, settings.panel_ip
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            f"{exc}. Исправьте имя пользователя в карточке сервера.",
+        ) from exc
     return SetupScriptOut(script=script, panel_public_key=public_key)
 
 

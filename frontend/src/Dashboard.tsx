@@ -89,7 +89,7 @@ const PRESETS = [3, 6, 12, 24, 24 * 7, 24 * 30, 24 * 90]
 type Custom = { from: number; to: number } | null
 
 export function Dashboard({ onUnauthorized }: Props) {
-  const { t } = useI18n()
+  const { t, lang } = useI18n()
   const [overview, setOverview] = useState<Overview | null>(null)
   const [history, setHistory] = useState<History | null>(null)
   const [top, setTop] = useState<TopClient[]>([])
@@ -136,7 +136,7 @@ export function Dashboard({ onUnauthorized }: Props) {
     [t],
   )
   const fmtDT = (ms: number) =>
-    new Date(ms).toLocaleString('ru', {
+    new Date(ms).toLocaleString(lang === 'en' ? 'en-GB' : 'ru-RU', {
       day: '2-digit',
       month: '2-digit',
       hour: '2-digit',

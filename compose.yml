@@ -64,9 +64,12 @@ services:
       VPNPANEL_ADMIN_PASSWORD_RESET: ${ACONTROL_ADMIN_PASSWORD_RESET:-0}
       VPNPANEL_DATA_DIR: /data
       VPNPANEL_PANEL_IP: ${ACONTROL_PANEL_IP}
-      # Публичный URL панели для пульса/watchdog — по умолчанию выводим из домена
-      # (https://<ACONTROL_DOMAIN>); можно переопределить ACONTROL_PANEL_URL.
-      VPNPANEL_PANEL_URL: ${ACONTROL_PANEL_URL:-https://${ACONTROL_DOMAIN}}
+      # Публичный URL панели для пульса/watchdog и ссылок в алертах. Задан
+      # ACONTROL_PANEL_URL - берем его, иначе https://<ACONTROL_DOMAIN>, а без
+      # домена остается пустым (никакого выдуманного URL).
+      VPNPANEL_PANEL_URL: ${ACONTROL_PANEL_URL:-${ACONTROL_DOMAIN:+https://${ACONTROL_DOMAIN}}}
+      # Swagger/OpenAPI на /api/docs (0 = выключить)
+      VPNPANEL_API_DOCS: ${ACONTROL_API_DOCS:-1}
       VPNPANEL_DEFAULT_SSH_USER: ${ACONTROL_DEFAULT_SSH_USER:-acontrol}
       VPNPANEL_STATS_INTERVAL: ${ACONTROL_STATS_INTERVAL:-300}
       VPNPANEL_EXPIRY_INTERVAL: ${ACONTROL_EXPIRY_INTERVAL:-300}
@@ -83,8 +86,11 @@ services:
     networks:
       - internal
     healthcheck:
-      # /api/health теперь проверяет и БД → 503 при мёртвом Postgres, healthcheck
-      # переведёт контейнер в unhealthy (restart:unless-stopped перезапустит)
+      # /api/health проверяет и БД: при мертвом Postgres отдает 503, и контейнер
+      # помечается unhealthy (видно в docker ps, frontend ждет healthy при старте).
+      # Сам Docker unhealthy-контейнер НЕ перезапускает: restart: unless-stopped
+      # срабатывает только когда процесс завершился. Для автоперезапуска нужен
+      # внешний сторож (например autoheal) или ops/panel-watchdog.sh для алерта.
       test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=3)\""]
       interval: 30s
       timeout: 5s

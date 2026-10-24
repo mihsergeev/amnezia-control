@@ -33,12 +33,59 @@ export async function api<T>(path: string, options: RequestInit = {}): Promise<T
   if (res.status === 204) return undefined as T
 
   const body = await res.json().catch(() => null)
-  if (!res.ok) {
-    const detail =
-      typeof body?.detail === 'string' ? body.detail : `Ошибка HTTP ${res.status}`
-    throw new ApiError(detail, res.status)
-  }
+  if (!res.ok) throw new ApiError(errorDetail(body, res.status), res.status)
   return body as T
+}
+
+// Текст ошибки из ответа. У 422 FastAPI detail - массив ошибок валидации, и
+// раньше вместо него показывалось "Ошибка HTTP 422".
+export function errorDetail(body: unknown, status: number): string {
+  const detail = (body as { detail?: unknown } | null)?.detail
+  if (typeof detail === 'string') return detail
+  if (Array.isArray(detail) && detail.length) {
+    return detail
+      .map((d: { loc?: unknown[]; msg?: string }) => {
+        const field = (d.loc ?? []).filter((x) => x !== 'body').join('.')
+        return field ? `${field}: ${d.msg ?? ''}` : (d.msg ?? '')
+      })
+      .join('; ')
+  }
+  return `Ошибка HTTP ${status}`
+}
+
+// Выход: токен отзывается и на сервере, иначе украденный жил бы до конца срока.
+export async function logoutServer(): Promise<void> {
+  try {
+    await api<void>('/api/auth/logout', { method: 'POST' })
+  } catch {
+    // сеть или истекший токен: локальный выход все равно состоится
+  }
+}
+
+// Скачивание файла с POST-запроса: fetch с токеном -> blob -> загрузка.
+async function downloadPost(path: string, body: unknown, fallback: string): Promise<void> {
+  const token = getToken()
+  const res = await fetch(path, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    },
+    body: JSON.stringify(body),
+  })
+  if (!res.ok) {
+    const err = await res.json().catch(() => null)
+    throw new ApiError(errorDetail(err, res.status), res.status)
+  }
+  const cd = res.headers.get('Content-Disposition') || ''
+  const m = cd.match(/filename="?([^"]+)"?/)
+  const blob = await res.blob()
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = m ? m[1] : fallback
+  a.click()
+  URL.revokeObjectURL(url)
 }
 
 // Смена пароля: возвращает новый токен (старые инвалидируются на бэкенде).
@@ -53,61 +100,36 @@ export async function changePassword(
   setToken(r.access_token)
 }
 
-// Скачивание бэкапа: fetch с токеном → blob → триггерим загрузку файла.
-export async function downloadBackup(): Promise<void> {
-  const token = getToken()
-  const res = await fetch('/api/backup', {
-    headers: token ? { Authorization: `Bearer ${token}` } : {},
-  })
-  if (!res.ok) {
-    throw new ApiError(`Ошибка бэкапа HTTP ${res.status}`, res.status)
-  }
-  const cd = res.headers.get('Content-Disposition') || ''
-  const m = cd.match(/filename="?([^"]+)"?/)
-  const name = m ? m[1] : 'acontrol-backup.tar.gz'
-  const blob = await res.blob()
-  const url = URL.createObjectURL(blob)
-  const a = document.createElement('a')
-  a.href = url
-  a.download = name
-  a.click()
-  URL.revokeObjectURL(url)
+// Скачивание бэкапа. В нем SSH-ключ ко всем нодам, поэтому нужен пароль.
+export async function downloadBackup(password: string): Promise<void> {
+  await downloadPost('/api/backup/download', { password }, 'acontrol-backup.tar.gz')
 }
 
-// Восстановление: заливаем архив в тело POST (без multipart).
+// Восстановление: архив в теле POST (без multipart), пароль заголовком.
 export async function restoreBackup(
   file: File | Blob,
+  password: string,
 ): Promise<{ restored: Record<string, number> }> {
   const token = getToken()
   const res = await fetch('/api/backup/restore', {
     method: 'POST',
-    headers: token ? { Authorization: `Bearer ${token}` } : {},
+    headers: {
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      'X-Confirm-Password': password,
+    },
     body: file,
   })
   const body = await res.json().catch(() => null)
-  if (!res.ok) {
-    const detail =
-      typeof body?.detail === 'string' ? body.detail : `Ошибка HTTP ${res.status}`
-    throw new ApiError(detail, res.status)
-  }
+  if (!res.ok) throw new ApiError(errorDetail(body, res.status), res.status)
   return body
 }
 
 export type BackupItem = { filename: string; size: number; created: string }
 
-export async function downloadSavedBackup(filename: string): Promise<void> {
-  const token = getToken()
-  const res = await fetch(`/api/backup/file/${encodeURIComponent(filename)}`, {
-    headers: token ? { Authorization: `Bearer ${token}` } : {},
-  })
-  if (!res.ok) throw new ApiError(`Ошибка HTTP ${res.status}`, res.status)
-  const blob = await res.blob()
-  const url = URL.createObjectURL(blob)
-  const a = document.createElement('a')
-  a.href = url
-  a.download = filename
-  a.click()
-  URL.revokeObjectURL(url)
+export async function downloadSavedBackup(filename: string, password: string): Promise<void> {
+  await downloadPost(
+    `/api/backup/file/${encodeURIComponent(filename)}`, { password }, filename,
+  )
 }
 
 // Перенос одного сервера между панелями (в отличие от бэкапа, который
@@ -145,11 +167,7 @@ export async function importServerFile(file: File | Blob): Promise<ServerImportR
     body: file,
   })
   const body = await res.json().catch(() => null)
-  if (!res.ok) {
-    const detail =
-      typeof body?.detail === 'string' ? body.detail : `Ошибка HTTP ${res.status}`
-    throw new ApiError(detail, res.status)
-  }
+  if (!res.ok) throw new ApiError(errorDetail(body, res.status), res.status)
   return body
 }
 
@@ -433,7 +451,7 @@ export async function pauseClient(
 // Установить/снять срок действия клиента (протокол-независимо).
 export async function setClientLimit(
   serverId: number,
-  protocol: 'awg' | 'openvpn' | 'xray',
+  protocol: 'awg' | 'awg3' | 'awglegacy' | 'openvpn' | 'xray',
   clientId: string,
   name: string,
   expiresAt: string | null,
@@ -548,21 +566,26 @@ export function get2FA(): Promise<TwoFAStatus> {
   return api<TwoFAStatus>('/api/auth/2fa')
 }
 
-export function setup2FA(): Promise<TwoFASetup> {
-  return api<TwoFASetup>('/api/auth/2fa/setup', { method: 'POST' })
-}
-
-export function enable2FA(otp: string): Promise<TwoFAStatus> {
-  return api<TwoFAStatus>('/api/auth/2fa/enable', {
+// включение и выключение 2FA требуют пароль: иначе укравший токен включил бы
+// 2FA со своим секретом и запер настоящего админа
+export function setup2FA(password: string): Promise<TwoFASetup> {
+  return api<TwoFASetup>('/api/auth/2fa/setup', {
     method: 'POST',
-    body: JSON.stringify({ otp }),
+    body: JSON.stringify({ password }),
   })
 }
 
-export function disable2FA(otp: string): Promise<TwoFAStatus> {
+export function enable2FA(otp: string, password: string): Promise<TwoFAStatus> {
+  return api<TwoFAStatus>('/api/auth/2fa/enable', {
+    method: 'POST',
+    body: JSON.stringify({ otp, password }),
+  })
+}
+
+export function disable2FA(otp: string, password: string): Promise<TwoFAStatus> {
   return api<TwoFAStatus>('/api/auth/2fa/disable', {
     method: 'POST',
-    body: JSON.stringify({ otp }),
+    body: JSON.stringify({ otp, password }),
   })
 }
 

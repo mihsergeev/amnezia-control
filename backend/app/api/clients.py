@@ -108,7 +108,10 @@ async def search_clients(
     # выданные конфиги: имя хранится вместе с ними
     for row in await session.scalars(select(AwgConfig)):
         if needle in (row.name or "").lower() or id_match(row.public_key):
-            add(row.server_id, "awg", row.public_key, name=row.name, has_config=True)
+            add(
+                row.server_id, row.protocol or "awg", row.public_key,
+                name=row.name, has_config=True,
+            )
     for row in await session.scalars(select(OvpnConfig)):
         if needle in (row.name or "").lower() or id_match(row.client_id):
             add(row.server_id, "openvpn", row.client_id, name=row.name, has_config=True)

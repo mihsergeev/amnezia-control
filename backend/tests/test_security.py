@@ -36,7 +36,8 @@ async def test_restore_blocks_absolute_path_write(
         }
     )
     r = await client.post(
-        "/api/backup/restore", content=archive, headers=auth_headers
+        "/api/backup/restore", content=archive,
+        headers={**auth_headers, "X-Confirm-Password": "testpass"}
     )
     assert r.status_code == 200
     assert not escaped.exists()  # выход за data_dir заблокирован
@@ -47,7 +48,10 @@ async def test_restore_rejects_oversized_body(
     client: httpx.AsyncClient, auth_headers
 ):
     big = b"x" * (101 * 1024 * 1024)
-    r = await client.post("/api/backup/restore", content=big, headers=auth_headers)
+    r = await client.post(
+        "/api/backup/restore", content=big,
+        headers={**auth_headers, "X-Confirm-Password": "testpass"},
+    )
     assert r.status_code == 413
 
 
@@ -88,12 +92,12 @@ async def test_password_change_wrong_current(client: httpx.AsyncClient, auth_hea
 
 
 async def test_totp_code_not_replayable(client: httpx.AsyncClient, auth_headers):
-    setup = (await client.post("/api/auth/2fa/setup", headers=auth_headers)).json()
+    setup = (await client.post("/api/auth/2fa/setup", headers=auth_headers, json={"password": "testpass"})).json()
     secret = setup["secret"]
     code = totp._hotp(secret, int(time.time() // 30))
     assert (
         await client.post(
-            "/api/auth/2fa/enable", json={"otp": code}, headers=auth_headers
+            "/api/auth/2fa/enable", json={"otp": code, "password": "testpass"}, headers=auth_headers
         )
     ).status_code == 200
 
@@ -184,7 +188,7 @@ async def test_break_glass_reset(tmp_path):
     from app.bootstrap import ensure_admin
     from app.config import Settings
     from app.db import Base, create_engine_and_factory
-    from app.models import User
+    from app.models import AuditLog, User
     from app.security import verify_password
 
     db = (tmp_path / "bg.db").as_posix()
@@ -224,6 +228,18 @@ async def test_break_glass_reset(tmp_path):
         assert verify_password("newpass456", u.password_hash)
         assert u.totp_enabled is False
         assert u.token_version == 4  # инкремент
+        assert await s.scalar(
+            select(AuditLog).where(AuditLog.action == "admin_password_reset")
+        )
+
+    # сменили ACONTROL_ADMIN_USER: тот же админ под новым логином, второго нет
+    await ensure_admin(
+        factory, Settings(admin_user="root2", admin_password="zzz", **strong)
+    )
+    async with factory() as s:
+        users = list((await s.scalars(select(User))).all())
+        assert [u.username for u in users] == ["root2"]
+        assert verify_password("newpass456", users[0].password_hash)
     await engine.dispose()
 
 

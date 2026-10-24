@@ -5,7 +5,7 @@ import httpx
 from fastapi import APIRouter, HTTPException, Request, status
 from sqlalchemy import delete, select
 
-from app import audit, awg, deploy, deploywatch, limits, notes, pausestore, sshops
+from app import audit, awg, deploy, deploywatch, limits, nodelock, notes, pausestore, sshops
 from app.config import get_settings
 from app.deps import CurrentUser, SessionDep
 from app.models import AwgConfig, ClientLimit, Server
@@ -39,10 +39,11 @@ def _connect(server: Server):
     settings = get_settings()
     ensure_panel_key(settings.data_dir)
     key_path, _pub = key_paths(settings.data_dir)
-    return sshops.connect(
+    # одна операция на ноде за раз, см. nodelock
+    return nodelock.connect("awg", server.id, sshops.connect(
         server.host, server.ssh_port, server.ssh_user, key_path,
         settings.ssh_connect_timeout,
-    )
+    ))
 
 
 async def _guard_foreign_awg(conn) -> None:
@@ -69,7 +70,9 @@ def _ssh_error(exc: Exception) -> HTTPException:
     return HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, str(exc))
 
 
-async def _store_config(session, server_id, public_key, name, config) -> None:
+async def _store_config(
+    session, server_id, public_key, name, config, protocol: str = "awg"
+) -> None:
     await session.execute(
         delete(AwgConfig).where(
             AwgConfig.server_id == server_id, AwgConfig.public_key == public_key
@@ -77,7 +80,8 @@ async def _store_config(session, server_id, public_key, name, config) -> None:
     )
     session.add(
         AwgConfig(
-            server_id=server_id, public_key=public_key, name=name, config=config
+            server_id=server_id, public_key=public_key, name=name, config=config,
+            protocol=protocol,
         )
     )
     await session.commit()
@@ -205,10 +209,13 @@ async def create_client(
 ) -> CreateClientResponse:
     server = await _get_or_404(server_id, session)
     dns = body.dns or get_settings().awg_client_dns
+    reserved = await pausestore.paused_ips(session, server_id, "awg")
     try:
         async with _connect(server) as conn:
             state = await awg.read_state(conn, server.host)
-            client, config = await awg.create_client(conn, state, body.name, dns)
+            client, config = await awg.create_client(
+                conn, state, body.name, dns, reserved=reserved
+            )
     except Exception as exc:  # noqa: BLE001
         raise _ssh_error(exc) from exc
     await _store_config(session, server_id, client.public_key, client.name, config)
@@ -285,12 +292,13 @@ async def reissue_client(
                 raise HTTPException(status.HTTP_404_NOT_FOUND, "Клиент не найден")
             name = target.name if target.name and target.name != "—" else "client"
             fixed_ip = target.address.split("/")[0] if target.address else None
-            # снимаем старого пира и выдаём новый ключ на тот же адрес/имя
-            await awg.revoke_client(
-                conn, state.container, state.interface, body.public_key
-            )
+            # сначала новый ключ на тот же адрес, потом снимаем старый: если
+            # выдача упадет (оборвался SSH), старый клиент останется рабочим
             client, config = await awg.create_client(
                 conn, state, name, dns, fixed_ip=fixed_ip
+            )
+            await awg.revoke_client(
+                conn, state.container, state.interface, body.public_key
             )
     except HTTPException:
         raise
@@ -660,16 +668,18 @@ async def revoke_client(
     session: SessionDep,
 ) -> None:
     server = await _get_or_404(server_id, session)
-    # клиент на паузе уже снят с сервера — SSH-удаление не нужно, только чистим БД
     is_paused = body.public_key in await pausestore.list_paused(session, server_id, "awg")
-    if not is_paused:
-        try:
-            async with _connect(server) as conn:
-                state = await awg.read_state(conn, server.host)
-                await awg.revoke_client(
-                    conn, state.container, state.interface, body.public_key
-                )
-        except Exception as exc:  # noqa: BLE001
+    # клиент на паузе снят с сервера, но пира снимаем все равно (это
+    # идемпотентно): после отката снимка он мог ожить, и отзыв по одной
+    # записи о паузе оставлял его работать. Для паузы ошибка ноды не мешает.
+    try:
+        async with _connect(server) as conn:
+            state = await awg.read_state(conn, server.host)
+            await awg.revoke_client(
+                conn, state.container, state.interface, body.public_key
+            )
+    except Exception as exc:  # noqa: BLE001
+        if not is_paused:
             raise _ssh_error(exc) from exc
     await audit.record(
         session, user.username, "awg_revoke", server.name, body.public_key

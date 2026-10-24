@@ -3,6 +3,9 @@ import { api, ApiError, type DeployStatus } from './api'
 import { useI18n } from './i18n'
 import { useModalDismiss } from './useModalDismiss'
 
+// после стольких неудачных опросов статуса подряд перестаем опрашивать
+const MAX_POLL_FAILS = 5
+
 type Props = {
   serverId: number
   serverName: string
@@ -45,6 +48,9 @@ export function DeployModal({
   const startedRef = useRef(false)
   const aliveRef = useRef(true)
   const timerRef = useRef<number | undefined>(undefined)
+  // сколько опросов статуса подряд упали; pollWarn - показать, что связь сбоит
+  const pollFailsRef = useRef(0)
+  const [pollWarn, setPollWarn] = useState(false)
 
   const handleError = useCallback(
     (err: unknown) => {
@@ -52,9 +58,15 @@ export function DeployModal({
         onUnauthorized()
         return
       }
-      // 409 от развёртывания = порт занят другим контейнером: показываем поле
-      // выбора порта, чтобы можно было повторить, а не упираться в тупик
-      if (err instanceof ApiError && err.status === 409) {
+      // 409 бывает разный (чужой контейнер, уже 3.1, идет другая установка).
+      // Поле выбора порта нужно только при установке и только когда бэкенд
+      // пишет "Порт {port}/{proto} уже занят: ...", остальное просто показываем
+      if (
+        mode === 'deploy' &&
+        err instanceof ApiError &&
+        err.status === 409 &&
+        /^Порт \d+\/\w+ уже занят/.test(err.message)
+      ) {
         setPortBusy(true)
         // подставляем соседний порт, чтобы не пришлось придумывать самому. Для
         // XRay с занятым 443 (часто это веб-сервер или сама панель) сразу 8443:
@@ -65,7 +77,7 @@ export function DeployModal({
       }
       setError(err instanceof Error ? err.message : t('Ошибка'))
     },
-    [onUnauthorized, t, protocol],
+    [onUnauthorized, t, protocol, mode],
   )
 
   const poll = useCallback(async () => {
@@ -75,6 +87,8 @@ export function DeployModal({
         `/api/servers/${serverId}/${protocol}/deploy/status`,
       )
       if (!aliveRef.current) return
+      pollFailsRef.current = 0
+      setPollWarn(false)
       setStatus(s)
       if (s.state === 'done') {
         onDone()
@@ -82,16 +96,33 @@ export function DeployModal({
       }
       if (s.state === 'error') return
     } catch (err) {
-      handleError(err)
-      return
+      if (!aliveRef.current) return
+      if (err instanceof ApiError && err.status === 401) {
+        onUnauthorized()
+        return
+      }
+      // разовый сбой сети/панели не должен останавливать опрос: установка на
+      // ноде идет дальше. Сдаемся только после нескольких неудач подряд
+      pollFailsRef.current += 1
+      setPollWarn(true)
+      if (pollFailsRef.current >= MAX_POLL_FAILS) {
+        setError(
+          t('Не удалось получить статус, установка на ноде может продолжаться. Проверьте позже: {err}', {
+            err: err instanceof Error ? err.message : t('Ошибка'),
+          }),
+        )
+        return
+      }
     }
     timerRef.current = window.setTimeout(() => void poll(), 3000)
-  }, [serverId, protocol, onDone, handleError])
+  }, [serverId, protocol, onDone, onUnauthorized, t])
 
   const start = useCallback(
     async (p: number) => {
       setError(null)
       setPortBusy(false)
+      pollFailsRef.current = 0
+      setPollWarn(false)
       try {
         const path =
           mode === 'update'
@@ -173,6 +204,9 @@ export function DeployModal({
         </div>
 
         {error && <p className="form-error">{error}</p>}
+        {!error && pollWarn && (
+          <p className="muted small">{t('Не удалось получить статус, повторяем запрос...')}</p>
+        )}
 
         {portBusy && (
           <div className="row port-retry">

@@ -1,4 +1,6 @@
 import asyncio
+import logging
+import secrets
 from contextlib import asynccontextmanager
 from typing import AsyncIterator
 
@@ -35,15 +37,23 @@ from app.db import create_engine_and_factory
 from app.sshkeys import ensure_panel_key
 
 
+log = logging.getLogger("acontrol")
+
 _WEAK_SECRETS = {"", "changeme", "dev-insecure-change-me"}
 _WEAK_PASSWORDS = {"", "changeme", "admin"}
 
 
 def _enforce_secrets(settings) -> None:
     """Отказываемся стартовать в проде с дефолтными/слабыми секретами."""
+    weak_secret = settings.jwt_secret in _WEAK_SECRETS or len(settings.jwt_secret) < 32
     if settings.debug:
+        # в отладке пускаем, но не с секретом из публичного репо: с ним любой
+        # подделал бы токен админа. Случайный секрет живет до рестарта.
+        if weak_secret:
+            settings.jwt_secret = secrets.token_hex(32)
+            log.warning("debug: слабый VPNPANEL_JWT_SECRET заменен случайным")
         return
-    if settings.jwt_secret in _WEAK_SECRETS or len(settings.jwt_secret) < 32:
+    if weak_secret:
         raise RuntimeError(
             "VPNPANEL_JWT_SECRET не задан или слишком слабый — задайте случайный "
             "секрет (openssl rand -hex 32). Панель не запущена в целях безопасности."

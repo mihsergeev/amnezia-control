@@ -4,22 +4,34 @@
 # Панель не может сама сообщить о собственной смерти по своему же каналу, поэтому
 # нужен наблюдатель ВНЕ её процесса. Этот скрипт — такой наблюдатель на самом
 # хосте панели: он читает «пульс», который панель пишет раз в минуту в
-# /app/acontrol/data/heartbeat (backend/app/heartbeat.py), и НЕЗАВИСИМО шлёт в
+# $ACONTROL_HEARTBEAT (backend/app/heartbeat.py), и НЕЗАВИСИМО шлёт в
 # Telegram/webhook, если:
 #   • пульс протух (>MAX_AGE) — контейнер/БД мертвы или зависли;
 #   • alerts_ok=0 — self-тест канала алертов панели не прошёл.
 # Креды (токен/чат/зеркало) берёт из самого пульса, поэтому достучится даже когда
 # панель и БД уже не отвечают. Алертит только на переходе (без спама).
 #
-# УСТАНОВКА (на admin-хосте панели, от root):
+# НАСТРОЙКА через переменные окружения (по умолчанию значения ниже):
+#   ACONTROL_DIR         каталог установки панели (где compose.yml и data/),
+#                        по умолчанию /app/acontrol
+#   ACONTROL_HEARTBEAT   файл пульса, по умолчанию $ACONTROL_DIR/data/heartbeat
+#   ACONTROL_WD_DIR      куда сторож пишет свое состояние, по умолчанию /lib65/acontrol
+#   ACONTROL_WD_STATE    файл состояния, по умолчанию $ACONTROL_WD_DIR/watchdog.state
+#   ACONTROL_HB_MAX_AGE  через сколько секунд пульс считается протухшим (600)
+#   ACONTROL_WD_STRIKES  сколько проверок подряд с проблемой до тревоги (2)
+# Свои пути можно задать прямо в строке cron, например:
+#   */5 * * * * root ACONTROL_DIR=/opt/acontrol ACONTROL_WD_DIR=/var/lib/acontrol /opt/acontrol/ops/panel-watchdog.sh
+#
+# УСТАНОВКА с путями по умолчанию (на хосте панели, от root):
 #   install -D -m755 ops/panel-watchdog.sh /lib65/acontrol/panel-watchdog.sh
 #   echo '*/5 * * * * root /lib65/acontrol/panel-watchdog.sh' > /etc/cron.d/acontrol-watchdog
 #   chmod 644 /etc/cron.d/acontrol-watchdog
-# (скрипт — в /lib65, т.к. /usr исключён из бэкапа; cron-конфиг в /etc.)
 
 set -u
-HB="${ACONTROL_HEARTBEAT:-/app/acontrol/data/heartbeat}"
-STATE=/lib65/acontrol/watchdog.state
+ACONTROL_DIR="${ACONTROL_DIR:-/app/acontrol}"
+HB="${ACONTROL_HEARTBEAT:-$ACONTROL_DIR/data/heartbeat}"
+WD_DIR="${ACONTROL_WD_DIR:-/lib65/acontrol}"
+STATE="${ACONTROL_WD_STATE:-$WD_DIR/watchdog.state}"
 MAX_AGE="${ACONTROL_HB_MAX_AGE:-600}"
 STRIKES="${ACONTROL_WD_STRIKES:-2}"                       # проверок ПОДРЯД с проблемой до тревоги
 NOW=$(date +%s)
@@ -76,4 +88,5 @@ else
     alerted=ok
   fi
 fi
+mkdir -p "$(dirname "$STATE")" 2>/dev/null
 printf '%s\n%s\n' "$alerted" "$strikes" > "$STATE"

@@ -95,10 +95,13 @@ async def issue_client(
     сохраняется в панели, поэтому его можно забрать повторно."""
     server = await _get_or_404(server_id, session)
     dns = body.dns or get_settings().awg_client_dns
+    reserved = await pausestore.paused_ips(session, server_id, "awg")
     try:
         async with _connect(server) as conn:
             state = await awg.read_state(conn, server.host)
-            created, config = await awg.create_client(conn, state, body.name, dns)
+            created, config = await awg.create_client(
+                conn, state, body.name, dns, reserved=reserved
+            )
     except Exception as exc:  # noqa: BLE001
         raise _ssh_error(exc) from exc
     await _store_config(session, server_id, created.public_key, created.name, config)
@@ -164,14 +167,17 @@ async def revoke_client(
     server = await _get_or_404(server_id, session)
     # клиент на паузе уже снят с ноды — SSH не нужен, чистим только БД
     is_paused = public_key in await pausestore.list_paused(session, server_id, "awg")
-    if not is_paused:
-        try:
-            async with _connect(server) as conn:
-                state = await awg.read_state(conn, server.host)
-                await awg.revoke_client(
-                    conn, state.container, state.interface, public_key
-                )
-        except Exception as exc:  # noqa: BLE001
+    # клиент на паузе снят с сервера, но пира снимаем все равно (это
+    # идемпотентно): после отката снимка он мог ожить, и отзыв по одной
+    # записи о паузе оставлял его работать. Для паузы ошибка ноды не мешает.
+    try:
+        async with _connect(server) as conn:
+            state = await awg.read_state(conn, server.host)
+            await awg.revoke_client(
+                conn, state.container, state.interface, public_key
+            )
+    except Exception as exc:  # noqa: BLE001
+        if not is_paused:
             raise _ssh_error(exc) from exc
     await audit.record(session, _actor(client), "awg_revoke", server.name, public_key)
     await pausestore.drop(session, server_id, "awg", public_key)

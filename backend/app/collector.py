@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from app import alerts, audit, awg, deploy, geo, nodestat, openvpn, settings_store, sshops, xray
 from app.config import Settings
 from app.models import (
+    AuditLog,
     ClientName,
     ClientTrafficSample,
     NodeMetric,
@@ -28,6 +29,13 @@ ONLINE_WINDOW = 180  # секунд — пир считается онлайн, 
 _hostkey_alerted: set[int] = set()
 
 _ZERO = {"rx": 0, "tx": 0, "total": 0, "online": 0}
+
+# Какие протоколы сервера прочитались в прошлом цикле. Счетчик сервера - сумма
+# по протоколам: если один не прочитался, сумма падает (дельта обрезается до 0),
+# а в следующем цикле весь накопленный счетчик протокола уходил бы как прирост.
+# Поэтому, пока набор протоколов не повторился два цикла подряд, общий снимок
+# сервера не пишем: дельта считается между двумя снимками с одним набором.
+_last_parts: dict[int, frozenset[str]] = {}
 
 
 async def _awg_part(conn, host) -> tuple[dict, list[dict]]:
@@ -50,11 +58,13 @@ async def _awg_part(conn, host) -> tuple[dict, list[dict]]:
     now = datetime.now(timezone.utc).timestamp()
     totals = {"rx": 0, "tx": 0, "total": 0, "online": 0}
     clients: list[dict] = []
+    parts: list[str] = []
     for container, proto in targets:
         try:
             state = await awg.read_state(conn, host, container=container)
         except Exception:  # noqa: BLE001 — один протокол не должен ронять сбор
             continue
+        parts.append(f"{proto}:{container}")
         totals["rx"] += sum(c.rx_bytes for c in state.clients)
         totals["tx"] += sum(c.tx_bytes for c in state.clients)
         totals["total"] += len(state.clients)
@@ -68,6 +78,8 @@ async def _awg_part(conn, host) -> tuple[dict, list[dict]]:
              "tx": c.tx_bytes, "name": c.name}
             for c in state.clients
         ]
+    totals["parts"] = parts
+    totals["known"] = [(c["protocol"], c["client_id"]) for c in clients]
     return totals, clients
 
 
@@ -92,7 +104,10 @@ async def _openvpn_part(conn, host) -> tuple[dict, list[dict]]:
             {"protocol": "openvpn", "client_id": cid,
              "rx": st["rx"], "tx": st["tx"], "name": ovpn_names.get(cid, "")}
         )
-    return {"rx": rx, "tx": tx, "total": total, "online": online}, clients
+    known = [("openvpn", e.get("clientId")) for e in table
+             if isinstance(e, dict) and e.get("clientId")]
+    return {"rx": rx, "tx": tx, "total": total, "online": online,
+            "parts": ["openvpn"], "known": known}, clients
 
 
 async def _xray_part(conn, host) -> tuple[dict, list[dict]]:
@@ -112,7 +127,8 @@ async def _xray_part(conn, host) -> tuple[dict, list[dict]]:
             {"protocol": "xray", "client_id": uid,
              "rx": st["up"], "tx": st["down"], "name": names.get(uid, "")}
         )
-    return {"rx": rx, "tx": tx, "total": len(clients), "online": 0}, rows
+    return {"rx": rx, "tx": tx, "total": len(clients), "online": 0,
+            "parts": ["xray"], "known": [("xray", c.client_id) for c in clients]}, rows
 
 
 async def _sample_server(
@@ -129,6 +145,8 @@ async def _sample_server(
             ) as conn:
                 agg = dict(_ZERO)
                 client_rows: list[dict] = []
+                parts: set[str] = set()
+                known: list[tuple[str, str]] = []
                 for part in (_awg_part, _openvpn_part, _xray_part):
                     try:
                         totals, cl = await part(conn, server.host)
@@ -136,6 +154,8 @@ async def _sample_server(
                         continue
                     for k in agg:
                         agg[k] += totals[k]
+                    parts.update(totals.get("parts") or [part.__name__])
+                    known.extend(totals.get("known") or [])
                     client_rows.extend(cl)
                 try:
                     res = await nodestat.read_resources(conn)
@@ -161,6 +181,8 @@ async def _sample_server(
         "clients_online": agg["online"],
         "resources": res,
         "clients": client_rows,
+        "parts": frozenset(parts),
+        "known": known,  # все клиенты на ноде, не только с трафиком
         "check": check,  # CheckResult | None (None = docker не ответил, не трогаем список)
     }
 
@@ -182,19 +204,27 @@ async def collect_once(
     )
     names = {s.id: s.name for s in servers}
     samples = [r for r in results if r is not None]
+    stable = []
+    for s in samples:
+        prev = _last_parts.get(s["server_id"])
+        parts = s.get("parts", frozenset())
+        _last_parts[s["server_id"]] = parts
+        if prev is None or prev == parts:
+            stable.append(s)
     if samples:
-        async with session_factory() as session:
-            session.add_all(
-                TrafficSample(
-                    server_id=s["server_id"],
-                    rx_total=s["rx_total"],
-                    tx_total=s["tx_total"],
-                    clients_total=s["clients_total"],
-                    clients_online=s["clients_online"],
+        if stable:
+            async with session_factory() as session:
+                session.add_all(
+                    TrafficSample(
+                        server_id=s["server_id"],
+                        rx_total=s["rx_total"],
+                        tx_total=s["tx_total"],
+                        clients_total=s["clients_total"],
+                        clients_online=s["clients_online"],
+                    )
+                    for s in stable
                 )
-                for s in samples
-            )
-            await session.commit()
+                await session.commit()
         try:
             await _store_node_metrics(session_factory, settings, samples, names)
         except Exception:  # noqa: BLE001 — метрики нод не критичны
@@ -314,18 +344,27 @@ async def _store_client_samples(session_factory, samples) -> None:
 
 async def _store_client_names(session_factory, samples) -> None:
     """Апсертит имена клиентов (из clientsTable ноды) в кэш ClientName — чтобы
-    статистика показывала имена и для клиентов, созданных не через панель."""
+    статистика показывала имена и для клиентов, созданных не через панель.
+    Имена клиентов, которых больше нет на ноде, удаляет: иначе поиск показывал
+    давно отозванных. Удаляем только по протоколам, которые прочитались."""
     wanted: dict[tuple[int, str, str], str] = {}
+    present: set[tuple[int, str, str]] = set()
+    read_ok: set[tuple[int, str]] = set()
     for s in samples:
         sid = s["server_id"]
+        for part in s.get("parts", ()):
+            read_ok.add((sid, part.split(":", 1)[0]))
+        for proto, cid in s.get("known", ()):
+            present.add((sid, proto, cid))
         for c in s.get("clients", []):
+            present.add((sid, c["protocol"], c["client_id"]))
             name = (c.get("name") or "").strip()
             if not name or name == "—":
                 continue
             wanted[(sid, c["protocol"], c["client_id"])] = name[:128]
-    if not wanted:
+    server_ids = {k[0] for k in wanted} | {k[0] for k in read_ok}
+    if not server_ids:
         return
-    server_ids = {k[0] for k in wanted}
     async with session_factory() as session:
         existing = {
             (r.server_id, r.protocol, r.client_id): r
@@ -333,6 +372,9 @@ async def _store_client_names(session_factory, samples) -> None:
                 select(ClientName).where(ClientName.server_id.in_(server_ids))
             )
         }
+        for key, row in existing.items():
+            if (key[0], key[1]) in read_ok and key not in present:
+                await session.delete(row)
         for (sid, proto, cid), name in wanted.items():
             row = existing.get((sid, proto, cid))
             if row is None:
@@ -409,6 +451,12 @@ async def _prune(session_factory, settings: Settings) -> None:
         await session.execute(
             delete(ClientTrafficSample).where(ClientTrafficSample.ts < client_cutoff)
         )
+        # журнал пишут и неудачные входы без авторизации, без срока он растет
+        if settings.audit_retention_days > 0:
+            audit_cutoff = datetime.now(timezone.utc) - timedelta(
+                days=settings.audit_retention_days
+            )
+            await session.execute(delete(AuditLog).where(AuditLog.ts < audit_cutoff))
         await session.commit()
 
 

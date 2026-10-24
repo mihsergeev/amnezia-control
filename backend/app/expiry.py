@@ -7,7 +7,7 @@ from datetime import datetime, timedelta, timezone
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app import alerts, audit, awg, deploy, openvpn, sshops, xray
+from app import alerts, audit, awg, deploy, nodelock, openvpn, pausestore, sshops, xray
 from app.config import Settings
 from app.models import AwgConfig, AwgNote, ClientLimit, OvpnConfig, Server
 from app.sshkeys import ensure_panel_key, key_paths
@@ -20,6 +20,31 @@ _deferred_alerted: set[tuple[int, str]] = set()
 _expiry_warned: set[tuple[int, str]] = set()
 
 
+class NodeNotReady(Exception):
+    """Контейнер протокола не запущен: отзыв нельзя считать выполненным."""
+
+
+class ProtocolGone(Exception):
+    """Контейнера протокола на ноде нет совсем, даже остановленного: клиент
+    исчез вместе с протоколом, откладывать отзыв бессмысленно."""
+
+
+async def _not_ready(conn, protocol: str, msg: str) -> Exception:
+    """NodeNotReady, если контейнер протокола есть хотя бы остановленным
+    (поднимется и вернет клиента), иначе ProtocolGone."""
+    out = await conn.run(
+        awg._DOCKER + "$DOCKER ps -a --format '{{.Names}}'", check=False
+    )
+    if out.exit_status != 0:
+        return NodeNotReady(msg)
+    names = [n.strip().lower() for n in (out.stdout or "").splitlines() if n.strip()]
+    if protocol == "awg3":
+        present = any("awg3" in n for n in names)
+    else:
+        present = any(n.startswith("amnezia-awg") and "awg3" not in n for n in names)
+    return NodeNotReady(msg) if present else ProtocolGone(msg)
+
+
 async def revoke_on_node(server: Server, protocol: str, client_id: str, key_path, timeout):
     # жёсткий таймаут: без него зависший docker exec на одной ноде застопорил бы
     # весь последовательный проход expiry — остальные истёкшие не отозвались бы.
@@ -30,30 +55,39 @@ async def revoke_on_node(server: Server, protocol: str, client_id: str, key_path
 async def _revoke_on_node_inner(
     server: Server, protocol: str, client_id: str, key_path, timeout
 ):
-    async with sshops.connect(
+    async with nodelock.connect(protocol, server.id, sshops.connect(
         server.host, server.ssh_port, server.ssh_user, key_path, timeout
-    ) as conn:
+    )) as conn:
+        # Контейнер протокола не запущен (упал, рестартует) - это НЕ успешный
+        # отзыв: раньше ветка тихо ничего не делала, срок и конфиг удалялись из
+        # БД, а поднявшийся контейнер оставлял истекшего клиента бессрочным.
+        # Исключение откладывает отзыв до следующего прохода.
         if protocol == "awg":
-            state = await awg.read_state(conn, server.host)
+            cont = (await awg.detect_awg_containers(conn))["new"]
+            if not cont:
+                raise await _not_ready(conn, protocol, "контейнер AmneziaWG 2.0 не запущен")
+            state = await awg.read_state(conn, server.host, container=cont)
             await awg.revoke_client(conn, state.container, state.interface, client_id)
         elif protocol == "awg3":
             # у 3.0 свой контейнер — читаем состояние именно из него, иначе
             # истёкший клиент 3.0 остался бы на сервере вопреки сроку
             names = await deploy.awg3_containers(conn)
-            if names:
-                state = await awg.read_state(conn, server.host, container=names[0])
-                await awg.revoke_client(
-                    conn, state.container, state.interface, client_id
-                )
+            if not names:
+                raise await _not_ready(conn, protocol, "контейнер AmneziaWG 3.1 не запущен")
+            state = await awg.read_state(conn, server.host, container=names[0])
+            await awg.revoke_client(
+                conn, state.container, state.interface, client_id
+            )
         elif protocol == "awglegacy":
             # старый AmneziaWG живёт в своём контейнере (wg0) рядом с новым —
             # без этой ветки массовый отзыв молча пропускал бы legacy-клиентов
             cont = (await awg.detect_awg_containers(conn))["legacy"]
-            if cont:
-                state = await awg.read_state(conn, server.host, container=cont)
-                await awg.revoke_client(
-                    conn, state.container, state.interface, client_id
-                )
+            if not cont:
+                raise await _not_ready(conn, protocol, "контейнер AmneziaWG Legacy не запущен")
+            state = await awg.read_state(conn, server.host, container=cont)
+            await awg.revoke_client(
+                conn, state.container, state.interface, client_id
+            )
         elif protocol == "openvpn":
             container = await openvpn.detect_container(conn)
             await openvpn.revoke_client(conn, container, client_id)
@@ -87,6 +121,9 @@ async def cleanup_client_db(session: AsyncSession, server_id, protocol, client_i
             ClientLimit.client_id == client_id,
         )
     )
+    # клиент мог быть на паузе: без этого он висел в списке на паузе без срока,
+    # и "Возобновить" возвращал истекшего клиента бессрочным
+    await pausestore.drop(session, server_id, protocol, client_id)
 
 
 async def expiry_once(
@@ -115,11 +152,20 @@ async def expiry_once(
                 )
                 await session.commit()
             continue
+        detail = lim.name or lim.client_id
         try:
             await revoke_on_node(
                 server, lim.protocol, lim.client_id, key_path,
                 settings.ssh_connect_timeout,
             )
+        except ProtocolGone:
+            # протокол удалили с ноды: без этого алерт "не отозван" шел бы
+            # каждый день по каждому его клиенту, пока срок не снимут руками
+            log.info(
+                "истекший %s/%s: протокола на %s нет, снимаю срок",
+                lim.protocol, lim.client_id, server.name,
+            )
+            detail += " (протокола на ноде нет)"
         except Exception:  # noqa: BLE001 — нода недоступна: оставим, повторим позже
             log.warning(
                 "истёкший %s/%s: нода %s недоступна, отложил",
@@ -139,8 +185,7 @@ async def expiry_once(
         async with session_factory() as session:
             await cleanup_client_db(session, lim.server_id, lim.protocol, lim.client_id)
             await audit.record(
-                session, "система", f"{lim.protocol}_expired",
-                server.name, lim.name or lim.client_id,
+                session, "система", f"{lim.protocol}_expired", server.name, detail,
             )
         revoked += 1
     if revoked:

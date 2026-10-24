@@ -745,7 +745,7 @@ def _paths(tag: str) -> tuple[str, str, str]:
 # --- снимки конфигов протоколов для отката пересборки -----------------------
 # $HOME/.acontrol/snapshots/<tag>/<ts>.tar.gz — tar конфига из ЖИВОГО контейнера.
 SNAP_ROOT = f"{WORK_ROOT}/snapshots"
-_SNAP_ID_RE = re.compile(r"^\d{8}-\d{6}$")
+_SNAP_ID_RE = re.compile(r"\d{8}-\d{6}")
 
 # спецификация снимка на протокол: контейнер, пути внутри контейнера для tar,
 # clientsTable для подсчёта клиентов, команда применения восстановленного конфига
@@ -811,8 +811,11 @@ async def snapshot_config(
         f'F="$R/$TS.tar.gz"; '
         f'if sudo docker exec "$C" tar -czf - {spec["paths"]} 2>/dev/null > "$F" && [ -s "$F" ]; then '
         f'n=$(sudo docker exec "$C" grep -c "clientId" "{spec["table"]}" 2>/dev/null || echo 0); '
-        f'echo "$n" > "$R/$TS.n"; echo "SNAP $TS"; else rm -f "$F"; fi; '
-        f'ls -1t "$R"/*.tar.gz 2>/dev/null | tail -n +{keep + 1} | while read f; do rm -f "$f" "${{f%.tar.gz}}.n"; done'
+        # .c - из какого контейнера снимок: под тегом awg лежат и 2.0, и Legacy,
+        # под openvpn - и чистый OpenVPN, и с Cloak, откат должен попасть туда же
+        f'echo "$n" > "$R/$TS.n"; echo "$C" > "$R/$TS.c"; echo "SNAP $TS"; else rm -f "$F"; fi; '
+        f'ls -1t "$R"/*.tar.gz 2>/dev/null | tail -n +{keep + 1} | while read f; do '
+        f'rm -f "$f" "${{f%.tar.gz}}.n" "${{f%.tar.gz}}.c"; done'
     )
     out = await conn.run(cmd, check=False)
     for line in (out.stdout or "").splitlines():
@@ -835,7 +838,7 @@ async def list_snapshots(conn: asyncssh.SSHClientConnection, tag: str) -> list[d
         if "|" not in line:
             continue
         ts, n = line.rsplit("|", 1)
-        if _SNAP_ID_RE.match(ts):
+        if _SNAP_ID_RE.fullmatch(ts):
             res.append({"id": ts, "clients": int(n) if n.strip().isdigit() else 0})
     return res
 
@@ -844,18 +847,26 @@ async def restore_snapshot(
     conn: asyncssh.SSHClientConnection, tag: str, snap_id: str
 ) -> bool:
     """Восстанавливает конфиг из снимка (распаковка tar В живой контейнер + reload)."""
-    if not _SNAP_ID_RE.match(snap_id or ""):
+    if not _SNAP_ID_RE.fullmatch(snap_id or ""):
         raise ValueError("некорректный id снимка")
     spec = _SNAP_SPECS[tag]
-    reload_cmd = spec["reload"].replace("%C", spec["container"])
+    default = spec["container"]
+    reload_cmd = spec["reload"].replace("%C", '"$C"')
     # РАСПАКОВКА проверяется по коду возврата tar — раньше RESTORE_OK печатался
     # безусловно, и битый/оборванный (ENOSPC) снимок «восстанавливался» с ошибкой,
     # а API рапортовал успех. Теперь reload и RESTORE_OK — только если tar прошёл.
+    # Контейнер берем из .c рядом со снимком (старые снимки без него - штатный).
+    # Если того контейнера уже нет, не откатываем в чужой: это сломало бы его.
+    # Не штатный контейнер (Legacy, OpenVPN без Cloak) просто перезапускаем,
+    # его start.sh сам поднимет интерфейс из восстановленного конфига.
     cmd = (
-        f'C={spec["container"]}; F={SNAP_ROOT}/{tag}/{snap_id}.tar.gz; '
+        f'F={SNAP_ROOT}/{tag}/{snap_id}.tar.gz; '
         f'[ -f "$F" ] || {{ echo NO_SNAP; exit 0; }}; '
+        f'C=$(head -n1 "${{F%.tar.gz}}.c" 2>/dev/null); C=${{C:-{default}}}; '
+        f'sudo docker ps --format "{{{{.Names}}}}" | grep -qxF -- "$C" || {{ echo NO_CONT; exit 0; }}; '
         f'if cat "$F" | sudo docker exec -i "$C" tar -xzf - -C /; then '
-        f'{reload_cmd} >/dev/null 2>&1; echo RESTORE_OK; '
+        f'if [ "$C" = "{default}" ]; then {reload_cmd} >/dev/null 2>&1; '
+        f'else sudo docker restart "$C" >/dev/null 2>&1; fi; echo RESTORE_OK; '
         f'else echo RESTORE_FAIL; fi'
     )
     out = await conn.run(cmd, check=False)
