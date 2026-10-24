@@ -4,6 +4,102 @@ All notable changes to Amnezia Control are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.56.0] - 2026-10-24
+
+A security and reliability release from a full review of the panel. Some API
+calls now ask for the panel password again, see **Changed** before you upgrade
+an integration that uses them.
+
+### Security
+- **An SSH user name from an import file can no longer run commands on the
+  panel host's nodes as root.** Names are now checked against a strict pattern
+  everywhere they come in: the server form, Amnezia import, bulk import, the
+  server transfer file and backup restore.
+- **Downloading a backup asks for the panel password and is written to the
+  audit log.** A backup holds the panel SSH key to every node, the 2FA secret and
+  client keys; one stolen session token was enough to take it.
+- **Restoring a backup asks for the panel password**, checks the file before
+  touching the database and sends a security alert.
+- **Turning 2FA on or off asks for the panel password**, and the code to turn
+  it off can no longer be brute-forced: wrong passwords and codes share one
+  lockout.
+- **Login lockout really lasts 15 minutes** and also counts failures per user
+  name across addresses (30 tries). IPv6 clients are counted per /64.
+- **Logout revokes the session token** on the server, not only in the browser.
+- **A TOTP code can't be used twice** even by two requests at the same moment.
+- **The DNS field of a new client can't add lines to its config.**
+- **Setup by password checks the node's host key** like every other connection.
+- **The Telegram bot token no longer ends up in the log** when sending fails.
+- **With `VPNPANEL_DEBUG=1` a weak JWT secret is replaced by a random one**
+  instead of being accepted.
+- **A password longer than 72 bytes no longer breaks login or the backend start**
+  (bcrypt 5 rejects such input). Existing hashes keep working.
+- **bcrypt runs off the event loop**, so a burst of logins doesn't stall the panel.
+- **A forgotten `ACONTROL_ADMIN_PASSWORD_RESET=1` is visible**: every reset is
+  written to the audit log and sent as a security alert.
+- Swagger no longer remembers API keys in the browser; `ACONTROL_API_DOCS=0`
+  turns `/api/docs` off.
+
+### Fixed
+- **Two operations on one node no longer run at the same time.** Adding two
+  clients at once (or a double Enter) could give both the same IP. Operations
+  on a node now wait for each other, and a busy node answers "try again in a
+  minute" after two minutes.
+- **The IP of a paused client is no longer given to a new client**, and resuming
+  a client that is already live no longer duplicates its peer.
+- **Expiry dates and traffic history on the 3.1 and Legacy tabs** were stored as
+  if they belonged to 2.0. Each version keeps its own now (database migration
+  0023 sorts the existing rows).
+- **Auto-revoke by expiry no longer reports success when the 3.1 or Legacy
+  container is down**: it retries later. If the protocol was removed from the
+  node altogether, the expiry is dropped instead of alerting every day.
+- **Bulk revoke from search** now really revokes 3.1 and Legacy clients.
+- **Reissuing a client creates the new one first** and keeps its expiry date,
+  so a failed reissue no longer leaves the client with nothing.
+- **A paused client with a past expiry is no longer resumed without one**, and
+  revoking a paused client also removes it from the node.
+- **Backups include paused clients and API keys.** Auto-backups are written to a
+  temporary file and checked before old copies are rotated out.
+- **Rolling back a 2.0 snapshot goes into the container it was taken from**
+  (Legacy snapshots used to land in the 2.0 container). The same goes for
+  OpenVPN with and without Cloak.
+- **Writing XRay and OpenVPN files on the node is checked**: a failed write
+  (for example a full disk) is reported and leaves the old file intact.
+- **"Full access" on a node with only 3.1** no longer installs a key before
+  saying it can't be used.
+- **Traffic charts no longer show false spikes** when one protocol of a node
+  could not be read for one cycle.
+- **The server transfer file** no longer brings expiry dates that have already
+  passed (they would revoke live clients right after import) or runtime tables.
+- **Changing `ACONTROL_ADMIN_USER`** renames the admin instead of creating a
+  second account.
+- **The audit log keeps one year** (`audit_retention_days`), and search no
+  longer shows clients that are gone from the node.
+- Web UI: switching between the 2.0, 3.1 and Legacy tabs quickly can no longer
+  send a revoke to the wrong one; rollback errors are shown; rollback, rebuild
+  and "Upgrade to 3.1" stay available when Docker Hub is unreachable; only a
+  401 logs you out, and logging out closes all windows; Escape in a note, a
+  menu or a config window closes only that; 422 errors show the actual reason;
+  "Copy" for an API key works over plain http; the deploy window no longer
+  calls every 409 "port in use" and keeps polling after one failed request.
+  Missing English translations added.
+- README: the update steps now cover installs from prebuilt images, the
+  break-glass reset uses `docker compose up -d`, and the configuration table
+  lists all variables.
+
+### Changed
+- API: `GET /api/backup` is replaced by `POST /api/backup/download` with
+  `{"password": ...}`; `POST /api/backup/file/{name}` takes the same body.
+  `POST /api/backup/restore` needs the `X-Confirm-Password` header.
+  `POST /api/auth/2fa/setup`, `/enable` and `/disable` need `password` in the
+  body. New `POST /api/auth/logout`.
+- CI actions are pinned by commit; `latest` is published only for a stable
+  release. Backend dependencies have upper version bounds.
+
+### Notes
+- The migration runs on backend start. Back up the database first
+  (**⚙ > Download backup**), as before every update.
+
 ## [0.55.7] - 2026-10-23
 
 ### Fixed
