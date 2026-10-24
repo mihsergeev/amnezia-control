@@ -32,6 +32,15 @@ def generate() -> tuple[str, str, str]:
     return f"ack_{prefix}_{secret}", prefix, key_hash
 
 
+def expired(row: ApiKey, now: datetime | None = None) -> bool:
+    if row.expires_at is None:
+        return False
+    exp = row.expires_at
+    if exp.tzinfo is None:  # SQLite отдает дату без пояса
+        exp = exp.replace(tzinfo=timezone.utc)
+    return exp <= (now or datetime.now(timezone.utc))
+
+
 def split(key: str) -> tuple[str, str] | None:
     """Разбирает `ack_<prefix>_<secret>`. None — формат не наш."""
     parts = (key or "").strip().split("_")
@@ -51,7 +60,7 @@ async def authenticate(session: AsyncSession, key: str) -> ApiKey | None:
         return None
     prefix, secret = parsed
     row = await session.scalar(select(ApiKey).where(ApiKey.prefix == prefix))
-    if row is None or row.revoked:
+    if row is None or row.revoked or expired(row):
         return None
     try:
         if not bcrypt.checkpw(secret.encode(), row.key_hash.encode()):

@@ -52,11 +52,19 @@ def _actor(client) -> str:
 
 
 @router.get("/servers", response_model=list[V1ServerOut], summary="Список серверов")
-async def list_servers(_: ApiClient, session: SessionDep) -> list[Server]:
-    """Серверы панели. `last_check_ok` — результат последней проверки доступности
-    (`null` — ещё не проверялся)."""
+async def list_servers(client: ApiClient, session: SessionDep) -> list[Server]:
+    """Серверы панели, доступные ключу. `last_check_ok` - результат последней
+    проверки доступности (`null` - еще не проверялся)."""
     rows = await session.scalars(select(Server).order_by(Server.position, Server.id))
-    return list(rows)
+    return [s for s in rows if client.allows(s.id)]
+
+
+async def _server(client, server_id: int, session) -> Server:
+    """Сервер по id, если ключу он разрешен. Чужой сервер для ключа - 404, как
+    несуществующий: ключ не должен узнавать, какие еще серверы есть в панели."""
+    if not client.allows(server_id):
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Сервер не найден")
+    return await _get_or_404(server_id, session)
 
 
 @router.get(
@@ -65,11 +73,11 @@ async def list_servers(_: ApiClient, session: SessionDep) -> list[Server]:
     summary="Список клиентов AmneziaWG",
 )
 async def list_clients(
-    server_id: int, _: ApiClient, session: SessionDep
+    server_id: int, client: ApiClient, session: SessionDep
 ) -> list[dict]:
     """Живые пиры ноды + клиенты на паузе. `has_config=true` — конфиг сохранён в
     панели и его можно забрать через `/clients/config`."""
-    server = await _get_or_404(server_id, session)
+    server = await _server(client, server_id, session)
     try:
         async with _connect(server) as conn:
             state = await awg.read_state(conn, server.host)
@@ -93,7 +101,7 @@ async def issue_client(
     """Создаёт пира на ноде и возвращает конфиг: `config` — текст .conf,
     `config_amnezia` — ссылка `vpn://` для приложения AmneziaVPN. Конфиг
     сохраняется в панели, поэтому его можно забрать повторно."""
-    server = await _get_or_404(server_id, session)
+    server = await _server(client, server_id, session)
     dns = body.dns or get_settings().awg_client_dns
     reserved = await pausestore.paused_ips(session, server_id, "awg")
     try:
@@ -127,13 +135,13 @@ async def issue_client(
 )
 async def get_config(
     server_id: int,
-    _: ApiClient,
+    client: ApiClient,
     session: SessionDep,
     public_key: str = _PK,
 ) -> ConfigTextResponse:
     """404, если конфиг в панели не сохранён (клиент заведён мимо неё) — тогда
     его текст восстановить нельзя, нужен перевыпуск."""
-    server = await _get_or_404(server_id, session)
+    server = await _server(client, server_id, session)
     row = await session.scalar(
         select(AwgConfig).where(
             AwgConfig.server_id == server_id, AwgConfig.public_key == public_key
@@ -164,7 +172,7 @@ async def revoke_client(
 ) -> None:
     """Снимает пира с ноды и чистит его данные в панели. Идемпотентно: повторный
     вызов на уже отозванном клиенте тоже вернёт 204."""
-    server = await _get_or_404(server_id, session)
+    server = await _server(client, server_id, session)
     # клиент на паузе уже снят с ноды — SSH не нужен, чистим только БД
     is_paused = public_key in await pausestore.list_paused(session, server_id, "awg")
     # клиент на паузе снят с сервера, но пира снимаем все равно (это
@@ -203,7 +211,7 @@ async def pause_client(
 ) -> None:
     """Снимает пира с ноды, запомнив его IP: подключиться он не сможет, но
     возобновляется тем же ключом без перевыпуска конфига."""
-    server = await _get_or_404(server_id, session)
+    server = await _server(client, server_id, session)
     try:
         async with _connect(server) as conn:
             state = await awg.read_state(conn, server.host)
@@ -237,7 +245,7 @@ async def resume_client(
 ) -> None:
     """Возвращает пира на ноду с прежними ключом и IP — выданный ранее конфиг
     продолжает работать."""
-    server = await _get_or_404(server_id, session)
+    server = await _server(client, server_id, session)
     paused = await pausestore.list_paused(session, server_id, "awg")
     rec = paused.get(public_key)
     if rec is None:

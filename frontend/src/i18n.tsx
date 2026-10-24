@@ -77,6 +77,7 @@ const EN: Record<string, string> = {
   'Название': 'Name',
   'Новый ключ': 'New key',
   'Отозван API-ключ': 'API key revoked',
+  'Изменен API-ключ': 'API key changed',
   'Отозвать ключ «{name}»? Интеграция сразу перестанет работать.':
     'Revoke the key "{name}"? The integration will stop working immediately.',
   'Передавайте ключ в заголовке X-API-Key.': 'Send the key in the X-API-Key header.',
@@ -658,6 +659,15 @@ const EN: Record<string, string> = {
   'Скачивание бэкапа отклонено': 'Backup download denied',
   'Выход': 'Logout',
   'Аварийный сброс пароля из .env': 'Emergency password reset from .env',
+  'Действует до': 'Valid until',
+  'Ключ видит приватные конфиги клиентов. Кнопкой "Изменить" в списке ограничьте его нужными серверами и задайте срок.':
+    'A key can read private client configs. Use "Edit" in the list to limit it to the servers it needs and set an expiry date.',
+  'бессрочно': 'no expiry',
+  'все серверы': 'all servers',
+  'истек {date}': 'expired {date}',
+  'не удалось сохранить ключ': 'failed to save the key',
+  'ничего не отмечено = все серверы': 'nothing checked = all servers',
+  'пусто = бессрочно': 'empty = no expiry',
 }
 
 type Ctx = {

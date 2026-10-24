@@ -657,6 +657,8 @@ export type ApiKey = {
   created_at: string
   last_used_at: string | null
   revoked: boolean
+  expires_at: string | null
+  server_ids: number[]
 }
 
 // Полный ключ приходит ТОЛЬКО в ответе на создание — показать и не терять.
@@ -670,6 +672,18 @@ export async function createApiKey(name: string): Promise<ApiKeyCreated> {
   return api<ApiKeyCreated>('/api/apikeys', {
     method: 'POST',
     body: JSON.stringify({ name }),
+  })
+}
+
+// срок (null = бессрочно) и серверы (пусто = все) задаются целиком
+export async function updateApiKey(
+  id: number,
+  expires_at: string | null,
+  server_ids: number[],
+): Promise<ApiKey> {
+  return api<ApiKey>(`/api/apikeys/${id}`, {
+    method: 'PUT',
+    body: JSON.stringify({ expires_at, server_ids }),
   })
 }
 

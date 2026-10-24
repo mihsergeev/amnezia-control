@@ -221,6 +221,7 @@ Set in `.env` (see [`.env.example`](.env.example)):
 | `ACONTROL_CADDY_NETWORK` | `caddy` | Docker network of an existing caddy-docker-proxy (`compose.caddy.yml` only) |
 | `ACONTROL_PANEL_URL` | `https://<ACONTROL_DOMAIN>` | Public URL of the panel for links in alerts and the watchdog heartbeat; empty when no domain is set |
 | `ACONTROL_API_DOCS` | `1` | Swagger/OpenAPI at `/api/docs` (0 = off) |
+| `ACONTROL_TRUSTED_PROXIES` | (empty) | Proxies trusted in `X-Forwarded-For`; empty = loopback and Docker networks. Add your own proxy if it reaches the panel from another network |
 | `ACONTROL_DEFAULT_SSH_USER` | `acontrol` | Prefilled SSH user for new servers |
 | `ACONTROL_STATS_INTERVAL` | `300` | Metrics/monitoring interval, seconds (0 = off) |
 | `ACONTROL_EXPIRY_INTERVAL` | `300` | Expired-client auto-revoke scan, seconds (0 = off) |
@@ -244,7 +245,9 @@ a versioned HTTP API at `/api/v1`. Interactive docs: **`/api/docs`** (set
 `ACONTROL_API_DOCS=0` in `.env` to turn off Swagger/OpenAPI; the API itself keeps working).
 
 Create a key in the panel under **API keys**. It is shown once — store it right
-away, only a hash is kept. Send it in the `X-API-Key` header:
+away, only a hash is kept. A key can read private client configs, so use
+**Edit** in the key list to limit it to the servers it needs and give it an expiry
+date; other servers return 404 for it. Send it in the `X-API-Key` header:
 
 ```bash
 curl -H "X-API-Key: ack_..." https://panel.example.com/api/v1/servers
@@ -354,6 +357,17 @@ npm run dev                                          # http://localhost:5173
 ```
 
 DB migrations (Alembic) run automatically on backend startup.
+
+The backend image installs its dependencies only from `backend/requirements.lock`
+(pinned, with hashes). After changing dependencies in `pyproject.toml`, or to pick
+up library updates, regenerate it for the image's platform:
+
+```bash
+cd backend
+docker run --rm -v "$PWD:/w" -w /w python:3.14-slim sh -c \
+  "pip install -q pip-tools && pip-compile -q --generate-hashes --strip-extras \
+   --allow-unsafe --no-header -U -o requirements.lock pyproject.toml"
+```
 
 ---
 

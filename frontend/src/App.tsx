@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import {
   ApiError,
+  api,
   downloadBackup,
   getToken,
   logoutServer,
@@ -110,12 +111,17 @@ function App() {
     setStepUp({ kind: 'restore', file })
   }
 
+  // версию отдает только /api/config после входа: health без авторизации ее
+  // больше не показывает
   useEffect(() => {
-    fetch('/api/health')
-      .then((res) => (res.ok ? res.json() : null))
-      .then((body) => setVersion(body?.version ?? null))
+    if (!authed) {
+      setVersion(null)
+      return
+    }
+    api<{ version?: string }>('/api/config')
+      .then((body) => setVersion(body?.version || null))
       .catch(() => setVersion(null))
-  }, [])
+  }, [authed])
 
   // Локальный выход (токен истек или отозван). Окна закрываем, иначе они
   // оставались висеть поверх формы входа.

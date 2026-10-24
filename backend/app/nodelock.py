@@ -19,6 +19,10 @@ from fastapi import HTTPException, status
 
 # сколько ждать занятую ноду, прежде чем ответить "занята"
 WAIT_SECONDS = 120
+# предел на всю SSH-сессию операции. Сборки и деплой идут на ноде в фоне, так
+# что обычной операции хватает секунд; предел нужен на зависший docker exec,
+# который иначе держал бы ручку и блокировку ноды бесконечно
+OP_TIMEOUT = 300
 
 
 class _Lock:
@@ -67,5 +71,16 @@ async def hold(kind: str, server_id: int, *, wait: float = WAIT_SECONDS):
 async def connect(kind: str, server_id: int, conn_cm):
     """Блокировка ноды на все время SSH-сессии conn_cm (async context manager)."""
     async with hold(kind, server_id):
-        async with conn_cm as conn:
-            yield conn
+        limit = asyncio.timeout(OP_TIMEOUT)
+        try:
+            async with limit:
+                async with conn_cm as conn:
+                    yield conn
+        except TimeoutError as exc:
+            if not limit.expired():
+                raise  # свой таймаут операции (например, подключения)
+            raise HTTPException(
+                status.HTTP_504_GATEWAY_TIMEOUT,
+                "Нода не ответила за 5 минут, операция прервана. Проверьте сервер "
+                "и повторите.",
+            ) from exc
