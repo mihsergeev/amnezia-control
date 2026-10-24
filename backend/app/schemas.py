@@ -120,6 +120,7 @@ class BootstrapRequest(BaseModel):
 class ConfigOut(BaseModel):
     default_ssh_user: str
     panel_ip: str
+    version: str = ""
 
 
 class AwgClientOut(BaseModel):
@@ -534,10 +535,21 @@ class ApiKeyOut(BaseModel):
     created_at: datetime
     last_used_at: datetime | None = None
     revoked: bool = False
+    expires_at: datetime | None = None
+    server_ids: list[int] = Field(
+        default_factory=list, description="Серверы, с которыми работает ключ (пусто = все)"
+    )
 
 
 class ApiKeyCreateRequest(BaseModel):
     name: str = Field(min_length=1, max_length=120, description="Кому выдан ключ")
+
+
+class ApiKeyUpdateRequest(BaseModel):
+    """Ограничения ключа целиком: срок (null = бессрочно) и серверы (пусто = все)."""
+
+    expires_at: datetime | None = None
+    server_ids: list[int] = Field(default_factory=list, max_length=500)
 
 
 class ApiKeyCreated(ApiKeyOut):

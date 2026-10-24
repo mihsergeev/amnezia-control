@@ -1,5 +1,14 @@
 import { useCallback, useEffect, useState } from 'react'
-import { ApiError, createApiKey, listApiKeys, revokeApiKey, type ApiKey } from './api'
+import {
+  ApiError,
+  api,
+  createApiKey,
+  listApiKeys,
+  revokeApiKey,
+  updateApiKey,
+  type ApiKey,
+  type Server,
+} from './api'
 import { copyText } from './clipboard'
 import { useI18n } from './i18n'
 
@@ -15,6 +24,9 @@ export function ApiKeysPage({ onUnauthorized }: Props) {
   // на бэкенде лежит лишь хэш, повторно показать его невозможно.
   const [fresh, setFresh] = useState<{ name: string; key: string } | null>(null)
   const [copied, setCopied] = useState(false)
+  const [servers, setServers] = useState<Server[]>([])
+  // правка ограничений ключа: срок и серверы задаются после выпуска, в списке
+  const [editing, setEditing] = useState<{ id: number; date: string; ids: number[] } | null>(null)
 
   const load = useCallback(async () => {
     try {
@@ -29,6 +41,44 @@ export function ApiKeysPage({ onUnauthorized }: Props) {
   useEffect(() => {
     void load()
   }, [load])
+
+  useEffect(() => {
+    api<Server[]>('/api/servers')
+      .then(setServers)
+      .catch(() => setServers([]))
+  }, [])
+
+  function startEdit(k: ApiKey) {
+    setEditing({
+      id: k.id,
+      date: k.expires_at ? k.expires_at.slice(0, 10) : '',
+      ids: k.server_ids,
+    })
+  }
+
+  async function saveEdit() {
+    if (!editing) return
+    try {
+      // срок до конца выбранного дня по UTC
+      const exp = editing.date ? `${editing.date}T23:59:59+00:00` : null
+      await updateApiKey(editing.id, exp, editing.ids)
+      setEditing(null)
+      await load()
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 401) return onUnauthorized()
+      setError(err instanceof ApiError ? err.message : t('не удалось сохранить ключ'))
+    }
+  }
+
+  function scope(k: ApiKey) {
+    if (!k.server_ids.length) return t('все серверы')
+    const names = new Map(servers.map((s) => [s.id, s.name]))
+    return k.server_ids.map((id) => names.get(id) ?? `#${id}`).join(', ')
+  }
+
+  function expired(k: ApiKey) {
+    return !!k.expires_at && new Date(k.expires_at).getTime() <= Date.now()
+  }
 
   async function create() {
     if (!name.trim() || creating) return
@@ -87,6 +137,9 @@ export function ApiKeysPage({ onUnauthorized }: Props) {
           {t(
             'Ключи нужны для интеграции внешних систем с панелью через /api/v1: выдавать и отзывать клиентов AmneziaWG, забирать конфиги, читать список серверов. Управлять серверами (разворачивать, удалять, брать полный доступ) ключ НЕ может.',
           )}
+        </p>
+        <p className="muted small">
+          {t('Ключ видит приватные конфиги клиентов. Кнопкой "Изменить" в списке ограничьте его нужными серверами и задайте срок.')}
         </p>
         <p className="muted small">
           {t('Передавайте ключ в заголовке X-API-Key.')}
@@ -152,6 +205,8 @@ export function ApiKeysPage({ onUnauthorized }: Props) {
                 <th>{t('Ключ')}</th>
                 <th>{t('Создан')}</th>
                 <th>{t('Последнее использование')}</th>
+                <th>{t('Серверы')}</th>
+                <th>{t('Действует до')}</th>
                 <th></th>
               </tr>
             </thead>
@@ -164,15 +219,69 @@ export function ApiKeysPage({ onUnauthorized }: Props) {
                   <td className="muted small">
                     {k.last_used_at ? fmt(k.last_used_at) : t('не использовался')}
                   </td>
-                  <td>
-                    {k.revoked ? (
-                      <span className="muted small">{t('отозван')}</span>
-                    ) : (
-                      <button className="ghost danger" onClick={() => revoke(k)}>
-                        {t('Отозвать')}
-                      </button>
-                    )}
-                  </td>
+                  {editing?.id === k.id ? (
+                    <>
+                      <td className="small">
+                        {servers.map((s) => (
+                          <label key={s.id} className="apikey-server">
+                            <input
+                              type="checkbox"
+                              checked={editing.ids.includes(s.id)}
+                              onChange={(e) =>
+                                setEditing({
+                                  ...editing,
+                                  ids: e.target.checked
+                                    ? [...editing.ids, s.id]
+                                    : editing.ids.filter((x) => x !== s.id),
+                                })
+                              }
+                            />{' '}
+                            {s.name}
+                          </label>
+                        ))}
+                        <span className="muted">{t('ничего не отмечено = все серверы')}</span>
+                      </td>
+                      <td className="small">
+                        <input
+                          type="date"
+                          value={editing.date}
+                          onChange={(e) => setEditing({ ...editing, date: e.target.value })}
+                        />
+                        <div className="muted">{t('пусто = бессрочно')}</div>
+                      </td>
+                      <td>
+                        <button onClick={() => void saveEdit()}>{t('Сохранить')}</button>{' '}
+                        <button className="ghost" onClick={() => setEditing(null)}>
+                          {t('Отмена')}
+                        </button>
+                      </td>
+                    </>
+                  ) : (
+                    <>
+                      <td className="muted small">{scope(k)}</td>
+                      <td className={expired(k) ? 'small form-error' : 'muted small'}>
+                        {k.expires_at
+                          ? expired(k)
+                            ? t('истек {date}', { date: fmt(k.expires_at) })
+                            : fmt(k.expires_at)
+                          : t('бессрочно')}
+                      </td>
+                      <td>
+                        {k.revoked ? (
+                          <span className="muted small">{t('отозван')}</span>
+                        ) : (
+                          <>
+                            <button className="ghost" onClick={() => startEdit(k)}>
+                              {t('Изменить')}
+                            </button>{' '}
+                            <button className="ghost danger" onClick={() => revoke(k)}>
+                              {t('Отозвать')}
+                            </button>
+                          </>
+                        )}
+                      </td>
+                    </>
+                  )}
                 </tr>
               ))}
             </tbody>

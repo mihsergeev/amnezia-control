@@ -221,6 +221,7 @@ docker network inspect caddy -f '{{(index .IPAM.Config 0).Gateway}}'
 | `ACONTROL_CADDY_NETWORK` | `caddy` | Docker-сеть уже развернутого caddy-docker-proxy (только `compose.caddy.yml`) |
 | `ACONTROL_PANEL_URL` | `https://<ACONTROL_DOMAIN>` | Публичный URL панели для ссылок в алертах и пульса для watchdog; без домена пустой |
 | `ACONTROL_API_DOCS` | `1` | Swagger/OpenAPI на `/api/docs` (0 = выкл) |
+| `ACONTROL_TRUSTED_PROXIES` | (пусто) | Прокси, которым панель верит в `X-Forwarded-For`; пусто = loopback и docker-сети. Свой прокси из другой сети добавьте сюда |
 | `ACONTROL_DEFAULT_SSH_USER` | `acontrol` | SSH-пользователь по умолчанию для новых серверов |
 | `ACONTROL_STATS_INTERVAL` | `300` | Интервал сбора метрик/мониторинга, сек (0 = выкл) |
 | `ACONTROL_EXPIRY_INTERVAL` | `300` | Скан авто-отзыва истёкших клиентов, сек (0 = выкл) |
@@ -244,7 +245,10 @@ docker network inspect caddy -f '{{(index .IPAM.Config 0).Gateway}}'
 (`ACONTROL_API_DOCS=0` в `.env` выключает Swagger/OpenAPI, сам API продолжает работать).
 
 Ключ создаётся в панели в разделе **API-ключи**. Он показывается один раз —
-сохраните сразу, в базе лежит только хэш. Передаётся в заголовке `X-API-Key`:
+сохраните сразу, в базе лежит только хэш. Ключ читает приватные конфиги
+клиентов, поэтому кнопкой **Изменить** в списке ограничьте его нужными серверами
+и задайте срок, остальные серверы для него отвечают 404. Передается в заголовке
+`X-API-Key`:
 
 ```bash
 curl -H "X-API-Key: ack_..." https://panel.example.com/api/v1/servers
@@ -355,6 +359,17 @@ npm run dev                                          # http://localhost:5173
 ```
 
 Миграции БД (Alembic) накатываются автоматически при старте бэкенда.
+
+Образ бэкенда ставит зависимости только из `backend/requirements.lock` (точные
+версии с хэшами). После смены зависимостей в `pyproject.toml` или чтобы забрать
+обновления библиотек, пересоберите его под платформу образа:
+
+```bash
+cd backend
+docker run --rm -v "$PWD:/w" -w /w python:3.14-slim sh -c \
+  "pip install -q pip-tools && pip-compile -q --generate-hashes --strip-extras \
+   --allow-unsafe --no-header -U -o requirements.lock pyproject.toml"
+```
 
 ---
 

@@ -3,6 +3,9 @@ from functools import lru_cache
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
+DEFAULT_TRUSTED_PROXIES = "127.0.0.0/8 ::1/128 172.16.0.0/12 fd00::/8"
+
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="VPNPANEL_", env_file=".env")
 
@@ -37,6 +40,10 @@ class Settings(BaseSettings):
     client_stats_retention_days: int = 14
     # Хранение журнала действий в днях (0 = вечно)
     audit_retention_days: int = 365
+    # Адреса своих обратных прокси, которым верим в X-Forwarded-For: loopback
+    # и docker-сети (caddy, nginx фронтенда). Клиентские сети сюда не входят.
+    # Пусто - тот же список по умолчанию (compose передает пустую строку).
+    trusted_proxies: str = ""
 
     # Авто-бэкап БД: интервал в часах (0 = выключить), сколько копий хранить
     backup_interval_hours: int = 24
