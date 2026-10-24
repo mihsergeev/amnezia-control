@@ -4,6 +4,48 @@ All notable changes to Amnezia Control are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.57.0] - 2026-10-24
+
+The rest of the review from 0.56.0: the backend no longer runs as root, API keys
+can be limited, and a few remaining gaps are closed.
+
+### Security
+- **The backend process runs as an unprivileged user (uid 10001).** It holds
+  the panel SSH key to every node. The container starts as root only to hand
+  `./data` over to that user (files there were created by root on older
+  installs; `./data/postgres` is left alone) and then drops all privileges.
+  `compose.yml` now drops every capability except the four the entrypoint needs
+  for that. An older `compose.yml` keeps working as is.
+- **API keys can be limited to servers and given an expiry date.** Use
+  **Edit** in the key list. Other servers return 404 for such a key, and an
+  expired key is rejected. Existing keys stay as they were: all servers, no
+  expiry.
+- **`X-Forwarded-For` is trusted only from the panel's own proxies** (loopback
+  and Docker networks, `ACONTROL_TRUSTED_PROXIES`). Before, every private
+  address counted as a proxy, so a client on a LAN or a mesh network could
+  forge its address and get around the login lockout.
+- **`/api/health` no longer shows the panel version** to anyone who is not
+  logged in. The version is in the header after login, as before.
+- **Backend dependencies are installed from `backend/requirements.lock`**, with
+  exact versions and hashes, so an image build no longer picks up whatever was
+  released that day. README, *Development*, shows how to refresh it.
+
+### Fixed
+- **Revoking an OpenVPN client that is connected right now ends its session.**
+  The CRL only applies on the next TLS handshake, so the client kept working for
+  up to an hour. If the revoked client is online, the container is restarted;
+  other clients reconnect on their own.
+- **A hung command on a node no longer blocks the panel.** A node operation
+  that takes longer than 5 minutes is stopped with an error, and the node is
+  free for the next one.
+
+### Notes
+- Database migration 0024 adds the key limits and runs on backend start.
+- On the first start the backend changes the owner of `./data` (except
+  `./data/postgres`) to uid 10001. If you run the backend with your own compose
+  file that drops all capabilities, it keeps running as root and says so in
+  the log.
+
 ## [0.56.0] - 2026-10-24
 
 A security and reliability release from a full review of the panel. Some API
