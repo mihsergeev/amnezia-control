@@ -21,6 +21,7 @@ from app.api import (
     health,
     importer,
     openvpn,
+    protocols,
     servers,
     stats,
     transfer,
@@ -121,6 +122,7 @@ def create_app() -> FastAPI:
     app.include_router(clients.router, prefix="/api")
     app.include_router(openvpn.router, prefix="/api")
     app.include_router(xray.router, prefix="/api")
+    app.include_router(protocols.router, prefix="/api")
     app.include_router(importer.router, prefix="/api")
     app.include_router(transfer.router, prefix="/api")
     app.include_router(stats.router, prefix="/api")

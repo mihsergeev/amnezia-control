@@ -590,6 +590,13 @@ class ClientSearchHit(BaseModel):
     has_config: bool = False
 
 
+class ProtocolRemoveOut(BaseModel):
+    container: str
+    snapshot: str  # id снимка конфига на ноде (для ручного восстановления)
+    moved: list[str] = []  # каталоги конфига на хосте, переименованные в *.removed-*
+    image: str = ""  # удаленный образ, если им больше никто не пользовался
+
+
 class RevokeBulkItem(BaseModel):
     server_id: int
     protocol: str = Field(min_length=1, max_length=16)

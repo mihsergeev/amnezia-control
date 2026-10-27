@@ -58,6 +58,8 @@ The [AmneziaVPN desktop client](https://amnezia.org) is great for personal use â
 
 **Clients**
 - Issue / revoke / reissue configs per protocol, with search, sorting and notes
+- **Bulk revoke**: tick clients in the list and revoke them in one go
+- **Remove a protocol** from a node with all its clients (password required; a config snapshot is kept on the node)
 - Animated QR in the exact AmneziaVPN format the app scans, plus plain `.conf` for WireGuard
 - **Expiry**: set a lifetime per client (7 / 30 / 90 days or a custom date) â€” a background task auto-revokes on the node when it lapses
 - **Per-client traffic history** (AmneziaWG & OpenVPN) with a speed chart and cumulative totals

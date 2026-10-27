@@ -48,6 +48,13 @@ const EN: Record<string, string> = {
   'Выбрать все': 'Select all',
   'Снять все': 'Clear selection',
   'Отозвать выбранные': 'Revoke selected',
+  'Удалить протокол {proto}': 'Remove protocol {proto}',
+  'Удалить {proto} с сервера «{server}» вместе со ВСЕМИ его клиентами? Их конфиги перестанут работать. Перед удалением на ноде сохраняется снимок конфига.':
+    'Remove {proto} from "{server}" together with ALL its clients? Their configs will stop working. A config snapshot is saved on the node first.',
+  'Удаление {proto} с сервера «{server}». Все клиенты протокола потеряют доступ.':
+    'Removing {proto} from "{server}". Every client of this protocol loses access.',
+  'Протокол удален с сервера «{name}», снимок конфига остался на ноде.':
+    'Protocol removed from "{name}". A config snapshot stays on the node.',
   'Отозвать {n} доступ(ов)? Клиенты будут удалены с серверов — подключиться по старым конфигам станет нельзя. Отменить это нельзя.':
     'Revoke {n} access(es)? The clients are removed from the servers — old configs will stop connecting. This cannot be undone.',
   'Да, отозвать': 'Yes, revoke',
