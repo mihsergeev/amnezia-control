@@ -4,6 +4,14 @@ All notable changes to Amnezia Control are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.60.0] - 2026-10-27
+
+### Added
+- **Rename a client.** **Rename** in the client's menu, on every protocol tab.
+  The name is changed in the protocol's client table on the node (the
+  AmneziaVPN app shows it with full access) and everywhere in the panel:
+  saved configs, expiry dates, search. A paused client can be renamed too.
+
 ## [0.59.0] - 2026-10-27
 
 ### Added
