@@ -2172,3 +2172,27 @@ button.linklike.srv-filter-only:hover {
 .srv-filter-empty {
   margin: 0.6rem 0.4rem;
 }
+
+/* выбор клиентов галочками и действия над выбранными */
+.check-col {
+  width: 2rem;
+  text-align: center;
+}
+
+.bulk-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+  align-items: center;
+  justify-content: flex-end;
+  margin: 0.6rem 0;
+}
+
+/* удаление протокола: внизу модалки, отдельно от частых кнопок */
+.danger-zone {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 1rem;
+  padding-top: 0.8rem;
+  border-top: 1px solid var(--border);
+}

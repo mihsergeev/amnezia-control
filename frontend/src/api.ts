@@ -735,6 +735,25 @@ export function revokeClientsBulk(
   })
 }
 
+export type ProtocolRemoved = {
+  container: string
+  snapshot: string
+  moved: string[]
+  image: string
+}
+
+// удаляет протокол с ноды вместе со всеми клиентами (нужен пароль)
+export function removeProtocol(
+  serverId: number,
+  protocol: Protocol['key'],
+  password: string,
+): Promise<ProtocolRemoved> {
+  return api<ProtocolRemoved>(`/api/servers/${serverId}/protocols/${protocol}/remove`, {
+    method: 'POST',
+    body: JSON.stringify({ password }),
+  })
+}
+
 // человекочитаемое имя протокола для списков поиска
 export const PROTOCOL_LABEL: Record<string, string> = {
   awg: 'AmneziaWG',

@@ -21,6 +21,7 @@ import { XrayClients } from './XrayClients'
 import { AmneziaQr } from './AmneziaQr'
 import { ExpiryCell, ExpirySelect } from './Expiry'
 import { ClientStatsModal } from './ClientStatsModal'
+import { BulkRevokeBar, RemoveProtocol, SelectAllCell, SelectCell, useSelection } from './BulkActions'
 import { useI18n } from './i18n'
 import { useModalDismiss } from './useModalDismiss'
 
@@ -32,6 +33,7 @@ type Props = {
   onRequestUpdate: (protocol: 'awg' | 'awg3' | 'xray' | 'openvpn') => void
   onRequestUpgrade31?: () => void
   onRequestAdopt?: () => void
+  onProtocolRemoved: () => void
 }
 
 type SortKey = 'name' | 'handshake' | 'traffic'
@@ -46,6 +48,7 @@ export function ClientsModal({
   onRequestUpdate,
   onRequestUpgrade31,
   onRequestAdopt,
+  onProtocolRemoved,
 }: Props) {
   const { t } = useI18n()
   const dismiss = useModalDismiss(onClose)
@@ -386,6 +389,9 @@ export function ClientsModal({
     return filtered
   }, [state, search, sortKey, sortAsc])
 
+  const sel = useSelection(useMemo(() => visibleClients.map((c) => c.public_key), [visibleClients]))
+  const current = protocols.find((p) => p.key === proto)
+
   const arrow = (key: SortKey) =>
     sortKey === key ? (sortAsc ? ' ▲' : ' ▼') : ''
 
@@ -604,6 +610,16 @@ export function ClientsModal({
               </div>
             )}
 
+            <BulkRevokeBar
+              serverId={server.id}
+              serverName={server.name}
+              protocol={limitProto}
+              protocolLabel={current?.label ?? limitProto}
+              sel={sel}
+              onDone={load}
+              onUnauthorized={onUnauthorized}
+            />
+
             {state.clients.length === 0 ? (
               <p className="muted">{t('Клиентов пока нет.')}</p>
             ) : (
@@ -611,6 +627,7 @@ export function ClientsModal({
                 <table>
                   <thead>
                     <tr>
+                      <SelectAllCell sel={sel} />
                       <th className="sortable" onClick={() => toggleSort('name')}>
                         {t('Имя')}{arrow('name')}
                       </th>
@@ -631,6 +648,7 @@ export function ClientsModal({
                       const editing = editKey === c.public_key
                       return (
                         <tr key={c.public_key}>
+                          <SelectCell sel={sel} id={c.public_key} />
                           <td className="name-cell">
                             <div className="client-row-name">
                               <span
@@ -776,7 +794,7 @@ export function ClientsModal({
                     })}
                     {visibleClients.length === 0 && (
                       <tr>
-                        <td colSpan={6} className="muted">
+                        <td colSpan={7} className="muted">
                           {t('Ничего не найдено.')}
                         </td>
                       </tr>
@@ -856,6 +874,17 @@ export function ClientsModal({
           />
         )}
           </>
+        )}
+
+        {current && (
+          <RemoveProtocol
+            key={current.key}
+            serverId={server.id}
+            serverName={server.name}
+            protocol={current}
+            onRemoved={onProtocolRemoved}
+            onUnauthorized={onUnauthorized}
+          />
         )}
       </div>
     </div>

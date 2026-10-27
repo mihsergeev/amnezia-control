@@ -46,54 +46,71 @@ async def _not_ready(conn, protocol: str, msg: str) -> Exception:
 
 
 async def revoke_on_node(server: Server, protocol: str, client_id: str, key_path, timeout):
+    errors = await revoke_many_on_node(server, protocol, [client_id], key_path, timeout)
+    if client_id in errors:
+        raise errors[client_id]
+
+
+async def revoke_many_on_node(
+    server: Server, protocol: str, client_ids: list[str], key_path, timeout
+) -> dict[str, Exception]:
+    """Отзывает клиентов одного протокола за одно SSH-соединение. Возвращает
+    ошибки по клиентам (пусто = все отозваны). Ошибка подключения или
+    незапущенный контейнер касаются всех сразу и поднимаются исключением."""
     # жёсткий таймаут: без него зависший docker exec на одной ноде застопорил бы
     # весь последовательный проход expiry — остальные истёкшие не отозвались бы.
-    async with asyncio.timeout(max(timeout * 4, 30)):
-        await _revoke_on_node_inner(server, protocol, client_id, key_path, timeout)
+    # Пачке даем запас на каждого клиента.
+    limit = max(timeout * 4, 30) + 5 * max(len(client_ids) - 1, 0)
+    errors: dict[str, Exception] = {}
+    async with asyncio.timeout(limit):
+        async with nodelock.connect(protocol, server.id, sshops.connect(
+            server.host, server.ssh_port, server.ssh_user, key_path, timeout
+        )) as conn:
+            revoke_one = await _revoker(conn, server, protocol)
+            for client_id in client_ids:
+                try:
+                    await revoke_one(client_id)
+                except Exception as exc:  # noqa: BLE001 - остальных отзываем дальше
+                    errors[client_id] = exc
+    return errors
 
 
-async def _revoke_on_node_inner(
-    server: Server, protocol: str, client_id: str, key_path, timeout
-):
-    async with nodelock.connect(protocol, server.id, sshops.connect(
-        server.host, server.ssh_port, server.ssh_user, key_path, timeout
-    )) as conn:
-        # Контейнер протокола не запущен (упал, рестартует) - это НЕ успешный
-        # отзыв: раньше ветка тихо ничего не делала, срок и конфиг удалялись из
-        # БД, а поднявшийся контейнер оставлял истекшего клиента бессрочным.
-        # Исключение откладывает отзыв до следующего прохода.
+async def _revoker(conn, server: Server, protocol: str):
+    """Функция отзыва одного клиента в контейнере протокола на ноде."""
+    # Контейнер протокола не запущен (упал, рестартует) - это НЕ успешный
+    # отзыв: раньше ветка тихо ничего не делала, срок и конфиг удалялись из
+    # БД, а поднявшийся контейнер оставлял истекшего клиента бессрочным.
+    # Исключение откладывает отзыв до следующего прохода.
+    if protocol in ("awg", "awg3", "awglegacy"):
         if protocol == "awg":
             cont = (await awg.detect_awg_containers(conn))["new"]
-            if not cont:
-                raise await _not_ready(conn, protocol, "контейнер AmneziaWG 2.0 не запущен")
-            state = await awg.read_state(conn, server.host, container=cont)
-            await awg.revoke_client(conn, state.container, state.interface, client_id)
+            missing = "контейнер AmneziaWG 2.0 не запущен"
         elif protocol == "awg3":
             # у 3.0 свой контейнер — читаем состояние именно из него, иначе
             # истёкший клиент 3.0 остался бы на сервере вопреки сроку
             names = await deploy.awg3_containers(conn)
-            if not names:
-                raise await _not_ready(conn, protocol, "контейнер AmneziaWG 3.1 не запущен")
-            state = await awg.read_state(conn, server.host, container=names[0])
-            await awg.revoke_client(
-                conn, state.container, state.interface, client_id
-            )
-        elif protocol == "awglegacy":
+            cont = names[0] if names else None
+            missing = "контейнер AmneziaWG 3.1 не запущен"
+        else:
             # старый AmneziaWG живёт в своём контейнере (wg0) рядом с новым —
             # без этой ветки массовый отзыв молча пропускал бы legacy-клиентов
             cont = (await awg.detect_awg_containers(conn))["legacy"]
-            if not cont:
-                raise await _not_ready(conn, protocol, "контейнер AmneziaWG Legacy не запущен")
-            state = await awg.read_state(conn, server.host, container=cont)
-            await awg.revoke_client(
-                conn, state.container, state.interface, client_id
-            )
-        elif protocol == "openvpn":
-            container = await openvpn.detect_container(conn)
-            await openvpn.revoke_client(conn, container, client_id)
-        elif protocol == "xray":
-            container = await xray.detect_container(conn)
-            await xray.revoke_client(conn, container, client_id)
+            missing = "контейнер AmneziaWG Legacy не запущен"
+        if not cont:
+            raise await _not_ready(conn, protocol, missing)
+        state = await awg.read_state(conn, server.host, container=cont)
+        return lambda cid: awg.revoke_client(conn, state.container, state.interface, cid)
+    if protocol == "openvpn":
+        container = await openvpn.detect_container(conn)
+        return lambda cid: openvpn.revoke_client(conn, container, cid)
+    if protocol == "xray":
+        container = await xray.detect_container(conn)
+        return lambda cid: xray.revoke_client(conn, container, cid)
+
+    async def _noop(_cid: str) -> None:
+        return None
+
+    return _noop
 
 
 async def cleanup_client_db(session: AsyncSession, server_id, protocol, client_id) -> None:

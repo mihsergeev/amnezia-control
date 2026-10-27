@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { AmneziaQr } from './AmneziaQr'
 import {
   api,
@@ -11,6 +11,7 @@ import {
   type OvpnState,
 } from './api'
 import { ExpiryCell, ExpirySelect } from './Expiry'
+import { BulkRevokeBar, SelectAllCell, SelectCell, useSelection } from './BulkActions'
 import { ClientStatsModal } from './ClientStatsModal'
 import { Menu } from './Menu'
 import { NoteCell } from './NoteCell'
@@ -230,6 +231,10 @@ export function OpenVpnClients({
     URL.revokeObjectURL(url)
   }
 
+  const sel = useSelection(
+    useMemo(() => state?.clients.map((c) => c.client_id) ?? [], [state]),
+  )
+
   return (
     <>
       <p className="muted small">
@@ -296,6 +301,16 @@ export function OpenVpnClients({
             </div>
           )}
 
+          <BulkRevokeBar
+            serverId={serverId}
+            serverName={serverName}
+            protocol="openvpn"
+            protocolLabel="OpenVPN/Cloak"
+            sel={sel}
+            onDone={load}
+            onUnauthorized={onUnauthorized}
+          />
+
           <div className="table-card">
             {state.clients.length === 0 ? (
               <p className="muted">{t('Клиентов пока нет.')}</p>
@@ -303,6 +318,7 @@ export function OpenVpnClients({
               <table>
                 <thead>
                   <tr>
+                    <SelectAllCell sel={sel} />
                     <th>{t('Имя')}</th>
                     <th>{t('Создан')}</th>
                     <th>{t('Трафик (↓ / ↑)')}</th>
@@ -313,6 +329,7 @@ export function OpenVpnClients({
                 <tbody>
                   {state.clients.map((c) => (
                     <tr key={c.client_id}>
+                      <SelectCell sel={sel} id={c.client_id} />
                       <td className="name-cell">
                         <NoteCell
                           name={c.paused ? `${c.name} ⏸` : c.name}
