@@ -1,4 +1,5 @@
 """Удаление протокола с ноды целиком: контейнер вместе со всеми клиентами.
+Здесь же переименование клиента: ему нужен тот же поиск контейнера протокола.
 
 Перед удалением снимается снимок конфига (как перед пересборкой), а каталоги
 конфига на хосте не стираются, а переименовываются в <каталог>.removed-<время>:
@@ -7,7 +8,7 @@
 
 from dataclasses import dataclass, field
 
-from sqlalchemy import delete
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import awg, deploy, openvpn, xray
@@ -117,3 +118,52 @@ async def cleanup_db(session: AsyncSession, server_id: int, protocols: set[str])
         for model in (AwgNote, ClientLimit, ClientName, PausedClient):
             await session.execute(delete(model).where(
                 model.server_id == server_id, model.protocol == proto))
+
+
+async def rename_on_node(
+    conn, protocol: str, client_id: str, name: str
+) -> tuple[bool, str]:
+    """Меняет имя клиента в clientsTable контейнера протокола. Возвращает
+    (нашелся ли клиент в таблице, протокол его клиентов в панели). Клиента на
+    паузе в таблице нет: он снят с ноды."""
+    found = await find_container(conn, protocol)
+    if found is None:
+        raise LookupError("Протокол на сервере не найден")
+    container, kind = found
+    mod = {"openvpn": openvpn, "xray": xray}.get(protocol, awg)
+    data = await mod._read_table(conn, container)
+    entry = next(
+        (e for e in data if isinstance(e, dict) and e.get("clientId") == client_id), None
+    )
+    if entry is None:
+        # пустая или нечитаемая таблица тоже сюда: записать ее обратно значило бы
+        # стереть всех клиентов
+        return False, kind
+    user_data = entry.get("userData")
+    if not isinstance(user_data, dict):
+        user_data = entry["userData"] = {}
+    user_data["clientName"] = name
+    await mod._write_table(conn, container, data)
+    return True, kind
+
+
+async def rename_in_db(
+    session: AsyncSession, server_id: int, protocols: set[str], client_id: str, name: str
+) -> bool:
+    """Меняет имя клиента во всех таблицах панели. True, если что-то нашлось."""
+    found = False
+    rows = []
+    if protocols & {"awg", "awg3", "awglegacy"}:
+        rows += list(await session.scalars(select(AwgConfig).where(
+            AwgConfig.server_id == server_id, AwgConfig.public_key == client_id)))
+    if "openvpn" in protocols:
+        rows += list(await session.scalars(select(OvpnConfig).where(
+            OvpnConfig.server_id == server_id, OvpnConfig.client_id == client_id)))
+    for model in (ClientName, ClientLimit, PausedClient):
+        rows += list(await session.scalars(select(model).where(
+            model.server_id == server_id, model.protocol.in_(protocols),
+            model.client_id == client_id)))
+    for row in rows:
+        found = found or isinstance(row, PausedClient)
+        row.name = name
+    return found

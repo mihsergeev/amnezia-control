@@ -754,6 +754,19 @@ export function removeProtocol(
   })
 }
 
+// новое имя клиента: в clientsTable на ноде и в панели
+export function renameClient(
+  serverId: number,
+  protocol: Protocol['key'],
+  clientId: string,
+  name: string,
+): Promise<void> {
+  return api<void>(`/api/servers/${serverId}/protocols/${protocol}/rename`, {
+    method: 'POST',
+    body: JSON.stringify({ client_id: clientId, name }),
+  })
+}
+
 // человекочитаемое имя протокола для списков поиска
 export const PROTOCOL_LABEL: Record<string, string> = {
   awg: 'AmneziaWG',
