@@ -10,7 +10,7 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="VPNPANEL_", env_file=".env")
 
     app_name: str = "Amnezia Control"
-    version: str = "0.57.0"
+    version: str = "0.58.0"
     debug: bool = False
 
     # Swagger/OpenAPI на /api/docs. Включено: интеграции нужен читаемый контракт
@@ -76,6 +76,13 @@ class Settings(BaseSettings):
 
     # Алерт «мало места на диске ноды»: порог в % (0 = выключить)
     disk_alert_percent: int = 90
+
+    # Алерт «на ноде пропали клиенты» (адрес режут у провайдеров, а сервер
+    # отвечает): активных за 2 часа не больше этого % от того же окна неделю
+    # назад (0 = выключить). Ноды, где неделю назад было меньше min_clients
+    # активных, не проверяем: на паре клиентов любая тишина выглядит провалом.
+    online_drop_percent: int = 35
+    online_drop_min_clients: int = 8
 
     jwt_secret: str = "dev-insecure-change-me"
     jwt_ttl_minutes: int = 12 * 60
