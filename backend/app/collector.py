@@ -8,7 +8,10 @@ from datetime import datetime, timedelta, timezone
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app import alerts, audit, awg, deploy, geo, nodestat, openvpn, settings_store, sshops, xray
+from app import (
+    alerts, audit, awg, deploy, geo, nodestat, onlinedrop, openvpn, settings_store,
+    sshops, xray,
+)
 from app.config import Settings
 from app.models import (
     AuditLog,
@@ -286,6 +289,10 @@ async def collect_once(
                 await alerts.reconcile(session, settings, online_map, names)
         except Exception:  # noqa: BLE001 — алерты не должны ронять сбор метрик
             log.exception("ошибка сверки статусов серверов")
+        try:
+            await onlinedrop.check(session_factory, settings, online_map, names)
+        except Exception:  # noqa: BLE001
+            log.exception("ошибка проверки просадки онлайна")
     try:
         await _handle_hostkey_alerts(
             session_factory, settings, hostkey_changed, online_map, names
