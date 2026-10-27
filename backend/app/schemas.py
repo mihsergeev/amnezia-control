@@ -590,6 +590,11 @@ class ClientSearchHit(BaseModel):
     has_config: bool = False
 
 
+class ClientRenameRequest(BaseModel):
+    client_id: str = Field(min_length=1, max_length=128)
+    name: str = Field(min_length=1, max_length=128)
+
+
 class ProtocolRemoveOut(BaseModel):
     container: str
     snapshot: str  # id снимка конфига на ноде (для ручного восстановления)
