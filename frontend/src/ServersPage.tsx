@@ -1008,6 +1008,12 @@ export function ServersPage({ onUnauthorized }: Props) {
           )}
           onClose={() => setClientsFor(null)}
           onUnauthorized={onUnauthorized}
+          onProtocolRemoved={() => {
+            const srv = clientsFor
+            setClientsFor(null)
+            if (srv) setNotice(t('Протокол удален с сервера «{name}», снимок конфига остался на ноде.', { name: srv.name }))
+            void load()
+          }}
           onRequestUpdate={(protocol) => {
             const srv = clientsFor
             if (!srv) return

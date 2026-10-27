@@ -143,31 +143,51 @@ async def revoke_bulk(
     servers = {s.id: s for s in await session.scalars(select(Server))}
     sem = asyncio.Semaphore(_MAX_PARALLEL_REVOKES)
 
-    async def one(item) -> RevokeBulkResultItem:
-        server = servers.get(item.server_id)
-        if server is None:
-            return RevokeBulkResultItem(
-                server_id=item.server_id, server_name="", protocol=item.protocol,
-                client_id=item.client_id, ok=False, error="сервер не найден в панели",
-            )
-        async with sem:
-            try:
-                await expiry.revoke_on_node(
-                    server, item.protocol, item.client_id, key_path,
-                    settings.ssh_connect_timeout,
-                )
-            except Exception as exc:  # noqa: BLE001 — нода недоступна и т.п.
-                return RevokeBulkResultItem(
-                    server_id=item.server_id, server_name=server.name,
-                    protocol=item.protocol, client_id=item.client_id, ok=False,
-                    error=str(exc) or type(exc).__name__,
-                )
+    # клиенты одного протокола на одной ноде отзываются за одно подключение:
+    # раньше каждый открывал свое и ждал очереди на ноде, и отзыв десятка
+    # клиентов с одного сервера тянулся минуту
+    groups: dict[tuple[int, str], list[str]] = {}
+    for item in body.items:
+        ids = groups.setdefault((item.server_id, item.protocol), [])
+        if item.client_id not in ids:
+            ids.append(item.client_id)
+
+    def result(sid, protocol, cid, error: str = "") -> RevokeBulkResultItem:
+        server = servers.get(sid)
         return RevokeBulkResultItem(
-            server_id=item.server_id, server_name=server.name,
-            protocol=item.protocol, client_id=item.client_id, ok=True,
+            server_id=sid, server_name=server.name if server else "",
+            protocol=protocol, client_id=cid, ok=not error, error=error,
         )
 
-    results = await asyncio.gather(*(one(i) for i in body.items))
+    def message(exc: Exception) -> str:
+        return str(exc) or type(exc).__name__
+
+    async def one_group(sid: int, protocol: str, ids: list[str]) -> list[RevokeBulkResultItem]:
+        server = servers.get(sid)
+        if server is None:
+            return [result(sid, protocol, c, "сервер не найден в панели") for c in ids]
+        async with sem:
+            try:
+                errors = await expiry.revoke_many_on_node(
+                    server, protocol, ids, key_path, settings.ssh_connect_timeout,
+                )
+            except expiry.ProtocolGone:
+                # протокола на ноде нет совсем - клиентов с ним тоже
+                errors = {}
+            except Exception as exc:  # noqa: BLE001 — нода недоступна и т.п.
+                return [result(sid, protocol, c, message(exc)) for c in ids]
+        return [
+            result(sid, protocol, c, message(errors[c]) if c in errors else "")
+            for c in ids
+        ]
+
+    results = [
+        r
+        for chunk in await asyncio.gather(
+            *(one_group(sid, proto, ids) for (sid, proto), ids in groups.items())
+        )
+        for r in chunk
+    ]
 
     # чистим панельные данные только для успешно отозванных: если нода была
     # недоступна, клиент на ней остался, и стирать его следы в панели нельзя —

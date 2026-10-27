@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import QRCode from 'qrcode'
 import { AmneziaQr } from './AmneziaQr'
 import {
@@ -14,6 +14,7 @@ import {
   type XrayVersion,
 } from './api'
 import { ExpiryCell, ExpirySelect } from './Expiry'
+import { BulkRevokeBar, SelectAllCell, SelectCell, useSelection } from './BulkActions'
 import { Menu } from './Menu'
 import { NoteCell } from './NoteCell'
 import { ClientStatsModal } from './ClientStatsModal'
@@ -268,6 +269,10 @@ export function XrayClients({
     URL.revokeObjectURL(url)
   }
 
+  const sel = useSelection(
+    useMemo(() => state?.clients.map((c) => c.client_id) ?? [], [state]),
+  )
+
   return (
     <>
       <p className="muted small">
@@ -349,6 +354,16 @@ export function XrayClients({
             </div>
           )}
 
+          <BulkRevokeBar
+            serverId={serverId}
+            serverName={serverName}
+            protocol="xray"
+            protocolLabel="XRay/REALITY"
+            sel={sel}
+            onDone={load}
+            onUnauthorized={onUnauthorized}
+          />
+
           <div className="table-card">
             {state.clients.length === 0 ? (
               <p className="muted">{t('Клиентов пока нет.')}</p>
@@ -356,6 +371,7 @@ export function XrayClients({
               <table>
                 <thead>
                   <tr>
+                    <SelectAllCell sel={sel} />
                     <th>{t('Имя')}</th>
                     <th>{t('Создан')}</th>
                     <th>{t('Трафик (↓ / ↑)')}</th>
@@ -366,6 +382,7 @@ export function XrayClients({
                 <tbody>
                   {state.clients.map((c) => (
                     <tr key={c.client_id}>
+                      <SelectCell sel={sel} id={c.client_id} />
                       <td className="name-cell">
                         <NoteCell
                           name={c.paused ? `${c.name} ⏸` : c.name}

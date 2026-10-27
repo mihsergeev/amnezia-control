@@ -101,7 +101,7 @@ async def test_bulk_revoke_keeps_traces_when_node_unreachable(
     async def boom(*a, **kw):
         raise OSError("нода недоступна")
 
-    monkeypatch.setattr(expiry, "revoke_on_node", boom)
+    monkeypatch.setattr(expiry, "revoke_many_on_node", boom)
     r = await client.post(
         "/api/clients/revoke-bulk",
         json={"items": [{"server_id": ids["srv-a"], "protocol": "awg",
@@ -130,9 +130,9 @@ async def test_bulk_revoke_cleans_panel_data_on_success(
         await s.commit()
 
     async def ok(*a, **kw):
-        return None
+        return {}
 
-    monkeypatch.setattr(expiry, "revoke_on_node", ok)
+    monkeypatch.setattr(expiry, "revoke_many_on_node", ok)
     r = await client.post(
         "/api/clients/revoke-bulk",
         json={"items": [{"server_id": ids["srv-a"], "protocol": "awg",
@@ -149,11 +149,12 @@ async def test_bulk_revoke_reports_each_item(client, auth_headers, session_facto
 
     ids = await _seed(client, auth_headers)
 
-    async def selective(server, protocol, client_id, *a, **kw):
+    async def selective(server, protocol, client_ids, *a, **kw):
         if server.name == "srv-b":
             raise OSError("таймаут")
+        return {}
 
-    monkeypatch.setattr(expiry, "revoke_on_node", selective)
+    monkeypatch.setattr(expiry, "revoke_many_on_node", selective)
     r = await client.post(
         "/api/clients/revoke-bulk",
         json={"items": [
