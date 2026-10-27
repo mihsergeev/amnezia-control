@@ -5,6 +5,7 @@ import {
   api,
   ApiError,
   pauseClient,
+  renameClient,
   setClientLimit,
   type XrayClient,
   type XrayConfig,
@@ -155,6 +156,20 @@ export function XrayClients({
         { method: 'POST', body: JSON.stringify({ client_id: clientId }) },
       )
       showConfig(result.name, variantsOf(result))
+    } catch (err) {
+      handleError(err)
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  async function rename(clientId: string, name: string) {
+    const next = window.prompt(t('Новое имя клиента'), name)?.trim()
+    if (!next || next === name) return
+    setBusy(clientId)
+    try {
+      await renameClient(serverId, 'xray', clientId, next)
+      await load()
     } catch (err) {
       handleError(err)
     } finally {
@@ -431,6 +446,10 @@ export function XrayClients({
                             c.paused
                               ? [
                                   {
+                                    label: t('Переименовать'),
+                                    onClick: () => rename(c.client_id, c.name),
+                                  },
+                                  {
                                     label: t('Отозвать'),
                                     danger: true,
                                     onClick: () => revoke(c.client_id, c.name),
@@ -445,6 +464,10 @@ export function XrayClients({
                                     label: t('Трафик клиента'),
                                     onClick: () =>
                                       setStatsFor({ id: c.client_id, name: c.name }),
+                                  },
+                                  {
+                                    label: t('Переименовать'),
+                                    onClick: () => rename(c.client_id, c.name),
                                   },
                                   {
                                     label: t('Пауза'),

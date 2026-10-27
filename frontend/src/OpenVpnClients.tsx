@@ -4,6 +4,7 @@ import {
   api,
   ApiError,
   pauseClient,
+  renameClient,
   setClientLimit,
   type OvpnClient,
   type OvpnConfig,
@@ -142,6 +143,20 @@ export function OpenVpnClients({
         { method: 'POST', body: JSON.stringify({ client_id: clientId }) },
       )
       showConfig(result.client.name, result.config_amnezia)
+      await load()
+    } catch (err) {
+      handleError(err)
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  async function rename(clientId: string, name: string) {
+    const next = window.prompt(t('Новое имя клиента'), name)?.trim()
+    if (!next || next === name) return
+    setBusy(clientId)
+    try {
+      await renameClient(serverId, 'openvpn', clientId, next)
       await load()
     } catch (err) {
       handleError(err)
@@ -387,6 +402,10 @@ export function OpenVpnClients({
                             c.paused
                               ? [
                                   {
+                                    label: t('Переименовать'),
+                                    onClick: () => rename(c.client_id, c.name),
+                                  },
+                                  {
                                     label: t('Отозвать'),
                                     danger: true,
                                     onClick: () => revoke(c.client_id, c.name),
@@ -406,6 +425,10 @@ export function OpenVpnClients({
                                     label: t('Трафик клиента'),
                                     onClick: () =>
                                       setStatsFor({ id: c.client_id, name: c.name }),
+                                  },
+                                  {
+                                    label: t('Переименовать'),
+                                    onClick: () => rename(c.client_id, c.name),
                                   },
                                   {
                                     label: t('Пауза'),

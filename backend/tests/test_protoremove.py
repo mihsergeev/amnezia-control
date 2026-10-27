@@ -208,3 +208,79 @@ async def test_revoke_many_uses_one_connection(monkeypatch):
     assert revoked == ["A=", "C="] and list(errors) == ["B="]
     with pytest.raises(RuntimeError):
         await expiry.revoke_on_node(srv, "awglegacy", "B=", None, 5)
+
+
+async def test_rename_on_node_keeps_other_clients(monkeypatch):
+    _legacy_only(monkeypatch, {"new": "amnezia-awg2", "legacy": None})
+    table = [
+        {"clientId": "A=", "userData": {"clientName": "old", "creationDate": "d"}},
+        {"clientId": "B=", "userData": {"clientName": "other"}},
+    ]
+    written = []
+
+    async def read(conn, container):
+        return json.loads(json.dumps(table))
+
+    async def write(conn, container, data):
+        written.append((container, data))
+
+    monkeypatch.setattr(awg, "_read_table", read)
+    monkeypatch.setattr(awg, "_write_table", write)
+    assert await protoremove.rename_on_node(_Conn(""), "awg", "A=", "new name") == (True, "awg")
+    container, data = written[0]
+    assert container == "amnezia-awg2"
+    assert data[0]["userData"] == {"clientName": "new name", "creationDate": "d"}
+    assert data[1] == table[1]
+    # клиента нет в таблице (или таблица не прочиталась) - ничего не пишем
+    written.clear()
+    assert await protoremove.rename_on_node(_Conn(""), "awg", "Z=", "x") == (False, "awg")
+    assert written == []
+
+
+async def test_api_rename_updates_panel_tables(
+    client, auth_headers, session_factory, monkeypatch
+):
+    sid = await _server(client, auth_headers)
+    async with session_factory() as s:
+        s.add(AwgConfig(server_id=sid, public_key="A=", name="old", config="[Interface]"))
+        s.add(ClientName(server_id=sid, protocol="awg", client_id="A=", name="old"))
+        s.add(ClientLimit(server_id=sid, protocol="awg", client_id="A=", name="old"))
+        s.add(ClientName(server_id=sid, protocol="xray", client_id="A=", name="keep"))
+        await s.commit()
+    monkeypatch.setattr(sshops, "connect", lambda *a, **k: _Conn(""))
+    seen = []
+
+    async def on_node(conn, protocol, cid, name):
+        seen.append((protocol, cid, name))
+        return True, "awg"
+
+    monkeypatch.setattr(protoremove, "rename_on_node", on_node)
+    r = await client.post(
+        f"/api/servers/{sid}/protocols/awg/rename",
+        json={"client_id": "A=", "name": "  phone   max "}, headers=auth_headers,
+    )
+    assert r.status_code == 204, r.text
+    assert seen == [("awg", "A=", "phone max")]
+    async with session_factory() as s:
+        names = {(type(x).__name__, getattr(x, "protocol", "")): x.name
+                 for m in (AwgConfig, ClientName, ClientLimit)
+                 for x in await s.scalars(select(m).where(m.server_id == sid))}
+    assert names[("AwgConfig", "awg")] == "phone max"
+    assert names[("ClientName", "awg")] == "phone max"
+    assert names[("ClientLimit", "awg")] == "phone max"
+    assert names[("ClientName", "xray")] == "keep"
+
+
+async def test_api_rename_unknown_client_is_404(client, auth_headers, monkeypatch):
+    sid = await _server(client, auth_headers)
+    monkeypatch.setattr(sshops, "connect", lambda *a, **k: _Conn(""))
+
+    async def on_node(conn, protocol, cid, name):
+        return False, protocol
+
+    monkeypatch.setattr(protoremove, "rename_on_node", on_node)
+    r = await client.post(
+        f"/api/servers/{sid}/protocols/xray/rename",
+        json={"client_id": "nope", "name": "x"}, headers=auth_headers,
+    )
+    assert r.status_code == 404

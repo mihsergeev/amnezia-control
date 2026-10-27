@@ -4,6 +4,7 @@ import {
   api,
   ApiError,
   pauseClient,
+  renameClient,
   setClientLimit,
   type AwgClient,
   type AwgState,
@@ -304,6 +305,20 @@ export function ClientsModal({
     setBusyKey(client.public_key)
     try {
       await pauseClient(server.id, awgBase, client.public_key, resume)
+      await load()
+    } catch (err) {
+      handleError(err)
+    } finally {
+      setBusyKey(null)
+    }
+  }
+
+  async function rename(client: AwgClient) {
+    const next = window.prompt(t('Новое имя клиента'), client.name)?.trim()
+    if (!next || next === client.name) return
+    setBusyKey(client.public_key)
+    try {
+      await renameClient(server.id, limitProto, client.public_key, next)
       await load()
     } catch (err) {
       handleError(err)
@@ -757,6 +772,10 @@ export function ClientsModal({
                                 c.paused
                                   ? [
                                       {
+                                        label: t('Переименовать'),
+                                        onClick: () => rename(c),
+                                      },
+                                      {
                                         label: t('Отозвать'),
                                         danger: true,
                                         onClick: () => revoke(c),
@@ -774,6 +793,10 @@ export function ClientsModal({
                                       {
                                         label: t('Трафик клиента'),
                                         onClick: () => setStatsFor(c),
+                                      },
+                                      {
+                                        label: t('Переименовать'),
+                                        onClick: () => rename(c),
                                       },
                                       {
                                         label: t('Пауза'),
