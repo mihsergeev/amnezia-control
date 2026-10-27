@@ -4,6 +4,22 @@ All notable changes to Amnezia Control are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.58.0] - 2026-10-27
+
+### Added
+- **"Clients gone" alert.** When ISPs start blocking a node's address, the node
+  itself stays reachable: SSH works, stats are collected, and the server-down
+  alert stays quiet, while clients can no longer connect. The panel now
+  compares how many clients were active (their traffic counter moved) over the
+  last 2 hours with the same 2 hours a week ago. If the node answers but has
+  at most 35% of last week's active clients for two checks in a row (checks run
+  every 30 minutes), an alert goes to Telegram/webhook, and another one when
+  the clients come back. A week ago rather than yesterday, so weekends do not
+  look like an outage. Nodes with fewer than 8 active clients a week ago are
+  not checked. Tune with `ACONTROL_ONLINE_DROP_PERCENT` (0 = off) and
+  `ACONTROL_ONLINE_DROP_MIN_CLIENTS`. The check needs a week of per-client
+  history, so on a new install it starts after a week.
+
 ## [0.57.0] - 2026-10-24
 
 The rest of the review from 0.56.0: the backend no longer runs as root, API keys
