@@ -4,6 +4,26 @@ All notable changes to Amnezia Control are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.59.0] - 2026-10-27
+
+### Added
+- **Bulk revoke in the client list.** Every protocol tab (AmneziaWG, Legacy,
+  3.1, OpenVPN/Cloak, XRay) has checkboxes; tick clients, or all of them from
+  the header, and revoke them in one go. Failures are listed per client, the
+  rest are revoked anyway.
+- **Remove a protocol from a node.** The button at the bottom of the client
+  list removes the protocol's container together with all its clients, for
+  example an old AmneziaWG Legacy left next to 2.0. It asks for your password.
+  Before removing, the panel takes a config snapshot on the node, and the
+  protocol's config directories on the host are renamed to
+  `<dir>.removed-<time>` instead of deleted, so deploying the protocol again
+  starts clean and does not bring the old clients back. The panel's notes,
+  expiry dates and saved configs for that protocol are removed too.
+
+### Changed
+- **Bulk revoke uses one SSH connection per node and protocol.** Revoking ten
+  clients on one server used to open ten connections one after another.
+
 ## [0.58.0] - 2026-10-27
 
 ### Added
