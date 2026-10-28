@@ -419,7 +419,8 @@ def build_exit_script(transport: str, entry_ip: str, cascade_id: int, params: di
 def exit_vless_config(params: dict) -> str:
     sni = params["sni"]
     cfg = {
-        "log": {"loglevel": "warning"},
+        # без журнала доступа: иначе на выходе копятся адреса сайтов клиентов
+        "log": {"loglevel": "warning", "access": "none"},
         "inbounds": [{
             "tag": "from-entry", "listen": "0.0.0.0", "port": int(params["port"]),
             "protocol": "vless",
@@ -521,7 +522,9 @@ def entry_gateway_config(transport: str, exit_ip: str, params: dict) -> str:
 # адрес выхода и российский адрес через шлюз (socks-вход check)
 _CHECK_LINES = [
     f"EG=$(curl -4 -fsS -m 20 --socks5-hostname 127.0.0.1:{SOCKS_PORT} https://api.ipify.org 2>/dev/null)",
-    f"RU=$(curl -4 -fsS -m 15 --socks5-hostname 127.0.0.1:{SOCKS_PORT} https://2ip.ru 2>/dev/null | head -1)",
+    # российский сервис на домене .ru: шлюз обязан выпустить его напрямую
+    f"RU=$(curl -4 -fsS -m 15 --socks5-hostname 127.0.0.1:{SOCKS_PORT} https://ip.nic.ru 2>/dev/null "
+    "| grep -oE '([0-9]{1,3}[.]){3}[0-9]{1,3}' | head -1)",
     'echo "CASCADE_EGRESS=$EG"',
     'echo "CASCADE_RU=$RU"',
 ]
@@ -809,6 +812,29 @@ async def public_ip(conn: asyncssh.SSHClientConnection) -> str:
         check=False,
     )
     return _ip_or_empty(r.stdout if isinstance(r.stdout, str) else "")
+
+
+def _is_public(ip: str) -> bool:
+    try:
+        return ipaddress.ip_address(ip).is_global
+    except ValueError:
+        return False
+
+
+def pick_source(route_src: str, exit_ip: str, nat_ip: str) -> str:
+    """С какого адреса выход видит вход. Обычно это адрес интерфейса, с которого
+    вход ходит к выходу. Если он внутренний, а выход в интернете, вход за NAT и
+    выход увидит внешний адрес; если оба в одной внутренней сети - внутренний."""
+    if route_src and (_is_public(route_src) or not _is_public(exit_ip)):
+        return route_src
+    return nat_ip or route_src
+
+
+async def entry_source_ip(conn: asyncssh.SSHClientConnection, exit_ip: str) -> str:
+    r = await conn.run(f"ip -4 route get {exit_ip} | {_SRC_OF} | head -1", check=False)
+    src = _ip_or_empty(r.stdout if isinstance(r.stdout, str) else "")
+    nat = "" if src and (_is_public(src) or not _is_public(exit_ip)) else await public_ip(conn)
+    return pick_source(src, exit_ip, nat)
 
 
 async def probe(exit_conn, entry_conn, entry_ip: str, exit_ip: str) -> dict:

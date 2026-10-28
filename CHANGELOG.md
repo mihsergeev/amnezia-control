@@ -4,7 +4,7 @@ All notable changes to Amnezia Control are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [0.66.0] - 2026-10-28
 
 ### Added
 - **Cascade wizard.** A cascade of two servers used to be built by hand: a
@@ -31,6 +31,13 @@ All notable changes to Amnezia Control are documented here. The format is based 
   reboot. The entry's card shows the route, the exit is marked **exit** in
   the list, and **More** has **Cascade: test the link** and **Remove the
   cascade**, which takes both sides apart.
+
+### Fixed
+- **Servers stayed offline on SQLite after the exit address was checked.**
+  The background collector compared a stored time without a time zone with
+  the current time and failed, so with an SQLite database a server with a
+  protocol was marked offline once its exit address had been checked.
+  PostgreSQL installs were not affected.
 
 ## [0.65.1] - 2026-10-28
 
