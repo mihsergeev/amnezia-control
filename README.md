@@ -62,6 +62,7 @@ The [AmneziaVPN desktop client](https://amnezia.org) is great for personal use �
 - **Bulk revoke**: tick clients in the list and revoke them in one go
 - **Remove a protocol** from a node with all its clients (password required; a config snapshot is kept on the node)
 - Animated QR in the exact AmneziaVPN format the app scans, plus plain `.conf` for WireGuard
+- **Send a config as a one-time link** instead of a file in a messenger: host [sup3rS3cretMes5age](https://github.com/algolia/sup3rS3cretMes5age) or [Password Pusher](https://github.com/pglombardo/PasswordPusher) yourself, add its address under ⚙ → Config links, and the config window gets a **Link** button. The link opens once and expires by itself in 7 days; the audit log records who sent which client, not the config
 - **Expiry**: set a lifetime per client (7 / 30 / 90 days or a custom date) — a background task auto-revokes on the node when it lapses
 - **Per-client traffic history** (AmneziaWG & OpenVPN) with a speed chart and cumulative totals
 - **Top clients by traffic** across all servers on the dashboard

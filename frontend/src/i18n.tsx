@@ -267,6 +267,24 @@ const EN: Record<string, string> = {
   'выход в интернет: {ip}': 'internet exit: {ip}',
   'этот сервер': 'this server',
   'GRE-туннель до {ip}': 'GRE tunnel to {ip}',
+  // --- одноразовые ссылки на конфиг ---
+  'Ссылка': 'Link',
+  'Создаю ссылку…': 'Creating link…',
+  'Одноразовая ссылка через {name}': 'One-time link via {name}',
+  'Ссылка через {name}: откроется один раз, через {n} дн. сгорит сама.':
+    'Link via {name}: opens once, expires by itself in {n} days.',
+  'Ссылки на конфиги': 'Config links',
+  'Вместо файла в мессенджере - одноразовая ссылка: панель кладет конфиг в сервис секретов, ссылка открывается один раз и через 7 дней сгорит сама. Подходят sup3rS3cretMes5age и Password Pusher: поставьте любой у себя и укажите его адрес. В окне конфига появится кнопка «Ссылка».':
+    'Instead of a file in a messenger, a one-time link: the panel puts the config into a secret-sharing service, the link opens once and expires by itself in 7 days. sup3rS3cretMes5age and Password Pusher work: host either one and enter its address. A "Link" button then appears in the config window.',
+  'Добавить сервис': 'Add service',
+  'Например, как группа серверов': 'For example, same as a server group',
+  'Если название совпадает с группой сервера, этот сервис предлагается первым для его клиентов.':
+    'If the name matches a server group, this service comes first for its clients.',
+  'Проверяю…': 'Checking…',
+  'Добавить': 'Add',
+  'Конфиг отправлен ссылкой': 'Config sent as a link',
+  'Добавлен сервис ссылок': 'Link service added',
+  'Удален сервис ссылок': 'Link service removed',
   'выход в интернет': 'internet exit',
   'выход в интернет, {org}': 'internet exit, {org}',
   'Протоколы': 'Protocols',

@@ -23,6 +23,7 @@ from app.api import (
     openvpn,
     protocols,
     servers,
+    share,
     stats,
     transfer,
     v1,
@@ -131,6 +132,7 @@ def create_app() -> FastAPI:
     app.include_router(audit.router, prefix="/api")
     app.include_router(alerts.router, prefix="/api")
     app.include_router(apikeys.router, prefix="/api")
+    app.include_router(share.router, prefix="/api")
     app.include_router(v1.router, prefix="/api")
 
     if show_docs:

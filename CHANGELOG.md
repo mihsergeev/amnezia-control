@@ -4,6 +4,23 @@ All notable changes to Amnezia Control are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.65.0] - 2026-10-28
+
+### Added
+- **Send a client config as a one-time link.** Configs used to leave the
+  panel only as copied text or a downloaded file, which then stays in a
+  messenger forever. Now you can host a secret-sharing service yourself,
+  [sup3rS3cretMes5age](https://github.com/algolia/sup3rS3cretMes5age) or
+  [Password Pusher](https://github.com/pglombardo/PasswordPusher), and add
+  its address under the gear menu, **Config links**; the panel detects which
+  of the two it is. The config window (AmneziaWG, XRay and OpenVPN) then
+  gets a **Link** button: the panel puts the shown config into the service
+  and returns a link that opens once and expires by itself in 7 days. The
+  link is copied right away. With several services the button opens a list;
+  a service named like the server's group comes first. The audit log
+  records who sent which client and through which service, but not the
+  config or the link.
+
 ## [0.64.0] - 2026-10-28
 
 ### Changed

@@ -19,11 +19,13 @@ import { NoteCell } from './NoteCell'
 import { RollbackMenu } from './RollbackMenu'
 import { copyText } from './clipboard'
 import { formatBytes } from './format'
+import { useShareLink } from './ShareLink'
 import { useI18n } from './i18n'
 
 type Props = {
   serverId: number
   serverName: string
+  groupName?: string
   onUnauthorized: () => void
   onRequestUpdate?: () => void
 }
@@ -33,6 +35,7 @@ type ConfigView = { name: string; amnezia: string }
 export function OpenVpnClients({
   serverId,
   serverName,
+  groupName = '',
   onUnauthorized,
   onRequestUpdate,
 }: Props) {
@@ -48,6 +51,7 @@ export function OpenVpnClients({
   const [creating, setCreating] = useState(false)
 
   const [view, setView] = useState<ConfigView | null>(null)
+  const shareLink = useShareLink(view?.amnezia ?? '', view?.name ?? '', groupName)
   const [statsFor, setStatsFor] = useState<{ id: string; name: string } | null>(
     null,
   )
@@ -474,10 +478,12 @@ export function OpenVpnClients({
               <button className="ghost" onClick={downloadConfig}>
                 {t('Скачать .txt')}
               </button>
+              {shareLink.control}
               <button onClick={copyConfig}>
                 {copied ? t('Скопировано ✓') : t('Скопировать')}
               </button>
             </div>
+            {shareLink.result}
           </div>
         </div>
       )}

@@ -23,6 +23,7 @@ import { AmneziaQr } from './AmneziaQr'
 import { ExpiryCell, ExpirySelect } from './Expiry'
 import { ClientStatsModal } from './ClientStatsModal'
 import { BulkRevokeBar, RemoveProtocol, SelectAllCell, SelectCell, useSelection } from './BulkActions'
+import { useShareLink } from './ShareLink'
 import { useI18n } from './i18n'
 import { useModalDismiss } from './useModalDismiss'
 
@@ -166,6 +167,7 @@ export function ClientsModal({
       ? view.config
       : view.amnezia
     : ''
+  const shareLink = useShareLink(currentText, view?.name ?? '', server.group_name)
 
   // обычный QR только для .conf (amnezia-формат рисует AmneziaQr — анимированный)
   useEffect(() => {
@@ -446,6 +448,7 @@ export function ClientsModal({
           <OpenVpnClients
             serverId={server.id}
             serverName={server.name}
+            groupName={server.group_name}
             onUnauthorized={onUnauthorized}
             onRequestUpdate={() => onRequestUpdate('openvpn')}
           />
@@ -455,6 +458,7 @@ export function ClientsModal({
           <XrayClients
             serverId={server.id}
             serverName={server.name}
+            groupName={server.group_name}
             onUnauthorized={onUnauthorized}
             onRequestUpdate={() => onRequestUpdate('xray')}
           />
@@ -883,10 +887,12 @@ export function ClientsModal({
                 <button className="ghost" onClick={downloadConfig}>
                   {t('Скачать')} {cfgFormat === 'conf' ? '.conf' : '.txt'}
                 </button>
+                {shareLink.control}
                 <button onClick={copyConfig}>
                   {copied ? t('Скопировано ✓') : t('Скопировать')}
                 </button>
               </div>
+              {shareLink.result}
             </div>
           </div>
         )}
