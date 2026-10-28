@@ -4,6 +4,17 @@ All notable changes to Amnezia Control are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.66.2] - 2026-10-28
+
+### Fixed
+- **Cascade geo databases are downloaded through the exit.** The entry server
+  fetched about 90 MB of geo databases from GitHub directly, which from some
+  networks in Russia is too slow, and the install stopped at the third step.
+  The gateway now starts without the geo rules first, the databases come
+  through the exit, and then the gateway restarts with the full rules. The
+  daily update also goes through the exit and falls back to a direct download.
+  It checks the checksums first and skips databases that did not change.
+
 ## [0.66.1] - 2026-10-28
 
 ### Fixed
