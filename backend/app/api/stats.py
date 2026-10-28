@@ -10,6 +10,7 @@ from app.deps import CurrentUser, SessionDep
 from app.models import (
     AwgConfig,
     AwgNote,
+    Cascade,
     ClientName,
     ClientTrafficSample,
     NodeMetric,
@@ -169,6 +170,11 @@ async def client_history(
     )
 
 
+async def _cascade_exits(session) -> set[int]:
+    """Выходы каскадов панели: своих клиентов у них нет, в обзоре они часть входа."""
+    return set(await session.scalars(select(Cascade.exit_server_id)))
+
+
 @router.get("/overview", response_model=OverviewOut)
 async def overview(
     _: CurrentUser, session: SessionDep, server_id: ServerFilter = None
@@ -179,7 +185,8 @@ async def overview(
         # карточки сверху считаются по выбранным серверам: "серверов онлайн 2 / 3"
         # должно означать три выбранных, а не весь парк
         srv_query = srv_query.where(Server.id.in_(server_id))
-    servers = [(s.id, s.name) for s in await session.scalars(srv_query)]
+    exits = await _cascade_exits(session)
+    servers = [(s.id, s.name) for s in await session.scalars(srv_query) if s.id not in exits]
     # свежими считаем снимки не старше 3 интервалов
     staleness = timedelta(seconds=max(settings.stats_interval, 60) * 3)
     cutoff = datetime.now(timezone.utc) - staleness
@@ -231,11 +238,12 @@ async def history(
     servers = []
     if by_server:
         names = dict((await session.execute(select(Server.id, Server.name))).all())
+        exits = await _cascade_exits(session)
         per = stats_calc.clients_by_server(samples, step)
         # удаленный сервер мог оставить снимки в истории - его в разбивку не берем
         servers = [
             {"server_id": sid, "name": names[sid], "clients_online": vals}
             for sid, vals in per.items()
-            if sid in names
+            if sid in names and sid not in exits
         ]
     return HistoryOut(interval_seconds=step, points=points, servers=servers)

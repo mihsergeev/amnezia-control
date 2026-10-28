@@ -3,6 +3,7 @@ import {
   api,
   ApiError,
   PROTOCOL_LABEL,
+  listVpnServers,
   type History,
   type Overview,
   type Server,
@@ -165,7 +166,7 @@ export function Dashboard({ onUnauthorized }: Props) {
       // есть сохраненный выбор, но еще неизвестно, какие серверы живы: сначала
       // список, статистика подтянется следующим проходом с уже чистым фильтром
       try {
-        setServers(await api<Server[]>('/api/servers'))
+        setServers(await listVpnServers())
       } catch (err) {
         handleError(err)
         setLoading(false)
@@ -182,7 +183,7 @@ export function Dashboard({ onUnauthorized }: Props) {
         api<TopClient[]>(`/api/stats/top-clients?limit=10${f}`),
         // список для фильтра обновляем вместе со статистикой: сервер, добавленный
         // при открытом "Обзоре", появится в нем без перезагрузки страницы
-        api<Server[]>('/api/servers'),
+        listVpnServers(),
       ])
       setOverview(ov)
       setHistory(hist)

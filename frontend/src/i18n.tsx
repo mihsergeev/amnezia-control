@@ -792,6 +792,9 @@ const EN: Record<string, string> = {
   'Каскад не собрался: {err}': 'Cascade build failed: {err}',
   'Каскад собирается…': 'Cascade is being built…',
   'Подробнее': 'Details',
+  'Выход {host} не отвечает: {err}': 'Exit {host} is not responding: {err}',
+  'нет связи': 'no connection',
+  'выход каскада не отвечает': 'cascade exit is not responding',
   'Российские сайты напрямую с этого сервера, остальное через выход.':
     'Russian sites go directly from this server, the rest through the exit.',
   'зарубежное через {ip}': 'foreign traffic via {ip}',

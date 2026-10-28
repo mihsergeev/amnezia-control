@@ -873,6 +873,16 @@ export function listCascades(): Promise<Cascade[]> {
   return api<Cascade[]>('/api/cascades')
 }
 
+// серверы без выходов каскадов: выход - часть своего входа, клиентов у него нет
+export async function listVpnServers(): Promise<Server[]> {
+  const [servers, cascades] = await Promise.all([
+    api<Server[]>('/api/servers'),
+    listCascades().catch(() => [] as Cascade[]),
+  ])
+  const exits = new Set(cascades.map((c) => c.exit_server_id))
+  return servers.filter((s) => !exits.has(s.id))
+}
+
 export function getCascade(id: number): Promise<Cascade> {
   return api<Cascade>(`/api/cascades/${id}`)
 }
