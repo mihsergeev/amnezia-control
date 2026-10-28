@@ -5,6 +5,7 @@ import {
   useRef,
   useState,
   type FormEvent,
+  type ReactNode,
 } from 'react'
 import {
   api,
@@ -13,9 +14,12 @@ import {
   protocolsFromContainers,
   reorderServers,
   type NodeMetric,
+  type Overview,
   type PanelConfig,
+  type Protocol,
   type Server,
   type ServerForm,
+  type ServerStat,
 } from './api'
 import { ClientsModal } from './ClientsModal'
 import { ImportModal } from './ImportModal'
@@ -93,92 +97,212 @@ function pct(used: number, total: number): number {
   return total > 0 ? Math.round((used / total) * 100) : 0
 }
 
-const svg = {
-  width: 15,
-  height: 15,
-  viewBox: '0 0 24 24',
-  fill: 'none',
-  stroke: 'currentColor',
-  strokeWidth: 2,
-  strokeLinecap: 'round',
-  strokeLinejoin: 'round',
-} as const
+// пороги те же, что подсвечивают метрики в карточке: диск и память от 90%,
+// загрузка от 1 на ядро - это уже проблема, а не "много"
+function loadLevel(m: NodeMetric): string {
+  if (m.cpu_count <= 0) return ''
+  const r = m.load1 / m.cpu_count
+  return r >= 1 ? 'res-crit' : r >= 0.7 ? 'res-warn' : ''
+}
 
-const IconClock = (
-  <svg {...svg}>
-    <circle cx="12" cy="12" r="9" />
-    <path d="M12 7v5l3 2" />
-  </svg>
-)
-const IconCpu = (
-  <svg {...svg}>
-    <rect width="16" height="16" x="4" y="4" rx="2" />
-    <rect width="6" height="6" x="9" y="9" rx="1" />
-    <path d="M15 2v2M15 20v2M2 15h2M2 9h2M20 15h2M20 9h2M9 2v2M9 20v2" />
-  </svg>
-)
-const IconRam = (
-  <svg {...svg}>
-    <rect x="2" y="8" width="20" height="9" rx="1.5" />
-    <path d="M6 8V6M10 8V6M14 8V6M18 8V6M6 17v2M18 17v2" />
-  </svg>
-)
-const IconDisk = (
-  <svg {...svg}>
-    <ellipse cx="12" cy="6" rx="8" ry="3" />
-    <path d="M4 6v12c0 1.66 3.58 3 8 3s8-1.34 8-3V6" />
-    <path d="M4 12c0 1.66 3.58 3 8 3s8-1.34 8-3" />
-  </svg>
-)
+function pctLevel(p: number, warn: number): string {
+  return p >= 90 ? 'res-crit' : p >= warn ? 'res-warn' : ''
+}
 
-function ResourceLine({ m }: { m: NodeMetric }) {
-  const { t } = useI18n()
-  const memPct = pct(m.mem_used, m.mem_total)
-  const diskPct = pct(m.disk_used, m.disk_total)
-  const diskCls = diskPct >= 90 ? 'res-crit' : diskPct >= 75 ? 'res-warn' : ''
-  const loadCls =
-    m.cpu_count > 0 && m.load1 / m.cpu_count >= 1
-      ? 'res-crit'
-      : m.cpu_count > 0 && m.load1 / m.cpu_count >= 0.7
-        ? 'res-warn'
-        : ''
+function isProblem(s: Server, m: NodeMetric | undefined): boolean {
+  if (s.last_check_ok === false) return true
+  if (!m) return false
   return (
-    <div className="server-res">
-      <span className="uptime" title={t('Аптайм')}>
-        {IconClock} {formatUptime(m.uptime_seconds)}
-      </span>
-      <div className="res-metrics">
-        <span className={`res-chip ${loadCls}`} title={t('Средняя загрузка (1 мин) / ядер')}>
-          {IconCpu}
-          <span className="res-label">CPU</span>
-          <b>{m.load1.toFixed(2)}</b>
-          {m.cpu_count > 0 && <span className="res-sub">/{m.cpu_count}</span>}
-        </span>
-        <span className="res-chip" title={t('Память')}>
-          {IconRam}
-          <span className="res-label">RAM</span>
-          <b>{memPct}%</b>
-          <span className="res-sub">
-            {formatBytes(m.mem_used)}/{formatBytes(m.mem_total)}
+    loadLevel(m) === 'res-crit' ||
+    pct(m.mem_used, m.mem_total) >= 90 ||
+    pct(m.disk_used, m.disk_total) >= 90
+  )
+}
+
+function Kpi({
+  label,
+  value,
+  sub,
+  bar,
+  level = '',
+}: {
+  label: string
+  value: ReactNode
+  sub?: string
+  bar?: number
+  level?: string
+}) {
+  return (
+    <div className={`srv-kpi ${level}`}>
+      <div className="srv-kpi-label">{label}</div>
+      <div className="srv-kpi-value">{value}</div>
+      {sub && <div className="srv-kpi-sub">{sub}</div>}
+      {bar !== undefined && (
+        <div className="srv-kpi-bar">
+          <i style={{ width: `${Math.min(100, bar)}%` }} />
+        </div>
+      )}
+    </div>
+  )
+}
+
+function ServerDetail({
+  server,
+  metric: m,
+  stat,
+  checking,
+  menu,
+  onCheck,
+  onClients,
+}: {
+  server: Server
+  metric: NodeMetric | undefined
+  stat: ServerStat | undefined
+  checking: boolean
+  menu: MenuItem[]
+  onCheck: () => void
+  onClients: (proto?: Protocol['key']) => void
+}) {
+  const { t } = useI18n()
+  const info = parseCheckInfo(server)
+  const protocols = protocolsFromContainers(
+    info?.amnezia_containers ?? [],
+    info?.protocols ?? {},
+  )
+  const online = server.last_check_ok === true
+  const memPct = m ? pct(m.mem_used, m.mem_total) : 0
+  const diskPct = m ? pct(m.disk_used, m.disk_total) : 0
+  const loadPct = m && m.cpu_count > 0 ? Math.round((m.load1 / m.cpu_count) * 100) : 0
+  return (
+    <div className={`card srv-detail${server.last_check_ok === false ? ' server-down' : ''}`}>
+      <div className="srv-detail-head">
+        <StatusDot server={server} />
+        <h3 className="srv-detail-name" title={server.name}>
+          {server.name}
+        </h3>
+        {server.group_name && <span className="group-count">{server.group_name}</span>}
+        <div className="srv-detail-actions">
+          {online && protocols.length > 0 && (
+            <button onClick={() => onClients()}>{t('Клиенты')}</button>
+          )}
+          <button className="ghost" onClick={onCheck} disabled={checking}>
+            {checking ? t('Проверка…') : t('Проверить')}
+          </button>
+          <Menu label={t('Ещё')} items={menu} />
+        </div>
+      </div>
+
+      <div className="srv-detail-meta">
+        {countryFlag(server.country) && (
+          <span className="server-flag" title={server.country}>
+            {countryFlag(server.country)}
           </span>
+        )}
+        <span className="mono host">{server.host}</span>
+        <span className="muted small mono">
+          SSH {server.ssh_user}:{server.ssh_port}
         </span>
-        <span className={`res-chip ${diskCls}`} title={t('Диск /')}>
-          {IconDisk}
-          <span className="res-label">{t('Диск')}</span>
-          <b>{diskPct}%</b>
-          <span className="res-sub">
-            {formatBytes(m.disk_used)}/{formatBytes(m.disk_total)}
+        {online && m && (
+          <span className="muted small">
+            {t('аптайм {t}', { t: formatUptime(m.uptime_seconds) })}
           </span>
-        </span>
+        )}
+      </div>
+
+      {server.note && <div className="srv-detail-note">{server.note}</div>}
+
+      {server.last_check_ok === false && info?.error && (
+        <div className="small err-text">{info.error}</div>
+      )}
+
+      {online && (m || stat?.online) && (
+        <div className="srv-kpis">
+          {stat?.online && (
+            <Kpi
+              label={t('Клиенты онлайн')}
+              value={
+                <>
+                  {stat.clients_online}
+                  <span className="srv-kpi-of"> / {stat.clients_total}</span>
+                </>
+              }
+            />
+          )}
+          {m && (
+            <>
+              <Kpi
+                label="CPU"
+                value={`${loadPct}%`}
+                sub={t('загрузка {l} на {n} ядер', {
+                  l: m.load1.toFixed(2),
+                  n: m.cpu_count,
+                })}
+                bar={loadPct}
+                level={loadLevel(m)}
+              />
+              <Kpi
+                label="RAM"
+                value={`${memPct}%`}
+                sub={`${formatBytes(m.mem_used)} / ${formatBytes(m.mem_total)}`}
+                bar={memPct}
+                level={pctLevel(memPct, 80)}
+              />
+              <Kpi
+                label={t('Диск')}
+                value={`${diskPct}%`}
+                sub={`${formatBytes(m.disk_used)} / ${formatBytes(m.disk_total)}`}
+                bar={diskPct}
+                level={pctLevel(diskPct, 75)}
+              />
+            </>
+          )}
+        </div>
+      )}
+
+      <div className="srv-protos">
+        <div className="srv-protos-title">{t('Протоколы')}</div>
+        {protocols.length === 0 ? (
+          <p className="muted small">
+            {!online
+              ? t('Протоколы появятся после успешной проверки сервера.')
+              : info?.docker === false
+                ? t('Docker на сервере недоступен.')
+                : t('Протоколов нет. Развернуть можно в меню «Ещё».')}
+          </p>
+        ) : (
+          protocols.map((p) => (
+            <div className="srv-proto-row" key={p.key}>
+              <span className="proto-badge">{p.label}</span>
+              {online && (
+                <button className="primary-ghost" onClick={() => onClients(p.key)}>
+                  {t('Клиенты')}
+                </button>
+              )}
+            </div>
+          ))
+        )}
       </div>
     </div>
   )
 }
 
+
 export function ServersPage({ onUnauthorized }: Props) {
   const { t } = useI18n()
   const [servers, setServers] = useState<Server[]>([])
   const [metrics, setMetrics] = useState<Record<number, NodeMetric>>({})
+  // клиенты онлайн/всего по серверам - из последних снимков сборщика
+  const [stats, setStats] = useState<Record<number, ServerStat>>({})
+  const [query, setQuery] = useState('')
+  const [onlyProblems, setOnlyProblems] = useState(false)
+  const [selectedId, setSelectedId] = useState<number | null>(() => {
+    try {
+      return Number(localStorage.getItem('acontrol_selected_server')) || null
+    } catch {
+      return null
+    }
+  })
+  const detailRef = useRef<HTMLDivElement>(null)
   const [config, setConfig] = useState<PanelConfig | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -199,6 +323,8 @@ export function ServersPage({ onUnauthorized }: Props) {
 
   const [checkingId, setCheckingId] = useState<number | null>(null)
   const [clientsFor, setClientsFor] = useState<Server | null>(null)
+  // вкладка протокола, с которой открыть клиентов (кнопка в строке протокола)
+  const [clientsTab, setClientsTab] = useState<Protocol['key'] | undefined>()
   const [importOpen, setImportOpen] = useState(false)
   // перенос одного сервера между панелями (не путать с бэкапом всей панели)
   const [exportFor, setExportFor] = useState<Server | null>(null)
@@ -260,6 +386,9 @@ export function ServersPage({ onUnauthorized }: Props) {
         .then((rows) =>
           setMetrics(Object.fromEntries(rows.map((r) => [r.server_id, r]))),
         )
+        .catch(() => {})
+      api<Overview>('/api/stats/overview')
+        .then((o) => setStats(Object.fromEntries(o.per_server.map((r) => [r.id, r]))))
         .catch(() => {})
     } catch (err) {
       handleError(err)
@@ -562,6 +691,121 @@ export function ServersPage({ onUnauthorized }: Props) {
     [servers],
   )
 
+  // меню «Ещё» сервера: в карточке справа. «Проверить» там отдельной кнопкой.
+  function serverMenu(s: Server): MenuItem[] {
+    const info = parseCheckInfo(s)
+    const protocols = protocolsFromContainers(
+      info?.amnezia_containers ?? [],
+      info?.protocols ?? {},
+    )
+    const online = s.last_check_ok === true
+    const items: MenuItem[] = []
+    if (online && protocols.length === 0) {
+      items.push({
+        label: t('Развернуть AmneziaWG'),
+        onClick: () => setDeployFor({ server: s, mode: 'deploy', protocol: 'awg' }),
+      })
+    }
+    if (online && !protocols.some((p) => p.key === 'awg3')) {
+      items.push({
+        label: t('Развернуть AmneziaWG 3.1'),
+        onClick: () => setDeployFor({ server: s, mode: 'deploy', protocol: 'awg3' }),
+      })
+    }
+    if (online && !protocols.some((p) => p.key === 'xray')) {
+      items.push({
+        label: t('Развернуть XRay / REALITY'),
+        onClick: () => setDeployFor({ server: s, mode: 'deploy', protocol: 'xray' }),
+      })
+    }
+    if (online && !protocols.some((p) => p.key === 'openvpn')) {
+      items.push({
+        label: t('Развернуть OpenVPN / Cloak'),
+        onClick: () => setDeployFor({ server: s, mode: 'deploy', protocol: 'openvpn' }),
+      })
+    }
+    if (online && fullAccessSupported(info?.amnezia_containers ?? [])) {
+      items.push({
+        label: faBusyId === s.id ? t('Генерация…') : t('Полный доступ'),
+        disabled: faBusyId === s.id,
+        onClick: () => {
+          setError(null)
+          setFaPassword('')
+          setFaStepUp(s)
+        },
+      })
+    }
+    if (!online) {
+      items.push({ label: t('Скрипт настройки'), onClick: () => openScript(s) })
+    }
+    items.push({ label: t('Выгрузить в файл'), onClick: () => setExportFor(s) })
+    items.push({ label: t('Изменить'), onClick: () => openEdit(s) })
+    items.push({
+      label: t('Удалить сервер'),
+      danger: true,
+      onClick: () => {
+        setDeleteRemoveKey(false)
+        setDeleteFor(s)
+      },
+    })
+    return items
+  }
+
+  const q = query.trim().toLowerCase()
+  const filtering = q !== '' || onlyProblems
+  const visibleGroups = useMemo(
+    () =>
+      groupList
+        .map((g) => ({
+          ...g,
+          servers: g.servers.filter((s) => {
+            if (onlyProblems && !isProblem(s, metrics[s.id])) return false
+            if (!q) return true
+            const info = parseCheckInfo(s)
+            const labels = protocolsFromContainers(
+              info?.amnezia_containers ?? [],
+              info?.protocols ?? {},
+            ).map((p) => p.label)
+            return [s.name, s.host, s.note, s.group_name, ...labels]
+              .join(' ')
+              .toLowerCase()
+              .includes(q)
+          }),
+        }))
+        .filter((g) => g.servers.length > 0),
+    [groupList, metrics, onlyProblems, q],
+  )
+  const visibleFlat = visibleGroups.flatMap((g) => g.servers)
+  const problemCount = servers.filter((s) => isProblem(s, metrics[s.id])).length
+  const selected =
+    visibleFlat.find((s) => s.id === selectedId) ?? visibleFlat[0] ?? null
+
+  function select(s: Server) {
+    setSelectedId(s.id)
+    try {
+      localStorage.setItem('acontrol_selected_server', String(s.id))
+    } catch {
+      // приватный режим: просто не запоминаем
+    }
+    // на телефоне карточка под списком: прокручиваем к ней
+    if (window.matchMedia('(max-width: 900px)').matches) {
+      requestAnimationFrame(() =>
+        detailRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }),
+      )
+    }
+  }
+
+  function groupSummary(list: Server[]) {
+    const online = list.reduce((a, s) => a + (stats[s.id]?.clients_online ?? 0), 0)
+    const bad = list.filter((s) => isProblem(s, metrics[s.id])).length
+    return (
+      <span className="group-sum">
+        {t('{n} онлайн', { n: online })}
+        {bad > 0 && <span className="group-sum-bad"> · {t('проблем: {n}', { n: bad })}</span>}
+      </span>
+    )
+  }
+
   return (
     <section>
       <div className="page-head">
@@ -589,238 +833,169 @@ export function ServersPage({ onUnauthorized }: Props) {
         </div>
       )}
 
-      <div className="server-list">
-        {groupList.map((g) => {
-          const cards = g.servers.map((s) => {
-          const info = parseCheckInfo(s)
-          const protocols = protocolsFromContainers(
-            info?.amnezia_containers ?? [],
-            info?.protocols ?? {},
-          )
-          const online = s.last_check_ok === true
-          const moreItems: MenuItem[] = []
-          // «Проверить» — редкое действие, прячем в меню (было отдельной кнопкой)
-          moreItems.push({
-            label: checkingId === s.id ? t('Проверка…') : t('Проверить'),
-            disabled: checkingId === s.id,
-            onClick: () => check(s),
-          })
-          if (online && protocols.length === 0) {
-            moreItems.push({
-              label: t('Развернуть AmneziaWG'),
-              onClick: () => setDeployFor({ server: s, mode: 'deploy', protocol: 'awg' }),
-            })
-          }
-          if (online && !protocols.some((p) => p.key === 'awg3')) {
-            moreItems.push({
-              label: t('Развернуть AmneziaWG 3.1'),
-              onClick: () => setDeployFor({ server: s, mode: 'deploy', protocol: 'awg3' }),
-            })
-          }
-          if (online && !protocols.some((p) => p.key === 'xray')) {
-            moreItems.push({
-              label: t('Развернуть XRay / REALITY'),
-              onClick: () => setDeployFor({ server: s, mode: 'deploy', protocol: 'xray' }),
-            })
-          }
-          if (online && !protocols.some((p) => p.key === 'openvpn')) {
-            moreItems.push({
-              label: t('Развернуть OpenVPN / Cloak'),
-              onClick: () => setDeployFor({ server: s, mode: 'deploy', protocol: 'openvpn' }),
-            })
-          }
-          if (online && fullAccessSupported(info?.amnezia_containers ?? [])) {
-            moreItems.push({
-              label:
-                faBusyId === s.id ? t('Генерация…') : t('Полный доступ'),
-              disabled: faBusyId === s.id,
-              onClick: () => {
-                setError(null)
-                setFaPassword('')
-                setFaStepUp(s)
-              },
-            })
-          }
-          if (!online) {
-            moreItems.push({ label: t('Скрипт настройки'), onClick: () => openScript(s) })
-          }
-          moreItems.push({
-            label: t('Выгрузить в файл'),
-            onClick: () => setExportFor(s),
-          })
-          moreItems.push({ label: t('Изменить'), onClick: () => openEdit(s) })
-          moreItems.push({
-            label: t('Удалить сервер'),
-            danger: true,
-            onClick: () => {
-              setDeleteRemoveKey(false)
-              setDeleteFor(s)
-            },
-          })
-          const canOpenClients = online && protocols.length > 0
-          return (
-          <div
-            className={`server-card${canOpenClients ? ' card-clickable' : ''}${
-              s.last_check_ok === false ? ' server-down' : ''
-            }${dropHint === `srv-${s.id}` ? ' drag-over' : ''}`}
-            key={s.id}
-            role={canOpenClients ? 'button' : undefined}
-            tabIndex={canOpenClients ? 0 : undefined}
-            title={canOpenClients ? t('Открыть клиентов') : undefined}
-            onClick={canOpenClients ? () => setClientsFor(s) : undefined}
-            onDragOver={(e) => {
-              if (dragServer.current != null) {
-                e.preventDefault()
-                if (dropHint !== `srv-${s.id}`) setDropHint(`srv-${s.id}`)
-              }
-            }}
-            onDragLeave={() => {
-              if (dropHint === `srv-${s.id}`) setDropHint(null)
-            }}
-            onDrop={() => dropOnServer(s.id)}
-            onKeyDown={
-              canOpenClients
-                ? (e) => {
-                    if (e.key === 'Enter' || e.key === ' ') {
-                      e.preventDefault()
-                      setClientsFor(s)
-                    }
-                  }
-                : undefined
-            }
-          >
-            <div className="server-top">
-              <div className="server-title">
-                <span
-                  className="drag-handle"
-                  draggable
-                  title={t('Перетащить')}
-                  onClick={(e) => e.stopPropagation()}
-                  onDragStart={(e) => {
-                    dragServer.current = s.id
-                    dragGroup.current = null
-                    e.dataTransfer.effectAllowed = 'move'
-                    e.dataTransfer.setData('text/plain', String(s.id))
-                  }}
-                  onDragEnd={() => {
-                    dragServer.current = null
-                    setDropHint(null)
-                  }}
+      {servers.length > 0 && (
+        <div className="srv-split">
+          <div className="srv-side">
+            <div className="srv-side-tools">
+              <input
+                className="srv-search"
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                placeholder={t('Имя, IP, заметка, протокол')}
+              />
+              <div className="srv-side-chips">
+                <button
+                  className={`srv-fchip${!onlyProblems ? ' on' : ''}`}
+                  onClick={() => setOnlyProblems(false)}
                 >
-                  ⠿
-                </span>
-                <span className="server-name" title={s.name}>
-                  {s.name}
-                </span>
-                <StatusDot server={s} />
-              </div>
-              <div
-                className="server-actions"
-                onClick={(e) => e.stopPropagation()}
-              >
-                {canOpenClients && (
-                  <button className="primary-ghost" onClick={() => setClientsFor(s)}>
-                    {t('Клиенты')}
-                  </button>
-                )}
-                {/* сервер недоступен/не проверялся — даём «Проверить» прямо на
-                    карточке (для онлайна оно остаётся в меню «Ещё») */}
-                {!online && (
-                  <button
-                    className="ghost"
-                    onClick={() => void check(s)}
-                    disabled={checkingId === s.id}
-                  >
-                    {checkingId === s.id ? t('Проверка…') : t('Проверить')}
-                  </button>
-                )}
-                <Menu label={t('Ещё')} items={moreItems} />
+                  {t('Все')} <b>{servers.length}</b>
+                </button>
+                <button
+                  className={`srv-fchip${onlyProblems ? ' on bad' : ''}`}
+                  onClick={() => setOnlyProblems(true)}
+                  disabled={problemCount === 0 && !onlyProblems}
+                >
+                  {t('Проблемы')} <b>{problemCount}</b>
+                </button>
               </div>
             </div>
-
-            <div className="server-meta">
-              {countryFlag(s.country) && (
-                <span className="server-flag" title={s.country}>
-                  {countryFlag(s.country)}
-                </span>
+            <div className="srv-side-list">
+              {visibleGroups.length === 0 && (
+                <p className="muted small srv-side-empty">{t('Ничего не найдено')}</p>
               )}
-              <span className="mono host">{s.host}</span>
-              {protocols.map((p) => (
-                <span key={p.key} className="proto-badge">
-                  {p.label}
-                </span>
-              ))}
-              {online && protocols.length === 0 && info?.docker === false && (
-                <span className="muted small">{t('· docker недоступен')}</span>
-              )}
+              {visibleGroups.map((g) => {
+                const open = filtering || !collapsed[g.name]
+                return (
+                  <div className="srv-side-group" key={g.name || '__ungrouped'}>
+                    {hasGroups && (
+                      <button
+                        type="button"
+                        className={`srv-side-gh${dropHint === `grp-${g.name}` ? ' drag-over' : ''}`}
+                        onClick={() => toggleGroup(g.name)}
+                        onDragOver={(e) => {
+                          if (dragServer.current != null || dragGroup.current != null) {
+                            e.preventDefault()
+                            if (dropHint !== `grp-${g.name}`) setDropHint(`grp-${g.name}`)
+                          }
+                        }}
+                        onDragLeave={() => {
+                          if (dropHint === `grp-${g.name}`) setDropHint(null)
+                        }}
+                        onDrop={() => {
+                          if (dragServer.current != null) dropServerOnGroup(g.name)
+                          else if (dragGroup.current != null) dropGroupOnGroup(g.name)
+                        }}
+                      >
+                        {g.name !== '' && !filtering && (
+                          <span
+                            className="drag-handle"
+                            draggable
+                            title={t('Перетащить группу')}
+                            onClick={(e) => e.stopPropagation()}
+                            onDragStart={(e) => {
+                              dragGroup.current = g.name
+                              dragServer.current = null
+                              e.dataTransfer.effectAllowed = 'move'
+                              e.dataTransfer.setData('text/plain', g.name)
+                            }}
+                            onDragEnd={() => {
+                              dragGroup.current = null
+                              setDropHint(null)
+                            }}
+                          >
+                            ⠿
+                          </span>
+                        )}
+                        <span className="group-caret">{open ? '▾' : '▸'}</span>
+                        <span className="group-name">{g.name || t('Без группы')}</span>
+                        <span className="group-count">{g.servers.length}</span>
+                        {groupSummary(g.servers)}
+                      </button>
+                    )}
+                    {open &&
+                      g.servers.map((s) => {
+                        const st = stats[s.id]
+                        return (
+                          <button
+                            type="button"
+                            key={s.id}
+                            className={`srv-item${selected?.id === s.id ? ' selected' : ''}${
+                              s.last_check_ok === false ? ' server-down' : ''
+                            }${dropHint === `srv-${s.id}` ? ' drag-over' : ''}`}
+                            onClick={() => select(s)}
+                            title={s.host}
+                            onDragOver={(e) => {
+                              if (dragServer.current != null) {
+                                e.preventDefault()
+                                if (dropHint !== `srv-${s.id}`) setDropHint(`srv-${s.id}`)
+                              }
+                            }}
+                            onDragLeave={() => {
+                              if (dropHint === `srv-${s.id}`) setDropHint(null)
+                            }}
+                            onDrop={() => dropOnServer(s.id)}
+                          >
+                            {!filtering && (
+                              <span
+                                className="drag-handle"
+                                draggable
+                                title={t('Перетащить')}
+                                onClick={(e) => e.stopPropagation()}
+                                onDragStart={(e) => {
+                                  dragServer.current = s.id
+                                  dragGroup.current = null
+                                  e.dataTransfer.effectAllowed = 'move'
+                                  e.dataTransfer.setData('text/plain', String(s.id))
+                                }}
+                                onDragEnd={() => {
+                                  dragServer.current = null
+                                  setDropHint(null)
+                                }}
+                              >
+                                ⠿
+                              </span>
+                            )}
+                            <StatusDot server={s} />
+                            {countryFlag(s.country) && (
+                              <span className="server-flag" title={s.country}>
+                                {countryFlag(s.country)}
+                              </span>
+                            )}
+                            <span className="srv-item-name">{s.name}</span>
+                            {st?.online && (
+                              <span className="srv-item-cl" title={t('онлайн / всего клиентов')}>
+                                <b>{st.clients_online}</b>/{st.clients_total}
+                              </span>
+                            )}
+                          </button>
+                        )
+                      })}
+                  </div>
+                )
+              })}
             </div>
+          </div>
 
-            {s.note && <div className="muted small server-note">{s.note}</div>}
-
-            {online && metrics[s.id] && <ResourceLine m={metrics[s.id]} />}
-
-            {s.last_check_ok === false && info?.error && (
-              <div className="muted small err-text">{info.error}</div>
+          <div className="srv-detail-wrap" ref={detailRef}>
+            {selected ? (
+              <ServerDetail
+                server={selected}
+                metric={metrics[selected.id]}
+                stat={stats[selected.id]}
+                checking={checkingId === selected.id}
+                menu={serverMenu(selected)}
+                onCheck={() => void check(selected)}
+                onClients={(proto) => {
+                  setClientsTab(proto)
+                  setClientsFor(selected)
+                }}
+              />
+            ) : (
+              <div className="card srv-detail muted">{t('Ничего не найдено')}</div>
             )}
           </div>
-          )
-          })
-          if (!hasGroups) return cards
-          return (
-            <div className="server-group" key={g.name || '__ungrouped'}>
-              <button
-                type="button"
-                className={`group-header${
-                  dropHint === `grp-${g.name}` ? ' drag-over' : ''
-                }`}
-                onClick={() => toggleGroup(g.name)}
-                onDragOver={(e) => {
-                  if (dragServer.current != null || dragGroup.current != null) {
-                    e.preventDefault()
-                    if (dropHint !== `grp-${g.name}`) setDropHint(`grp-${g.name}`)
-                  }
-                }}
-                onDragLeave={() => {
-                  if (dropHint === `grp-${g.name}`) setDropHint(null)
-                }}
-                onDrop={() => {
-                  if (dragServer.current != null) dropServerOnGroup(g.name)
-                  else if (dragGroup.current != null) dropGroupOnGroup(g.name)
-                }}
-              >
-                {g.name !== '' && (
-                  <span
-                    className="drag-handle"
-                    draggable
-                    title={t('Перетащить группу')}
-                    onClick={(e) => e.stopPropagation()}
-                    onDragStart={(e) => {
-                      dragGroup.current = g.name
-                      dragServer.current = null
-                      e.dataTransfer.effectAllowed = 'move'
-                      e.dataTransfer.setData('text/plain', g.name)
-                    }}
-                    onDragEnd={() => {
-                      dragGroup.current = null
-                      setDropHint(null)
-                    }}
-                  >
-                    ⠿
-                  </span>
-                )}
-                <span className="group-caret">
-                  {collapsed[g.name] ? '▸' : '▾'}
-                </span>
-                <span className="group-name">{g.name || t('Без группы')}</span>
-                <span className="group-count">{g.servers.length}</span>
-              </button>
-              {!collapsed[g.name] && (
-                <div className="group-cards">{cards}</div>
-              )}
-            </div>
-          )
-        })}
-      </div>
+        </div>
+      )}
 
       {formOpen && (
         <div className="modal-backdrop">
@@ -1002,6 +1177,7 @@ export function ServersPage({ onUnauthorized }: Props) {
       {clientsFor && (
         <ClientsModal
           server={clientsFor}
+          initialProtocol={clientsTab}
           protocols={protocolsFromContainers(
             parseCheckInfo(clientsFor)?.amnezia_containers ?? [],
             parseCheckInfo(clientsFor)?.protocols ?? {},
