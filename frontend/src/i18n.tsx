@@ -266,6 +266,7 @@ const EN: Record<string, string> = {
   'загрузка {l} на {n} ядер': 'load {l} on {n} cores',
   'выход в интернет: {ip}': 'internet exit: {ip}',
   'этот сервер': 'this server',
+  'GRE-туннель до {ip}': 'GRE tunnel to {ip}',
   'выход в интернет': 'internet exit',
   'выход в интернет, {org}': 'internet exit, {org}',
   'Протоколы': 'Protocols',

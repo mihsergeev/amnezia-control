@@ -203,6 +203,8 @@ export type CheckInfo = {
   // awg1 | awg2 | awg3 | openvpn | xray. Имя контейнера версию не отражает —
   // на боевой ноде встречается amnezia-awg2, внутри которого конфиг 1.0.
   protocols?: Record<string, string>
+  // поднятые GRE-туннели ноды (каскад через GRE)
+  tunnels?: { kind: string; name: string; remote: string }[]
 }
 
 export function parseCheckInfo(server: Server): CheckInfo | null {

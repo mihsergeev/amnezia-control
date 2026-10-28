@@ -39,8 +39,15 @@ _PROTO_PROBE = (
     "done"
 )
 
+# GRE-туннели ноды (каскад через GRE: ТСПУ не трогает proto 47). Сырые строки
+# `ip -o -d link`, разбираем в _parse_tunnel; служебный gre0 (remote any) отсеиваем
+_TUNNEL_PROBE = (
+    "ip -o -d link show type gre 2>/dev/null | sed 's/^/GRELINK=/'; "
+)
+
 CHECK_COMMAND = (
     'echo "HOST=$(hostname)"; '
+    + _TUNNEL_PROBE +
     "if docker ps --format '{{.Names}}' 2>/dev/null; then D=docker; "
     "elif sudo -n docker ps --format '{{.Names}}' 2>/dev/null; then D='sudo -n docker'; "
     "else echo DOCKER_UNAVAILABLE; D=''; fi; "
@@ -103,6 +110,8 @@ class CheckResult:
     # реальный протокол по каждому amnezia-контейнеру: {имя: awg1|awg2|awg3|
     # openvpn|xray|other} — определяется по конфигу ВНУТРИ контейнера, а не по имени
     protocols: dict[str, str] = field(default_factory=dict)
+    # поднятые GRE-туннели: [{"kind": "gre", "name": "gre-fi", "remote": "203.0.113.9"}]
+    tunnels: list[dict] = field(default_factory=list)
 
     def as_dict(self) -> dict:
         return {
@@ -112,6 +121,7 @@ class CheckResult:
             "containers": self.containers,
             "amnezia_containers": self.amnezia_containers,
             "protocols": self.protocols,
+            "tunnels": self.tunnels,
         }
 
 
@@ -120,6 +130,20 @@ class BootstrapResult:
     ok: bool
     error: str = ""
     output: str = ""
+
+
+_GRELINK_RE = re.compile(r"^\d+:\s+([^@:\s]+)[@:].*?<([^>]*)>.*\sgre remote (\S+)")
+
+
+def _parse_tunnel(line: str) -> dict | None:
+    """Строка `ip -o -d link show type gre` -> туннель, если он поднят и с адресом."""
+    m = _GRELINK_RE.search(line)
+    if not m:
+        return None
+    name, flags, remote = m.groups()
+    if "UP" not in flags.split(",") or remote == "any":
+        return None
+    return {"kind": "gre", "name": name, "remote": remote}
 
 
 def _parse_check_output(output: str) -> CheckResult:
@@ -132,6 +156,10 @@ def _parse_check_output(output: str) -> CheckResult:
             result.hostname = line.removeprefix("HOST=")
         elif line == "DOCKER_UNAVAILABLE":
             result.docker = False
+        elif line.startswith("GRELINK="):
+            tun = _parse_tunnel(line.removeprefix("GRELINK="))
+            if tun:
+                result.tunnels.append(tun)
         elif line.startswith("PROTO="):
             name, _, kind = line.removeprefix("PROTO=").partition("|")
             if name and kind:
