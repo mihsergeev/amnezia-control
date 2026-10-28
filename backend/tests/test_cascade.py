@@ -199,3 +199,25 @@ async def test_server_delete_drops_cascade(
     r = await client.delete(f"/api/servers/{b}", headers=auth_headers)
     assert r.status_code == 200
     assert (await client.get("/api/cascades", headers=auth_headers)).json() == []
+
+
+def test_pick_source() -> None:
+    # адрес на интерфейсе публичный - его и видит выход
+    assert cascade.pick_source("203.0.113.10", "198.51.100.20", "") == "203.0.113.10"
+    # вход за NAT, выход в интернете - внешний адрес
+    assert cascade.pick_source("10.0.0.5", "8.8.8.8", "203.0.113.10") == "203.0.113.10"
+    # оба во внутренней сети - внутренний адрес, а не адрес роутера
+    assert cascade.pick_source("192.168.1.21", "192.168.1.22", "8.8.4.4") == "192.168.1.21"
+
+
+def test_egress_due_accepts_naive_sqlite_dates() -> None:
+    from datetime import datetime, timedelta, timezone
+
+    from app import server_ops
+
+    now = datetime.now(timezone.utc)
+    s = Server(name="vpn-a", host="203.0.113.10")
+    s.egress_at = (now - timedelta(minutes=5)).replace(tzinfo=None)
+    assert server_ops.egress_due(s, now) is False
+    s.egress_at = (now - timedelta(hours=2)).replace(tzinfo=None)
+    assert server_ops.egress_due(s, now) is True

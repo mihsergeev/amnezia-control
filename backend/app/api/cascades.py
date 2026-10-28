@@ -106,8 +106,9 @@ async def _pair(body: CascadePair, session) -> tuple[Server, Server]:
 
 
 async def _addresses(entry_conn, entry: Server, exit_: Server) -> tuple[str, str]:
-    entry_ip = await cascade.public_ip(entry_conn) or await _ipv4(entry.host)
     exit_ip = await _ipv4(exit_.host)
+    entry_ip = await cascade.entry_source_ip(entry_conn, exit_ip) if exit_ip else ""
+    entry_ip = entry_ip or await _ipv4(entry.host)
     if not entry_ip or not exit_ip:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Не удалось определить IPv4 серверов")
     return entry_ip, exit_ip
