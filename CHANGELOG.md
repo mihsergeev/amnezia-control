@@ -4,6 +4,18 @@ All notable changes to Amnezia Control are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.63.0] - 2026-10-28
+
+### Added
+- **GRE badge on servers with a GRE tunnel.** Some networks freeze TCP to
+  foreign hosting after a few dozen kilobytes but let plain GRE through, so a
+  cascade can run over a GRE tunnel. The server check now lists the node's
+  GRE tunnels that are up (`ip -o -d link show type gre`, the idle `gre0`
+  device is skipped). Such servers get a **GRE** badge in the list; on the
+  server card the badge sits on the route between the server and its
+  internet exit, or shows the tunnel peer address when the exit is not
+  known.
+
 ## [0.62.1] - 2026-10-28
 
 ### Fixed

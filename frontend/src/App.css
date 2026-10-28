@@ -2211,6 +2211,33 @@ button.srv-side-gh:hover .drag-handle {
   font-size: 1.1rem;
 }
 
+/* бейдж GRE: каскад идет через GRE-туннель */
+.tun-badge {
+  display: inline-block;
+  padding: 0.05rem 0.4rem;
+  border: 1px solid #a78bfa66;
+  border-radius: 6px;
+  background: #a78bfa1a;
+  color: #a78bfa;
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  line-height: 1.4;
+  white-space: nowrap;
+}
+
+:root[data-theme='light'] .tun-badge {
+  color: #6d28d9;
+  border-color: #6d28d955;
+  background: #6d28d912;
+}
+
+.srv-route-arrow {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
 .srv-hop {
   display: flex;
   align-items: center;
