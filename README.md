@@ -72,6 +72,7 @@ The [AmneziaVPN desktop client](https://amnezia.org) is great for personal use â
 - Overview dashboard: aggregate traffic and online-clients charts (24 h), per-server breakdown
 - **Server-down alerts** and **low-disk alerts** to Telegram and/or a webhook, configured from the UI
 - **"Clients gone" alert**: the node still answers, but far fewer clients are active than at the same time yesterday and a week ago. This is what it looks like when ISPs start blocking a node's address. One alert per drop, at most once a day per server, and no "clients are back" message
+- **"Cascade down" alert**: the panel checks every cascade from its entry every 2 minutes and alerts with the reason when traffic has not gone through the exit for 10 minutes, then says when it works again
 
 **Operations & security**
 - **Two-factor auth (TOTP)** for panel login

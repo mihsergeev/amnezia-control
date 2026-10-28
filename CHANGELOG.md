@@ -4,6 +4,21 @@ All notable changes to Amnezia Control are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.67.0] - 2026-10-28
+
+### Added
+- **Alert when a cascade stops working.** Both servers can answer over SSH
+  while client traffic does not get through the exit: GRE blocked on the way,
+  the gateway on the entry stopped, the exit no longer lets traffic out. The
+  server alerts stay silent then. The panel now runs the cascade check on the
+  entry every 2 minutes and sends an alert with the reason when the cascade
+  has been down for longer than `cascade_down_minutes`
+  (`VPNPANEL_CASCADE_DOWN_MINUTES`, default `10`, `-1` turns the check off),
+  one alert per outage and a message when it works again. The entry server
+  turns red in the list and its card says since when and why.
+- The cascade check asks a second address service when the first one does
+  not answer, so one service being down is not taken for a dead exit.
+
 ## [0.66.3] - 2026-10-28
 
 ### Changed

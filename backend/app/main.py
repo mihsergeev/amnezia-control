@@ -31,6 +31,7 @@ from app.api import (
     xray,
 )
 from app.autobackup import backup_loop
+from app.cascadewatch import cascade_watch_loop
 from app.bootstrap import ensure_admin
 from app.collector import collector_loop
 from app.expiry import expiry_loop
@@ -81,11 +82,13 @@ def create_app() -> FastAPI:
         backup_task = asyncio.create_task(backup_loop(session_factory, settings))
         expiry_task = asyncio.create_task(expiry_loop(session_factory, settings))
         hb_task = asyncio.create_task(heartbeat_loop(session_factory, settings))
+        cas_task = asyncio.create_task(cascade_watch_loop(session_factory, settings))
         yield
         task.cancel()
         backup_task.cancel()
         expiry_task.cancel()
         hb_task.cancel()
+        cas_task.cancel()
         await engine.dispose()
 
     # Доки/схему отдаём в debug ИЛИ когда явно включены (api_docs) — интегратору

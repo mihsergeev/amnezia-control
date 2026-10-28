@@ -841,7 +841,13 @@ export type Cascade = {
   entry_ip: string
   exit_ip: string
   probe: Partial<CascadeProbe> & { checked_at?: string }
-  result: { egress?: string; ru?: string; checked_at?: string }
+  result: {
+    egress?: string
+    ru?: string
+    checked_at?: string
+    // фоновая проверка панели раз в пару минут
+    health?: { ok: boolean; reason?: string; since?: string; checked_at?: string }
+  }
   created_at: string
 }
 

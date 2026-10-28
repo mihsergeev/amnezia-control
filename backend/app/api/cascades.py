@@ -238,7 +238,7 @@ async def check(cascade_id: int, _: CurrentUser, session: SessionDep) -> Cascade
     tunnel = kv.get("tun", "") if c.transport == "gre" else ""
     gateway = kv.get("gw") == "yes"
     tproxy = kv.get("tproxy") == "active"
-    ok = gateway and tproxy and bool(res["egress"]) and (c.transport != "gre" or tunnel != "")
+    ok, _reason = cascade.health(c.transport, kv, res)
     return CascadeCheckOut(
         ok=ok, gateway=gateway, tproxy=tproxy, tunnel=tunnel,
         egress=res["egress"], ru=res["ru"], checked_at=now,
