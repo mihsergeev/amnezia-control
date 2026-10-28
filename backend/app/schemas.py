@@ -493,6 +493,7 @@ class AlertConfigOut(BaseModel):
     telegram_chat: str
     telegram_api: str = ""
     webhook: str
+    lang: Literal["", "ru", "en"] = ""  # пусто - не выбирали (алерты по-русски)
     enabled: bool
 
 
@@ -501,6 +502,7 @@ class AlertConfigIn(BaseModel):
     telegram_chat: str = Field(default="", max_length=64)
     telegram_api: str = Field(default="", max_length=256)
     webhook: str = Field(default="", max_length=512)
+    lang: Literal["", "ru", "en"] = ""
 
 
 class AlertTestResult(BaseModel):

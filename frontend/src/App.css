@@ -1541,7 +1541,8 @@ body {
   color: var(--text-muted);
 }
 
-.field input {
+.field input,
+.field select {
   padding: 0.45rem 0.6rem;
   background: var(--bg);
   color: var(--text);

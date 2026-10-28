@@ -1,11 +1,11 @@
 """Каскад из двух серверов: клиенты подключаются ко входу, в интернет выходят
-с адреса выхода. Российские адреса и домены вход выпускает напрямую.
+с адреса выхода. Адреса и домены страны входа вход выпускает напрямую.
 
 Устройство на нодах (все в /opt/acontrol/cascade, службы systemd):
 - вход: шлюз acontrol-cascade (xray-core в сети хоста). Исходящий трафик
   VPN-контейнеров с docker0 заворачивается в него через tproxy
-  (cascade-tproxy.sh), он раскладывает по геобазам runetfreedom: российское
-  напрямую, остальное на выход. Если шлюз лежит, трафик клиентов не уходит
+  (cascade-tproxy.sh), он раскладывает по геобазам runetfreedom: сайты страны
+  входа напрямую, остальное на выход. Если шлюз лежит, трафик клиентов не уходит
   никуда, утечки мимо выхода нет;
 - связь вход -> выход одна из двух:
   vless - VLESS Reality до контейнера acontrol-cascade-exit на выходе. Снаружи
@@ -251,7 +251,7 @@ WantedBy=multi-user.target
 _GEO_SH = r"""#!/bin/sh
 # Amnezia Control: обновляет геобазы runetfreedom (geoip.dat, geosite.dat) для
 # шлюза каскада и перезапускает его, если базы изменились. Качает через выход
-# каскада (из России github бывает медленным), без шлюза или при ошибке напрямую.
+# каскада (со входа github бывает медленным), без шлюза или при ошибке напрямую.
 # Сначала сверяет контрольные суммы и не качает базы, которые не менялись.
 # Новые базы проверяются через xray -test до подмены, при ошибке остаются старые.
 set -eu
@@ -467,7 +467,38 @@ def exit_vless_config(params: dict) -> str:
     return json.dumps(cfg, indent=2)
 
 
-def entry_gateway_config(transport: str, exit_ip: str, params: dict, bootstrap: bool = False) -> str:
+# доменные зоны страны входа, кроме двухбуквенной по ее коду
+_TLDS = {
+    "ru": ["ru", "su", "xn--p1ai"], "by": ["by", "xn--90ais"], "kz": ["kz", "xn--80ao21a"],
+    "ua": ["ua", "xn--j1amh"], "rs": ["rs", "xn--90a3ac"], "gb": ["uk"],
+}
+# списки доменов страны в geosite есть не у всех стран, а без списка xray не стартует
+_GEOSITE = {"ru": ["geosite:ru-available-only-inside", "geosite:category-ru"],
+            "ir": ["geosite:category-ir"]}
+
+
+def local_rules(country: str) -> list[dict]:
+    """Правила шлюза "страна входа напрямую". Страна неизвестна - правил нет, все идет на выход."""
+    cc = (country or "").lower()
+    if not re.fullmatch(r"[a-z]{2}", cc):
+        return []
+    rules: list[dict] = []
+    if cc == "ru":
+        # заблокированное в России уходит на выход, даже если адрес российский
+        rules += [
+            {"domain": ["geosite:ru-blocked"], "outboundTag": "exit"},
+            {"ip": ["geoip:ru-blocked"], "outboundTag": "exit"},
+        ]
+    domains = _GEOSITE.get(cc, []) + [f"domain:{tld}" for tld in _TLDS.get(cc, [cc])]
+    rules += [
+        {"domain": domains, "outboundTag": "direct"},
+        {"ip": [f"geoip:{cc}"], "outboundTag": "direct"},
+    ]
+    return rules
+
+
+def entry_gateway_config(transport: str, exit_ip: str, params: dict, bootstrap: bool = False,
+                         country: str = "") -> str:
     """Конфиг шлюза на входе. Первый outbound (exit) - путь по умолчанию.
     bootstrap: без правил по геобазам, чтобы скачать их через выход, пока их еще нет."""
     if transport == "gre":
@@ -522,16 +553,7 @@ def entry_gateway_config(transport: str, exit_ip: str, params: dict, bootstrap: 
             "domainStrategy": "IPIfNonMatch",
             "rules": [
                 {"ip": ["geoip:private"], "outboundTag": "block"},
-                {"domain": ["geosite:ru-blocked"], "outboundTag": "exit"},
-                {"ip": ["geoip:ru-blocked"], "outboundTag": "exit"},
-                {
-                    "domain": [
-                        "geosite:ru-available-only-inside", "geosite:category-ru",
-                        "domain:ru", "domain:su", "domain:xn--p1ai",
-                    ],
-                    "outboundTag": "direct",
-                },
-                {"ip": ["geoip:ru"], "outboundTag": "direct"},
+                *local_rules(country),
             ],
         },
     }
@@ -540,16 +562,26 @@ def entry_gateway_config(transport: str, exit_ip: str, params: dict, bootstrap: 
     return json.dumps(cfg, indent=2)
 
 
-# адрес выхода и российский адрес через шлюз (socks-вход check)
-_CHECK_LINES = [
-    f"EG=$(curl -4 -fsS -m 20 --socks5-hostname 127.0.0.1:{SOCKS_PORT} https://api.ipify.org 2>/dev/null "
-    f"|| curl -4 -fsS -m 20 --socks5-hostname 127.0.0.1:{SOCKS_PORT} https://ipv4.icanhazip.com 2>/dev/null)",
-    # российский сервис на домене .ru: шлюз обязан выпустить его напрямую
-    f"RU=$(curl -4 -fsS -m 15 --socks5-hostname 127.0.0.1:{SOCKS_PORT} https://ip.nic.ru 2>/dev/null "
-    "| grep -oE '([0-9]{1,3}[.]){3}[0-9]{1,3}' | head -1)",
-    'echo "CASCADE_EGRESS=$EG"',
-    'echo "CASCADE_RU=$RU"',
-]
+# сервис адреса в зоне страны входа: шлюз обязан выпустить его напрямую.
+# Для других стран такого сервиса не держим, местный адрес не проверяется
+_LOCAL_IP_URL = {"ru": "https://ip.nic.ru"}
+
+
+def _check_lines(country: str = "") -> list[str]:
+    """Адрес выхода и местный адрес через шлюз (socks-вход check).
+    CASCADE_RU - исторически так, это адрес, с которого идут сайты страны входа."""
+    lines = [
+        f"EG=$(curl -4 -fsS -m 20 --socks5-hostname 127.0.0.1:{SOCKS_PORT} https://api.ipify.org 2>/dev/null "
+        f"|| curl -4 -fsS -m 20 --socks5-hostname 127.0.0.1:{SOCKS_PORT} https://ipv4.icanhazip.com 2>/dev/null)",
+        'RU=""',
+    ]
+    url = _LOCAL_IP_URL.get((country or "").lower())
+    if url:
+        lines.append(
+            f"RU=$(curl -4 -fsS -m 15 --socks5-hostname 127.0.0.1:{SOCKS_PORT} {url} 2>/dev/null "
+            "| grep -oE '([0-9]{1,3}[.]){3}[0-9]{1,3}' | head -1)"
+        )
+    return lines + ['echo "CASCADE_EGRESS=$EG"', 'echo "CASCADE_RU=$RU"']
 
 
 def gateway_run(confdir: str) -> str:
@@ -564,7 +596,8 @@ def gateway_run(confdir: str) -> str:
     )
 
 
-def build_entry_script(transport: str, exit_ip: str, cascade_id: int, params: dict) -> str:
+def build_entry_script(transport: str, exit_ip: str, cascade_id: int, params: dict,
+                       country: str = "") -> str:
     net, ein, _xin = inner_net(cascade_id)
     lines = [_HEAD, 'log "[1/5] docker"', _DOCKER]
     if transport == "gre":
@@ -578,9 +611,10 @@ def build_entry_script(transport: str, exit_ip: str, cascade_id: int, params: di
     else:
         lines += ['log "[2/5] связь VLESS Reality, настроит шлюз"']
     lines += [
-        'log "[3/5] геобазы российских сайтов"',
+        'log "[3/5] геобазы для сайтов страны входа"',
         f"sudo mkdir -p {DIR}/config {DIR}/geo || fail mkdir",
-        _put(f"{DIR}/config/config.json", entry_gateway_config(transport, exit_ip, params), "600"),
+        _put(f"{DIR}/config/config.json",
+             entry_gateway_config(transport, exit_ip, params, country=country), "600"),
         f"sudo mkdir -p {DIR}/boot || fail mkdir",
         _put(f"{DIR}/boot/config.json",
              entry_gateway_config(transport, exit_ip, params, bootstrap=True), "600"),
@@ -609,7 +643,7 @@ def build_entry_script(transport: str, exit_ip: str, cascade_id: int, params: di
         f"sudo docker ps --format '{{{{.Names}}}}' | grep -qx {GATEWAY} "
         f"|| fail \"xray: $(sudo docker logs --tail 3 {GATEWAY} 2>&1 | tr '\\n' ' ')\"",
         'log "[5/5] проверка через шлюз"',
-        *_CHECK_LINES,
+        *_check_lines(country),
         '[ -n "$EG" ] || fail "через выход интернет не открывается"',
         'log "выход в интернет: $EG"',
         # только теперь заворачиваем клиентов: до этого они ходили напрямую
@@ -621,7 +655,7 @@ def build_entry_script(transport: str, exit_ip: str, cascade_id: int, params: di
     return "\n".join(lines) + "\n"
 
 
-def build_check_command() -> str:
+def build_check_command(country: str = "") -> str:
     """Разовая проверка каскада на входе: службы, шлюз, адреса через шлюз."""
     return "\n".join([
         f"GW=$(sudo docker ps --format '{{{{.Names}}}}' | grep -qx {GATEWAY} && echo yes || echo no)",
@@ -630,7 +664,7 @@ def build_check_command() -> str:
         'echo "CASCADE_GW=$GW"',
         'echo "CASCADE_TPROXY=$TP"',
         'echo "CASCADE_TUN=$TUN"',
-        *_CHECK_LINES,
+        *_check_lines(country),
     ]) + "\n"
 
 

@@ -31,7 +31,7 @@ START_DELAY = 60
 
 async def _ssh_check(entry: Server, settings: Settings) -> str:
     async with nodelock.connect("cascade", entry.id, cascadejob.connect(entry, settings)) as conn:
-        r = await conn.run(cascade.build_check_command(), check=False, timeout=90)
+        r = await conn.run(cascade.build_check_command(entry.country), check=False, timeout=90)
     return r.stdout if isinstance(r.stdout, str) else ""
 
 
@@ -64,11 +64,13 @@ async def _send(session, settings: Settings, entry: str, exit_: str, event: str,
     cfg = await settings_store.get_alert_config(session, settings)
     if not alerts.alerts_enabled(cfg):
         return
+    t = alerts.t
     if event == "down":
-        card = alerts.Card("crit", "", f"Каскад не работает больше {mins} мин",
-                           f"{reason}, выход {exit_}", subject=entry)
+        card = alerts.Card("crit", "", t("Каскад не работает больше {mins} мин", mins=mins),
+                           t("{reason}, выход {exit}", reason=t(reason), exit=exit_), subject=entry)
     else:
-        card = alerts.Card("ok", "", "Каскад снова работает", f"выход {exit_}", subject=entry)
+        card = alerts.Card("ok", "", t("Каскад снова работает"), t("выход {exit}", exit=exit_),
+                           subject=entry)
     await alerts.send_card(cfg, settings, card)
 
 

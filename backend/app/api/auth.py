@@ -53,9 +53,9 @@ async def _record_failure(session, settings, key: str, username: str, action: st
         await alerts.security_alert(
             session, settings,
             alerts.Card(
-                "crit", "🔑", "Подбор пароля к панели",
-                f"{ratelimit.MAX_FAILURES} неудачных входов подряд с {key}, адрес "
-                "временно заблокирован",
+                "crit", "🔑", alerts.t("Подбор пароля к панели"),
+                alerts.t("{n} неудачных входов подряд с {ip}, адрес временно заблокирован",
+                         n=ratelimit.MAX_FAILURES, ip=key),
             ),
         )
     if user_locked:
@@ -66,9 +66,9 @@ async def _record_failure(session, settings, key: str, username: str, action: st
         await alerts.security_alert(
             session, settings,
             alerts.Card(
-                "crit", "🔑", f"Подбор пароля к «{username}»",
-                f"{USER_MAX_FAILURES} неудачных входов с разных адресов, логин "
-                "временно заблокирован",
+                "crit", "🔑", alerts.t("Подбор пароля к «{user}»", user=username),
+                alerts.t("{n} неудачных входов с разных адресов, логин временно заблокирован",
+                         n=USER_MAX_FAILURES),
             ),
         )
 
@@ -160,8 +160,8 @@ async def change_password(
     settings = get_settings()
     await alerts.security_alert(
         session, settings,
-        alerts.Card("warn", "🔑", f"Сменен пароль «{user.username}»",
-                    f"с {_client_key(request)}"),
+        alerts.Card("warn", "🔑", alerts.t("Сменен пароль «{user}»", user=user.username),
+                    alerts.t("с {ip}", ip=_client_key(request))),
     )
     token = create_access_token(
         user.username, settings.jwt_secret, settings.jwt_ttl_minutes,
@@ -217,8 +217,8 @@ async def twofa_enable(
     await audit.record(session, user.username, "2fa_enable", user.username)
     await alerts.security_alert(
         session, get_settings(),
-        alerts.Card("ok", "🔐", f"Включена 2FA у «{user.username}»",
-                    f"с {_client_key(request)}"),
+        alerts.Card("ok", "🔐", alerts.t("Включена 2FA у «{user}»", user=user.username),
+                    alerts.t("с {ip}", ip=_client_key(request))),
     )
     return TwoFAStatusOut(enabled=True)
 
@@ -250,7 +250,7 @@ async def twofa_disable(
     await audit.record(session, user.username, "2fa_disable", user.username)
     await alerts.security_alert(
         session, get_settings(),
-        alerts.Card("warn", "🔐", f"Отключена 2FA у «{user.username}»",
-                    f"с {_client_key(request)}"),
+        alerts.Card("warn", "🔐", alerts.t("Отключена 2FA у «{user}»", user=user.username),
+                    alerts.t("с {ip}", ip=_client_key(request))),
     )
     return TwoFAStatusOut(enabled=False)

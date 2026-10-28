@@ -24,7 +24,7 @@ async def put_alerts(
 ) -> AlertConfigOut:
     await settings_store.set_alert_config(
         session, body.telegram_token, body.telegram_chat, body.webhook,
-        telegram_api=body.telegram_api,
+        telegram_api=body.telegram_api, lang=body.lang,
     )
     cfg = await settings_store.get_alert_config(session, get_settings())
     channels = []
@@ -47,7 +47,7 @@ async def test_alerts(user: CurrentUser, session: SessionDep) -> AlertTestResult
             status.HTTP_400_BAD_REQUEST, "Каналы алертов не настроены"
         )
     errors = await alerts.send_card(
-        cfg, get_settings(), alerts.Card("info", "", "Тестовый алерт", "канал работает")
+        cfg, get_settings(), alerts.Card("info", "", alerts.t("Тестовый алерт"), alerts.t("канал работает"))
     )
     await audit.record(
         session, user.username, "alerts_test", "",

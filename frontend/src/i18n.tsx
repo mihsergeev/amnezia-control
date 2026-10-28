@@ -339,9 +339,8 @@ const EN: Record<string, string> = {
 
   // --- алерты ---
   'Алерты': 'Alerts',
-  'Алерты о падении серверов': 'Server-down alerts',
-  'Панель следит за доступностью серверов и присылает уведомление, когда сервер пропадает или снова становится онлайн. Проверка идёт вместе со сбором метрик.':
-    'The panel watches server availability and notifies you when a server goes down or comes back online. Checks run together with metrics collection.',
+  'Панель присылает короткие алерты: сервер пропал или вернулся, каскад не работает, пропали клиенты, мало места на диске, события безопасности.':
+    'The panel sends short alerts: a server went down or came back, a cascade stopped working, clients are gone, low disk space, security events.',
   'Создайте бота через @BotFather, вставьте его токен и chat_id (свой ID узнаете у @userinfobot).':
     'Create a bot via @BotFather, paste its token and chat_id (get your ID from @userinfobot).',
   'Токен бота': 'Bot token',
@@ -724,10 +723,10 @@ const EN: Record<string, string> = {
   '4. Установка': '4. Install',
   'Новый каскад': 'New cascade',
   'Уже в панели': 'Already in the panel',
-  'Вход - сервер, к которому подключаются клиенты. Обычно в России: российские сайты будут открываться с него напрямую, остальное пойдет через выход.':
-    'Entry is the server clients connect to. Usually in Russia: Russian sites open from it directly, everything else goes through the exit.',
-  'Выход - зарубежный сервер, с его адреса клиенты будут выходить в интернет. Клиентов на нем не будет, можно взять пустой.':
-    'Exit is a server abroad: clients reach the internet from its address. It has no clients of its own, an empty server will do.',
+  'Вход - сервер, к которому подключаются клиенты. Сайты его страны будут открываться с него напрямую, остальное пойдет через выход в другой стране.':
+    'The entry is the server clients connect to. Sites of its country open from it directly, the rest goes through the exit in another country.',
+  'Выход - сервер в другой стране, с его адреса клиенты будут выходить в интернет. Клиентов на нем не будет, можно взять пустой.':
+    'The exit is a server in another country: clients reach the internet from its address. It has no clients of its own, an empty server will do.',
   'Свободных серверов на связи нет, добавьте новый.':
     'No free online servers, add a new one.',
   'Серверы, которые уже входят в каскад или не на связи, в списке не показаны.':
@@ -767,13 +766,13 @@ const EN: Record<string, string> = {
     'masquerade, MSS clamping, the tunnel is accepted only from {ip}',
   'порт открыт только для {ip}': 'the port is open only to {ip}',
   'Вход: шлюз каскада': 'Entry: cascade gateway',
-  'российское напрямую, остальное на выход; если выход пропадет, трафик клиентов никуда не уйдет':
-    'Russian traffic goes direct, the rest to the exit; if the exit is gone, clients\' traffic goes nowhere',
+  'сайты страны входа напрямую, остальное на выход; если выход пропадет, трафик клиентов никуда не уйдет':
+    "sites of the entry's country go directly, the rest to the exit; if the exit goes down, clients' traffic goes nowhere",
   'Окно можно закрыть, установка продолжится. Ход виден в карточке входа.':
     'You can close the window, the install goes on. Progress is in the entry\'s card.',
   'Каскад собран': 'Cascade is ready',
-  'Зарубежные сайты открываются с {ip}': 'Foreign sites open from {ip}',
-  'Российские сайты идут напрямую с {ip}': 'Russian sites go directly from {ip}',
+  'Остальные сайты открываются с {ip}': 'Other sites open from {ip}',
+  'Сайты страны входа идут напрямую с {ip}': "Sites of the entry's country go directly from {ip}",
   'Канал вход -> выход: ~{mbps} Мбит/с': 'Entry -> exit link: ~{mbps} Mbit/s',
   'Перезагрузку обоих серверов переживает: туннель и шлюз - службы systemd':
     'Survives a reboot of both servers: the tunnel and the gateway are systemd services',
@@ -794,16 +793,19 @@ const EN: Record<string, string> = {
   'Подробнее': 'Details',
   'Выход {host} не отвечает: {err}': 'Exit {host} is not responding: {err}',
   'нет связи': 'no connection',
+  'Язык алертов': 'Alert language',
   'шлюз на входе не запущен': 'the gateway on the entry is not running',
   'нет GRE-туннеля': 'no GRE tunnel',
   'клиенты идут мимо шлюза (tproxy выключен)': 'clients bypass the gateway (tproxy is off)',
   'Каскад не работает с {time}: {reason}': 'The cascade has been down since {time}: {reason}',
   'выход каскада не отвечает': 'cascade exit is not responding',
-  'Российские сайты напрямую с этого сервера, остальное через выход.':
-    'Russian sites go directly from this server, the rest through the exit.',
-  'зарубежное через {ip}': 'foreign traffic via {ip}',
+  'Сайты страны входа напрямую с этого сервера, остальное через выход.':
+    "Sites of the entry's country go directly from this server, the rest through the exit.",
+  'Весь трафик клиентов идет через выход: страна этого сервера неизвестна.':
+    "All client traffic goes through the exit: this server's country is unknown.",
+  'остальное через {ip}': 'the rest via {ip}',
   'через выход интернет не открывается': 'no internet through the exit',
-  'российское напрямую с {ip}': 'Russian traffic directly from {ip}',
+  'местное напрямую с {ip}': 'local traffic directly from {ip}',
   'шлюз не запущен': 'gateway is not running',
   'клиенты не заворачиваются в шлюз': 'clients are not routed into the gateway',
   'GRE-туннеля нет': 'no GRE tunnel',

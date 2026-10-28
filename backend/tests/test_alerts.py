@@ -177,3 +177,47 @@ def test_card_layout() -> None:
     panel_card = alerts.Card("warn", "🔑", "Сменен пароль «admin»", "с 203.0.113.5")
     assert panel_card.render("https://acontrol.example.org")[0].splitlines()[0] == "⚠️🔑 acontrol.example.org"
     assert panel_card.render("")[0].splitlines()[0] == "⚠️🔑 Amnezia Control"
+
+
+def test_every_alert_text_has_english() -> None:
+    """Каждый шаблон alerts.t(...) в коде есть в словаре EN: иначе при английских
+    алертах строка уйдет по-русски."""
+    import ast
+    import pathlib
+
+    from app import cascade
+
+    missing = []
+    for path in pathlib.Path("app").rglob("*.py"):
+        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+            if not (isinstance(node, ast.Call) and node.args):
+                continue
+            f = node.func
+            is_t = (isinstance(f, ast.Attribute) and f.attr == "t"
+                    and isinstance(f.value, ast.Name) and f.value.id == "alerts") or (
+                isinstance(f, ast.Name) and f.id == "t" and path.name in ("alerts.py", "cascadewatch.py"))
+            arg = node.args[0]
+            if is_t and isinstance(arg, ast.Constant) and isinstance(arg.value, str):
+                if arg.value not in alerts.EN:
+                    missing.append(f"{path}: {arg.value}")
+    for kv in ({"gw": "no"}, {"gw": "yes"}, {"gw": "yes", "tun": "UP"},
+               {"gw": "yes", "tun": "UP", "tproxy": "active"}):
+        ok, reason = cascade.health("gre", kv, {"egress": ""})
+        if reason and reason not in alerts.EN:
+            missing.append(f"cascade.health: {reason}")
+    assert missing == []
+
+
+def test_card_in_english() -> None:
+    card = alerts.Card(
+        "crit", "", alerts.t("Каскад не работает больше {mins} мин", mins=10),
+        alerts.t("{reason}, выход {exit}", reason=alerts.t("нет GRE-туннеля"), exit="fi-exit"),
+        subject="vpn-b",
+    )
+    assert card.render("", "en")[0].splitlines() == [
+        "🔴 vpn-b", "Cascade down for over 10 min", "no GRE tunnel, exit fi-exit",
+    ]
+    assert card.render("", "ru")[0].splitlines()[1] == "Каскад не работает больше 10 мин"
+    # обычная строка с фигурными скобками идет как есть
+    raw = alerts.Card("crit", "", alerts.t("Авто-бэкап не создан"), "OSError: {x}")
+    assert raw.render("", "en")[0].splitlines()[1:] == ["Auto-backup failed", "OSError: {x}"]

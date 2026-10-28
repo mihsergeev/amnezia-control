@@ -203,11 +203,12 @@ async def _confirm(user, password: str, request: Request, session, what: str) ->
         raise
 
 
-async def _announce(session, user, request: Request, action: str, title: str) -> None:
+async def _announce(session, user, request: Request, action: str, title) -> None:
     await audit.record(session, user.username, action, "", client_ip(request))
     await alerts.security_alert(
         session, get_settings(),
-        alerts.Card("warn", "🗄", title, f"{user.username} с {client_ip(request)}"),
+        alerts.Card("warn", "🗄", title,
+                    alerts.t("{user} с {ip}", user=user.username, ip=client_ip(request))),
     )
 
 
@@ -223,7 +224,7 @@ async def download_backup(
     stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
     filename = f"acontrol-backup-{stamp}.tar.gz"
     await _announce(
-        session, user, request, "backup_download", "Скачан бэкап панели"
+        session, user, request, "backup_download", alerts.t("Скачан бэкап панели")
     )
     return Response(
         content=archive,
@@ -295,7 +296,7 @@ async def download_saved_backup(
         data = fh.read()
     await _announce(
         session, user, request, "backup_download",
-        f"Скачан бэкап панели {filename}",
+        alerts.t("Скачан бэкап панели {name}", name=filename),
     )
     return Response(
         content=data,
@@ -426,7 +427,7 @@ async def restore_backup(
     )
     await alerts.security_alert(
         session, get_settings(),
-        alerts.Card("warn", "🗄", "Панель восстановлена из бэкапа",
-                    f"{user.username} с {client_ip(request)}"),
+        alerts.Card("warn", "🗄", alerts.t("Панель восстановлена из бэкапа"),
+                    alerts.t("{user} с {ip}", user=user.username, ip=client_ip(request))),
     )
     return {"restored": restored}

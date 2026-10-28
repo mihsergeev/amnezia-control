@@ -57,7 +57,7 @@ def test_gateway_default_route_is_exit() -> None:
     gre = json.loads(cascade.entry_gateway_config("gre", "198.51.100.20", {}))
     assert gre["outbounds"][0]["tag"] == "exit"
     assert gre["outbounds"][0]["streamSettings"]["sockopt"]["mark"] == cascade.GRE_MARK
-    vless = json.loads(cascade.entry_gateway_config("vless", "198.51.100.20", VLESS))
+    vless = json.loads(cascade.entry_gateway_config("vless", "198.51.100.20", VLESS, country="RU"))
     out = vless["outbounds"][0]
     assert out["tag"] == "exit" and out["protocol"] == "vless"
     assert out["settings"]["vnext"][0] == {
@@ -298,3 +298,28 @@ def test_geo_update_goes_through_gateway_and_skips_unchanged(tmp_path) -> None:
     third = _geo_run(tmp_path, gateway_up=False)
     assert "socks5" not in third
     assert any(line.endswith("/geoip.dat") and "socks5" not in line for line in third.splitlines())
+
+
+def test_local_rules_follow_entry_country() -> None:
+    def rules(cc):
+        return json.loads(cascade.entry_gateway_config("gre", "198.51.100.20", {}, country=cc))["routing"]["rules"]
+
+    kz = rules("KZ")
+    assert {"ip": ["geoip:kz"], "outboundTag": "direct"} in kz
+    assert {"domain": ["domain:kz", "domain:xn--80ao21a"], "outboundTag": "direct"} in kz
+    # списка доменов Казахстана в geosite нет: ссылка на него уронила бы шлюз
+    assert "geosite:" not in json.dumps(kz) and "ru-blocked" not in json.dumps(kz)
+    assert {"domain": ["domain:de"], "outboundTag": "direct"} in rules("de")
+    assert "geosite:category-ir" in json.dumps(rules("IR"))
+    ru = json.dumps(rules("RU"))
+    assert "geosite:ru-blocked" in ru and "geoip:ru" in ru and "domain:xn--p1ai" in ru
+    # страна неизвестна: только блок частных адресов, остальное на выход
+    assert rules("") == [{"ip": ["geoip:private"], "outboundTag": "block"}]
+
+
+def test_local_ip_check_only_where_known() -> None:
+    assert "ip.nic.ru" in cascade.build_check_command("RU")
+    kz = cascade.build_check_command("KZ")
+    assert "ip.nic.ru" not in kz and 'RU=""' in kz and "CASCADE_RU=$RU" in kz
+    script = cascade.build_entry_script("gre", "198.51.100.20", 3, VLESS, "KZ")
+    assert "ip.nic.ru" not in script

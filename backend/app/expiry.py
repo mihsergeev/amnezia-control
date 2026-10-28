@@ -195,8 +195,9 @@ async def expiry_once(
                 await alerts.maybe_alert(
                     session_factory, settings,
                     alerts.Card(
-                        "warn", "⏳", "Клиент истек, но не отозван",
-                        f"{lim.name or lim.client_id}: сервер недоступен, повторю позже",
+                        "warn", "⏳", alerts.t("Клиент истек, но не отозван"),
+                        alerts.t("{client}: сервер недоступен, повторю позже",
+                                 client=lim.name or lim.client_id),
                         subject=server.name,
                     ),
                 )
@@ -252,9 +253,9 @@ async def warn_expiring(
         await alerts.maybe_alert(
             session_factory, settings,
             alerts.Card(
-                "warn", "⏳", f"Клиент истекает через {left_days} дн.",
-                f"{lim.name or lim.client_id}, {lim.expires_at:%d.%m %H:%M} UTC. "
-                "Не продлить - отключится сам",
+                "warn", "⏳", alerts.t("Клиент истекает через {days} дн.", days=left_days),
+                alerts.t("{client}, {at} UTC. Не продлить - отключится сам",
+                         client=lim.name or lim.client_id, at=f"{lim.expires_at:%d.%m %H:%M}"),
                 subject=srv,
             ),
         )

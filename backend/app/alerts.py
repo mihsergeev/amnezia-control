@@ -24,6 +24,85 @@ def _aware(dt: datetime) -> datetime:
 
 LEVEL = {"crit": "🔴", "warn": "⚠️", "ok": "✅", "info": "🔔"}
 
+# Английские тексты алертов по русскому шаблону (язык - в настройках алертов).
+# Причины отказа каскада совпадают с cascade.health() и подсказками во фронте.
+EN = {
+    "Сервер снова онлайн": "Server is back online",
+    "Сервер недоступен больше {mins} мин": "Server unreachable for over {mins} min",
+    "Каскад не работает больше {mins} мин": "Cascade down for over {mins} min",
+    "Каскад снова работает": "Cascade works again",
+    "Каскад не собрался": "Cascade install failed",
+    "{reason}, выход {exit}": "{reason}, exit {exit}",
+    "выход {exit}": "exit {exit}",
+    "шлюз на входе не запущен": "the gateway on the entry is not running",
+    "нет GRE-туннеля": "no GRE tunnel",
+    "клиенты идут мимо шлюза (tproxy выключен)": "clients bypass the gateway (tproxy is off)",
+    "через выход интернет не открывается": "no internet through the exit",
+    "Сменился SSH-ключ сервера": "Server SSH host key changed",
+    "возможна подмена. Если сервер пересоздавали, удалите его строку из data/ssh/known_hosts":
+        "possible spoofing. If the server was rebuilt, remove its line from data/ssh/known_hosts",
+    "Мало места: диск занят на {pct}%": "Low disk space: {pct}% used",
+    "Место на диске снова есть": "Disk space is fine again",
+    "занято {pct}%": "{pct}% used",
+    "Пропали клиенты": "Clients are gone",
+    "активных за 2 часа {cur}, вчера {yday}, неделю назад {week}. Сервер отвечает, "
+    "похоже, адрес режут провайдеры":
+        "active in 2 hours: {cur}, yesterday {yday}, a week ago {week}. The server answers, "
+        "ISPs are probably blocking its address",
+    "Подбор пароля к панели": "Panel password guessing",
+    "{n} неудачных входов подряд с {ip}, адрес временно заблокирован":
+        "{n} failed logins in a row from {ip}, the address is blocked for a while",
+    "Подбор пароля к «{user}»": "Password guessing for \"{user}\"",
+    "{n} неудачных входов с разных адресов, логин временно заблокирован":
+        "{n} failed logins from different addresses, the login is blocked for a while",
+    "Сменен пароль «{user}»": "Password changed for \"{user}\"",
+    "Включена 2FA у «{user}»": "2FA enabled for \"{user}\"",
+    "Отключена 2FA у «{user}»": "2FA disabled for \"{user}\"",
+    "с {ip}": "from {ip}",
+    "{user} с {ip}": "{user} from {ip}",
+    "Скачан бэкап панели": "Panel backup downloaded",
+    "Скачан бэкап панели {name}": "Panel backup {name} downloaded",
+    "Панель восстановлена из бэкапа": "Panel restored from a backup",
+    "Авто-бэкап снова проходит": "Auto-backup works again",
+    "самопроверка ок": "self-test passed",
+    "Авто-бэкап не создан": "Auto-backup failed",
+    "{err}. Проверьте место на диске и логи backend": "{err}. Check disk space and the backend logs",
+    "Бэкап не прошел самопроверку": "Backup failed its self-test",
+    "{problems}. Восстановиться из него может не выйти": "{problems}. Restoring from it may fail",
+    "Пароль «{user}» сброшен из .env": "Password for \"{user}\" reset from .env",
+    "2FA отключена. Уберите флаг сброса из .env, иначе это повторится при каждом перезапуске":
+        "2FA is off. Remove the reset flag from .env, or this repeats on every restart",
+    "Развертывание {proto} не удалось": "{proto} deployment failed",
+    "лог в карточке сервера": "the log is in the server card",
+    "Клиент истек, но не отозван": "Client expired but not revoked",
+    "{client}: сервер недоступен, повторю позже": "{client}: the server is unreachable, will retry",
+    "Клиент истекает через {days} дн.": "Client expires in {days} d",
+    "{client}, {at} UTC. Не продлить - отключится сам":
+        "{client}, {at} UTC. Extend it or it is revoked automatically",
+    "Тестовый алерт": "Test alert",
+    "канал работает": "the channel works",
+}
+
+
+@dataclass
+class T:
+    """Текст алерта: русский шаблон и параметры, переводится при отправке.
+    Обычная строка (текст ошибки, имя) идет как есть, без подстановки."""
+
+    text: str
+    kw: dict
+
+
+def t(text: str, **kw) -> T:
+    return T(text, kw)
+
+
+def _text(value, lang: str) -> str:
+    if not isinstance(value, T):
+        return str(value)
+    template = EN.get(value.text, value.text) if lang == "en" else value.text
+    return template.format(**{k: _text(v, lang) for k, v in value.kw.items()})
+
 
 @dataclass
 class Card:
@@ -32,30 +111,31 @@ class Card:
 
     level: str  # crit | warn | ok | info
     icon: str  # тема: 🖥 сервер, 💾 диск, 🔑 доступ и т.п.; у каскада без иконки
-    title: str
-    detail: str = ""
+    title: "T | str"
+    detail: "T | str" = ""
     subject: str = ""
 
-    def render(self, panel_url: str = "") -> tuple[str, str]:
+    def render(self, panel_url: str = "", lang: str = "ru") -> tuple[str, str]:
         """(текст для вебхука, HTML для Telegram)."""
         panel = (panel_url or "").rstrip("/")
         subject = self.subject or urlsplit(panel).hostname or "Amnezia Control"
         head = f"{LEVEL.get(self.level, '')}{self.icon}"
-        plain = [f"{head} {subject}", self.title]
+        title, detail = _text(self.title, lang), _text(self.detail, lang)
+        plain = [f"{head} {subject}", title]
         link = (
             f'<a href="{escape(panel)}">{escape(subject)}</a>' if panel else escape(subject)
         )
-        html = [f"{head} {link}", f"<b>{escape(self.title)}</b>"]
-        if self.detail:
-            plain.append(self.detail)
-            html.append(escape(self.detail))
+        html = [f"{head} {link}", f"<b>{escape(title)}</b>"]
+        if detail:
+            plain.append(detail)
+            html.append(escape(detail))
         if panel:
             plain.append(panel)  # вебхуку ссылка отдельной строкой
         return "\n".join(plain), "\n".join(html)
 
 
 async def send_card(cfg: dict, settings: Settings, card: Card) -> list[str]:
-    text, html_text = card.render(getattr(settings, "panel_url", ""))
+    text, html_text = card.render(getattr(settings, "panel_url", ""), cfg.get("lang") or "ru")
     return await send_alert(cfg, text, html_text=html_text)
 
 
@@ -193,9 +273,9 @@ async def reconcile(
         name = names.get(sid, str(sid))
         # длительность в тексте — сразу видно, что это не блип, а реальная авария
         card = (
-            Card("ok", "🖥", "Сервер снова онлайн", subject=name)
+            Card("ok", "🖥", t("Сервер снова онлайн"), subject=name)
             if online
-            else Card("crit", "🖥", f"Сервер недоступен больше {mins} мин", subject=name)
+            else Card("crit", "🖥", t("Сервер недоступен больше {mins} мин", mins=mins), subject=name)
         )
         await send_card(cfg, settings, card)
     return transitions

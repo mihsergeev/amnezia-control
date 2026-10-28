@@ -9,12 +9,13 @@ type Props = {
 }
 
 export function AlertsModal({ onClose, onUnauthorized }: Props) {
-  const { t } = useI18n()
+  const { t, lang } = useI18n()
   const dismiss = useModalDismiss(onClose)
   const [token, setToken] = useState('')
   const [chat, setChat] = useState('')
   const [apiUrl, setApiUrl] = useState('')
   const [webhook, setWebhook] = useState('')
+  const [alertLang, setAlertLang] = useState<'ru' | 'en'>(lang)
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [testing, setTesting] = useState(false)
@@ -29,6 +30,8 @@ export function AlertsModal({ onClose, onUnauthorized }: Props) {
         setChat(c.telegram_chat)
         setApiUrl(c.telegram_api)
         setWebhook(c.webhook)
+        // язык еще не выбирали: настроенные раньше алерты шли по-русски
+        setAlertLang(c.lang || (c.enabled ? 'ru' : lang))
       })
       .catch((err) => {
         if (err instanceof ApiError && err.status === 401) onUnauthorized()
@@ -36,7 +39,7 @@ export function AlertsModal({ onClose, onUnauthorized }: Props) {
         else setLoadError(err instanceof Error ? err.message : t('Ошибка'))
       })
       .finally(() => setLoading(false))
-  }, [onUnauthorized, t])
+  }, [onUnauthorized, t, lang])
 
   async function save() {
     setSaving(true)
@@ -48,6 +51,7 @@ export function AlertsModal({ onClose, onUnauthorized }: Props) {
         telegram_chat: chat,
         telegram_api: apiUrl,
         webhook,
+        lang: alertLang,
       })
       setMsg(t('Сохранено.'))
     } catch (err) {
@@ -65,6 +69,7 @@ export function AlertsModal({ onClose, onUnauthorized }: Props) {
       // сначала сохраняем, чтобы тест шёл по текущим полям
       await putAlerts({
         telegram_token: token, telegram_chat: chat, telegram_api: apiUrl, webhook,
+        lang: alertLang,
       })
       const r = await testAlerts()
       if (r.sent) setMsg(t('Тестовый алерт отправлен — проверьте канал.'))
@@ -82,14 +87,14 @@ export function AlertsModal({ onClose, onUnauthorized }: Props) {
     <div className="modal-backdrop" onClick={dismiss}>
       <div className="card modal" onClick={(e) => e.stopPropagation()}>
         <div className="clients-head">
-          <h3>{t('Алерты о падении серверов')}</h3>
+          <h3>{t('Алерты')}</h3>
           <button className="ghost" onClick={onClose}>
             {t('Закрыть')}
           </button>
         </div>
         <p className="muted small">
           {t(
-            'Панель следит за доступностью серверов и присылает уведомление, когда сервер пропадает или снова становится онлайн. Проверка идёт вместе со сбором метрик.',
+            'Панель присылает короткие алерты: сервер пропал или вернулся, каскад не работает, пропали клиенты, мало места на диске, события безопасности.',
           )}
         </p>
 
@@ -149,6 +154,19 @@ export function AlertsModal({ onClose, onUnauthorized }: Props) {
                   onChange={(e) => setWebhook(e.target.value)}
                   placeholder="https://…"
                 />
+              </label>
+            </div>
+
+            <div className="settings-group">
+              <label className="field">
+                <span>{t('Язык алертов')}</span>
+                <select
+                  value={alertLang}
+                  onChange={(e) => setAlertLang(e.target.value as 'ru' | 'en')}
+                >
+                  <option value="ru">Русский</option>
+                  <option value="en">English</option>
+                </select>
               </label>
             </div>
 

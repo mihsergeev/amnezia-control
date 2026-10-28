@@ -141,7 +141,7 @@ function EgressRoute({
   )
 }
 
-// exitDown: выход каскада этого сервера не отвечает - зарубежное у клиентов не открывается
+// exitDown: выход каскада этого сервера не отвечает - у клиентов не открывается все, что идет через выход
 function StatusDot({ server, exitDown = false }: { server: Server; exitDown?: boolean }) {
   const { t } = useI18n()
   const cls =
@@ -315,7 +315,9 @@ function ServerDetail({
       )}
       {cascade && cascade.status === 'ready' && cascade.entry_server_id === server.id && (
         <div className="muted small">
-          {t('Российские сайты напрямую с этого сервера, остальное через выход.')}
+          {server.country
+            ? t('Сайты страны входа напрямую с этого сервера, остальное через выход.')
+            : t('Весь трафик клиентов идет через выход: страна этого сервера неизвестна.')}
         </div>
       )}
       {health?.ok === false && (
@@ -873,9 +875,9 @@ export function ServersPage({ onUnauthorized }: Props) {
       const r = await checkCascade(c.id)
       const parts = [
         r.egress
-          ? t('зарубежное через {ip}', { ip: r.egress })
+          ? t('остальное через {ip}', { ip: r.egress })
           : t('через выход интернет не открывается'),
-        r.ru ? t('российское напрямую с {ip}', { ip: r.ru }) : '',
+        r.ru ? t('местное напрямую с {ip}', { ip: r.ru }) : '',
         !r.gateway ? t('шлюз не запущен') : '',
         !r.tproxy ? t('клиенты не заворачиваются в шлюз') : '',
         c.transport === 'gre' && !r.tunnel ? t('GRE-туннеля нет') : '',
