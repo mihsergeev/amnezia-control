@@ -4,6 +4,22 @@ All notable changes to Amnezia Control are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.64.0] - 2026-10-28
+
+### Changed
+- **"Clients gone" alert: one alert per drop, no repeats.** The alert kept
+  coming back for the same drop: whether it had already been sent was kept
+  in memory, so every panel restart (each update) sent it again, and a node
+  hovering around the threshold sent "gone" and "back" in turn. Now:
+  - the state is stored in the database, so a restart does not resend it;
+  - the baseline is the lower of the same 2 hours yesterday and a week ago,
+    so only a new drop alerts. When clients were moved to another server or
+    the address has been blocked since yesterday, it is not news;
+  - a second alert for the same server comes at most once a day;
+  - there is no "clients are back" message.
+  On update, every server starts with a day of quiet for this alert, so drops
+  the previous version already reported are not sent again.
+
 ## [0.63.0] - 2026-10-28
 
 ### Added

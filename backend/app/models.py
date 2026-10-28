@@ -191,6 +191,13 @@ class ServerStatus(Base):
     down_since: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True, default=None
     )
+    # Алерт «пропали клиенты» (onlinedrop): когда отправлен последний и идет ли
+    # еще эта просадка. В БД, а не в памяти - иначе каждый рестарт панели
+    # (релиз) заново слал алерт про ту же самую просадку.
+    drop_alerted: Mapped[bool] = mapped_column(Boolean, default=False)
+    drop_alerted_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True, default=None
+    )
 
 
 class AppSetting(Base):
