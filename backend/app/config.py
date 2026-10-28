@@ -10,7 +10,7 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="VPNPANEL_", env_file=".env")
 
     app_name: str = "Amnezia Control"
-    version: str = "0.66.3"
+    version: str = "0.67.0"
     debug: bool = False
 
     # Swagger/OpenAPI на /api/docs. Включено: интеграции нужен читаемый контракт
@@ -64,6 +64,10 @@ class Settings(BaseSettings):
     # дежурного будить не должны: алерт шлём только когда реально нужно
     # вмешательство. 0 = алертить с первого же пропуска (без антидребезга).
     server_down_minutes: int = 30
+    # Каскад: сколько минут трафик через выход должен не идти НЕПРЕРЫВНО, прежде
+    # чем поднять алерт (проверка раз в 2 минуты). Меньше, чем у серверов:
+    # клиенты в это время без зарубежных сайтов. -1 = не проверять.
+    cascade_down_minutes: int = 10
 
     # Алерты о падении серверов (Telegram / вебхук)
     alert_telegram_token: str = ""
