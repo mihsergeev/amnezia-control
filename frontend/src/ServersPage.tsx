@@ -76,9 +76,26 @@ function countryFlag(code: string): string {
   )
 }
 
+function greTunnels(server: Server) {
+  return (parseCheckInfo(server)?.tunnels ?? []).filter((x) => x.kind === 'gre')
+}
+
+function GreBadge({ server, withRemote }: { server: Server; withRemote?: boolean }) {
+  const { t } = useI18n()
+  const gre = greTunnels(server)
+  if (gre.length === 0) return null
+  const remotes = gre.map((x) => x.remote).join(', ')
+  return (
+    <span className="tun-badge" title={t('GRE-туннель до {ip}', { ip: remotes })}>
+      {withRemote ? `GRE → ${remotes}` : 'GRE'}
+    </span>
+  )
+}
+
 // путь трафика клиентов, когда нода - вход каскада: выход в интернет с другого адреса
 function EgressRoute({ server }: { server: Server }) {
   const { t } = useI18n()
+  const viaGre = greTunnels(server).length > 0
   return (
     <div className="srv-route">
       <span className="srv-route-label">{t('Клиенты')}</span>
@@ -92,7 +109,9 @@ function EgressRoute({ server }: { server: Server }) {
           <div className="muted small">{t('этот сервер')}</div>
         </div>
       </div>
-      <span className="srv-route-arrow">→</span>
+      <span className="srv-route-arrow">
+        {viaGre && <GreBadge server={server} />}→
+      </span>
       <div className="srv-hop srv-hop-exit">
         {countryFlag(server.egress_country) && (
           <span className="server-flag">{countryFlag(server.egress_country)}</span>
@@ -243,7 +262,15 @@ function ServerDetail({
         )}
       </div>
 
-      {server.egress_ip && <EgressRoute server={server} />}
+      {server.egress_ip ? (
+        <EgressRoute server={server} />
+      ) : (
+        greTunnels(server).length > 0 && (
+          <div>
+            <GreBadge server={server} withRemote />
+          </div>
+        )
+      )}
 
       {server.note && <div className="srv-detail-note">{server.note}</div>}
 
@@ -1009,6 +1036,7 @@ export function ServersPage({ onUnauthorized }: Props) {
                               </span>
                             )}
                             <span className="srv-item-name">{s.name}</span>
+                            <GreBadge server={s} />
                             {st?.online && (
                               <span className="srv-item-cl" title={t('онлайн / всего клиентов')}>
                                 <b>{st.clients_online}</b>/{st.clients_total}

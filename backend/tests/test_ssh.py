@@ -269,3 +269,24 @@ def test_egress_command_probes_inside_amnezia_container() -> None:
     # клиентский трафик идет из контейнера, у каскадов он выходит не с адреса ноды
     assert "grep -i '^amnezia'" in sshops.EGRESS_COMMAND
     assert '$D exec "$c"' in sshops.EGRESS_COMMAND
+
+
+# так `ip -o -d link show type gre` печатает поднятый туннель и служебный gre0
+_GRE_UP = (
+    "6: gre-a@NONE: <POINTOPOINT,NOARP,UP,LOWER_UP> mtu 1476 qdisc noqueue state UNKNOWN"
+    " \\    link/gre 198.51.100.5 peer 203.0.113.9 \\    gre remote 203.0.113.9"
+    " local 198.51.100.5 ttl 64"
+)
+_GRE_IDLE = (
+    "3: gre0@NONE: <NOARP> mtu 1476 qdisc noop state DOWN \\    link/gre 0.0.0.0"
+    " \\    gre remote any local any ttl inherit"
+)
+
+
+def test_parse_check_output_gre_tunnels() -> None:
+    out = f"HOST=x\nGRELINK={_GRE_UP}\nGRELINK={_GRE_IDLE}\namnezia-xray\n"
+    result = sshops._parse_check_output(out)
+    # служебный gre0 без адреса - не туннель; строки GRELINK не попадают в контейнеры
+    assert result.tunnels == [{"kind": "gre", "name": "gre-a", "remote": "203.0.113.9"}]
+    assert result.containers == ["amnezia-xray"]
+    assert result.as_dict()["tunnels"] == result.tunnels
