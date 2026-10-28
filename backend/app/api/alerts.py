@@ -46,7 +46,9 @@ async def test_alerts(user: CurrentUser, session: SessionDep) -> AlertTestResult
         raise HTTPException(
             status.HTTP_400_BAD_REQUEST, "Каналы алертов не настроены"
         )
-    errors = await alerts.send_alert(cfg, "🔔 Тестовый алерт Amnezia Control")
+    errors = await alerts.send_card(
+        cfg, get_settings(), alerts.Card("info", "", "Тестовый алерт", "канал работает")
+    )
     await audit.record(
         session, user.username, "alerts_test", "",
         "; ".join(errors) if errors else "ok",
