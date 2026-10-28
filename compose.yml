@@ -56,12 +56,11 @@ services:
     security_opt:
       - no-new-privileges:true
     # Процесс работает от uid 10001 без прав. Root на старте нужен entrypoint'у
-    # только чтобы отдать /data этому пользователю, отсюда четыре права ниже.
+    # только чтобы отдать /data этому пользователю, отсюда три права ниже.
     cap_drop:
       - ALL
     cap_add:
       - CHOWN
-      - DAC_READ_SEARCH
       - SETUID
       - SETGID
     environment:
