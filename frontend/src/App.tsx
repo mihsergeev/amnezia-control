@@ -17,6 +17,7 @@ import { AuditPage } from './AuditPage'
 import { Menu } from './Menu'
 import { BackupsModal } from './BackupsModal'
 import { AlertsModal } from './AlertsModal'
+import { ShareServicesModal } from './ShareServicesModal'
 import { TwoFAModal } from './TwoFAModal'
 import { PasswordModal } from './PasswordModal'
 import { StepUpModal } from './StepUpModal'
@@ -36,6 +37,7 @@ function App() {
   >(null)
   const [backupsOpen, setBackupsOpen] = useState(false)
   const [alertsOpen, setAlertsOpen] = useState(false)
+  const [shareOpen, setShareOpen] = useState(false)
   const [twoFaOpen, setTwoFaOpen] = useState(false)
   const [pwOpen, setPwOpen] = useState(false)
   const [theme, setTheme] = useState<'dark' | 'light'>(() =>
@@ -227,6 +229,7 @@ function App() {
                 label={<span className="menu-gear">⚙</span>}
                 items={[
                   { label: t('Алерты'), onClick: () => setAlertsOpen(true) },
+                  { label: t('Ссылки на конфиги'), onClick: () => setShareOpen(true) },
                   {
                     label: t('Двухфакторная аутентификация'),
                     onClick: () => setTwoFaOpen(true),
@@ -277,6 +280,13 @@ function App() {
       {alertsOpen && (
         <AlertsModal
           onClose={() => setAlertsOpen(false)}
+          onUnauthorized={logout}
+        />
+      )}
+
+      {shareOpen && (
+        <ShareServicesModal
+          onClose={() => setShareOpen(false)}
           onUnauthorized={logout}
         />
       )}

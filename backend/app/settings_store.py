@@ -9,6 +9,8 @@ from app.config import Settings
 from app.models import AppSetting
 
 ALERTS_KEY = "alerts"
+# сервисы одноразовых ссылок: [{"id", "name", "url", "engine"}] (см. app/share.py)
+SHARE_KEY = "share_services"
 
 
 async def _get_raw(session: AsyncSession, key: str) -> str | None:
@@ -59,3 +61,16 @@ async def set_alert_config(
             }
         ),
     )
+
+
+async def get_share_services(session: AsyncSession) -> list[dict]:
+    raw = await _get_raw(session, SHARE_KEY)
+    try:
+        data = json.loads(raw) if raw else []
+    except ValueError:
+        return []
+    return [s for s in data if isinstance(s, dict) and s.get("id")]
+
+
+async def set_share_services(session: AsyncSession, services: list[dict]) -> None:
+    await _set_raw(session, SHARE_KEY, json.dumps(services, ensure_ascii=False))
