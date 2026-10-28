@@ -4,6 +4,22 @@ All notable changes to Amnezia Control are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.62.0] - 2026-10-28
+
+### Added
+- **Cascade route on the Servers page.** A server whose VPN clients reach the
+  internet from another address (the entry of a cascade or a tunnel) was shown
+  only with its own country, so two entries in the same country looked the
+  same. The panel now asks the node which address client traffic leaves from:
+  it runs a request from inside an amnezia container, the same path clients
+  take, once an hour and on **Check**. When that address differs from the
+  server's own, the list shows the exit country next to the server's flag
+  (for example RU -> FI) and the server card shows the route: clients, this
+  server, then the exit address with its country and provider. Servers that
+  send traffic out directly look as before. The probe asks api.ipify.org
+  (ifconfig.me as a fallback) from the node; the country and provider come
+  from ipwho.is, the same lookup that already sets the server flag.
+
 ## [0.61.0] - 2026-10-28
 
 ### Changed

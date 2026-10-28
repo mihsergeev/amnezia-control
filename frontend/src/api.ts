@@ -181,6 +181,11 @@ export type Server = {
   group_name: string
   position: number
   country: string
+  // адрес выхода клиентов в интернет, если он не совпадает с host (вход каскада)
+  egress_ip: string
+  egress_country: string
+  egress_org: string
+  egress_at: string | null
   last_check_ok: boolean | null
   last_check_at: string | null
   last_check_info: string

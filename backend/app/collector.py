@@ -9,8 +9,8 @@ from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app import (
-    alerts, audit, awg, deploy, geo, nodestat, onlinedrop, openvpn, settings_store,
-    sshops, xray,
+    alerts, audit, awg, deploy, geo, nodestat, onlinedrop, openvpn, server_ops,
+    settings_store, sshops, xray,
 )
 from app.config import Settings
 from app.models import (
@@ -170,6 +170,17 @@ async def _sample_server(
                     check = await sshops.probe_containers(conn)
                 except Exception:  # noqa: BLE001 — список не критичен
                     check = None
+                # адрес выхода клиентов - раз в EGRESS_TTL (ходит во внешний сервис)
+                egress = None
+                if (
+                    check is not None
+                    and check.amnezia_containers
+                    and server_ops.egress_due(server, datetime.now(timezone.utc))
+                ):
+                    try:
+                        egress = await sshops.probe_egress(conn)
+                    except Exception:  # noqa: BLE001 — не критично
+                        egress = None
     except sshops.HostKeyChangedError:
         # host-ключ ноды не совпал — сигналим наверх (возможен MITM/подмена)
         hostkey_changed.add(server.id)
@@ -187,6 +198,7 @@ async def _sample_server(
         "parts": frozenset(parts),
         "known": known,  # все клиенты на ноде, не только с трафиком
         "check": check,  # CheckResult | None (None = docker не ответил, не трогаем список)
+        "egress": egress,  # str | None (None = в этот раз не спрашивали)
     }
 
 
@@ -252,6 +264,20 @@ async def collect_once(
             s.id: c for s, c in zip(need_geo, codes) if isinstance(c, str) and c
         }
 
+    # адрес выхода клиентов (схема каскада на карточке) - только где спрашивали
+    host_of = {s.id: s.host for s in servers}
+    asked = [r for r in samples if r.get("egress") is not None]
+    egress_map: dict[int, dict[str, str] | None] = {}
+    if asked:
+        descs = await asyncio.gather(
+            *[server_ops.describe_egress(host_of[r["server_id"]], r["egress"]) for r in asked],
+            return_exceptions=True,
+        )
+        egress_map = {
+            r["server_id"]: (d if not isinstance(d, BaseException) else None)
+            for r, d in zip(asked, descs)
+        }
+
     # алерты о падении/восстановлении: online = удалось снять метрики
     online_map = {s.id: r is not None for s, r in zip(servers, results)}
     # свежий список контейнеров по каждому серверу, где docker надёжно ответил
@@ -280,6 +306,8 @@ async def collect_once(
                         srv.country = geo_map[srv.id]
                     if srv.id in check_map:
                         srv.last_check_info = check_map[srv.id]
+                    if srv.id in egress_map:
+                        server_ops.apply_egress(srv, egress_map[srv.id], now)
                 await session.commit()
         except Exception:  # noqa: BLE001 — статус карточки не критичен
             log.exception("ошибка обновления статуса серверов")
