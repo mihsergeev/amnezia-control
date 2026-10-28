@@ -2376,22 +2376,35 @@ button.srv-side-gh:hover .drag-handle {
 /* одноразовая ссылка на конфиг (сервис секретов) под кнопками окна конфига */
 .share-link {
   display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 0.4rem 0.5rem;
+  flex-direction: column;
+  gap: 0.5rem;
   margin-top: 0.6rem;
 }
 
-.share-link input {
-  flex: 1;
-  min-width: 0;
+.share-link-url {
+  padding: 0.55rem 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
   font-family: ui-monospace, 'Cascadia Mono', Consolas, monospace;
   font-size: 0.85rem;
+  line-height: 1.4;
+  word-break: break-all;
+  user-select: all;
 }
 
-.share-link p {
-  flex-basis: 100%;
+.share-link-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.8rem;
+}
+
+.share-link-row p {
   margin: 0;
+}
+
+.share-link-row button {
+  flex-shrink: 0;
 }
 
 /* список сервисов в настройках ссылок */

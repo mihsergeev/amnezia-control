@@ -4,6 +4,14 @@ All notable changes to Amnezia Control are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.65.1] - 2026-10-28
+
+### Fixed
+- **One-time link is shown in full.** The link sat in a one-line field next
+  to the copy button, so a long link was cut off. It is now shown as wrapped
+  text across the whole window, with the note and the **Copy** button below
+  it.
+
 ## [0.65.0] - 2026-10-28
 
 ### Added
