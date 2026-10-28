@@ -12,6 +12,10 @@ NEW_SERVER = {
 }
 
 
+def _refuse_connect(*args, **kwargs):
+    raise OSError("no network in tests")
+
+
 async def _create_server(client: httpx.AsyncClient, auth_headers) -> int:
     response = await client.post("/api/servers", json=NEW_SERVER, headers=auth_headers)
     assert response.status_code == 201
@@ -56,6 +60,7 @@ async def test_check_stores_result(
         )
 
     monkeypatch.setattr(sshops, "check_server", fake_check)
+    monkeypatch.setattr(sshops, "connect", _refuse_connect)
 
     server_id = await _create_server(client, auth_headers)
     response = await client.post(
@@ -64,6 +69,8 @@ async def test_check_stores_result(
     assert response.status_code == 200
     body = response.json()
     assert body["last_check_ok"] is True
+    # адрес выхода не узнали - схемы нет
+    assert body["egress_ip"] == ""
     assert body["last_check_at"] is not None
     info = json.loads(body["last_check_info"])
     assert info["hostname"] == "de-hz-vpn"
@@ -183,3 +190,82 @@ def test_parse_no_docker() -> None:
     result = sshops._parse_check_output("HOST=x\nDOCKER_UNAVAILABLE\n")
     assert result.docker is False
     assert result.containers == []
+
+
+class _Conn:
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *args):
+        return False
+
+
+async def test_check_stores_cascade_egress(
+    client: httpx.AsyncClient, auth_headers, monkeypatch
+) -> None:
+    from app import geo
+
+    async def fake_check(host, port, username, key_path, timeout=10):
+        return sshops.CheckResult(
+            ok=True, docker=True,
+            containers=["amnezia-awg3"], amnezia_containers=["amnezia-awg3"],
+        )
+
+    async def fake_probe(conn):
+        return "203.0.113.9"
+
+    async def fake_info(ip):
+        assert ip == "203.0.113.9"
+        return "FI", "Example Hosting"
+
+    monkeypatch.setattr(sshops, "check_server", fake_check)
+    monkeypatch.setattr(sshops, "connect", lambda *a, **k: _Conn())
+    monkeypatch.setattr(sshops, "probe_egress", fake_probe)
+    monkeypatch.setattr(geo, "ip_info", fake_info)
+
+    server_id = await _create_server(client, auth_headers)
+    response = await client.post(
+        f"/api/servers/{server_id}/check", headers=auth_headers
+    )
+    body = response.json()
+    assert body["egress_ip"] == "203.0.113.9"
+    assert body["egress_country"] == "FI"
+    assert body["egress_org"] == "Example Hosting"
+    assert body["egress_at"] is not None
+
+
+async def test_check_egress_same_as_host_is_direct(
+    client: httpx.AsyncClient, auth_headers, monkeypatch
+) -> None:
+    async def fake_check(host, port, username, key_path, timeout=10):
+        return sshops.CheckResult(
+            ok=True, docker=True,
+            containers=["amnezia-xray"], amnezia_containers=["amnezia-xray"],
+        )
+
+    async def fake_probe(conn):
+        return NEW_SERVER["host"]
+
+    monkeypatch.setattr(sshops, "check_server", fake_check)
+    monkeypatch.setattr(sshops, "connect", lambda *a, **k: _Conn())
+    monkeypatch.setattr(sshops, "probe_egress", fake_probe)
+
+    server_id = await _create_server(client, auth_headers)
+    body = (
+        await client.post(f"/api/servers/{server_id}/check", headers=auth_headers)
+    ).json()
+    assert body["egress_ip"] == ""
+    assert body["egress_at"] is not None
+
+
+def test_parse_egress_output() -> None:
+    assert sshops._parse_egress_output("EGRESS=203.0.113.9\n") == "203.0.113.9"
+    assert sshops._parse_egress_output("") == ""
+    assert sshops._parse_egress_output("EGRESS=<html>1.2.3</html>\n") == ""
+    assert sshops._parse_egress_output("EGRESS=127.0.0.1\n") == ""
+
+
+def test_egress_command_probes_inside_amnezia_container() -> None:
+    # клиентский трафик идет из контейнера, у каскадов он выходит не с адреса ноды
+    assert "grep -i '^amnezia'" in sshops.EGRESS_COMMAND
+    assert '$D exec "$c"' in sshops.EGRESS_COMMAND

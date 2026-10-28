@@ -76,6 +76,40 @@ function countryFlag(code: string): string {
   )
 }
 
+// путь трафика клиентов, когда нода - вход каскада: выход в интернет с другого адреса
+function EgressRoute({ server }: { server: Server }) {
+  const { t } = useI18n()
+  return (
+    <div className="srv-route">
+      <span className="srv-route-label">{t('Клиенты')}</span>
+      <span className="srv-route-arrow">→</span>
+      <div className="srv-hop">
+        {countryFlag(server.country) && (
+          <span className="server-flag">{countryFlag(server.country)}</span>
+        )}
+        <div>
+          <div className="mono">{server.host}</div>
+          <div className="muted small">{t('этот сервер')}</div>
+        </div>
+      </div>
+      <span className="srv-route-arrow">→</span>
+      <div className="srv-hop srv-hop-exit">
+        {countryFlag(server.egress_country) && (
+          <span className="server-flag">{countryFlag(server.egress_country)}</span>
+        )}
+        <div>
+          <div className="mono">{server.egress_ip}</div>
+          <div className="muted small">
+            {server.egress_org
+              ? t('выход в интернет, {org}', { org: server.egress_org })
+              : t('выход в интернет')}
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 function StatusDot({ server }: { server: Server }) {
   const { t } = useI18n()
   const cls =
@@ -208,6 +242,8 @@ function ServerDetail({
           </span>
         )}
       </div>
+
+      {server.egress_ip && <EgressRoute server={server} />}
 
       {server.note && <div className="srv-detail-note">{server.note}</div>}
 
@@ -959,6 +995,17 @@ export function ServersPage({ onUnauthorized }: Props) {
                             {countryFlag(s.country) && (
                               <span className="server-flag" title={s.country}>
                                 {countryFlag(s.country)}
+                              </span>
+                            )}
+                            {s.egress_ip && (
+                              <span
+                                className="srv-item-route"
+                                title={t('выход в интернет: {ip}', { ip: s.egress_ip })}
+                              >
+                                →
+                                <span className="server-flag">
+                                  {countryFlag(s.egress_country) || '?'}
+                                </span>
                               </span>
                             )}
                             <span className="srv-item-name">{s.name}</span>

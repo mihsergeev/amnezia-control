@@ -49,6 +49,15 @@ class Server(Base):
     position: Mapped[int] = mapped_column(Integer, default=0)
     # ISO 3166-1 alpha-2 (для флажка на карточке); заполняется коллектором по IP
     country: Mapped[str] = mapped_column(String(2), default="")
+    # адрес, с которого клиенты VPN выходят в интернет, если он НЕ совпадает с
+    # адресом сервера (нода - вход каскада/туннеля). Пусто - выход напрямую или
+    # еще не проверяли. Снимается изнутри amnezia-контейнера (sshops.EGRESS_COMMAND)
+    egress_ip: Mapped[str] = mapped_column(String(45), default="")
+    egress_country: Mapped[str] = mapped_column(String(2), default="")
+    egress_org: Mapped[str] = mapped_column(String(128), default="")
+    egress_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     last_check_ok: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
     last_check_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True

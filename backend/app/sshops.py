@@ -1,4 +1,5 @@
 import asyncio
+import ipaddress
 import os
 import re
 from contextlib import asynccontextmanager
@@ -45,6 +46,50 @@ CHECK_COMMAND = (
     "else echo DOCKER_UNAVAILABLE; D=''; fi; "
     '[ -n "$D" ] && { ' + _PROTO_PROBE + "; } || true"
 )
+
+
+# Адрес, с которого трафик клиентов уходит в интернет. Спрашиваем изнутри
+# amnezia-контейнера, а не с хоста: у каскадов (tproxy с docker0, GRE и т.п.)
+# собственный трафик ноды идет напрямую, а клиентский - через другой выход.
+# В alpine-контейнерах есть busybox wget, в xray еще и curl.
+EGRESS_COMMAND = (
+    "if docker ps >/dev/null 2>&1; then D=docker; "
+    "elif sudo -n docker ps >/dev/null 2>&1; then D='sudo -n docker'; "
+    "else exit 0; fi; "
+    "c=$($D ps --format '{{.Names}}' 2>/dev/null | grep -i '^amnezia' | head -1); "
+    '[ -n "$c" ] || exit 0; '
+    "for u in https://api.ipify.org https://ifconfig.me/ip; do "
+    'ip=$($D exec "$c" sh -c "wget -qO- -T 6 $u 2>/dev/null || curl -fsS -m 6 $u 2>/dev/null" '
+    "2>/dev/null); "
+    'case "$ip" in *.*.*.*) echo "EGRESS=$ip"; exit 0 ;; esac; '
+    "done"
+)
+
+
+def _parse_egress_output(output: str) -> str:
+    """IPv4 из строки EGRESS=..., иначе '' (нет контейнеров / сервисы не ответили)."""
+    for line in output.splitlines():
+        line = line.strip()
+        if line.startswith("EGRESS="):
+            try:
+                addr = ipaddress.IPv4Address(line.removeprefix("EGRESS="))
+            except ValueError:
+                return ""
+            return "" if addr.is_loopback or addr.is_unspecified else str(addr)
+    return ""
+
+
+async def probe_egress(conn: "asyncssh.SSHClientConnection") -> str | None:
+    """Адрес выхода клиентов через уже открытое соединение.
+
+    '' - ответа нет (контейнеров нет, сервисы недоступны), None - SSH-сбой.
+    """
+    try:
+        run = await conn.run(EGRESS_COMMAND, check=False, timeout=30)
+    except (OSError, asyncssh.Error):
+        return None
+    output = run.stdout if isinstance(run.stdout, str) else ""
+    return _parse_egress_output(output)
 
 
 @dataclass
