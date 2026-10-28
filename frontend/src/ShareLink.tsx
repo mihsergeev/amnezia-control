@@ -90,16 +90,19 @@ export function useShareLink(
     <p className="small err-text">{error}</p>
   ) : link ? (
     <div className="share-link">
-      <input readOnly value={link.url} onFocus={(e) => e.currentTarget.select()} />
-      <button className="ghost" onClick={async () => setCopied(await copyText(link.url))}>
-        {copied ? t('Скопировано ✓') : t('Скопировать')}
-      </button>
-      <p className="muted small">
-        {t('Ссылка через {name}: откроется один раз, через {n} дн. сгорит сама.', {
-          name: link.via,
-          n: link.days,
-        })}
-      </p>
+      {/* текстом с переносом, а не input: длинная ссылка видна целиком */}
+      <div className="share-link-url">{link.url}</div>
+      <div className="share-link-row">
+        <p className="muted small">
+          {t('Ссылка через {name}: откроется один раз, через {n} дн. сгорит сама.', {
+            name: link.via,
+            n: link.days,
+          })}
+        </p>
+        <button className="ghost" onClick={async () => setCopied(await copyText(link.url))}>
+          {copied ? t('Скопировано ✓') : t('Скопировать')}
+        </button>
+      </div>
     </div>
   ) : null
 
