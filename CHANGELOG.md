@@ -4,6 +4,20 @@ All notable changes to Amnezia Control are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.61.0] - 2026-10-28
+
+### Changed
+- **Servers page: list on the left, selected server on the right.** With many
+  servers the full-width cards took a lot of scrolling. Servers are now a
+  compact list grouped by folder, with online/total clients next to each name,
+  a search box (name, IP, note or protocol) and a **Problems** filter
+  (unreachable servers, CPU load of 1 per core and up, memory or disk at 90%
+  and up). The selected server opens on the right: address, uptime, note, the
+  last check error, clients online, CPU, RAM and disk, and every protocol with
+  its own **Clients** button that opens the client list on that protocol's
+  tab. Groups still collapse, and servers and groups are still reordered by
+  dragging in the list. The selected server is remembered in the browser.
+
 ## [0.60.0] - 2026-10-27
 
 ### Added
