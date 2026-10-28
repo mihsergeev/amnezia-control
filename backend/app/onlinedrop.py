@@ -1,9 +1,17 @@
 """Алерт «на ноде пропали клиенты»: нода отвечает, но активных клиентов за
-последние 2 часа намного меньше, чем в то же время неделю назад.
+последние 2 часа намного меньше, чем в то же время вчера И неделю назад.
 
 Так выглядит блокировка адреса ноды у провайдеров: SSH и сбор метрик живы,
-а клиенты подключиться не могут, и алерт о падении сервера молчит. Сравниваем
-с тем же окном неделю назад, а не со вчера: в выходные клиентов и так меньше.
+а клиенты подключиться не могут, и алерт о падении сервера молчит.
+
+База - меньшее из «вчера» и «неделю назад» в том же окне: алертим только про
+новую просадку. Если клиентов меньше уже со вчера (их перевели на другой
+сервер, адрес режут давно), это не новость и дежурного не будит. Неделя
+назад нужна из-за выходных: в субботу клиентов и так меньше, чем в пятницу.
+
+Один алерт на просадку: флаг в server_status (рестарт панели не шлет его
+заново), повтор по тому же серверу не раньше чем через сутки, сообщения
+«клиенты вернулись» нет - на него реагировать не нужно.
 
 Активный клиент - тот, у кого за окно менялся счетчик rx. Считаем агрегатом в
 БД (group by клиент), историю в память не грузим: снимков миллионы."""
@@ -15,12 +23,16 @@ from sqlalchemy import func, select
 
 from app import alerts, settings_store
 from app.config import Settings
-from app.models import ClientTrafficSample
+from app.models import ClientTrafficSample, ServerStatus
 
 log = logging.getLogger("acontrol.onlinedrop")
 
 WINDOW = timedelta(hours=2)
+DAY = timedelta(days=1)
 WEEK = timedelta(days=7)
+# повторный алерт по тому же серверу - не чаще раза в сутки (просадка у порога
+# то уходит, то возвращается)
+COOLDOWN = timedelta(hours=24)
 CHECK_EVERY = timedelta(minutes=30)
 # сколько проверок подряд условие должно держаться (и для алерта, и для отбоя):
 # одиночный провал онлайна дежурного не будит
@@ -29,8 +41,8 @@ CONFIRM = 2
 # сама лежала пару часов, после старта увидела бы «пустую» ноду
 MIN_COVERAGE = 0.5
 
-# server_id -> {"hits": проверок подряд с просадкой, "ok": подряд без нее,
-#               "alerted": отправлен ли алерт}
+# server_id -> {"hits": проверок подряд с просадкой, "ok": подряд без нее};
+# отправлен ли алерт - в server_status (drop_alerted), чтобы пережить рестарт
 _state: dict[int, dict] = {}
 _last_check: datetime | None = None
 
@@ -79,8 +91,9 @@ async def check(
     *,
     now: datetime | None = None,
 ) -> list[tuple[int, bool]]:
-    """Раз в CHECK_EVERY сверяет онлайн нод с прошлой неделей и шлет алерты.
-    Возвращает переходы (server_id, просел) - для тестов."""
+    """Раз в CHECK_EVERY сверяет онлайн нод со вчера и прошлой неделей и шлет
+    алерты. Возвращает переходы (server_id, просел): True - алерт отправлен,
+    False - просадка закончилась (молча) - для тестов."""
     global _last_check
     percent = settings.online_drop_percent
     if percent <= 0:
@@ -92,52 +105,75 @@ async def check(
 
     async with session_factory() as session:
         cur = await _active_counts(session, now - WINDOW, now)
-        base = await _active_counts(session, now - WEEK - WINDOW, now - WEEK)
+        yday = await _active_counts(session, now - DAY - WINDOW, now - DAY)
+        week = await _active_counts(session, now - WEEK - WINDOW, now - WEEK)
         cover = await _coverage(session, now - WINDOW, now)
     expected = WINDOW.total_seconds() / max(settings.stats_interval, 60)
 
-    transitions: list[tuple[int, bool]] = []
+    judged: dict[int, bool] = {}
     for sid, online in online_map.items():
-        st = _state.setdefault(sid, {"hits": 0, "ok": 0, "alerted": False})
+        st = _state.setdefault(sid, {"hits": 0, "ok": 0})
         if not online or cover.get(sid, 0) < expected * MIN_COVERAGE:
             # нода лежит (про это свой алерт) или данных мало - не судим
             continue
-        if _dropped(cur.get(sid, 0), base.get(sid, 0), percent,
-                    settings.online_drop_min_clients):
+        base = min(yday.get(sid, 0), week.get(sid, 0))
+        if _dropped(cur.get(sid, 0), base, percent, settings.online_drop_min_clients):
             st["hits"] += 1
             st["ok"] = 0
-            if not st["alerted"] and st["hits"] >= CONFIRM:
-                st["alerted"] = True
-                transitions.append((sid, True))
+            if st["hits"] >= CONFIRM:
+                judged[sid] = True
         else:
             st["ok"] += 1
             st["hits"] = 0
-            if st["alerted"] and st["ok"] >= CONFIRM:
-                st["alerted"] = False
-                transitions.append((sid, False))
+            if st["ok"] >= CONFIRM:
+                judged[sid] = False
     for sid in list(_state):
         if sid not in online_map:
             del _state[sid]
+    if not judged:
+        return []
 
-    if not transitions:
+    transitions: list[tuple[int, bool]] = []
+    to_send: list[int] = []
+    async with session_factory() as session:
+        rows = {
+            r.server_id: r
+            for r in await session.scalars(
+                select(ServerStatus).where(ServerStatus.server_id.in_(judged))
+            )
+        }
+        for sid, dropped in judged.items():
+            row = rows.get(sid)
+            if row is None:
+                row = ServerStatus(server_id=sid, online=True, changed_at=now)
+                session.add(row)
+            if dropped and not row.drop_alerted:
+                row.drop_alerted = True
+                last = row.drop_alerted_at
+                if last is not None and last.tzinfo is None:
+                    last = last.replace(tzinfo=timezone.utc)
+                if last is None or now - last >= COOLDOWN:
+                    row.drop_alerted_at = now
+                    to_send.append(sid)
+                    transitions.append((sid, True))
+            elif not dropped and row.drop_alerted:
+                row.drop_alerted = False
+                transitions.append((sid, False))
+        await session.commit()
+
+    if not to_send:
         return transitions
     async with session_factory() as session:
         cfg = await settings_store.get_alert_config(session, settings)
     if not alerts.alerts_enabled(cfg):
         return transitions
-    for sid, dropped in transitions:
+    for sid in to_send:
         name = names.get(sid, str(sid))
-        now_n, base_n = cur.get(sid, 0), base.get(sid, 0)
-        if dropped:
-            text = (
-                f"📉 На сервере «{name}» пропали клиенты: активных за 2 часа {now_n}, "
-                f"неделю назад в это время {base_n}. Сервер отвечает - возможно, "
-                f"его адрес режут у провайдеров"
-            )
-        else:
-            text = (
-                f"✅ На сервере «{name}» клиенты вернулись: активных за 2 часа "
-                f"{now_n}, неделю назад {base_n}"
-            )
+        text = (
+            f"📉 На сервере «{name}» пропали клиенты: активных за 2 часа "
+            f"{cur.get(sid, 0)}, в это время вчера {yday.get(sid, 0)}, неделю назад "
+            f"{week.get(sid, 0)}. Сервер отвечает - возможно, его адрес режут у "
+            f"провайдеров"
+        )
         await alerts.send_alert(cfg, text)
     return transitions
