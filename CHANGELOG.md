@@ -4,6 +4,34 @@ All notable changes to Amnezia Control are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+- **Cascade wizard.** A cascade of two servers used to be built by hand: a
+  gateway on the entry, a tunnel, routing rules, geo databases, firewall
+  holes on both sides. Now **+ Cascade** next to **+ Add server** does it.
+  Pick the entry (where clients connect) and the exit (whose address they
+  browse from), either from the panel or as a new server by password or
+  setup script. The panel then tests the link by sending 20 MB from the
+  entry to the exit over plain TCP and over a temporary GRE tunnel, and
+  recommends one of two transports:
+  - **VLESS Reality**, an encrypted tunnel that looks like HTTPS, when TCP
+    passes;
+  - **GRE**, a bare tunnel without encryption, for providers whose filters
+    let only a few dozen kilobytes of TCP through to the exit's network.
+
+  The install runs in the background, exit first, then entry, with a step
+  list and a live log; the window can be closed. On the entry an xray-core
+  gateway takes the outgoing traffic of the VPN containers: Russian domains
+  and addresses (runetfreedom geo databases, updated daily) go out directly,
+  the rest goes to the exit. Clients are switched over only after a test
+  request through the gateway succeeds, and if the exit or the tunnel goes
+  down their traffic goes nowhere instead of leaking past it. Everything
+  lives in `/opt/acontrol/cascade` as systemd services and survives a
+  reboot. The entry's card shows the route, the exit is marked **exit** in
+  the list, and **More** has **Cascade: test the link** and **Remove the
+  cascade**, which takes both sides apart.
+
 ## [0.65.1] - 2026-10-28
 
 ### Fixed

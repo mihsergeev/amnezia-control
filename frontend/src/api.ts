@@ -812,3 +812,90 @@ export function createShareLink(
     body: JSON.stringify({ service_id: serviceId, text, target }),
   })
 }
+
+// --- каскады: вход и выход ---------------------------------------------------
+
+export type CascadeTransport = 'vless' | 'gre'
+
+export type ProbeSide = { ok: boolean; bytes: number; secs: number; mbps: number; error: string }
+
+export type CascadeProbe = {
+  entry_ip: string
+  exit_ip: string
+  exit_country: string
+  exit_org: string
+  tcp: ProbeSide
+  gre: ProbeSide
+  recommend: CascadeTransport | ''
+}
+
+export type Cascade = {
+  id: number
+  entry_server_id: number
+  exit_server_id: number
+  transport: CascadeTransport
+  status: 'installing' | 'ready' | 'error'
+  error: string
+  phase: '' | 'exit' | 'entry'
+  log: string
+  entry_ip: string
+  exit_ip: string
+  probe: Partial<CascadeProbe> & { checked_at?: string }
+  result: { egress?: string; ru?: string; checked_at?: string }
+  created_at: string
+}
+
+export type CascadeCheck = {
+  ok: boolean
+  gateway: boolean
+  tproxy: boolean
+  tunnel: string
+  egress: string
+  ru: string
+  checked_at: string
+}
+
+/** Сервер уже в каскаде: собранном панелью или настроенном руками (GRE, другой выход). */
+export function inCascade(s: Server, cascades: Cascade[]): boolean {
+  if (cascades.some((c) => c.entry_server_id === s.id || c.exit_server_id === s.id)) return true
+  const gre = (parseCheckInfo(s)?.tunnels ?? []).some((x) => x.kind === 'gre')
+  return gre || s.egress_ip !== ''
+}
+
+export function listCascades(): Promise<Cascade[]> {
+  return api<Cascade[]>('/api/cascades')
+}
+
+export function getCascade(id: number): Promise<Cascade> {
+  return api<Cascade>(`/api/cascades/${id}`)
+}
+
+export function probeCascade(entryId: number, exitId: number): Promise<CascadeProbe> {
+  return api<CascadeProbe>('/api/cascades/probe', {
+    method: 'POST',
+    body: JSON.stringify({ entry_id: entryId, exit_id: exitId }),
+  })
+}
+
+export function createCascade(
+  entryId: number,
+  exitId: number,
+  transport: CascadeTransport,
+): Promise<Cascade> {
+  return api<Cascade>('/api/cascades', {
+    method: 'POST',
+    body: JSON.stringify({ entry_id: entryId, exit_id: exitId, transport }),
+  })
+}
+
+export function reinstallCascade(id: number): Promise<Cascade> {
+  return api<Cascade>(`/api/cascades/${id}/install`, { method: 'POST' })
+}
+
+export function checkCascade(id: number): Promise<CascadeCheck> {
+  return api<CascadeCheck>(`/api/cascades/${id}/check`, { method: 'POST' })
+}
+
+export function deleteCascade(id: number, force = false): Promise<void> {
+  return api<void>(`/api/cascades/${id}${force ? '?force=true' : ''}`, { method: 'DELETE' })
+}

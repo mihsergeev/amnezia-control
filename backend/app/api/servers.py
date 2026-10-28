@@ -6,7 +6,7 @@ from app import audit, limits, server_ops, sshops
 from app.config import get_settings
 from app.db import Base
 from app.deps import CurrentUser, SessionDep
-from app.models import Server
+from app.models import Cascade, Server
 from app.schemas import (
     BootstrapRequest,
     DeleteServerResult,
@@ -135,6 +135,12 @@ async def delete_server(
         await session.execute(
             sa_delete(model).where(model.server_id == server_id)
         )
+    # каскад с этим сервером теряет смысл; на нодах остается как есть
+    await session.execute(
+        sa_delete(Cascade).where(
+            (Cascade.entry_server_id == server_id) | (Cascade.exit_server_id == server_id)
+        )
+    )
     await session.delete(server)
     await session.commit()
     await audit.record(

@@ -52,6 +52,7 @@ The [AmneziaVPN desktop client](https://amnezia.org) is great for personal use �
 - **AmneziaWG 3.1** as a separate protocol next to 2.0 and legacy: own container, port and subnet, so both versions run on one node. The AmneziaVPN app labels these connections "version 3.1"
 - **In-place upgrade from 2.0 to 3.1** ("Upgrade to 3.1" on the 2.0 tab): same container, port, server key and subnet, with a snapshot taken first for rollback. 2.0 clients stop connecting afterwards and have to be reissued. Nodes installed back on 3.0 move to 3.1 with **Rebuild**
 - AmneziaWG 3.1 is built from source at pinned tags and installs on old Docker too (19.03 and early 20.10)
+- **Cascade of two servers** (**+ Cascade**): clients connect to the entry, Russian sites open from it directly, everything else leaves through the exit server's address. The wizard picks both servers (or adds new ones), tests the link between them and offers VLESS Reality or a bare GRE tunnel for providers that stall TCP to the exit's network. The panel then sets up both sides itself: a gateway with Russian geo databases on the entry, the tunnel and internet access on the exit, all as systemd services. If the exit goes down, clients' traffic does not leak past it. The card shows the route; **More** has a link check and **Remove the cascade**
 - Update the server core in one click; live deploy log
 - Per-node resource monitoring: CPU load, RAM, disk, uptime — right on the card
 - Organize servers into collapsible **groups** (folders) — by company, location, etc.

@@ -1,4 +1,5 @@
 from datetime import datetime
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -656,3 +657,56 @@ class ShareRequest(BaseModel):
 class ShareLinkOut(BaseModel):
     url: str
     ttl_days: int
+
+
+class CascadePair(BaseModel):
+    entry_id: int
+    exit_id: int
+
+
+class CascadeCreate(CascadePair):
+    transport: Literal["vless", "gre"]
+
+
+class ProbeSide(BaseModel):
+    ok: bool
+    bytes: int
+    secs: float
+    mbps: int
+    error: str = ""
+
+
+class CascadeProbeOut(BaseModel):
+    entry_ip: str
+    exit_ip: str
+    exit_country: str = ""
+    exit_org: str = ""
+    tcp: ProbeSide
+    gre: ProbeSide
+    recommend: str  # vless | gre | "" (не проходит ничего)
+
+
+class CascadeOut(BaseModel):
+    id: int
+    entry_server_id: int
+    exit_server_id: int
+    transport: str
+    status: str  # installing | ready | error
+    error: str
+    phase: str = ""  # exit | entry, пока идет установка
+    log: str = ""
+    entry_ip: str = ""
+    exit_ip: str = ""
+    probe: dict = {}
+    result: dict = {}
+    created_at: datetime
+
+
+class CascadeCheckOut(BaseModel):
+    ok: bool
+    gateway: bool
+    tproxy: bool
+    tunnel: str  # состояние acgre (UP/DOWN) или "" без GRE
+    egress: str
+    ru: str
+    checked_at: datetime
