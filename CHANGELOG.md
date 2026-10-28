@@ -4,6 +4,16 @@ All notable changes to Amnezia Control are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.66.3] - 2026-10-28
+
+### Changed
+- **A cascade exit is part of its entry server.** The exit server has no
+  clients of its own, so it no longer shows up as a separate server in the
+  server list, the counters, the overview and the server filters. The entry
+  shows the exit in its route, search by the exit name or address finds the
+  entry, and when the exit does not respond the entry gets a red status and
+  the error, since its clients lose foreign sites.
+
 ## [0.66.2] - 2026-10-28
 
 ### Fixed

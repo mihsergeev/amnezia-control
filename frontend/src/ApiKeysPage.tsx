@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import {
   ApiError,
-  api,
+  listVpnServers,
   createApiKey,
   listApiKeys,
   revokeApiKey,
@@ -43,7 +43,7 @@ export function ApiKeysPage({ onUnauthorized }: Props) {
   }, [load])
 
   useEffect(() => {
-    api<Server[]>('/api/servers')
+    listVpnServers()
       .then(setServers)
       .catch(() => setServers([]))
   }, [])
