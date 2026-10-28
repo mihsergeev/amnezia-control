@@ -1,4 +1,5 @@
 import json
+import os
 import shutil
 import socket
 import subprocess
@@ -221,3 +222,79 @@ def test_egress_due_accepts_naive_sqlite_dates() -> None:
     assert server_ops.egress_due(s, now) is False
     s.egress_at = (now - timedelta(hours=2)).replace(tzinfo=None)
     assert server_ops.egress_due(s, now) is True
+
+
+def test_bootstrap_gateway_needs_no_geo_files() -> None:
+    for transport in ("gre", "vless"):
+        boot = cascade.entry_gateway_config(transport, "198.51.100.20", VLESS, bootstrap=True)
+        assert "geoip:" not in boot and "geosite:" not in boot
+        assert json.loads(boot)["outbounds"][0]["tag"] == "exit"
+
+
+def test_entry_fetches_geo_through_bootstrap_gateway() -> None:
+    script = cascade.build_entry_script("vless", "198.51.100.20", 3, VLESS)
+    boot = script.index(f"-v {cascade.DIR}/boot:")
+    geo = script.index(f"sudo {cascade.DIR}/geo-update.sh")
+    full = script.index(f"-v {cascade.DIR}/config:")
+    assert boot < geo < full
+    assert "--socks5-hostname $via" in cascade._GEO_SH
+    assert f"127.0.0.1:{cascade.SOCKS_PORT}" in cascade._fill(cascade._GEO_SH)
+
+
+def _geo_run(tmp_path, gateway_up: bool) -> str:
+    import hashlib
+
+    base = (tmp_path / "cas").as_posix()
+    src, bin_ = tmp_path / "src", tmp_path / "bin"
+    for d in (src, bin_, tmp_path / "cas" / "config"):
+        d.mkdir(parents=True, exist_ok=True)
+    for name in ("geoip.dat", "geosite.dat"):
+        data = name.encode() * 100
+        (src / name).write_bytes(data)
+        (src / f"{name}.sha256sum").write_bytes(f"{hashlib.sha256(data).hexdigest()}  {name}\n".encode())
+    log = (tmp_path / "log").as_posix()
+    # подставные curl и docker: пишут вызовы в лог, curl отдает файлы из src
+    (bin_ / "curl").write_text(
+        "#!/bin/sh\n"
+        f'echo "curl $*" >> {log}\n'
+        'out=""; prev=""; for a in "$@"; do [ "$prev" = -o ] && out=$a; prev=$a; done\n'
+        f'cp "{src.as_posix()}/$(basename "$a")" "$out"\n',
+        newline="\n",
+    )
+    (bin_ / "docker").write_text(
+        "#!/bin/sh\n"
+        f'echo "docker $*" >> {log}\n'
+        f'[ "$1" = ps ] && {"echo " + cascade.GATEWAY if gateway_up else "true"}\n'
+        "exit 0\n",
+        newline="\n",
+    )
+    for f in bin_.iterdir():
+        f.chmod(0o755)
+    script = cascade._fill(cascade._GEO_SH.replace("@DIR@", base))
+    env = {**os.environ, "PATH": str(bin_) + os.pathsep + os.environ["PATH"]}
+    r = subprocess.run(
+        [shutil.which("bash"), "-c", script], capture_output=True, text=True, timeout=60, env=env,
+    )
+    assert r.returncode == 0, r.stderr
+    text = open(log).read()
+    open(log, "w").close()
+    return text
+
+
+@pytest.mark.skipif(shutil.which("bash") is None, reason="нужен bash")
+def test_geo_update_goes_through_gateway_and_skips_unchanged(tmp_path) -> None:
+    first = _geo_run(tmp_path, gateway_up=True)
+    proxy = f"--socks5-hostname 127.0.0.1:{cascade.SOCKS_PORT}"
+    downloads = [line for line in first.splitlines() if line.startswith("curl")]
+    assert len(downloads) == 4 and all(proxy in line for line in downloads)
+    assert (tmp_path / "cas" / "geo" / "geosite.dat").exists()
+    assert f"docker restart {cascade.GATEWAY}" in first
+    # базы не менялись: качаются только контрольные суммы, шлюз не трогаем
+    second = _geo_run(tmp_path, gateway_up=True)
+    assert "geosite.dat " not in second and "geosite.dat.sha256sum" in second
+    assert "restart" not in second
+    # без шлюза напрямую
+    (tmp_path / "cas" / "geo" / "geoip.dat").write_bytes(b"old")
+    third = _geo_run(tmp_path, gateway_up=False)
+    assert "socks5" not in third
+    assert any(line.endswith("/geoip.dat") and "socks5" not in line for line in third.splitlines())
