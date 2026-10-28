@@ -2372,3 +2372,46 @@ button.srv-side-gh:hover .drag-handle {
     padding: 1rem;
   }
 }
+
+/* одноразовая ссылка на конфиг (сервис секретов) под кнопками окна конфига */
+.share-link {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem 0.5rem;
+  margin-top: 0.6rem;
+}
+
+.share-link input {
+  flex: 1;
+  min-width: 0;
+  font-family: ui-monospace, 'Cascadia Mono', Consolas, monospace;
+  font-size: 0.85rem;
+}
+
+.share-link p {
+  flex-basis: 100%;
+  margin: 0;
+}
+
+/* список сервисов в настройках ссылок */
+.share-services {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin: 0.8rem 0;
+}
+
+.share-service {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.8rem;
+  padding: 0.55rem 0.8rem;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+
+.share-service .mono {
+  word-break: break-all;
+}

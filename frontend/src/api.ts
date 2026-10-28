@@ -783,3 +783,32 @@ export const PROTOCOL_LABEL: Record<string, string> = {
   openvpn: 'OpenVPN/Cloak',
   xray: 'XRay/REALITY',
 }
+
+// --- одноразовые ссылки на конфиг через сервисы секретов ---
+export type ShareService = { id: string; name: string; url: string; engine: string }
+
+export function getShareServices(): Promise<ShareService[]> {
+  return api<ShareService[]>('/api/share/services')
+}
+
+export function addShareService(name: string, url: string): Promise<ShareService[]> {
+  return api<ShareService[]>('/api/share/services', {
+    method: 'POST',
+    body: JSON.stringify({ name, url }),
+  })
+}
+
+export function deleteShareService(id: string): Promise<ShareService[]> {
+  return api<ShareService[]>(`/api/share/services/${id}`, { method: 'DELETE' })
+}
+
+export function createShareLink(
+  serviceId: string,
+  text: string,
+  target: string,
+): Promise<{ url: string; ttl_days: number }> {
+  return api('/api/share', {
+    method: 'POST',
+    body: JSON.stringify({ service_id: serviceId, text, target }),
+  })
+}

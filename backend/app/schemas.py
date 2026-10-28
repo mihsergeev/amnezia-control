@@ -632,3 +632,27 @@ class RevokeBulkResult(BaseModel):
     revoked: int
     failed: int
     items: list[RevokeBulkResultItem]
+
+
+class ShareServiceIn(BaseModel):
+    name: str = Field(min_length=1, max_length=64)
+    url: str = Field(min_length=1, max_length=255)
+
+
+class ShareServiceOut(BaseModel):
+    id: str
+    name: str
+    url: str
+    engine: str
+
+
+class ShareRequest(BaseModel):
+    service_id: str = Field(min_length=1, max_length=32)
+    text: str = Field(min_length=1, max_length=100_000)
+    # что отправляем (имя клиента) - только для журнала, сам текст туда не пишем
+    target: str = Field(default="", max_length=255)
+
+
+class ShareLinkOut(BaseModel):
+    url: str
+    ttl_days: int

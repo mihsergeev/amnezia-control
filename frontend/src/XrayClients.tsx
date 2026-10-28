@@ -22,11 +22,13 @@ import { ClientStatsModal } from './ClientStatsModal'
 import { RollbackMenu } from './RollbackMenu'
 import { copyText } from './clipboard'
 import { formatBytes } from './format'
+import { useShareLink } from './ShareLink'
 import { useI18n } from './i18n'
 
 type Props = {
   serverId: number
   serverName: string
+  groupName?: string
   onUnauthorized: () => void
   onRequestUpdate?: () => void
 }
@@ -58,6 +60,7 @@ function PlainQr({ text }: { text: string }) {
 export function XrayClients({
   serverId,
   serverName,
+  groupName = '',
   onUnauthorized,
   onRequestUpdate,
 }: Props) {
@@ -83,6 +86,7 @@ export function XrayClients({
 
   const variant = view ? view.variants[Math.min(variantIdx, view.variants.length - 1)] : null
   const shownText = variant ? (format === 'uri' && variant.uri ? variant.uri : variant.amnezia) : ''
+  const shareLink = useShareLink(shownText, view?.name ?? '', groupName)
 
   const handleError = useCallback(
     (err: unknown) => {
@@ -564,10 +568,12 @@ export function XrayClients({
               <button className="ghost" onClick={downloadConfig}>
                 {t('Скачать .txt')}
               </button>
+              {shareLink.control}
               <button onClick={copyConfig}>
                 {copied ? t('Скопировано ✓') : t('Скопировать')}
               </button>
             </div>
+            {shareLink.result}
           </div>
         </div>
       )}
