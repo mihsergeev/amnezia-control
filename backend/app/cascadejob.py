@@ -118,7 +118,7 @@ async def _run(cid: int, factory, settings) -> None:
             await _finish(factory, cid, "error", msg, _joined(logs), {"failed_phase": phase})
             await alerts.maybe_alert(
                 factory, settings,
-                alerts.Card("crit", "🔗", "Каскад не собрался", msg, subject=entry.name),
+                alerts.Card("crit", "", "Каскад не собрался", msg, subject=entry.name),
             )
             return
         if phase == "entry":

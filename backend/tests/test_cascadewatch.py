@@ -80,7 +80,7 @@ async def test_alert_only_after_grace_and_once(factory, sent) -> None:
                                       check=_check(NO_EXIT))
     assert len(sent) == 1
     assert sent[0].splitlines()[:3] == [
-        "🔴🔗 vpn-b", "Каскад не работает больше 10 мин",
+        "🔴 vpn-b", "Каскад не работает больше 10 мин",
         "через выход интернет не открывается, выход fi-exit",
     ]
     await cascadewatch.watch_once(factory, settings, now=NOW + timedelta(minutes=60), check=_check(OK))

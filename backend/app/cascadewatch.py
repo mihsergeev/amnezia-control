@@ -65,10 +65,10 @@ async def _send(session, settings: Settings, entry: str, exit_: str, event: str,
     if not alerts.alerts_enabled(cfg):
         return
     if event == "down":
-        card = alerts.Card("crit", "🔗", f"Каскад не работает больше {mins} мин",
+        card = alerts.Card("crit", "", f"Каскад не работает больше {mins} мин",
                            f"{reason}, выход {exit_}", subject=entry)
     else:
-        card = alerts.Card("ok", "🔗", "Каскад снова работает", f"выход {exit_}", subject=entry)
+        card = alerts.Card("ok", "", "Каскад снова работает", f"выход {exit_}", subject=entry)
     await alerts.send_card(cfg, settings, card)
 
 
