@@ -794,6 +794,10 @@ const EN: Record<string, string> = {
   'Подробнее': 'Details',
   'Выход {host} не отвечает: {err}': 'Exit {host} is not responding: {err}',
   'нет связи': 'no connection',
+  'шлюз на входе не запущен': 'the gateway on the entry is not running',
+  'нет GRE-туннеля': 'no GRE tunnel',
+  'клиенты идут мимо шлюза (tproxy выключен)': 'clients bypass the gateway (tproxy is off)',
+  'Каскад не работает с {time}: {reason}': 'The cascade has been down since {time}: {reason}',
   'выход каскада не отвечает': 'cascade exit is not responding',
   'Российские сайты напрямую с этого сервера, остальное через выход.':
     'Russian sites go directly from this server, the rest through the exit.',

@@ -542,7 +542,8 @@ def entry_gateway_config(transport: str, exit_ip: str, params: dict, bootstrap: 
 
 # адрес выхода и российский адрес через шлюз (socks-вход check)
 _CHECK_LINES = [
-    f"EG=$(curl -4 -fsS -m 20 --socks5-hostname 127.0.0.1:{SOCKS_PORT} https://api.ipify.org 2>/dev/null)",
+    f"EG=$(curl -4 -fsS -m 20 --socks5-hostname 127.0.0.1:{SOCKS_PORT} https://api.ipify.org 2>/dev/null "
+    f"|| curl -4 -fsS -m 20 --socks5-hostname 127.0.0.1:{SOCKS_PORT} https://ipv4.icanhazip.com 2>/dev/null)",
     # российский сервис на домене .ru: шлюз обязан выпустить его напрямую
     f"RU=$(curl -4 -fsS -m 15 --socks5-hostname 127.0.0.1:{SOCKS_PORT} https://ip.nic.ru 2>/dev/null "
     "| grep -oE '([0-9]{1,3}[.]){3}[0-9]{1,3}' | head -1)",
@@ -652,6 +653,19 @@ def _ip_or_empty(value: str) -> str:
 def check_result(kv: dict[str, str]) -> dict[str, str]:
     """Адреса из вывода проверки: мусор вместо адреса (страница ошибки) - пусто."""
     return {"egress": _ip_or_empty(kv.get("egress", "")), "ru": _ip_or_empty(kv.get("ru", ""))}
+
+
+def health(transport: str, kv: dict[str, str], res: dict[str, str]) -> tuple[bool, str]:
+    """Работает ли каскад по выводу проверки; при отказе - причина для человека."""
+    if kv.get("gw") != "yes":
+        return False, "шлюз на входе не запущен"
+    if transport == "gre" and not kv.get("tun"):
+        return False, "нет GRE-туннеля"
+    if kv.get("tproxy") != "active":
+        return False, "клиенты идут мимо шлюза (tproxy выключен)"
+    if not res.get("egress"):
+        return False, "через выход интернет не открывается"
+    return True, ""
 
 
 def build_remove_entry() -> str:

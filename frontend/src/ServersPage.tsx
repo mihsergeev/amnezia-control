@@ -238,7 +238,7 @@ function ServerDetail({
   peer?: Server
   onCascade: (c: Cascade) => void
 }) {
-  const { t } = useI18n()
+  const { t, lang } = useI18n()
   const info = parseCheckInfo(server)
   const protocols = protocolsFromContainers(
     info?.amnezia_containers ?? [],
@@ -248,7 +248,9 @@ function ServerDetail({
   const memPct = m ? pct(m.mem_used, m.mem_total) : 0
   const diskPct = m ? pct(m.disk_used, m.disk_total) : 0
   const loadPct = m && m.cpu_count > 0 ? Math.round((m.load1 / m.cpu_count) * 100) : 0
-  const exitDown = cascade?.entry_server_id === server.id && peer?.last_check_ok === false
+  const isEntry = cascade?.entry_server_id === server.id
+  const health = isEntry ? cascade?.result.health : undefined
+  const exitDown = isEntry && (peer?.last_check_ok === false || health?.ok === false)
   return (
     <div className={`card srv-detail${server.last_check_ok === false ? ' server-down' : ''}`}>
       <div className="srv-detail-head">
@@ -316,7 +318,22 @@ function ServerDetail({
           {t('Российские сайты напрямую с этого сервера, остальное через выход.')}
         </div>
       )}
-      {exitDown && peer && (
+      {health?.ok === false && (
+        <div className="small err-text cas-exit-down">
+          {t('Каскад не работает с {time}: {reason}', {
+            time: health.since
+              ? new Date(health.since).toLocaleString(lang === 'en' ? 'en-GB' : 'ru-RU', {
+                  day: 'numeric',
+                  month: 'short',
+                  hour: '2-digit',
+                  minute: '2-digit',
+                })
+              : '?',
+            reason: t(health.reason ?? ''),
+          })}
+        </div>
+      )}
+      {isEntry && peer?.last_check_ok === false && (
         <div className="small err-text cas-exit-down">
           {t('Выход {host} не отвечает: {err}', {
             host: peer.host,
@@ -828,13 +845,16 @@ export function ServersPage({ onUnauthorized }: Props) {
 
   function exitDown(s: Server): boolean {
     const c = cascades.find((x) => x.entry_server_id === s.id)
-    return !!c && servers.find((x) => x.id === c.exit_server_id)?.last_check_ok === false
+    if (!c) return false
+    if (c.result.health?.ok === false) return true
+    return servers.find((x) => x.id === c.exit_server_id)?.last_check_ok === false
   }
 
   // проблема сервера с учетом выхода его каскада: выход в списке не виден
   function problem(s: Server): boolean {
     if (isProblem(s, metrics[s.id])) return true
     const c = cascades.find((x) => x.entry_server_id === s.id)
+    if (c?.result.health?.ok === false) return true
     const exit = c && servers.find((x) => x.id === c.exit_server_id)
     return !!exit && isProblem(exit, metrics[exit.id])
   }
