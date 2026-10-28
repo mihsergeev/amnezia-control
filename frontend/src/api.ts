@@ -859,7 +859,14 @@ export type CascadeCheck = {
 export function inCascade(s: Server, cascades: Cascade[]): boolean {
   if (cascades.some((c) => c.entry_server_id === s.id || c.exit_server_id === s.id)) return true
   const gre = (parseCheckInfo(s)?.tunnels ?? []).some((x) => x.kind === 'gre')
-  return gre || s.egress_ip !== ''
+  // каскад, собранный руками: клиенты выходят в другой стране. Просто другой
+  // адрес выхода (NAT, несколько адресов у сервера) каскадом не считаем
+  const abroad =
+    s.egress_ip !== '' &&
+    s.egress_country !== '' &&
+    s.country !== '' &&
+    s.egress_country !== s.country
+  return gre || abroad
 }
 
 export function listCascades(): Promise<Cascade[]> {
