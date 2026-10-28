@@ -4,6 +4,15 @@ All notable changes to Amnezia Control are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.62.1] - 2026-10-28
+
+### Fixed
+- **Servers page: long server names are no longer cut off in the list.** The
+  list was a fixed 340px wide, so a name with a location suffix and the new
+  exit flag ended in "...". The list now grows to fit the longest name (up
+  to 460px), and a name longer than that wraps to a second line instead of
+  being cut.
+
 ## [0.62.0] - 2026-10-28
 
 ### Added

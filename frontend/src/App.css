@@ -1945,12 +1945,14 @@ button.linklike.srv-filter-only:hover {
 /* ---------- страница серверов: список слева, выбранный сервер справа ---------- */
 .srv-split {
   display: grid;
-  grid-template-columns: minmax(280px, 340px) minmax(0, 1fr);
+  /* список по ширине самых длинных имен (до 460px), дальше имя переносится */
+  grid-template-columns: fit-content(460px) minmax(0, 1fr);
   gap: 0.9rem;
   align-items: start;
 }
 
 .srv-side {
+  min-width: 280px;
   background: var(--bg-card);
   border: 1px solid var(--border);
   border-radius: 14px;
@@ -2112,9 +2114,8 @@ button.srv-side-gh:hover .drag-handle {
   flex: 1;
   min-width: 0;
   font-weight: 600;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
 }
 
 /* «→ 🇫🇮» в строке списка: нода - вход каскада, клиенты выходят в другой стране */
