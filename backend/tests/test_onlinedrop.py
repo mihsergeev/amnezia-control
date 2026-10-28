@@ -58,8 +58,16 @@ async def _samples(factory, sid, start, end, active, silent):
 
 
 async def _week_ago(factory, sid, active, until=NOW + timedelta(hours=2)):
-    await _samples(factory, sid, NOW - timedelta(days=7, hours=3),
-                   until - timedelta(days=7), active, 0)
+    """Неделю назад и вчера в то же время было active клиентов (база алерта)."""
+    for days in (7, 1):
+        await _samples(factory, sid, NOW - timedelta(days=days, hours=3),
+                       until - timedelta(days=days), active, 0)
+
+
+async def _restart():
+    """Рестарт панели: память модуля обнуляется, БД остается."""
+    onlinedrop._state.clear()
+    onlinedrop._last_check = None
 
 
 async def _setup_alerts(factory):
@@ -67,7 +75,7 @@ async def _setup_alerts(factory):
         await settings_store.set_alert_config(s, "TOKEN", "123", "")
 
 
-async def test_drop_alerts_after_two_checks_and_recovers(factory, sent):
+async def test_drop_alerts_once_and_recovers_silently(factory, sent):
     settings = config.get_settings()
     await _setup_alerts(factory)
     await _week_ago(factory, 1, active=12)
@@ -82,13 +90,71 @@ async def test_drop_alerts_after_two_checks_and_recovers(factory, sent):
     assert len(sent) == 1 and "пропали клиенты" in sent[0] and "vpn-a" in sent[0]
     assert "2" in sent[0] and "12" in sent[0]
 
-    # клиенты вернулись: отбой тоже после двух проверок подряд
-    await _samples(factory, 1, later, later + timedelta(hours=3), 12, 0)
-    t = later + timedelta(hours=2, minutes=30)
+    # просадка держится - больше не пишем
+    await _samples(factory, 1, later + timedelta(minutes=31), later + timedelta(hours=1), 2, 10)
+    assert await onlinedrop.check(factory, settings, {1: True}, names,
+                                  now=later + timedelta(minutes=30)) == []
+    assert len(sent) == 1
+
+    # клиенты вернулись: отбой после двух проверок подряд, без сообщения
+    await _samples(factory, 1, later + timedelta(hours=1), later + timedelta(hours=4), 12, 0)
+    t = later + timedelta(hours=3, minutes=30)
     assert await onlinedrop.check(factory, settings, {1: True}, names, now=t) == []
     t += timedelta(minutes=30)
     assert await onlinedrop.check(factory, settings, {1: True}, names, now=t) == [(1, False)]
-    assert len(sent) == 2 and "вернулись" in sent[1]
+    assert len(sent) == 1
+
+
+async def test_restart_does_not_resend(factory, sent):
+    """Раньше флаг жил в памяти и каждый релиз панели слал алерт заново."""
+    settings = config.get_settings()
+    await _setup_alerts(factory)
+    await _week_ago(factory, 1, active=12, until=NOW + timedelta(hours=4))
+    await _samples(factory, 1, NOW - timedelta(hours=3), NOW + timedelta(hours=4), 2, 10)
+    names = {1: "vpn-a"}
+    for k in range(2):
+        await onlinedrop.check(factory, settings, {1: True}, names,
+                               now=NOW + timedelta(minutes=30 * k))
+    assert len(sent) == 1
+    await _restart()
+    for k in range(2, 6):
+        await onlinedrop.check(factory, settings, {1: True}, names,
+                               now=NOW + timedelta(minutes=30 * k))
+    assert len(sent) == 1
+
+
+async def test_drop_already_yesterday_is_not_news(factory, sent):
+    """Клиентов меньше уже со вчера (перевели на другой сервер) - не алертим."""
+    settings = config.get_settings()
+    await _setup_alerts(factory)
+    await _samples(factory, 1, NOW - timedelta(days=7, hours=3),
+                   NOW - timedelta(days=7) + timedelta(hours=2), 12, 0)
+    await _samples(factory, 1, NOW - timedelta(days=1, hours=3),
+                   NOW - timedelta(days=1) + timedelta(hours=2), 2, 10)
+    await _samples(factory, 1, NOW - timedelta(hours=3), NOW + timedelta(hours=2), 2, 10)
+    for k in range(3):
+        await onlinedrop.check(factory, settings, {1: True}, {1: "vpn-a"},
+                               now=NOW + timedelta(minutes=30 * k))
+    assert sent == []
+
+
+async def test_repeat_drop_waits_cooldown(factory, sent):
+    """Просадка у порога то уходит, то возвращается - второй алерт не раньше суток."""
+    settings = config.get_settings()
+    await _setup_alerts(factory)
+    names = {1: "vpn-a"}
+    await _week_ago(factory, 1, active=12, until=NOW + timedelta(hours=8))
+    # просадка -> вернулись -> снова просадка, все за несколько часов
+    await _samples(factory, 1, NOW - timedelta(hours=3), NOW + timedelta(hours=1), 2, 10)
+    await _samples(factory, 1, NOW + timedelta(hours=1), NOW + timedelta(hours=4), 12, 0)
+    await _samples(factory, 1, NOW + timedelta(hours=4), NOW + timedelta(hours=8), 2, 10)
+    seen = []
+    for k in range(16):
+        seen += await onlinedrop.check(factory, settings, {1: True}, names,
+                                       now=NOW + timedelta(minutes=30 * k))
+    assert (1, False) in seen
+    assert seen.count((1, True)) == 1
+    assert len(sent) == 1
 
 
 async def test_small_node_is_not_checked(factory, sent):

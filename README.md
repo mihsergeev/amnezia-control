@@ -69,7 +69,7 @@ The [AmneziaVPN desktop client](https://amnezia.org) is great for personal use â
 **Monitoring & alerts**
 - Overview dashboard: aggregate traffic and online-clients charts (24 h), per-server breakdown
 - **Server-down alerts** and **low-disk alerts** to Telegram and/or a webhook, configured from the UI
-- **"Clients gone" alert**: the node still answers, but far fewer clients are active than at the same time a week ago. This is what it looks like when ISPs start blocking a node's address
+- **"Clients gone" alert**: the node still answers, but far fewer clients are active than at the same time yesterday and a week ago. This is what it looks like when ISPs start blocking a node's address. One alert per drop, at most once a day per server, and no "clients are back" message
 
 **Operations & security**
 - **Two-factor auth (TOTP)** for panel login
@@ -230,8 +230,8 @@ Set in `.env` (see [`.env.example`](.env.example)):
 | `ACONTROL_STATS_INTERVAL` | `300` | Metrics/monitoring interval, seconds (0 = off) |
 | `ACONTROL_EXPIRY_INTERVAL` | `300` | Expired-client auto-revoke scan, seconds (0 = off) |
 | `ACONTROL_DISK_ALERT_PERCENT` | `90` | Low-disk alert threshold, % (0 = off) |
-| `ACONTROL_ONLINE_DROP_PERCENT` | `35` | "Clients gone" alert: active clients in the last 2 h at or below this % of the same hours a week ago, node still answering (0 = off) |
-| `ACONTROL_ONLINE_DROP_MIN_CLIENTS` | `8` | Check only nodes that had at least this many active clients a week ago |
+| `ACONTROL_ONLINE_DROP_PERCENT` | `35` | "Clients gone" alert: active clients in the last 2 h at or below this % of the same hours yesterday and a week ago, node still answering (0 = off) |
+| `ACONTROL_ONLINE_DROP_MIN_CLIENTS` | `8` | Check only nodes that had at least this many active clients yesterday and a week ago |
 | `ACONTROL_BACKUP_INTERVAL_HOURS` | `24` | Auto-backup interval (0 = off) |
 | `ACONTROL_BACKUP_KEEP` | `14` | Auto-backups to keep |
 | `ACONTROL_BACKUP_INCLUDE_TRAFFIC` | `0` | 1 = include traffic history in backups (can be hundreds of MB) |
