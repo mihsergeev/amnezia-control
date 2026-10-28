@@ -87,7 +87,7 @@ async def test_drop_alerts_once_and_recovers_silently(factory, sent):
     assert sent == []
     later = NOW + timedelta(minutes=30)
     assert await onlinedrop.check(factory, settings, {1: True}, names, now=later) == [(1, True)]
-    assert len(sent) == 1 and "пропали клиенты" in sent[0] and "vpn-a" in sent[0]
+    assert len(sent) == 1 and "Пропали клиенты" in sent[0] and "vpn-a" in sent[0]
     assert "2" in sent[0] and "12" in sent[0]
 
     # просадка держится - больше не пишем

@@ -54,8 +54,8 @@ async def _watch(
         if state == "error":
             await alerts.maybe_alert(
                 session_factory, settings,
-                f"❌ Amnezia Control: развёртывание {tag.upper()} на «{label}» "
-                f"завершилось ОШИБКОЙ. Откройте карточку сервера и лог деплоя.",
+                alerts.Card("crit", "🚀", f"Развертывание {tag.upper()} не удалось",
+                            "лог в карточке сервера", subject=label),
             )
             return
 

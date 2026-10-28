@@ -15,7 +15,6 @@ import asyncio
 import json
 import logging
 from datetime import datetime, timedelta, timezone
-from html import escape
 
 from sqlalchemy import select
 
@@ -65,20 +64,12 @@ async def _send(session, settings: Settings, entry: str, exit_: str, event: str,
     cfg = await settings_store.get_alert_config(session, settings)
     if not alerts.alerts_enabled(cfg):
         return
-    pair = f"{entry} → {exit_}"
     if event == "down":
-        tail = f" не работает больше {mins} мин: {reason}"
-        icon = "🔴"
+        card = alerts.Card("crit", "🔗", f"Каскад не работает больше {mins} мин",
+                           f"{reason}, выход {exit_}", subject=entry)
     else:
-        tail = " снова работает"
-        icon = "✅"
-    text = f"{icon} Каскад «{pair}»{tail}"
-    html_text = None
-    panel = (getattr(settings, "panel_url", "") or "").rstrip("/")
-    if panel:
-        html_text = f'{icon} Каскад «<a href="{escape(panel)}">{escape(pair)}</a>»{escape(tail)}'
-        text = f"{text}\n{panel}"
-    await alerts.send_alert(cfg, text, html_text=html_text)
+        card = alerts.Card("ok", "🔗", "Каскад снова работает", f"выход {exit_}", subject=entry)
+    await alerts.send_card(cfg, settings, card)
 
 
 async def watch_once(session_factory, settings: Settings, *, now: datetime | None = None,

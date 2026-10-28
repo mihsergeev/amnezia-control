@@ -63,7 +63,7 @@ async def test_store_metrics_and_disk_alert(factory, monkeypatch):
 
     sent: list[str] = []
 
-    async def fake_send(cfg, text):
+    async def fake_send(cfg, text, *, html_text=None):
         sent.append(text)
         return []
 
@@ -75,7 +75,7 @@ async def test_store_metrics_and_disk_alert(factory, monkeypatch):
     async with factory() as s:
         row = await s.get(NodeMetric, 1)
         assert row.disk_used == 95 and row.disk_alerted is True
-    assert len(sent) == 1 and "мало места" in sent[0]
+    assert len(sent) == 1 and "Мало места" in sent[0]
 
     # всё ещё 95% → повторного алерта нет
     await collector._store_node_metrics(factory, settings, [_sample(1, 95)], names)
@@ -85,4 +85,4 @@ async def test_store_metrics_and_disk_alert(factory, monkeypatch):
     await collector._store_node_metrics(factory, settings, [_sample(1, 80)], names)
     async with factory() as s:
         assert (await s.get(NodeMetric, 1)).disk_alerted is False
-    assert len(sent) == 2 and "снова ок" in sent[1]
+    assert len(sent) == 2 and "снова есть" in sent[1]

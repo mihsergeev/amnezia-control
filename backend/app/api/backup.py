@@ -203,11 +203,11 @@ async def _confirm(user, password: str, request: Request, session, what: str) ->
         raise
 
 
-async def _announce(session, user, request: Request, action: str, text: str) -> None:
+async def _announce(session, user, request: Request, action: str, title: str) -> None:
     await audit.record(session, user.username, action, "", client_ip(request))
     await alerts.security_alert(
         session, get_settings(),
-        f"{text} (пользователь «{user.username}», IP {client_ip(request)}).",
+        alerts.Card("warn", "🗄", title, f"{user.username} с {client_ip(request)}"),
     )
 
 
@@ -223,7 +223,7 @@ async def download_backup(
     stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
     filename = f"acontrol-backup-{stamp}.tar.gz"
     await _announce(
-        session, user, request, "backup_download", "💾 Amnezia Control: скачан бэкап панели"
+        session, user, request, "backup_download", "Скачан бэкап панели"
     )
     return Response(
         content=archive,
@@ -295,7 +295,7 @@ async def download_saved_backup(
         data = fh.read()
     await _announce(
         session, user, request, "backup_download",
-        f"💾 Amnezia Control: скачан бэкап панели {filename}",
+        f"Скачан бэкап панели {filename}",
     )
     return Response(
         content=data,
@@ -426,7 +426,7 @@ async def restore_backup(
     )
     await alerts.security_alert(
         session, get_settings(),
-        f"♻️ Amnezia Control: панель восстановлена из бэкапа "
-        f"(пользователь «{user.username}», IP {client_ip(request)}).",
+        alerts.Card("warn", "🗄", "Панель восстановлена из бэкапа",
+                    f"{user.username} с {client_ip(request)}"),
     )
     return {"restored": restored}

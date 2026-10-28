@@ -169,11 +169,11 @@ async def check(
         return transitions
     for sid in to_send:
         name = names.get(sid, str(sid))
-        text = (
-            f"📉 На сервере «{name}» пропали клиенты: активных за 2 часа "
-            f"{cur.get(sid, 0)}, в это время вчера {yday.get(sid, 0)}, неделю назад "
-            f"{week.get(sid, 0)}. Сервер отвечает - возможно, его адрес режут у "
-            f"провайдеров"
+        card = alerts.Card(
+            "warn", "📉", "Пропали клиенты",
+            f"активных за 2 часа {cur.get(sid, 0)}, вчера {yday.get(sid, 0)}, неделю назад "
+            f"{week.get(sid, 0)}. Сервер отвечает, похоже, адрес режут провайдеры",
+            subject=name,
         )
-        await alerts.send_alert(cfg, text)
+        await alerts.send_card(cfg, settings, card)
     return transitions

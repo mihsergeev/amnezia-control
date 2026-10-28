@@ -194,9 +194,11 @@ async def expiry_once(
                 _deferred_alerted.add(key)
                 await alerts.maybe_alert(
                     session_factory, settings,
-                    f"⚠️ Amnezia Control: клиент «{lim.name or lim.client_id}» на "
-                    f"«{server.name}» истёк, но не отозван — нода недоступна. "
-                    f"Повторю позже.",
+                    alerts.Card(
+                        "warn", "⏳", "Клиент истек, но не отозван",
+                        f"{lim.name or lim.client_id}: сервер недоступен, повторю позже",
+                        subject=server.name,
+                    ),
                 )
             continue
         async with session_factory() as session:
@@ -249,9 +251,12 @@ async def warn_expiring(
         srv = names.get(lim.server_id, str(lim.server_id))
         await alerts.maybe_alert(
             session_factory, settings,
-            f"⏳ Amnezia Control: клиент «{lim.name or lim.client_id}» на «{srv}» "
-            f"истекает через ~{left_days} дн. ({lim.expires_at:%d.%m %H:%M} UTC) — "
-            f"продлите, иначе будет авто-отзыв.",
+            alerts.Card(
+                "warn", "⏳", f"Клиент истекает через {left_days} дн.",
+                f"{lim.name or lim.client_id}, {lim.expires_at:%d.%m %H:%M} UTC. "
+                "Не продлить - отключится сам",
+                subject=srv,
+            ),
         )
         warned += 1
     return warned

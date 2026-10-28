@@ -4,6 +4,16 @@ All notable changes to Amnezia Control are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.68.0] - 2026-10-28
+
+### Changed
+- **Alerts are short cards.** Every alert now has the same three lines: the
+  level and topic icons with the server name (a link to the panel in
+  Telegram), what happened in bold, and one line of detail. Alerts about the
+  panel itself (logins, passwords, backups) are signed with the panel domain,
+  so when several panels write to one chat it is clear which one it is. The
+  host watchdog (`ops/panel-watchdog.sh`) uses the same layout.
+
 ## [0.67.0] - 2026-10-28
 
 ### Added

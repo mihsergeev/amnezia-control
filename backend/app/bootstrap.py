@@ -66,7 +66,9 @@ async def ensure_admin(
             await audit.record(session, "system", "admin_password_reset", user.username)
             await alerts.security_alert(
                 session, settings,
-                f"⚠️ Amnezia Control: пароль «{user.username}» сброшен из .env и 2FA "
-                "отключена. Если флаг сброса остался в .env, это повторится при "
-                "каждом перезапуске.",
+                alerts.Card(
+                    "warn", "🔑", f"Пароль «{user.username}» сброшен из .env",
+                    "2FA отключена. Уберите флаг сброса из .env, иначе это повторится "
+                    "при каждом перезапуске",
+                ),
             )
