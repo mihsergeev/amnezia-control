@@ -52,8 +52,11 @@ async def _record_failure(session, settings, key: str, username: str, action: st
         )
         await alerts.security_alert(
             session, settings,
-            f"🚨 Amnezia Control: {ratelimit.MAX_FAILURES} неудачных попыток входа "
-            f"подряд с IP {key} — вход временно заблокирован.",
+            alerts.Card(
+                "crit", "🔑", "Подбор пароля к панели",
+                f"{ratelimit.MAX_FAILURES} неудачных входов подряд с {key}, адрес "
+                "временно заблокирован",
+            ),
         )
     if user_locked:
         await audit.record(
@@ -62,9 +65,11 @@ async def _record_failure(session, settings, key: str, username: str, action: st
         )
         await alerts.security_alert(
             session, settings,
-            f"🚨 Amnezia Control: {USER_MAX_FAILURES} неудачных попыток входа под "
-            f"«{username}» с разных адресов — вход под этим логином временно "
-            "заблокирован.",
+            alerts.Card(
+                "crit", "🔑", f"Подбор пароля к «{username}»",
+                f"{USER_MAX_FAILURES} неудачных входов с разных адресов, логин "
+                "временно заблокирован",
+            ),
         )
 
 
@@ -155,8 +160,8 @@ async def change_password(
     settings = get_settings()
     await alerts.security_alert(
         session, settings,
-        f"🔑 Amnezia Control: пароль администратора «{user.username}» изменён "
-        f"(IP {_client_key(request)}).",
+        alerts.Card("warn", "🔑", f"Сменен пароль «{user.username}»",
+                    f"с {_client_key(request)}"),
     )
     token = create_access_token(
         user.username, settings.jwt_secret, settings.jwt_ttl_minutes,
@@ -212,8 +217,8 @@ async def twofa_enable(
     await audit.record(session, user.username, "2fa_enable", user.username)
     await alerts.security_alert(
         session, get_settings(),
-        f"🔐 Amnezia Control: у «{user.username}» включена 2FA "
-        f"(IP {_client_key(request)}).",
+        alerts.Card("ok", "🔐", f"Включена 2FA у «{user.username}»",
+                    f"с {_client_key(request)}"),
     )
     return TwoFAStatusOut(enabled=True)
 
@@ -245,7 +250,7 @@ async def twofa_disable(
     await audit.record(session, user.username, "2fa_disable", user.username)
     await alerts.security_alert(
         session, get_settings(),
-        f"⚠️ Amnezia Control: у «{user.username}» отключена 2FA "
-        f"(IP {_client_key(request)}).",
+        alerts.Card("warn", "🔐", f"Отключена 2FA у «{user.username}»",
+                    f"с {_client_key(request)}"),
     )
     return TwoFAStatusOut(enabled=False)

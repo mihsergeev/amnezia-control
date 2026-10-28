@@ -161,3 +161,19 @@ async def test_alerts_test_requires_config(
 ):
     r = await client.post("/api/alerts/test", headers=auth_headers)
     assert r.status_code == 400
+
+
+def test_card_layout() -> None:
+    card = alerts.Card("crit", "🖥", "Сервер недоступен больше 30 мин", "детали", subject="vpn<a>")
+    plain, html_text = card.render("https://panel.example/")
+    assert plain.splitlines() == [
+        "🔴🖥 vpn<a>", "Сервер недоступен больше 30 мин", "детали", "https://panel.example",
+    ]
+    assert html_text.splitlines() == [
+        '🔴🖥 <a href="https://panel.example">vpn&lt;a&gt;</a>',
+        "<b>Сервер недоступен больше 30 мин</b>", "детали",
+    ]
+    # алерт самой панели подписан ее доменом: в общем чате видно, какая панель
+    panel_card = alerts.Card("warn", "🔑", "Сменен пароль «admin»", "с 203.0.113.5")
+    assert panel_card.render("https://acontrol.example.org")[0].splitlines()[0] == "⚠️🔑 acontrol.example.org"
+    assert panel_card.render("")[0].splitlines()[0] == "⚠️🔑 Amnezia Control"

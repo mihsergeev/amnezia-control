@@ -349,9 +349,12 @@ async def _handle_hostkey_alerts(
             await audit.record(session, "система", "host_key_changed", name)
             await alerts.security_alert(
                 session, settings,
-                f"🚨 Amnezia Control: host-ключ ноды «{name}» ИЗМЕНИЛСЯ — возможна "
-                f"подмена/MITM. Если ноду пересоздавали, удалите её строку из "
-                f"data/ssh/known_hosts.",
+                alerts.Card(
+                    "crit", "🔑", "Сменился SSH-ключ сервера",
+                    "возможна подмена. Если сервер пересоздавали, удалите его строку "
+                    "из data/ssh/known_hosts",
+                    subject=name,
+                ),
             )
 
 
@@ -466,12 +469,13 @@ async def _store_node_metrics(session_factory, settings: Settings, samples, name
         return
     for sid, over, pct in disk_alerts:
         name = names.get(sid, str(sid))
-        text = (
-            f"💾 На сервере «{name}» мало места: диск занят на {pct}%"
+        card = (
+            alerts.Card("warn", "💾", f"Мало места: диск занят на {pct}%", subject=name)
             if over
-            else f"✅ На сервере «{name}» с местом снова ок ({pct}%)"
+            else alerts.Card("ok", "💾", "Место на диске снова есть", f"занято {pct}%",
+                             subject=name)
         )
-        await alerts.send_alert(cfg, text)
+        await alerts.send_card(cfg, settings, card)
 
 
 async def _prune(session_factory, settings: Settings) -> None:

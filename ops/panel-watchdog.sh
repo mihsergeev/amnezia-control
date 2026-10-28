@@ -51,23 +51,32 @@ send(){
     --data "{\"text\": \"$(printf '%s' "$msg" | sed 's/\\/\\\\/g; s/"/\\"/g')\"}" "$hook" >/dev/null 2>&1
 }
 
+# проблема карточкой, как алерты панели: уровень, заголовок, подробность
 problem=""
 if [ ! -f "$HB" ]; then
-  problem="файл пульса отсутствует — панель не пишет heartbeat (не запущена?)"
+  problem="🔴|Панель не пишет пульс|файла heartbeat нет, похоже, панель не запущена"
 else
   ts=$(val ts); ok=$(val alerts_ok); age=$(( NOW - ${ts:-0} ))
   if [ "${ts:-0}" -eq 0 ] || [ "$age" -gt "$MAX_AGE" ]; then
-    problem="панель молчит ${age}с (>${MAX_AGE}с) — контейнер/БД мертвы или зависли"
+    problem="🔴|Панель молчит $(( age / 60 )) мин|контейнер или база упали либо зависли"
   elif [ "$ok" = "0" ]; then
-    problem="панель жива, но канал алертов сломан (Telegram недоступен/токен невалиден)"
+    problem="⚠️|Канал алертов сломан|панель жива, но Telegram не отвечает или токен неверный"
   fi
 fi
 
-# какая именно панель (из пульса) — чтобы в алерте была видна КОНКРЕТНАЯ панель
-# со ссылкой (когда в один чат шлют 2-3 панели — сразу понятно, чья тревога)
+# какая именно панель (из пульса): в один чат пишут несколько панелей, первая
+# строка алерта - домен панели, ссылка - последней строкой
 panel=$(val panel)
-[ -z "$panel" ] && panel="$(hostname)"
-tag="🚑 Amnezia Control watchdog [$panel]"
+host=${panel#*://}; host=${host%%/*}
+[ -z "$host" ] && host="$(hostname)"
+
+card(){  # card "уровень|заголовок|подробность"
+  local level title detail
+  IFS='|' read -r level title detail <<< "$1"
+  printf '%s🚑 %s\n%s' "$level" "$host" "$title"
+  [ -n "$detail" ] && printf '\n%s' "$detail"
+  [ -n "$panel" ] && printf '\n%s' "$panel"
+}
 
 # Дебаунс: тревогу шлём лишь после STRIKES проверок ПОДРЯД с проблемой — чтобы
 # кратковременные события (рестарт панели при деплое, разовый блип канала) не
@@ -78,13 +87,13 @@ strikes=$(sed -n 2p "$STATE" 2>/dev/null); case "$strikes" in ''|*[!0-9]*) strik
 if [ -n "$problem" ]; then
   strikes=$((strikes + 1))
   if [ "$alerted" != "problem" ] && [ "$strikes" -ge "$STRIKES" ]; then
-    send "$tag: $problem"
+    send "$(card "$problem")"
     alerted=problem
   fi
 else
   strikes=0
   if [ "$alerted" = "problem" ]; then
-    send "✅ Amnezia Control watchdog [$panel]: панель снова в норме."
+    send "$(card "✅|Панель снова в норме|")"
     alerted=ok
   fi
 fi
