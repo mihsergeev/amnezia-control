@@ -44,7 +44,7 @@
 
 /* тени только в светлой теме — в тёмной глубину даёт сам фон */
 :root[data-theme='light'] .card,
-:root[data-theme='light'] .server-card,
+:root[data-theme='light'] .srv-side,
 :root[data-theme='light'] .stat-card {
   box-shadow: var(--shadow-card);
 }

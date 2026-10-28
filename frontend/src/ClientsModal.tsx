@@ -35,6 +35,8 @@ type Props = {
   onRequestUpgrade31?: () => void
   onRequestAdopt?: () => void
   onProtocolRemoved: () => void
+  // вкладка, открытая сразу; без нее - первая (самый новый протокол)
+  initialProtocol?: Protocol['key']
 }
 
 type SortKey = 'name' | 'handshake' | 'traffic'
@@ -50,11 +52,14 @@ export function ClientsModal({
   onRequestUpgrade31,
   onRequestAdopt,
   onProtocolRemoved,
+  initialProtocol,
 }: Props) {
   const { t } = useI18n()
   const dismiss = useModalDismiss(onClose)
   const [proto, setProto] = useState<Protocol['key']>(
-    protocols[0]?.key ?? 'awg',
+    initialProtocol && protocols.some((p) => p.key === initialProtocol)
+      ? initialProtocol
+      : (protocols[0]?.key ?? 'awg'),
   )
   // 'awglegacy' — старый AmneziaWG (wg0) рядом с новым; путь /awg-legacy
   // 'awg3' — AmneziaWG 3.0, отдельный контейнер и свой путь /awg3

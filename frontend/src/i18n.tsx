@@ -254,6 +254,22 @@ const EN: Record<string, string> = {
   'Диск /': 'Disk /',
   'Диск': 'Disk',
   'Аптайм': 'Uptime',
+  // --- страница серверов: список и выбранный сервер ---
+  'Имя, IP, заметка, протокол': 'Name, IP, note, protocol',
+  'Все': 'All',
+  'Проблемы': 'Problems',
+  'онлайн / всего клиентов': 'online / total clients',
+  '{n} онлайн': '{n} online',
+  'проблем: {n}': 'problems: {n}',
+  'Клиенты онлайн': 'Clients online',
+  'аптайм {t}': 'uptime {t}',
+  'загрузка {l} на {n} ядер': 'load {l} on {n} cores',
+  'Протоколы': 'Protocols',
+  'Протоколы появятся после успешной проверки сервера.':
+    'Protocols appear after a successful server check.',
+  'Docker на сервере недоступен.': 'Docker is not available on the server.',
+  'Протоколов нет. Развернуть можно в меню «Ещё».':
+    'No protocols yet. Deploy one from the "More" menu.',
 
   // --- 2FA ---
   'Двухфакторная аутентификация': 'Two-factor authentication',
