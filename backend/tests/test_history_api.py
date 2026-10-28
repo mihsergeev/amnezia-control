@@ -174,3 +174,26 @@ async def test_history_by_server_breakdown(app_with_samples) -> None:
     split = await _get(app, f"/api/stats/history?from_ms={frm}&to_ms={to}&by_server=true")
     got = {x["name"]: x["clients_online"] for x in split["servers"]}
     assert got == {"kz-a": [4], "de-b": [6]}
+
+
+async def test_overview_hides_cascade_exits(app_with_samples) -> None:
+    # выход каскада - часть своего входа: в обзоре серверов два, а не три
+    from app.models import Cascade, Server
+
+    app = app_with_samples
+    async with app.state.session_factory() as s:
+        for sid, name in ((1, "ru-a"), (2, "ru-b"), (3, "fi-exit")):
+            s.add(Server(id=sid, name=name, host=f"203.0.113.{sid}",
+                         ssh_port=22, ssh_user="acontrol"))
+        s.add(Cascade(entry_server_id=2, exit_server_id=3, transport="gre", status="ready"))
+        await s.commit()
+    now = datetime.now(timezone.utc)
+    await _seed(app, [(1, now, 10, 10, 3), (2, now, 10, 10, 1), (3, now, 10, 10, 0)])
+
+    body = await _get(app, "/api/stats/overview")
+    assert [s["name"] for s in body["per_server"]] == ["ru-a", "ru-b"]
+    assert body["servers_total"] == 2 and body["servers_online"] == 2
+    frm = int((now - timedelta(minutes=1)).timestamp() * 1000)
+    to = int((now + timedelta(minutes=1)).timestamp() * 1000)
+    hist = await _get(app, f"/api/stats/history?from_ms={frm}&to_ms={to}&by_server=true")
+    assert sorted(s["name"] for s in hist["servers"]) == ["ru-a", "ru-b"]

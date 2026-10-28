@@ -797,6 +797,10 @@ input:focus {
   line-height: 1.35;
 }
 
+.cas-exit-down {
+  color: #e74c3c;
+}
+
 .badge-amnezia {
   background: rgba(53, 99, 233, 0.16);
   color: #8aa5ff;

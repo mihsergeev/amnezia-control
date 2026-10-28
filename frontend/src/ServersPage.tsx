@@ -141,20 +141,23 @@ function EgressRoute({
   )
 }
 
-function StatusDot({ server }: { server: Server }) {
+// exitDown: выход каскада этого сервера не отвечает - зарубежное у клиентов не открывается
+function StatusDot({ server, exitDown = false }: { server: Server; exitDown?: boolean }) {
   const { t } = useI18n()
   const cls =
     server.last_check_ok === null
       ? 'dot-unknown'
-      : server.last_check_ok
+      : server.last_check_ok && !exitDown
         ? 'dot-ok'
         : 'dot-fail'
   const title =
     server.last_check_ok === null
       ? t('не проверялся')
-      : server.last_check_ok
-        ? t('онлайн')
-        : t('ошибка (см. лог)')
+      : !server.last_check_ok
+        ? t('ошибка (см. лог)')
+        : exitDown
+          ? t('выход каскада не отвечает')
+          : t('онлайн')
   return <span className={`dot ${cls}`} title={title} />
 }
 
@@ -245,10 +248,11 @@ function ServerDetail({
   const memPct = m ? pct(m.mem_used, m.mem_total) : 0
   const diskPct = m ? pct(m.disk_used, m.disk_total) : 0
   const loadPct = m && m.cpu_count > 0 ? Math.round((m.load1 / m.cpu_count) * 100) : 0
+  const exitDown = cascade?.entry_server_id === server.id && peer?.last_check_ok === false
   return (
     <div className={`card srv-detail${server.last_check_ok === false ? ' server-down' : ''}`}>
       <div className="srv-detail-head">
-        <StatusDot server={server} />
+        <StatusDot server={server} exitDown={exitDown} />
         <h3 className="srv-detail-name" title={server.name}>
           {server.name}
         </h3>
@@ -310,6 +314,14 @@ function ServerDetail({
       {cascade && cascade.status === 'ready' && cascade.entry_server_id === server.id && (
         <div className="muted small">
           {t('Российские сайты напрямую с этого сервера, остальное через выход.')}
+        </div>
+      )}
+      {exitDown && peer && (
+        <div className="small err-text cas-exit-down">
+          {t('Выход {host} не отвечает: {err}', {
+            host: peer.host,
+            err: parseCheckInfo(peer)?.error || t('нет связи'),
+          })}
         </div>
       )}
 
@@ -692,8 +704,12 @@ export function ServersPage({ onUnauthorized }: Props) {
   // серверы, сгруппированные по group_name; порядок карточек и групп — ручной
   // (position, drag-and-drop). Группа выводится по первому появлению в
   // отсортированном списке (= по минимальной позиции участника), пустая — в конце.
+  // выходы каскадов панели: своих клиентов нет, в списке они часть сервера-входа
+  const exitIds = useMemo(() => new Set(cascades.map((c) => c.exit_server_id)), [cascades])
+  const listed = useMemo(() => servers.filter((s) => !exitIds.has(s.id)), [servers, exitIds])
+
   const groupList = useMemo(() => {
-    const sorted = [...servers].sort(
+    const sorted = [...listed].sort(
       (a, b) => a.position - b.position || a.id - b.id,
     )
     const map = new Map<string, Server[]>()
@@ -706,7 +722,7 @@ export function ServersPage({ onUnauthorized }: Props) {
     const names = [...map.keys()].filter((n) => n !== '')
     if (map.has('')) names.push('')
     return names.map((name) => ({ name, servers: map.get(name)! }))
-  }, [servers])
+  }, [listed])
 
   // --- drag-and-drop: перетаскивание карточек и групп ---
   const dragServer = useRef<number | null>(null)
@@ -716,7 +732,8 @@ export function ServersPage({ onUnauthorized }: Props) {
   const applyOrder = useCallback(
     (flat: Server[]) => {
       const next = flat.map((s, i) => ({ ...s, position: i }))
-      setServers(next) // оптимистично
+      // оптимистично; выходы каскадов в списке не участвуют, но нужны карточкам
+      setServers((prev) => [...next, ...prev.filter((s) => !next.some((n) => n.id === s.id))])
       void reorderServers(
         next.map((s) => ({ id: s.id, group_name: s.group_name })),
       ).catch(() => {
@@ -807,6 +824,19 @@ export function ServersPage({ onUnauthorized }: Props) {
 
   function cascadeOf(s: Server): Cascade | undefined {
     return cascades.find((c) => c.entry_server_id === s.id || c.exit_server_id === s.id)
+  }
+
+  function exitDown(s: Server): boolean {
+    const c = cascades.find((x) => x.entry_server_id === s.id)
+    return !!c && servers.find((x) => x.id === c.exit_server_id)?.last_check_ok === false
+  }
+
+  // проблема сервера с учетом выхода его каскада: выход в списке не виден
+  function problem(s: Server): boolean {
+    if (isProblem(s, metrics[s.id])) return true
+    const c = cascades.find((x) => x.entry_server_id === s.id)
+    const exit = c && servers.find((x) => x.id === c.exit_server_id)
+    return !!exit && isProblem(exit, metrics[exit.id])
   }
 
   function cascadePeer(s: Server, c: Cascade | undefined): Server | undefined {
@@ -942,24 +972,26 @@ export function ServersPage({ onUnauthorized }: Props) {
         .map((g) => ({
           ...g,
           servers: g.servers.filter((s) => {
-            if (onlyProblems && !isProblem(s, metrics[s.id])) return false
+            if (onlyProblems && !problem(s)) return false
             if (!q) return true
             const info = parseCheckInfo(s)
             const labels = protocolsFromContainers(
               info?.amnezia_containers ?? [],
               info?.protocols ?? {},
             ).map((p) => p.label)
-            return [s.name, s.host, s.note, s.group_name, ...labels]
+            // по имени и адресу выхода находится его вход
+            const exit = cascadePeer(s, cascades.find((c) => c.entry_server_id === s.id))
+            return [s.name, s.host, s.note, s.group_name, ...labels, exit?.name, exit?.host]
               .join(' ')
               .toLowerCase()
               .includes(q)
           }),
         }))
         .filter((g) => g.servers.length > 0),
-    [groupList, metrics, onlyProblems, q],
+    [groupList, metrics, onlyProblems, q, cascades, servers],
   )
   const visibleFlat = visibleGroups.flatMap((g) => g.servers)
-  const problemCount = servers.filter((s) => isProblem(s, metrics[s.id])).length
+  const problemCount = listed.filter(problem).length
   const selected =
     visibleFlat.find((s) => s.id === selectedId) ?? visibleFlat[0] ?? null
 
@@ -980,7 +1012,7 @@ export function ServersPage({ onUnauthorized }: Props) {
 
   function groupSummary(list: Server[]) {
     const online = list.reduce((a, s) => a + (stats[s.id]?.clients_online ?? 0), 0)
-    const bad = list.filter((s) => isProblem(s, metrics[s.id])).length
+    const bad = list.filter(problem).length
     return (
       <span className="group-sum">
         {t('{n} онлайн', { n: online })}
@@ -1034,7 +1066,7 @@ export function ServersPage({ onUnauthorized }: Props) {
                   className={`srv-fchip${!onlyProblems ? ' on' : ''}`}
                   onClick={() => setOnlyProblems(false)}
                 >
-                  {t('Все')} <b>{servers.length}</b>
+                  {t('Все')} <b>{listed.length}</b>
                 </button>
                 <button
                   className={`srv-fchip${onlyProblems ? ' on bad' : ''}`}
@@ -1141,7 +1173,7 @@ export function ServersPage({ onUnauthorized }: Props) {
                                 ⠿
                               </span>
                             )}
-                            <StatusDot server={s} />
+                            <StatusDot server={s} exitDown={exitDown(s)} />
                             {countryFlag(s.country) && (
                               <span className="server-flag" title={s.country}>
                                 {countryFlag(s.country)}
@@ -1168,9 +1200,6 @@ export function ServersPage({ onUnauthorized }: Props) {
                             })()}
                             <span className="srv-item-name">{s.name}</span>
                             <GreBadge server={s} />
-                            {cascadeOf(s)?.exit_server_id === s.id && (
-                              <span className="role-badge">{t('выход')}</span>
-                            )}
                             {st?.online && (
                               <span className="srv-item-cl" title={t('онлайн / всего клиентов')}>
                                 <b>{st.clients_online}</b>/{st.clients_total}
