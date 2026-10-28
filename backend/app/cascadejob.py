@@ -113,7 +113,9 @@ async def _run(cid: int, factory, settings) -> None:
             state, tail = "error", f"DEPLOY_ERROR: SSH: {exc or type(exc).__name__}"
         if state != "done":
             msg = f"{PHASE_LABEL[phase]} «{server.name}»: {_error_line(tail)}"
-            await _finish(factory, cid, "error", msg, _joined(logs) + "\n" + tail, {})
+            # хвост этой стороны кладем на ее место (при сбое SSH его там еще нет)
+            logs[phase] = (server.name, tail)
+            await _finish(factory, cid, "error", msg, _joined(logs), {"failed_phase": phase})
             await alerts.maybe_alert(
                 factory, settings,
                 f"❌ Amnezia Control: каскад «{entry.name}» -> «{exit_.name}» не собрался: {msg}",
@@ -151,7 +153,7 @@ async def _finish(factory, cid: int, status: str, error: str, text: str, result:
                 c.result = json.dumps(result)
             await session.commit()
     # последний лог оставляем: мастер покажет его на шаге «Готово» или при ошибке
-    _progress[cid] = {"phase": "", "log": text}
+    _progress[cid] = {"phase": result.get("failed_phase", ""), "log": text}
 
 
 def spawn(app, cascade_id: int) -> None:

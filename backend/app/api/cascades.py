@@ -9,6 +9,7 @@ from fastapi import APIRouter, HTTPException, Request, status
 from sqlalchemy import select
 
 from app import audit, cascade, cascadejob, deploy, geo, nodelock, server_ops
+from app.config import get_settings
 from app.deps import CurrentUser, SessionDep
 from app.models import Cascade, Server
 from app.schemas import (
@@ -48,7 +49,10 @@ async def _ipv4(host: str) -> str:
 
 def _out(c: Cascade) -> CascadeOut:
     params = json.loads(c.params or "{}")
+    result = json.loads(c.result or "{}")
     prog = cascadejob.progress(c.id)
+    # на какой стороне упала установка - и после рестарта панели, когда хода в памяти нет
+    phase = prog.get("phase", "") or (result.get("failed_phase", "") if c.status == "error" else "")
     return CascadeOut(
         id=c.id,
         entry_server_id=c.entry_server_id,
@@ -56,12 +60,12 @@ def _out(c: Cascade) -> CascadeOut:
         transport=c.transport,
         status=c.status,
         error=c.error,
-        phase=prog.get("phase", ""),
+        phase=phase,
         log=prog.get("log", ""),
         entry_ip=params.get("entry_ip", ""),
         exit_ip=params.get("exit_ip", ""),
         probe=json.loads(c.probe or "{}"),
-        result=json.loads(c.result or "{}"),
+        result=result,
         created_at=c.created_at,
     )
 
@@ -291,3 +295,13 @@ async def delete(
         session, user.username, "cascade_delete", name,
         "без разборки на сервере" if errors else "",
     )
+    # туннеля больше нет: перечитываем ноды, чтобы бейдж GRE и маршрут не висели
+    # до следующей проверки
+    if not errors:
+        for server in (entry, exit_):
+            if server is None:
+                continue
+            try:
+                await server_ops.run_check(session, server, get_settings())
+            except Exception:  # noqa: BLE001 — каскад уже разобран
+                pass

@@ -4,6 +4,26 @@ All notable changes to Amnezia Control are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.66.1] - 2026-10-28
+
+### Fixed
+- **Cascade wizard after more test runs.**
+  - A failed install marked the wrong step: the exit got the cross even when
+    the entry failed, and the log tail was shown twice. The failed side is
+    now stored with the cascade, so it is right after a panel restart too;
+    an install cut short by a restart marks no step.
+  - One failed status request (for example while the panel restarts) stopped
+    the install window from updating. It now keeps asking and clears the
+    error once the panel answers.
+  - After **Remove the cascade** the GRE badge and the route stayed until
+    the next server check. Both servers are now checked right away.
+  - The wizard hid every server whose exit address differs from its own,
+    which is also true behind NAT or with several addresses. Only servers
+    with a GRE tunnel or clients exiting in another country count as being
+    in a cascade now.
+  - A server added from the wizard is named by its address, and the route
+    showed that address twice; the second line now says entry or exit.
+
 ## [0.66.0] - 2026-10-28
 
 ### Added

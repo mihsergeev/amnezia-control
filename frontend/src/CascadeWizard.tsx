@@ -57,7 +57,9 @@ function probeText(t: ReturnType<typeof useI18n>['t'], p: ProbeSide): string {
 function installTasks(c: Cascade) {
   const gre = c.transport === 'gre'
   const order = ['exit', 'entry']
-  const at = c.status === 'ready' ? 2 : Math.max(0, order.indexOf(c.phase))
+  // ошибка без стороны (установку прервал рестарт панели) - крестик ставить некуда
+  const at =
+    c.status === 'ready' ? 2 : c.phase ? order.indexOf(c.phase) : c.status === 'error' ? -1 : 0
   const failed = c.status === 'error'
   const state = (i: number) =>
     i < at ? 'ok' : i === at ? (failed ? 'bad' : c.status === 'ready' ? 'ok' : 'run') : 'wait'
@@ -108,6 +110,7 @@ export function CascadeWizard({
   const [cascade, setCascade] = useState<Cascade | null>(resume ?? null)
   const [extra, setExtra] = useState<Server[]>([])
   const timer = useRef<number | undefined>(undefined)
+  const [pollTick, setPollTick] = useState(0)
 
   const all = [...servers, ...extra.filter((x) => !servers.some((s) => s.id === x.id))]
   const byId = (id: number | null) => all.find((s) => s.id === id) ?? null
@@ -128,6 +131,7 @@ export function CascadeWizard({
     timer.current = window.setTimeout(async () => {
       try {
         const c = await getCascade(cascade.id)
+        setError(null)
         setCascade(c)
         if (c.status === 'ready') {
           setStep('done')
@@ -137,10 +141,12 @@ export function CascadeWizard({
         }
       } catch (err) {
         handleError(err)
+        // панель перезапускают или моргнула сеть - спрашиваем дальше, а не замолкаем
+        setPollTick((n) => n + 1)
       }
     }, 3000)
     return () => window.clearTimeout(timer.current)
-  }, [cascade, handleError, onChanged])
+  }, [cascade, pollTick, handleError, onChanged])
 
   const candidates = (exclude: number | null) =>
     all.filter((s) => s.id !== exclude && s.last_check_ok === true && !inCascade(s, cascades))
@@ -302,6 +308,10 @@ export function CascadeWizard({
     )
   }
 
+  // у сервера, добавленного из мастера, имя = адрес: второй раз адрес не пишем
+  const named = (s: Server | null, role: string) =>
+    s && s.name !== s.host ? s.name : t(role)
+
   function route(withClients: boolean) {
     const gre = (cascade?.transport ?? transport) === 'gre'
     const exitIp = cascade?.result.egress || probe?.exit_ip || cascade?.exit_ip || exit?.host || ''
@@ -313,7 +323,7 @@ export function CascadeWizard({
             <span className="srv-route-arrow">→</span>
           </>
         )}
-        {hop(entry, cascade?.entry_ip || probe?.entry_ip || '', entry?.name ?? t('вход'))}
+        {hop(entry, cascade?.entry_ip || probe?.entry_ip || '', named(entry, 'вход'))}
         <span className="srv-route-arrow">
           {(step === 'done' || step === 'install') && (
             <span className="tun-badge">{gre ? 'GRE' : 'VLESS'}</span>
@@ -323,7 +333,7 @@ export function CascadeWizard({
         {hop(
           exit,
           exitIp,
-          [exit?.name ?? t('выход'), probe?.exit_org].filter(Boolean).join(', '),
+          [named(exit, 'выход'), probe?.exit_org].filter(Boolean).join(', '),
           true,
           probe?.exit_country,
         )}
