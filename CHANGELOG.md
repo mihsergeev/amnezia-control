@@ -4,6 +4,14 @@ All notable changes to Amnezia Control are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.68.1] - 2026-10-28
+
+### Changed
+- Cascade alerts have no topic icon: the level icon and the entry server name
+  are enough.
+- README: what sets the panel apart, the cascade wizard and Telegram alerts
+  with new screenshots.
+
 ## [0.68.0] - 2026-10-28
 
 ### Changed

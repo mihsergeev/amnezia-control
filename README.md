@@ -34,10 +34,21 @@ The [AmneziaVPN desktop client](https://amnezia.org) is great for personal use �
 | Auto-expiring access | ❌ | ✅ |
 | Pause & resume a client (keep the slot) | ❌ | ✅ |
 | Traffic & node-health monitoring | ❌ | ✅ |
-| Telegram & webhook alerts | ❌ | ✅ |
+| Two-server cascade: Russian sites direct, the rest via the exit | ❌ | ✅ |
+| Link test that spots stalled TCP and offers a GRE tunnel | ❌ | ✅ |
+| Telegram & webhook alerts (server, cascade, clients gone, disk) | ❌ | ✅ |
 | Config snapshots & one-click rollback | ❌ | ✅ |
 | Scheduled backups & restore | ❌ | ✅ |
 | Audit log & panel 2FA | ❌ | ✅ |
+
+**What sets it apart**
+
+- **Made for networks with DPI filtering.** The cascade wizard tests the link between two servers before building anything: when the provider stalls TCP to the exit's network, it says so and offers a GRE tunnel. Russian sites go straight from the entry by up-to-date geo databases, the rest leaves through the exit, and if the exit is down nothing leaks past it.
+- **One screen for the whole fleet.** Groups, search by name, address, note or protocol, a problems filter, node load and disk right in the server card. A cascade exit is part of its entry and does not clutter the list.
+- **Alerts you act on.** Short Telegram cards: what, where and why in three lines. Short blips are filtered out, one alert per outage and a message when it is over. Besides a dead server the panel catches what plain monitoring misses: a cascade that stopped passing traffic, clients disappearing from a node whose address is being blocked, a changed SSH host key.
+- **Nothing extra on the nodes.** The panel works over plain SSH, with no agent. What it installs (protocol containers, cascade services) is removed from the same menu.
+- **Safe to operate.** Config snapshots and rollback, scheduled backups with a self-test, an audit log, 2FA, and a password prompt for destructive actions.
+- **Integration API** with per-key server scopes for issuing and revoking clients from your own systems.
 
 > Independent open-source project — not affiliated with or endorsed by [AmneziaVPN](https://github.com/amnezia-vpn/amnezia-client).
 
@@ -52,7 +63,7 @@ The [AmneziaVPN desktop client](https://amnezia.org) is great for personal use �
 - **AmneziaWG 3.1** as a separate protocol next to 2.0 and legacy: own container, port and subnet, so both versions run on one node. The AmneziaVPN app labels these connections "version 3.1"
 - **In-place upgrade from 2.0 to 3.1** ("Upgrade to 3.1" on the 2.0 tab): same container, port, server key and subnet, with a snapshot taken first for rollback. 2.0 clients stop connecting afterwards and have to be reissued. Nodes installed back on 3.0 move to 3.1 with **Rebuild**
 - AmneziaWG 3.1 is built from source at pinned tags and installs on old Docker too (19.03 and early 20.10)
-- **Cascade of two servers** (**+ Cascade**): clients connect to the entry, Russian sites open from it directly, everything else leaves through the exit server's address. The wizard picks both servers (or adds new ones), tests the link between them and offers VLESS Reality or a bare GRE tunnel for providers that stall TCP to the exit's network. The panel then sets up both sides itself: a gateway with Russian geo databases on the entry, the tunnel and internet access on the exit, all as systemd services. If the exit goes down, clients' traffic does not leak past it. The card shows the route; **More** has a link check and **Remove the cascade**
+- **Cascade of two servers** (**+ Cascade**): clients connect to the entry, Russian sites open from it directly, everything else leaves through the exit server's address. The wizard picks both servers (or adds new ones), tests the link between them and offers VLESS Reality or a bare GRE tunnel for providers that stall TCP to the exit's network. The panel then sets up both sides itself: a gateway with Russian geo databases on the entry, the tunnel and internet access on the exit, all as systemd services. If the exit goes down, clients' traffic does not leak past it. The card shows the route; **More** has a link check and **Remove the cascade**. The exit server has no clients of its own, so the list shows the pair as one server: the entry
 - Update the server core in one click; live deploy log
 - Per-node resource monitoring: CPU load, RAM, disk, uptime — right on the card
 - Organize servers into collapsible **groups** (folders) — by company, location, etc.
@@ -70,7 +81,7 @@ The [AmneziaVPN desktop client](https://amnezia.org) is great for personal use �
 
 **Monitoring & alerts**
 - Overview dashboard: aggregate traffic and online-clients charts (24 h), per-server breakdown
-- **Server-down alerts** and **low-disk alerts** to Telegram and/or a webhook, configured from the UI
+- **Server-down alerts** and **low-disk alerts** to Telegram and/or a webhook, configured from the UI. Every alert is a short card: level, server, what happened, one line of detail
 - **"Clients gone" alert**: the node still answers, but far fewer clients are active than at the same time yesterday and a week ago. This is what it looks like when ISPs start blocking a node's address. One alert per drop, at most once a day per server, and no "clients are back" message
 - **"Cascade down" alert**: the panel checks every cascade from its entry every 2 minutes and alerts with the reason when traffic has not gone through the exit for 10 minutes, then says when it works again
 
@@ -90,6 +101,16 @@ The [AmneziaVPN desktop client](https://amnezia.org) is great for personal use �
 | Servers (dark) | Servers (light) |
 |---|---|
 | ![Servers](docs/screenshots/servers-dark.png) | ![Servers light](docs/screenshots/servers-light.png) |
+
+**Cascade wizard**: the link test finds that TCP to the exit stalls and recommends GRE; after the install the panel shows where clients exit:
+
+| Link test | Cascade ready |
+|---|---|
+| ![Cascade link test](docs/screenshots/cascade-link.png) | ![Cascade ready](docs/screenshots/cascade-done.png) |
+
+**Alerts in Telegram** (the texts are in Russian):
+
+<img src="docs/screenshots/telegram-alerts.png" alt="Alerts in Telegram" width="520" />
 
 | Clients | Server-down alerts | Two-factor auth |
 |---|---|---|
