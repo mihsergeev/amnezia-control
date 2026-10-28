@@ -51,16 +51,20 @@ send(){
     --data "{\"text\": \"$(printf '%s' "$msg" | sed 's/\\/\\\\/g; s/"/\\"/g')\"}" "$hook" >/dev/null 2>&1
 }
 
+# язык алертов из пульса (настройка алертов панели), без пульса - русский
+lang=$(val lang)
+say(){ if [ "$lang" = en ]; then printf '%s' "$2"; else printf '%s' "$1"; fi; }
+
 # проблема карточкой, как алерты панели: уровень, заголовок, подробность
 problem=""
 if [ ! -f "$HB" ]; then
-  problem="🔴|Панель не пишет пульс|файла heartbeat нет, похоже, панель не запущена"
+  problem="🔴|$(say 'Панель не пишет пульс' 'The panel writes no heartbeat')|$(say     'файла heartbeat нет, похоже, панель не запущена' 'no heartbeat file, the panel is probably not running')"
 else
   ts=$(val ts); ok=$(val alerts_ok); age=$(( NOW - ${ts:-0} ))
   if [ "${ts:-0}" -eq 0 ] || [ "$age" -gt "$MAX_AGE" ]; then
-    problem="🔴|Панель молчит $(( age / 60 )) мин|контейнер или база упали либо зависли"
+    problem="🔴|$(say "Панель молчит $(( age / 60 )) мин" "The panel is silent for $(( age / 60 )) min")|$(say       'контейнер или база упали либо зависли' 'the container or the database is down or stuck')"
   elif [ "$ok" = "0" ]; then
-    problem="⚠️|Канал алертов сломан|панель жива, но Telegram не отвечает или токен неверный"
+    problem="⚠️|$(say 'Канал алертов сломан' 'The alert channel is broken')|$(say       'панель жива, но Telegram не отвечает или токен неверный' 'the panel is up, but Telegram does not answer or the token is wrong')"
   fi
 fi
 
@@ -93,7 +97,7 @@ if [ -n "$problem" ]; then
 else
   strikes=0
   if [ "$alerted" = "problem" ]; then
-    send "$(card "✅|Панель снова в норме|")"
+    send "$(card "✅|$(say 'Панель снова в норме' 'The panel is fine again')|")"
     alerted=ok
   fi
 fi

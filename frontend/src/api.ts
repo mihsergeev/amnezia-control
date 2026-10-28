@@ -512,6 +512,8 @@ export type AlertConfig = {
   telegram_chat: string
   telegram_api: string
   webhook: string
+  // язык алертов; пусто - не выбирали (панель шлет по-русски)
+  lang: '' | 'ru' | 'en'
   enabled: boolean
 }
 
@@ -524,6 +526,7 @@ export function putAlerts(cfg: {
   telegram_chat: string
   telegram_api: string
   webhook: string
+  lang: 'ru' | 'en'
 }): Promise<AlertConfig> {
   return api<AlertConfig>('/api/alerts', {
     method: 'PUT',
