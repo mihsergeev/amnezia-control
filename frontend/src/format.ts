@@ -40,3 +40,10 @@ export function formatUptime(seconds: number): string {
   if (h > 0) return t('{h}ч {m}м', { h, m })
   return t('{m}м', { m })
 }
+
+// ISO-код страны -> эмодзи-флаг (KZ -> 🇰🇿) через regional indicator symbols
+export function countryFlag(code: string): string {
+  const cc = (code || '').toUpperCase()
+  if (!/^[A-Z]{2}$/.test(cc)) return ''
+  return String.fromCodePoint(...[...cc].map((c) => 0x1f1e6 + c.charCodeAt(0) - 65))
+}
