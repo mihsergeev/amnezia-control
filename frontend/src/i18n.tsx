@@ -716,6 +716,105 @@ const EN: Record<string, string> = {
   'не удалось сохранить ключ': 'failed to save the key',
   'ничего не отмечено = все серверы': 'nothing checked = all servers',
   'пусто = бессрочно': 'empty = no expiry',
+  // --- каскад ---
+  '+ Каскад': '+ Cascade',
+  '1. Вход': '1. Entry',
+  '2. Выход': '2. Exit',
+  '3. Связь': '3. Link',
+  '4. Установка': '4. Install',
+  'Новый каскад': 'New cascade',
+  'Уже в панели': 'Already in the panel',
+  'Вход - сервер, к которому подключаются клиенты. Обычно в России: российские сайты будут открываться с него напрямую, остальное пойдет через выход.':
+    'Entry is the server clients connect to. Usually in Russia: Russian sites open from it directly, everything else goes through the exit.',
+  'Выход - зарубежный сервер, с его адреса клиенты будут выходить в интернет. Клиентов на нем не будет, можно взять пустой.':
+    'Exit is a server abroad: clients reach the internet from its address. It has no clients of its own, an empty server will do.',
+  'Свободных серверов на связи нет, добавьте новый.':
+    'No free online servers, add a new one.',
+  'Серверы, которые уже входят в каскад или не на связи, в списке не показаны.':
+    'Servers already in a cascade or offline are not listed.',
+  'Выполните скрипт на сервере под root: он создаст пользователя панели и поставит ее ключ. Потом нажмите «Дальше».':
+    'Run the script on the server as root: it creates the panel user and installs the panel key. Then press "Next".',
+  'Порт SSH': 'SSH port',
+  'Скрипт': 'Script',
+  'Пользователь': 'User',
+  'Пароль нужен один раз: панель заходит по нему, ставит свой ключ и дальше работает по ключу.':
+    'The password is used once: the panel logs in with it, installs its key and uses the key from then on.',
+  'Панель добавит сервер и покажет скрипт, его надо выполнить на сервере под root.':
+    'The panel adds the server and shows a script to run on it as root.',
+  'Сервер пока не отвечает по ключу панели: скрипт выполнен под root ?':
+    'The server does not accept the panel key yet: was the script run as root?',
+  'Проверка канала: панель отправляет 20 мб со входа на выход':
+    'Link test: the panel sends 20 MB from the entry to the exit',
+  'Проверяю, это до минуты…': 'Testing, up to a minute…',
+  'Обычный TCP': 'Plain TCP',
+  '{size} за {secs} с, ~{mbps} Мбит/с': '{size} in {secs} s, ~{mbps} Mbit/s',
+  'замерзает на {size}': 'stalls at {size}',
+  'не проходит': 'does not pass',
+  'Так режут фильтры у провайдера входа: в сеть выхода по TCP уходит только несколько десятков килобайт.':
+    'This is how filters at the entry\'s provider behave: only a few dozen kilobytes of TCP get through to the exit\'s network.',
+  'Ни один способ не прошел. Проверьте фаервол у провайдера выхода, собрать можно и так, но работать скорее всего не будет.':
+    'Neither way passed. Check the firewall at the exit\'s provider. You can build anyway, but it will most likely not work.',
+  'рекомендуется': 'recommended',
+  'Шифрованный туннель, снаружи похож на обычный HTTPS. Подходит, когда TCP от входа к выходу проходит.':
+    'Encrypted tunnel that looks like plain HTTPS from outside. Works when TCP from the entry to the exit passes.',
+  'Голый туннель, такие фильтры его не трогают. Без шифрования: по дороге видны имена сайтов и незашифрованный трафик клиентов.':
+    'Bare tunnel that such filters leave alone. No encryption: site names and clients\' unencrypted traffic are visible on the way.',
+  'Собираю каскад': 'Building the cascade',
+  'Каскад не собрался': 'Cascade build failed',
+  'Выход: GRE-туннель и выпуск в интернет': 'Exit: GRE tunnel and internet access',
+  'Выход: сервер VLESS Reality': 'Exit: VLESS Reality server',
+  'маскарад, подрезка MSS, туннель принимается только от {ip}':
+    'masquerade, MSS clamping, the tunnel is accepted only from {ip}',
+  'порт открыт только для {ip}': 'the port is open only to {ip}',
+  'Вход: шлюз каскада': 'Entry: cascade gateway',
+  'российское напрямую, остальное на выход; если выход пропадет, трафик клиентов никуда не уйдет':
+    'Russian traffic goes direct, the rest to the exit; if the exit is gone, clients\' traffic goes nowhere',
+  'Окно можно закрыть, установка продолжится. Ход виден в карточке входа.':
+    'You can close the window, the install goes on. Progress is in the entry\'s card.',
+  'Каскад собран': 'Cascade is ready',
+  'Зарубежные сайты открываются с {ip}': 'Foreign sites open from {ip}',
+  'Российские сайты идут напрямую с {ip}': 'Russian sites go directly from {ip}',
+  'Канал вход -> выход: ~{mbps} Мбит/с': 'Entry -> exit link: ~{mbps} Mbit/s',
+  'Перезагрузку обоих серверов переживает: туннель и шлюз - службы systemd':
+    'Survives a reboot of both servers: the tunnel and the gateway are systemd services',
+  'Протоколов для клиентов на входе пока нет. Развернуть AmneziaWG или XRay можно в карточке сервера, меню «Ещё».':
+    'The entry has no client protocols yet. Deploy AmneziaWG or XRay from the server card, "More" menu.',
+  'Назад': 'Back',
+  'Проверить еще раз': 'Test again',
+  'Дальше': 'Next',
+  'Подключаюсь…': 'Connecting…',
+  'Собрать каскад': 'Build the cascade',
+  'Запустить еще раз': 'Run again',
+  'вход': 'entry',
+  'выход': 'exit',
+  'Выход каскада: сюда идет трафик клиентов с «{name}», своих клиентов тут нет.':
+    'Cascade exit: clients\' traffic from "{name}" comes out here, it has no clients of its own.',
+  'Каскад не собрался: {err}': 'Cascade build failed: {err}',
+  'Каскад собирается…': 'Cascade is being built…',
+  'Подробнее': 'Details',
+  'Российские сайты напрямую с этого сервера, остальное через выход.':
+    'Russian sites go directly from this server, the rest through the exit.',
+  'зарубежное через {ip}': 'foreign traffic via {ip}',
+  'через выход интернет не открывается': 'no internet through the exit',
+  'российское напрямую с {ip}': 'Russian traffic directly from {ip}',
+  'шлюз не запущен': 'gateway is not running',
+  'клиенты не заворачиваются в шлюз': 'clients are not routed into the gateway',
+  'GRE-туннеля нет': 'no GRE tunnel',
+  'Каскад: {parts}': 'Cascade: {parts}',
+  'Каскад разобран: клиенты входа снова выходят в интернет с него самого.':
+    'Cascade removed: entry clients reach the internet from the entry itself again.',
+  'Каскад: проверить канал': 'Cascade: test the link',
+  'Каскад: ход установки': 'Cascade: install progress',
+  'Разобрать каскад…': 'Remove the cascade…',
+  'Разобрать каскад?': 'Remove the cascade?',
+  'Панель уберет шлюз и туннель с обоих серверов. Клиенты входа останутся подключенными, но в интернет пойдут с адреса самого входа.':
+    'The panel removes the gateway and the tunnel from both servers. Entry clients stay connected but reach the internet from the entry\'s own address.',
+  'Убрать только из панели': 'Remove from the panel only',
+  'Разбираю…': 'Removing…',
+  'Разобрать': 'Remove',
+  'Каскад собран панелью': 'Cascade built',
+  'Каскад разобран': 'Cascade removed',
+  'Каскад: повторная установка': 'Cascade reinstalled',
 }
 
 type Ctx = {

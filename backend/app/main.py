@@ -16,6 +16,7 @@ from app.api import (
     awg3,
     awg_legacy,
     backup,
+    cascades,
     clients,
     fullaccess,
     health,
@@ -133,6 +134,7 @@ def create_app() -> FastAPI:
     app.include_router(alerts.router, prefix="/api")
     app.include_router(apikeys.router, prefix="/api")
     app.include_router(share.router, prefix="/api")
+    app.include_router(cascades.router, prefix="/api")
     app.include_router(v1.router, prefix="/api")
 
     if show_docs:

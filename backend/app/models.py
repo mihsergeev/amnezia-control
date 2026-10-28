@@ -322,3 +322,30 @@ class ApiKey(Base):
     def allows(self, server_id: int) -> bool:
         ids = self.server_ids
         return not ids or int(server_id) in ids
+
+
+class Cascade(Base):
+    """Каскад: клиенты подключаются ко входу, в интернет выходят с адреса выхода
+    (см. app/cascade.py). Сервер бывает только в одном каскаде."""
+
+    __tablename__ = "cascades"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    entry_server_id: Mapped[int] = mapped_column(Integer, unique=True)
+    exit_server_id: Mapped[int] = mapped_column(Integer, unique=True)
+    # vless | gre
+    transport: Mapped[str] = mapped_column(String(16))
+    # installing | ready | error
+    status: Mapped[str] = mapped_column(String(16), default="installing")
+    error: Mapped[str] = mapped_column(Text, default="")
+    # ключи VLESS, порт, адреса сторон на момент установки (JSON)
+    params: Mapped[str] = mapped_column(Text, default="{}")
+    # последняя проверка канала до установки и проверка через шлюз после (JSON)
+    probe: Mapped[str] = mapped_column(Text, default="{}")
+    result: Mapped[str] = mapped_column(Text, default="{}")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )

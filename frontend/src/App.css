@@ -2428,3 +2428,249 @@ button.srv-side-gh:hover .drag-handle {
 .share-service .mono {
   word-break: break-all;
 }
+
+/* ---------- мастер каскада ---------- */
+
+.ok-text {
+  color: #22c55e;
+}
+
+:root[data-theme='light'] .ok-text {
+  color: #15803d;
+}
+
+.cas-modal {
+  width: min(640px, 94vw);
+}
+
+.cas-steps {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+}
+
+.cas-steps span {
+  padding: 0.2rem 0.6rem;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--text-muted);
+  font-size: 0.8rem;
+}
+
+.cas-steps span.on {
+  border-color: #3563e9;
+  color: var(--text);
+}
+
+.cas-steps span.done {
+  border-color: #22c55e66;
+  color: #22c55e;
+}
+
+.cas-lead {
+  margin: 0;
+  line-height: 1.45;
+}
+
+.cas-pick {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  max-height: 46vh;
+  overflow-y: auto;
+}
+
+.cas-pick label,
+.cas-opts label {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.5rem 0.7rem;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  cursor: pointer;
+}
+
+.cas-pick label.on,
+.cas-opts label.on {
+  border-color: #3563e9;
+  background: #3563e912;
+}
+
+.cas-pick label,
+.cas-opts label {
+  flex-direction: row;
+  color: var(--text);
+  font-size: 0.92rem;
+}
+
+.cas-pick input,
+.cas-opts input {
+  width: auto;
+  margin: 0;
+  flex: none;
+  accent-color: #3563e9;
+}
+
+.cas-pick-name {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.cas-row2 {
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) minmax(0, 1fr);
+  gap: 0.6rem;
+}
+
+.cas-row2 label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  font-size: 0.85rem;
+  color: var(--text-muted);
+}
+
+.cas-script {
+  max-height: 30vh;
+}
+
+.cas-probe {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  padding: 0.6rem 0.8rem;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+
+.cas-probe-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  font-size: 0.9rem;
+}
+
+.cas-probe-row .err-text {
+  text-align: right;
+}
+
+.cas-opts {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+}
+
+.cas-opts label {
+  align-items: flex-start;
+}
+
+.cas-opts input {
+  margin-top: 0.2rem;
+}
+
+.cas-opts p {
+  margin: 0.2rem 0 0;
+  line-height: 1.4;
+}
+
+.cas-rec {
+  margin-left: 0.5rem;
+  padding: 0.05rem 0.45rem;
+  border-radius: 6px;
+  background: #22c55e1f;
+  color: #22c55e;
+  font-size: 0.72rem;
+  font-weight: 600;
+}
+
+.cas-tasks,
+.cas-checks {
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+}
+
+.cas-task {
+  display: flex;
+  gap: 0.6rem;
+  line-height: 1.35;
+}
+
+.cas-ic {
+  flex: none;
+  width: 1.2rem;
+  text-align: center;
+  color: var(--text-muted);
+}
+
+.cas-ic-ok {
+  color: #22c55e;
+}
+
+.cas-ic-bad {
+  color: #e74c3c;
+}
+
+.cas-ic-run {
+  color: #3563e9;
+  animation: cas-pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes cas-pulse {
+  50% {
+    opacity: 0.35;
+  }
+}
+
+.cas-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+  margin-top: 0.3rem;
+}
+
+.cas-actions-r {
+  display: flex;
+  gap: 0.6rem;
+  margin-left: auto;
+}
+
+/* роль сервера в каскаде в списке: выход */
+.role-badge {
+  display: inline-block;
+  padding: 0.05rem 0.4rem;
+  border: 1px solid #3b82f666;
+  border-radius: 6px;
+  background: #3b82f61a;
+  color: #60a5fa;
+  font-size: 0.7rem;
+  font-weight: 600;
+  line-height: 1.4;
+  white-space: nowrap;
+}
+
+:root[data-theme='light'] .role-badge {
+  color: #1d4ed8;
+}
+
+.link-btn {
+  padding: 0;
+  border: none;
+  background: none;
+  color: #3563e9;
+  font: inherit;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.link-btn:hover {
+  background: none;
+}
+
+@media (max-width: 560px) {
+  .cas-row2 {
+    grid-template-columns: 1fr;
+  }
+}

@@ -10,9 +10,13 @@ import {
 import {
   api,
   ApiError,
+  checkCascade,
+  deleteCascade,
+  listCascades,
   parseCheckInfo,
   protocolsFromContainers,
   reorderServers,
+  type Cascade,
   type NodeMetric,
   type Overview,
   type PanelConfig,
@@ -27,7 +31,8 @@ import { DeployModal } from './DeployModal'
 import { Menu, type MenuItem } from './Menu'
 import { ServerExportModal, ServerImportModal } from './ServerTransfer'
 import { copyText } from './clipboard'
-import { formatBytes, formatUptime } from './format'
+import { countryFlag, formatBytes, formatUptime } from './format'
+import { CascadeWizard } from './CascadeWizard'
 import { useI18n } from './i18n'
 
 const FALLBACK_USER = 'acontrol'
@@ -67,15 +72,6 @@ function isAwg30Node(info: ReturnType<typeof parseCheckInfo>): boolean {
   )
 }
 
-// ISO-код страны → эмодзи-флаг (KZ → 🇰🇿) через regional indicator symbols
-function countryFlag(code: string): string {
-  const cc = (code || '').toUpperCase()
-  if (!/^[A-Z]{2}$/.test(cc)) return ''
-  return String.fromCodePoint(
-    ...[...cc].map((c) => 0x1f1e6 + c.charCodeAt(0) - 65),
-  )
-}
-
 function greTunnels(server: Server) {
   return (parseCheckInfo(server)?.tunnels ?? []).filter((x) => x.kind === 'gre')
 }
@@ -92,10 +88,22 @@ function GreBadge({ server, withRemote }: { server: Server; withRemote?: boolean
   )
 }
 
-// путь трафика клиентов, когда нода - вход каскада: выход в интернет с другого адреса
-function EgressRoute({ server }: { server: Server }) {
+// путь трафика клиентов, когда нода - вход каскада: выход в интернет с другого адреса.
+// cascade - каскад, собранный панелью: выход известен и до первой проверки адреса
+function EgressRoute({
+  server,
+  cascade,
+  exitServer,
+}: {
+  server: Server
+  cascade?: Cascade
+  exitServer?: Server
+}) {
   const { t } = useI18n()
-  const viaGre = greTunnels(server).length > 0
+  const viaGre = !cascade && greTunnels(server).length > 0
+  const exitIp = server.egress_ip || cascade?.result.egress || cascade?.exit_ip || ''
+  const exitCountry = server.egress_country || exitServer?.country || ''
+  const exitSub = [exitServer?.name, server.egress_org].filter(Boolean).join(', ')
   return (
     <div className="srv-route">
       <span className="srv-route-label">{t('Клиенты')}</span>
@@ -110,17 +118,21 @@ function EgressRoute({ server }: { server: Server }) {
         </div>
       </div>
       <span className="srv-route-arrow">
-        {viaGre && <GreBadge server={server} />}→
+        {viaGre && <GreBadge server={server} />}
+        {cascade && (
+          <span className="tun-badge">{cascade.transport === 'gre' ? 'GRE' : 'VLESS'}</span>
+        )}
+        →
       </span>
       <div className="srv-hop srv-hop-exit">
-        {countryFlag(server.egress_country) && (
-          <span className="server-flag">{countryFlag(server.egress_country)}</span>
+        {countryFlag(exitCountry) && (
+          <span className="server-flag">{countryFlag(exitCountry)}</span>
         )}
         <div>
-          <div className="mono">{server.egress_ip}</div>
+          <div className="mono">{exitIp}</div>
           <div className="muted small">
-            {server.egress_org
-              ? t('выход в интернет, {org}', { org: server.egress_org })
+            {exitSub
+              ? t('выход в интернет, {org}', { org: exitSub })
               : t('выход в интернет')}
           </div>
         </div>
@@ -207,6 +219,9 @@ function ServerDetail({
   menu,
   onCheck,
   onClients,
+  cascade,
+  peer,
+  onCascade,
 }: {
   server: Server
   metric: NodeMetric | undefined
@@ -215,6 +230,10 @@ function ServerDetail({
   menu: MenuItem[]
   onCheck: () => void
   onClients: (proto?: Protocol['key']) => void
+  // каскад панели с этим сервером и второй его сервер
+  cascade?: Cascade
+  peer?: Server
+  onCascade: (c: Cascade) => void
 }) {
   const { t } = useI18n()
   const info = parseCheckInfo(server)
@@ -262,14 +281,36 @@ function ServerDetail({
         )}
       </div>
 
-      {server.egress_ip ? (
-        <EgressRoute server={server} />
+      {cascade && cascade.exit_server_id === server.id ? (
+        <div className="muted small">
+          {t('Выход каскада: сюда идет трафик клиентов с «{name}», своих клиентов тут нет.', {
+            name: peer?.name ?? '?',
+          })}
+        </div>
+      ) : server.egress_ip || cascade ? (
+        <EgressRoute server={server} cascade={cascade} exitServer={peer} />
       ) : (
         greTunnels(server).length > 0 && (
           <div>
             <GreBadge server={server} withRemote />
           </div>
         )
+      )}
+
+      {cascade && cascade.status !== 'ready' && (
+        <div className={`small ${cascade.status === 'error' ? 'err-text' : 'muted'}`}>
+          {cascade.status === 'error'
+            ? t('Каскад не собрался: {err}', { err: cascade.error })
+            : t('Каскад собирается…')}{' '}
+          <button className="link-btn" onClick={() => onCascade(cascade)}>
+            {t('Подробнее')}
+          </button>
+        </div>
+      )}
+      {cascade && cascade.status === 'ready' && cascade.entry_server_id === server.id && (
+        <div className="muted small">
+          {t('Российские сайты напрямую с этого сервера, остальное через выход.')}
+        </div>
       )}
 
       {server.note && <div className="srv-detail-note">{server.note}</div>}
@@ -413,6 +454,12 @@ export function ServersPage({ onUnauthorized }: Props) {
   const [deleting, setDeleting] = useState(false)
   const [scriptText, setScriptText] = useState('')
   const [copied, setCopied] = useState(false)
+  const [cascades, setCascades] = useState<Cascade[]>([])
+  // мастер каскада: новый (resume нет) или ход установки уже созданного
+  const [wizard, setWizard] = useState<{ resume?: Cascade } | null>(null)
+  const [unbuild, setUnbuild] = useState<{ c: Cascade; error?: string } | null>(null)
+  const [unbuilding, setUnbuilding] = useState(false)
+  const [casChecking, setCasChecking] = useState<number | null>(null)
 
   // Escape закрывает открытую инлайновую модалку страницы (компонентные —
   // ClientsModal/DeployModal и т.п. — обрабатывают Escape сами)
@@ -423,11 +470,12 @@ export function ServersPage({ onUnauthorized }: Props) {
       else if (fullAccess) setFullAccess(null)
       else if (scriptFor) setScriptFor(null)
       else if (deleteFor) setDeleteFor(null)
+      else if (unbuild) setUnbuild(null)
       else if (formOpen) setFormOpen(false)
     }
     document.addEventListener('keydown', onKey)
     return () => document.removeEventListener('keydown', onKey)
-  }, [faStepUp, fullAccess, scriptFor, deleteFor, formOpen])
+  }, [faStepUp, fullAccess, scriptFor, deleteFor, unbuild, formOpen])
 
   const handleError = useCallback(
     (err: unknown) => {
@@ -449,6 +497,9 @@ export function ServersPage({ onUnauthorized }: Props) {
         .then((rows) =>
           setMetrics(Object.fromEntries(rows.map((r) => [r.server_id, r]))),
         )
+        .catch(() => {})
+      listCascades()
+        .then(setCascades)
         .catch(() => {})
       api<Overview>('/api/stats/overview')
         .then((o) => setStats(Object.fromEntries(o.per_server.map((r) => [r.id, r]))))
@@ -754,6 +805,58 @@ export function ServersPage({ onUnauthorized }: Props) {
     [servers],
   )
 
+  function cascadeOf(s: Server): Cascade | undefined {
+    return cascades.find((c) => c.entry_server_id === s.id || c.exit_server_id === s.id)
+  }
+
+  function cascadePeer(s: Server, c: Cascade | undefined): Server | undefined {
+    if (!c) return undefined
+    const id = c.entry_server_id === s.id ? c.exit_server_id : c.entry_server_id
+    return servers.find((x) => x.id === id)
+  }
+
+  async function checkCas(c: Cascade) {
+    setCasChecking(c.id)
+    setNotice(null)
+    setError(null)
+    try {
+      const r = await checkCascade(c.id)
+      const parts = [
+        r.egress
+          ? t('зарубежное через {ip}', { ip: r.egress })
+          : t('через выход интернет не открывается'),
+        r.ru ? t('российское напрямую с {ip}', { ip: r.ru }) : '',
+        !r.gateway ? t('шлюз не запущен') : '',
+        !r.tproxy ? t('клиенты не заворачиваются в шлюз') : '',
+        c.transport === 'gre' && !r.tunnel ? t('GRE-туннеля нет') : '',
+      ].filter(Boolean)
+      const msg = t('Каскад: {parts}', { parts: parts.join(', ') })
+      if (r.ok) setNotice(msg)
+      else setError(msg)
+      await load()
+    } catch (err) {
+      handleError(err)
+    } finally {
+      setCasChecking(null)
+    }
+  }
+
+  async function confirmUnbuild(force: boolean) {
+    if (!unbuild) return
+    setUnbuilding(true)
+    try {
+      await deleteCascade(unbuild.c.id, force)
+      setUnbuild(null)
+      setNotice(t('Каскад разобран: клиенты входа снова выходят в интернет с него самого.'))
+      await load()
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 401) onUnauthorized()
+      else setUnbuild({ c: unbuild.c, error: err instanceof Error ? err.message : t('Ошибка') })
+    } finally {
+      setUnbuilding(false)
+    }
+  }
+
   // меню «Ещё» сервера: в карточке справа. «Проверить» там отдельной кнопкой.
   function serverMenu(s: Server): MenuItem[] {
     const info = parseCheckInfo(s)
@@ -800,6 +903,23 @@ export function ServersPage({ onUnauthorized }: Props) {
     }
     if (!online) {
       items.push({ label: t('Скрипт настройки'), onClick: () => openScript(s) })
+    }
+    const cas = cascadeOf(s)
+    if (cas) {
+      if (cas.status === 'ready') {
+        items.push({
+          label: casChecking === cas.id ? t('Проверка…') : t('Каскад: проверить канал'),
+          disabled: casChecking === cas.id,
+          onClick: () => void checkCas(cas),
+        })
+      } else {
+        items.push({ label: t('Каскад: ход установки'), onClick: () => setWizard({ resume: cas }) })
+      }
+      items.push({
+        label: t('Разобрать каскад…'),
+        danger: true,
+        onClick: () => setUnbuild({ c: cas }),
+      })
     }
     items.push({ label: t('Выгрузить в файл'), onClick: () => setExportFor(s) })
     items.push({ label: t('Изменить'), onClick: () => openEdit(s) })
@@ -879,6 +999,9 @@ export function ServersPage({ onUnauthorized }: Props) {
           </button>
           <button className="ghost" onClick={() => setImportOpen(true)}>
             {t('Импорт')}
+          </button>
+          <button className="ghost" onClick={() => setWizard({})}>
+            {t('+ Каскад')}
           </button>
           <button onClick={openCreate}>{t('+ Добавить сервер')}</button>
         </div>
@@ -1024,19 +1147,30 @@ export function ServersPage({ onUnauthorized }: Props) {
                                 {countryFlag(s.country)}
                               </span>
                             )}
-                            {s.egress_ip && (
-                              <span
-                                className="srv-item-route"
-                                title={t('выход в интернет: {ip}', { ip: s.egress_ip })}
-                              >
-                                →
-                                <span className="server-flag">
-                                  {countryFlag(s.egress_country) || '?'}
+                            {(() => {
+                              // вход каскада: стрелка и флаг страны выхода
+                              const cas = cascadeOf(s)
+                              const isEntry = cas?.entry_server_id === s.id
+                              if (!s.egress_ip && !isEntry) return null
+                              const peer = isEntry ? cascadePeer(s, cas) : undefined
+                              const ip = s.egress_ip || cas?.exit_ip || ''
+                              return (
+                                <span
+                                  className="srv-item-route"
+                                  title={t('выход в интернет: {ip}', { ip })}
+                                >
+                                  →
+                                  <span className="server-flag">
+                                    {countryFlag(s.egress_country || peer?.country || '') || '?'}
+                                  </span>
                                 </span>
-                              </span>
-                            )}
+                              )
+                            })()}
                             <span className="srv-item-name">{s.name}</span>
                             <GreBadge server={s} />
+                            {cascadeOf(s)?.exit_server_id === s.id && (
+                              <span className="role-badge">{t('выход')}</span>
+                            )}
                             {st?.online && (
                               <span className="srv-item-cl" title={t('онлайн / всего клиентов')}>
                                 <b>{st.clients_online}</b>/{st.clients_total}
@@ -1064,6 +1198,9 @@ export function ServersPage({ onUnauthorized }: Props) {
                   setClientsTab(proto)
                   setClientsFor(selected)
                 }}
+                cascade={cascadeOf(selected)}
+                peer={cascadePeer(selected, cascadeOf(selected))}
+                onCascade={(c) => setWizard({ resume: c })}
               />
             ) : (
               <div className="card srv-detail muted">{t('Ничего не найдено')}</div>
@@ -1439,6 +1576,49 @@ export function ServersPage({ onUnauthorized }: Props) {
                 onClick={async () => setFaCopied(await copyText(fullAccess.config))}
               >
                 {faCopied ? t('Скопировано ✓') : t('Скопировать')}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {wizard && (
+        <CascadeWizard
+          servers={servers}
+          cascades={cascades}
+          defaultUser={config?.default_ssh_user ?? FALLBACK_USER}
+          resume={wizard.resume}
+          onClose={() => setWizard(null)}
+          onChanged={() => void load()}
+          onUnauthorized={onUnauthorized}
+        />
+      )}
+
+      {unbuild && (
+        <div className="modal-backdrop">
+          <div className="card modal" onClick={(e) => e.stopPropagation()}>
+            <h3>{t('Разобрать каскад?')}</h3>
+            <p className="muted small">
+              {t(
+                'Панель уберет шлюз и туннель с обоих серверов. Клиенты входа останутся подключенными, но в интернет пойдут с адреса самого входа.',
+              )}
+            </p>
+            {unbuild.error && <p className="small err-text">{unbuild.error}</p>}
+            <div className="modal-actions">
+              <button className="ghost" onClick={() => setUnbuild(null)}>
+                {t('Отмена')}
+              </button>
+              {unbuild.error && (
+                <button className="ghost" disabled={unbuilding} onClick={() => confirmUnbuild(true)}>
+                  {t('Убрать только из панели')}
+                </button>
+              )}
+              <button
+                className="danger-solid"
+                disabled={unbuilding}
+                onClick={() => confirmUnbuild(false)}
+              >
+                {unbuilding ? t('Разбираю…') : t('Разобрать')}
               </button>
             </div>
           </div>
