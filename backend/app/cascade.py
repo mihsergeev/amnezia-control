@@ -250,22 +250,39 @@ WantedBy=multi-user.target
 
 _GEO_SH = r"""#!/bin/sh
 # Amnezia Control: обновляет геобазы runetfreedom (geoip.dat, geosite.dat) для
-# шлюза каскада и перезапускает его, если базы изменились. Новые базы
-# проверяются через xray -test до подмены, при ошибке остаются старые.
+# шлюза каскада и перезапускает его, если базы изменились. Качает через выход
+# каскада (из России github бывает медленным), без шлюза или при ошибке напрямую.
+# Сначала сверяет контрольные суммы и не качает базы, которые не менялись.
+# Новые базы проверяются через xray -test до подмены, при ошибке остаются старые.
 set -eu
 DIR=@DIR@/geo
 BASE=https://github.com/runetfreedom/russia-v2ray-rules-dat/releases/latest/download
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
 cd "$TMP"
-for f in geoip.dat geosite.dat; do
-  curl -fsSL --retry 3 -m 300 -o "$f" "$BASE/$f"
-  curl -fsSL --retry 3 -m 60 -o "$f.sha256sum" "$BASE/$f.sha256sum"
-  sha256sum -c "$f.sha256sum" >/dev/null
-done
+VIA=direct
+if docker ps --format "{{.Names}}" | grep -qx @GATEWAY@; then
+  VIA="127.0.0.1:@SOCKS@ direct"
+fi
+fetch() {
+  for via in $VIA; do
+    opt=""
+    [ "$via" = direct ] || opt="--socks5-hostname $via"
+    # shellcheck disable=SC2086
+    curl -fsSL --retry 1 -m "$1" $opt -o "$2" "$BASE/$2" && return 0
+  done
+  return 1
+}
 changed=0
 for f in geoip.dat geosite.dat; do
-  cmp -s "$f" "$DIR/$f" 2>/dev/null || changed=1
+  fetch 60 "$f.sha256sum"
+  if [ -s "$DIR/$f" ] && (cd "$DIR" && sha256sum -c "$TMP/$f.sha256sum" >/dev/null 2>&1); then
+    cp "$DIR/$f" "$f"
+    continue
+  fi
+  fetch 900 "$f"
+  sha256sum -c "$f.sha256sum" >/dev/null
+  changed=1
 done
 [ "$changed" = 1 ] || exit 0
 mkdir -p "$TMP/geo" "$DIR"
@@ -318,6 +335,7 @@ def _fill(text: str) -> str:
         .replace("@TABLE@", str(TPROXY_TABLE))
         .replace("@IMAGE@", XRAY_IMAGE)
         .replace("@GATEWAY@", GATEWAY)
+        .replace("@SOCKS@", str(SOCKS_PORT))
     )
 
 
@@ -449,8 +467,9 @@ def exit_vless_config(params: dict) -> str:
     return json.dumps(cfg, indent=2)
 
 
-def entry_gateway_config(transport: str, exit_ip: str, params: dict) -> str:
-    """Конфиг шлюза на входе. Первый outbound (exit) - путь по умолчанию."""
+def entry_gateway_config(transport: str, exit_ip: str, params: dict, bootstrap: bool = False) -> str:
+    """Конфиг шлюза на входе. Первый outbound (exit) - путь по умолчанию.
+    bootstrap: без правил по геобазам, чтобы скачать их через выход, пока их еще нет."""
     if transport == "gre":
         out = {
             "tag": "exit", "protocol": "freedom",
@@ -516,6 +535,8 @@ def entry_gateway_config(transport: str, exit_ip: str, params: dict) -> str:
             ],
         },
     }
+    if bootstrap:
+        cfg["routing"] = {"rules": []}
     return json.dumps(cfg, indent=2)
 
 
@@ -528,6 +549,18 @@ _CHECK_LINES = [
     'echo "CASCADE_EGRESS=$EG"',
     'echo "CASCADE_RU=$RU"',
 ]
+
+
+def gateway_run(confdir: str) -> str:
+    """Строка скрипта: запустить шлюз каскада с конфигом из confdir."""
+    return (
+        f"sudo docker run -d --name {GATEWAY} --restart always --network host "
+        "--user 0:0 --read-only --cap-drop ALL --cap-add NET_ADMIN --cap-add NET_BIND_SERVICE "
+        "--security-opt no-new-privileges:true --log-opt max-size=10m --log-opt max-file=3 "
+        "-e XRAY_LOCATION_ASSET=/usr/local/share/xray "
+        f"-v {confdir}:/usr/local/etc/xray:ro -v {DIR}/geo:/usr/local/share/xray:ro "
+        f"{XRAY_IMAGE} >/dev/null || fail 'docker run'"
+    )
 
 
 def build_entry_script(transport: str, exit_ip: str, cascade_id: int, params: dict) -> str:
@@ -547,6 +580,9 @@ def build_entry_script(transport: str, exit_ip: str, cascade_id: int, params: di
         'log "[3/5] геобазы российских сайтов"',
         f"sudo mkdir -p {DIR}/config {DIR}/geo || fail mkdir",
         _put(f"{DIR}/config/config.json", entry_gateway_config(transport, exit_ip, params), "600"),
+        f"sudo mkdir -p {DIR}/boot || fail mkdir",
+        _put(f"{DIR}/boot/config.json",
+             entry_gateway_config(transport, exit_ip, params, bootstrap=True), "600"),
         _put(f"{DIR}/geo-update.sh", _fill(_GEO_SH), "755"),
         _put(f"{DIR}/cascade-tproxy.sh", _fill(_TPROXY_SH), "755"),
     ]
@@ -556,16 +592,18 @@ def build_entry_script(transport: str, exit_ip: str, cascade_id: int, params: di
     lines += [
         "sudo systemctl daemon-reload",
         f"sudo docker pull -q {XRAY_IMAGE} >/dev/null || fail 'docker pull'",
+        # первая установка: баз еще нет, а без них шлюз с полными правилами не
+        # запустится. Поднимаем его без правил и качаем базы через выход
+        f"if ! sudo test -s {DIR}/geo/geosite.dat; then",
+        f"  sudo docker rm -f {GATEWAY} >/dev/null 2>&1",
+        "  " + gateway_run(f"{DIR}/boot"),
+        "  sleep 3",
+        "fi",
         f"sudo {DIR}/geo-update.sh 2>&1 | tail -2",
         f"sudo test -s {DIR}/geo/geosite.dat || fail 'geo download (github.com)'",
         'log "[4/5] шлюз каскада"',
         f"sudo docker rm -f {GATEWAY} >/dev/null 2>&1",
-        f"sudo docker run -d --name {GATEWAY} --restart always --network host "
-        "--user 0:0 --read-only --cap-drop ALL --cap-add NET_ADMIN --cap-add NET_BIND_SERVICE "
-        "--security-opt no-new-privileges:true --log-opt max-size=10m --log-opt max-file=3 "
-        "-e XRAY_LOCATION_ASSET=/usr/local/share/xray "
-        f"-v {DIR}/config:/usr/local/etc/xray:ro -v {DIR}/geo:/usr/local/share/xray:ro "
-        f"{XRAY_IMAGE} >/dev/null || fail 'docker run'",
+        gateway_run(f"{DIR}/config"),
         "sleep 3",
         f"sudo docker ps --format '{{{{.Names}}}}' | grep -qx {GATEWAY} "
         f"|| fail \"xray: $(sudo docker logs --tail 3 {GATEWAY} 2>&1 | tr '\\n' ' ')\"",
