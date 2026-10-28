@@ -17,7 +17,14 @@ EGRESS_TTL = timedelta(hours=1)
 
 
 def egress_due(server: Server, now: datetime) -> bool:
-    return server.egress_at is None or now - server.egress_at >= EGRESS_TTL
+    at = server.egress_at
+    if at is None:
+        return True
+    # SQLite отдает дату без пояса; вычитание из aware падало, и сборщик
+    # считал такую ноду офлайн
+    if at.tzinfo is None:
+        at = at.replace(tzinfo=timezone.utc)
+    return now - at >= EGRESS_TTL
 
 
 async def _host_addrs(host: str) -> set[str]:
