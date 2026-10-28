@@ -148,3 +148,51 @@ async def test_xray_deploy_on_busy_port_is_refused_before_anything(
     assert r.status_code == 409
     assert "443/tcp" in r.json()["detail"]
     assert "caddy-proxy-caddy-1" in r.json()["detail"]
+
+
+# Нода со вторым адресом: XRay на 203.0.113.3:443, панель (caddy) на
+# 203.0.113.6:443. Друг другу они не мешают, пока XRay привязан к своему адресу.
+_XRAY_ON_3 = "amnezia-xray|203.0.113.3:443->443/tcp"
+_CADDY_ON_6 = "caddy|203.0.113.6:80->80/tcp, 203.0.113.6:443->443/tcp"
+
+
+async def test_neighbour_on_other_address_is_not_a_conflict() -> None:
+    conn = _Conn({"publish=443/tcp": f"{_CADDY_ON_6}\n{_XRAY_ON_3}\n", "-lntpH": "LISTEN ..."})
+    assert await deploy.port_owner(conn, 443, "tcp", own="amnezia-xray") is None
+    # docker-proxy соседа в ss - не повод считать порт занятым
+    assert not any("ss " in c for c in conn.commands)
+
+
+@pytest.mark.parametrize("rows", [
+    # XRay на всех адресах сталкивается с панелью на одном из них
+    f"{_CADDY_ON_6}\namnezia-xray|0.0.0.0:443->443/tcp, [::]:443->443/tcp\n",
+    # новый XRay ставится на все адреса
+    f"{_CADDY_ON_6}\n",
+    # сосед на всех адресах
+    f"caddy|0.0.0.0:443->443/tcp\n{_XRAY_ON_3}\n",
+    # тот же адрес
+    f"caddy|203.0.113.3:443->443/tcp\n{_XRAY_ON_3}\n",
+    # старый вывод без адресов
+    "caddy\namnezia-xray\n",
+])
+async def test_shared_port_conflicts(rows) -> None:
+    conn = _Conn({"publish=443/tcp": rows})
+    assert await deploy.port_owner(conn, 443, "tcp", own="amnezia-xray") == "контейнер «caddy»"
+
+
+def test_bound_ips_parsing() -> None:
+    ips = deploy._bound_ips
+    assert ips("203.0.113.6:80->80/tcp, 203.0.113.6:443->443/tcp", 443, ["tcp"]) == {"203.0.113.6"}
+    assert ips("0.0.0.0:443->443/tcp, [::]:443->443/tcp", 443, ["tcp"]) == {"0.0.0.0", "::"}
+    assert ips(":::443->443/tcp", 443, ["tcp"]) == {"::"}
+    assert ips("0.0.0.0:8000-8010->8000-8010/tcp", 8005, ["tcp"]) == {"0.0.0.0"}
+    # чужой протокол и непонятная строка - на всех адресах
+    assert ips("203.0.113.6:443->443/udp", 443, ["tcp"]) == {""}
+    assert ips("", 443, ["tcp"]) == {""}
+
+
+def test_xray_script_keeps_bind_address() -> None:
+    s = xray.build_deploy_script(443, "www.example.com")
+    # адрес читается со старого контейнера до проверки порта и сноса
+    assert s.index("BIND=$(") < s.index('publish=$XRAY_SERVER_PORT/tcp') < s.index("docker rm -f")
+    assert "-p ${BIND:+$BIND:}${XRAY_SERVER_PORT}:${XRAY_SERVER_PORT}/tcp" in s
