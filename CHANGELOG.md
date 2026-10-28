@@ -4,6 +4,17 @@ All notable changes to Amnezia Control are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.69.1] - 2026-10-29
+
+### Security
+- The backend container no longer gets `DAC_READ_SEARCH`. The entrypoint
+  hands `/data` to the panel user with `CHOWN`, `SETUID` and `SETGID` only,
+  and skips that work when everything already belongs to the panel user.
+- The panel never falls back to running as root. If files in `/data` can't
+  be handed over (a custom compose without those capabilities, or root-owned
+  files the entrypoint can't reach), the container stops and the log names
+  the files and the command to run on the host.
+
 ## [0.69.0] - 2026-10-29
 
 ### Added
