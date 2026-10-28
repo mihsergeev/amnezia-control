@@ -2117,6 +2117,16 @@ button.srv-side-gh:hover .drag-handle {
   white-space: nowrap;
 }
 
+/* «→ 🇫🇮» в строке списка: нода - вход каскада, клиенты выходят в другой стране */
+.srv-item-route {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.2rem;
+  margin-left: -0.15rem;
+  color: var(--text-muted);
+  font-size: 0.8rem;
+}
+
 .srv-item-cl {
   color: var(--text-muted);
   font-size: 0.78rem;
@@ -2180,6 +2190,39 @@ button.srv-side-gh:hover .drag-handle {
 
 .srv-detail-meta .host {
   font-size: 1.02rem;
+}
+
+/* путь трафика клиентов: этот сервер -> адрес выхода в интернет */
+.srv-route {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.5rem 0.7rem;
+}
+
+.srv-route-label {
+  color: var(--text-muted);
+  font-size: 0.85rem;
+}
+
+.srv-route-arrow {
+  color: var(--text-muted);
+  font-size: 1.1rem;
+}
+
+.srv-hop {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  padding: 0.45rem 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  line-height: 1.3;
+}
+
+.srv-hop-exit {
+  border-color: #3b82f666;
+  background: #3b82f60f;
 }
 
 .srv-detail-note {

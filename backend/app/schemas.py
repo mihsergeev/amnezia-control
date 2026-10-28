@@ -95,6 +95,10 @@ class ServerOut(BaseModel):
     group_name: str
     position: int = 0
     country: str = ""
+    egress_ip: str = ""
+    egress_country: str = ""
+    egress_org: str = ""
+    egress_at: datetime | None = None
     last_check_ok: bool | None
     last_check_at: datetime | None
     last_check_info: str

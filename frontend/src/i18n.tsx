@@ -264,6 +264,10 @@ const EN: Record<string, string> = {
   'Клиенты онлайн': 'Clients online',
   'аптайм {t}': 'uptime {t}',
   'загрузка {l} на {n} ядер': 'load {l} on {n} cores',
+  'выход в интернет: {ip}': 'internet exit: {ip}',
+  'этот сервер': 'this server',
+  'выход в интернет': 'internet exit',
+  'выход в интернет, {org}': 'internet exit, {org}',
   'Протоколы': 'Protocols',
   'Протоколы появятся после успешной проверки сервера.':
     'Protocols appear after a successful server check.',
