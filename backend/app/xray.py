@@ -645,9 +645,18 @@ C=amnezia-xray
 BUILD=/opt/amnezia-build/xray
 D=/opt/amnezia/xray
 
+# Адрес, на котором XRay уже опубликован, при пересборке сохраняем: на ноде со
+# вторым адресом рядом на том же порту может жить другой сервис (сама панель)
+BIND=$(sudo docker inspect -f '{{{{range $k, $v := .HostConfig.PortBindings}}}}{{{{range $v}}}}{{{{.HostIp}}}} {{{{end}}}}{{{{end}}}}' "$C" 2>/dev/null | awk '{{print $1}}')
+case "$BIND" in 0.0.0.0|::) BIND= ;; esac
+
 # Порт должен быть свободен ДО сборки и генерации ключей. Панель проверяет это
-# сама; здесь страховка на случай вызова в обход окна установки.
-OTHER=$(sudo docker ps --filter "publish=$XRAY_SERVER_PORT/tcp" --format '{{{{.Names}}}}' 2>/dev/null | grep -vx "$C" | head -1)
+# сама; здесь страховка на случай вызова в обход окна установки. Сосед на
+# другом адресе не мешает, если XRay привязан к своему адресу
+OTHER=$(sudo docker ps --filter "publish=$XRAY_SERVER_PORT/tcp" --format '{{{{.Names}}}}|{{{{.Ports}}}}' 2>/dev/null | grep -v "^$C|" | while IFS='|' read -r n p; do
+  [ -z "$BIND" ] && {{ echo "$n"; continue; }}
+  case ", $p" in *", 0.0.0.0:$XRAY_SERVER_PORT->"*|*", [::]:$XRAY_SERVER_PORT->"*|*", :::$XRAY_SERVER_PORT->"*|*", $BIND:$XRAY_SERVER_PORT->"*) echo "$n" ;; esac
+done | head -1)
 [ -n "$OTHER" ] && fail "port $XRAY_SERVER_PORT/tcp busy: $OTHER"
 
 log "[1/5] docker"
@@ -729,13 +738,13 @@ if command -v firewall-cmd >/dev/null 2>&1; then sudo firewall-cmd --permanent -
 log "[5/5] контейнер"
 sudo docker rm -f "$C" >/dev/null 2>&1 || true
 sudo docker run -d --name "$C" --restart always --privileged --cap-add=NET_ADMIN \\
-  -p ${{XRAY_SERVER_PORT}}:${{XRAY_SERVER_PORT}}/tcp \\
+  -p ${{BIND:+$BIND:}}${{XRAY_SERVER_PORT}}:${{XRAY_SERVER_PORT}}/tcp \\
   -v "$D":/opt/amnezia/xray \\
   --entrypoint sh "$IMG" -c "xray -config /opt/amnezia/xray/server.json" >/dev/null \\
   || {{ sudo docker rm -f "$C" >/dev/null 2>&1; fail run; }}
 sleep 4
 sudo docker ps --format '{{{{.Names}}}}' | grep -Fx "$C" >/dev/null || {{ sudo docker logs "$C" 2>&1 | tail; fail notrunning; }}
-log "xray запущен на порту $XRAY_SERVER_PORT"
+log "xray запущен на порту ${{BIND:+$BIND:}}$XRAY_SERVER_PORT"
 echo "DEPLOY_DONE"
 """
 

@@ -4,6 +4,17 @@ All notable changes to Amnezia Control are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.70.0] - 2026-10-29
+
+### Changed
+- **XRay and the panel can share port 443 on a node with two addresses.**
+  When XRay is published on one address of the node (for example
+  `docker run -p 203.0.113.3:443:443`), reinstalling or upgrading it keeps that
+  address instead of taking 443 on every address. The port check before an
+  install looks at the address too: a web server on another address of the
+  same port is no longer a conflict, while one on all addresses or on the same
+  address still is.
+
 ## [0.69.1] - 2026-10-29
 
 ### Security

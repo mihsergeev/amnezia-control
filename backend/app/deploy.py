@@ -937,6 +937,63 @@ async def foreign_awg_container(conn: asyncssh.SSHClientConnection) -> str | Non
     return names[0] if names else None
 
 
+# адреса, которые в колонке Ports у `docker ps` значат "на всех адресах"
+_ANY_IP = {"", "0.0.0.0", "::"}
+_PORTS_RE = re.compile(r"^(.*):(\d+)(?:-(\d+))?->\d+(?:-\d+)?/(\w+)$")
+
+
+def _bound_ips(ports: str, port: int, protos: list[str]) -> set[str]:
+    """Адреса хоста, на которых контейнер публикует порт (колонка Ports у
+    `docker ps`). Не разобрали - считаем, что на всех."""
+    ips: set[str] = set()
+    for item in ports.split(","):
+        m = _PORTS_RE.match(item.strip())
+        if not m or m.group(4) not in protos:
+            continue
+        lo = int(m.group(2))
+        if lo <= port <= int(m.group(3) or lo):
+            ips.add(m.group(1).strip("[]"))
+    return ips or {""}
+
+
+async def _publishers(
+    conn: asyncssh.SSHClientConnection, port: int, proto: str | None
+) -> list[tuple[str, set[str]]]:
+    """Контейнеры, публикующие порт, и адреса хоста, на которых они его держат."""
+    # ВАЖНО: `--filter publish=NNN` без протокола НЕ находит контейнеры с
+    # UDP-публикацией (проверено на ноде: awg2 на 47180/udp так не виден), а у
+    # AmneziaWG порт как раз UDP. Поэтому спрашиваем оба протокола явно.
+    # proto сужает проверку до одного протокола: AmneziaWG на 443/udp и веб-сервер
+    # на 443/tcp друг другу не мешают, и такой порт ложно считался бы занятым
+    protos = [proto] if proto in ("tcp", "udp") else ["udp", "tcp"]
+    filters = " ".join(f'--filter "publish={port}/{x}"' for x in protos)
+    cmd = (
+        'D=$(docker info >/dev/null 2>&1 && echo docker || echo "sudo -n docker"); '
+        f'$D ps {filters} --format "{{{{.Names}}}}|{{{{.Ports}}}}"'
+    )
+    result = await conn.run(cmd, check=False)
+    rows = []
+    for line in (result.stdout or "").splitlines():
+        name, _, ports = line.strip().partition("|")
+        if name:
+            rows.append((name, _bound_ips(ports, port, protos)))
+    return rows
+
+
+def _conflict(rows: list[tuple[str, set[str]]], own: str) -> str | None:
+    """Кто из публикующих порт мешает контейнеру `own`. Свой контейнер,
+    привязанный к одному адресу, не мешает соседу на другом адресе того же
+    порта (так на ноде со вторым адресом рядом с XRay живет сама панель):
+    при пересборке скрипты сохраняют адрес публикации."""
+    mine = next((ips for name, ips in rows if name == own), None) if own else None
+    for name, ips in rows:
+        if name == own:
+            continue
+        if mine is None or (mine | ips) & _ANY_IP or mine & ips:
+            return name
+    return None
+
+
 async def container_on_port(
     conn: asyncssh.SSHClientConnection, port: int, exclude: str = "",
     proto: str | None = None,
@@ -948,24 +1005,7 @@ async def container_on_port(
     по ошибке указан чужой — снесётся рабочий контейнер другого протокола со
     всеми клиентами. Поэтому такой случай ловим заранее и операцию не начинаем.
     """
-    # ВАЖНО: `--filter publish=NNN` без протокола НЕ находит контейнеры с
-    # UDP-публикацией (проверено на ноде: awg2 на 47180/udp так не виден), а у
-    # AmneziaWG порт как раз UDP. Поэтому спрашиваем оба протокола явно.
-    p = int(port)
-    # proto сужает проверку до одного протокола: AmneziaWG на 443/udp и веб-сервер
-    # на 443/tcp друг другу не мешают, и такой порт ложно считался бы занятым
-    protos = [proto] if proto in ("tcp", "udp") else ["udp", "tcp"]
-    filters = " ".join(f'--filter "publish={p}/{x}"' for x in protos)
-    cmd = (
-        'D=$(docker info >/dev/null 2>&1 && echo docker || echo "sudo -n docker"); '
-        f'$D ps {filters} --format "{{{{.Names}}}}"'
-    )
-    result = await conn.run(cmd, check=False)
-    for line in (result.stdout or "").splitlines():
-        name = line.strip()
-        if name and name != exclude:
-            return name
-    return None
+    return _conflict(await _publishers(conn, int(port), proto), exclude)
 
 
 async def port_owner(
@@ -981,10 +1021,13 @@ async def port_owner(
     Caddy не в Docker держат 443 точно так же.
     """
     p = int(port)
-    name = await container_on_port(conn, p, exclude=own, proto=proto)
+    rows = await _publishers(conn, p, proto)
+    name = _conflict(rows, own)
     if name:
         return f"контейнер «{name}»"
-    if own and await container_on_port(conn, p, proto=proto) == own:
+    if rows:
+        # порт публикует наш контейнер, а соседи на других адресах не мешают;
+        # их docker-proxy в ss ниже был бы ложной находкой
         return None
     flag = "-lntpH" if proto == "tcp" else "-lnupH"
     res = await conn.run(
