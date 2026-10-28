@@ -222,7 +222,7 @@ async def check(cascade_id: int, _: CurrentUser, session: SessionDep) -> Cascade
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Сервер не найден")
     try:
         async with _locked(entry) as conn:
-            r = await conn.run(cascade.build_check_command(), check=False, timeout=60)
+            r = await conn.run(cascade.build_check_command(entry.country), check=False, timeout=60)
     except Exception as exc:  # noqa: BLE001
         raise _ssh_error(exc) from exc
     kv = cascade.parse_kv(r.stdout if isinstance(r.stdout, str) else "")

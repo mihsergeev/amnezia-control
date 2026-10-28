@@ -54,8 +54,9 @@ async def _watch(
         if state == "error":
             await alerts.maybe_alert(
                 session_factory, settings,
-                alerts.Card("crit", "🚀", f"Развертывание {tag.upper()} не удалось",
-                            "лог в карточке сервера", subject=label),
+                alerts.Card("crit", "🚀", alerts.t("Развертывание {proto} не удалось",
+                                                    proto=tag.upper()),
+                            alerts.t("лог в карточке сервера"), subject=label),
             )
             return
 

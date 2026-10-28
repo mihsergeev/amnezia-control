@@ -350,9 +350,11 @@ async def _handle_hostkey_alerts(
             await alerts.security_alert(
                 session, settings,
                 alerts.Card(
-                    "crit", "🔑", "Сменился SSH-ключ сервера",
-                    "возможна подмена. Если сервер пересоздавали, удалите его строку "
-                    "из data/ssh/known_hosts",
+                    "crit", "🔑", alerts.t("Сменился SSH-ключ сервера"),
+                    alerts.t(
+                        "возможна подмена. Если сервер пересоздавали, удалите его строку "
+                        "из data/ssh/known_hosts"
+                    ),
                     subject=name,
                 ),
             )
@@ -470,10 +472,11 @@ async def _store_node_metrics(session_factory, settings: Settings, samples, name
     for sid, over, pct in disk_alerts:
         name = names.get(sid, str(sid))
         card = (
-            alerts.Card("warn", "💾", f"Мало места: диск занят на {pct}%", subject=name)
+            alerts.Card("warn", "💾", alerts.t("Мало места: диск занят на {pct}%", pct=pct),
+                        subject=name)
             if over
-            else alerts.Card("ok", "💾", "Место на диске снова есть", f"занято {pct}%",
-                             subject=name)
+            else alerts.Card("ok", "💾", alerts.t("Место на диске снова есть"),
+                             alerts.t("занято {pct}%", pct=pct), subject=name)
         )
         await alerts.send_card(cfg, settings, card)
 

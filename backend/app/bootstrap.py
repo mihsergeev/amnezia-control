@@ -67,8 +67,10 @@ async def ensure_admin(
             await alerts.security_alert(
                 session, settings,
                 alerts.Card(
-                    "warn", "🔑", f"Пароль «{user.username}» сброшен из .env",
-                    "2FA отключена. Уберите флаг сброса из .env, иначе это повторится "
-                    "при каждом перезапуске",
+                    "warn", "🔑", alerts.t("Пароль «{user}» сброшен из .env", user=user.username),
+                    alerts.t(
+                        "2FA отключена. Уберите флаг сброса из .env, иначе это повторится "
+                        "при каждом перезапуске"
+                    ),
                 ),
             )

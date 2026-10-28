@@ -59,6 +59,7 @@ def _write(path: str, cfg: dict, alerts_ok: bool, panel_url: str = "") -> None:
         f"tg_chat={cfg.get('telegram_chat') or ''}",
         f"webhook={cfg.get('webhook') or ''}",
         f"panel={panel_url}",  # чтобы watchdog назвал КОНКРЕТНУЮ панель со ссылкой
+        f"lang={cfg.get('lang') or 'ru'}",  # язык алертов сторожа
     ]
     tmp = path + ".tmp"
     with open(tmp, "w", encoding="utf-8") as fh:

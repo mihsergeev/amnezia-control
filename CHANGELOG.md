@@ -4,6 +4,28 @@ All notable changes to Amnezia Control are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.69.0] - 2026-10-29
+
+### Added
+- **Alert language.** ⚙ > Alerts has a language switch, English or Russian.
+  Every alert card, the test alert and the host watchdog use it. Panels that
+  had alerts set up before keep sending in Russian until the language is
+  changed there.
+
+### Changed
+- **A cascade works for any entry country, not only Russia.** The entry lets
+  sites of its own country go directly: the national domains and the
+  country's IP ranges from the geo databases. Russia keeps its extra lists
+  (sites blocked in Russia go through the exit, sites that only work from
+  inside go directly), Iran gets its domain list too. When the entry's
+  country is unknown, all client traffic goes through the exit. The wizard
+  and the server card speak of "sites of the entry's country" instead of
+  Russian sites. Cascades with a Russian entry work as before.
+- The alert settings window is called **Alerts** and lists what the panel
+  sends.
+- README: English only in the English version, new overview, server list,
+  cascade and Telegram alert screenshots, and a new demo GIF.
+
 ## [0.68.1] - 2026-10-28
 
 ### Changed

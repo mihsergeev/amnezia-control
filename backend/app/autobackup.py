@@ -135,20 +135,22 @@ async def backup_loop(
                 _last_backup_ok = True
                 await alerts.maybe_alert(
                     session_factory, settings,
-                    alerts.Card("ok", "🗄", "Авто-бэкап снова проходит", "самопроверка ок"),
+                    alerts.Card("ok", "🗄", alerts.t("Авто-бэкап снова проходит"), alerts.t("самопроверка ок")),
                 )
         elif _last_backup_ok:  # переход ok → проблема: алертим один раз
             _last_backup_ok = False
             if exc is not None:
                 card = alerts.Card(
-                    "crit", "🗄", "Авто-бэкап не создан",
-                    f"{type(exc).__name__}: {exc}. Проверьте место на диске и логи backend",
+                    "crit", "🗄", alerts.t("Авто-бэкап не создан"),
+                    alerts.t("{err}. Проверьте место на диске и логи backend",
+                             err=f"{type(exc).__name__}: {exc}"),
                 )
             else:
                 card = alerts.Card(
-                    "warn", "🗄", "Бэкап не прошел самопроверку",
-                    "; ".join(problems) + ". Восстановиться из него может не выйти",
+                    "warn", "🗄", alerts.t("Бэкап не прошел самопроверку"),
+                    alerts.t("{problems}. Восстановиться из него может не выйти",
+                             problems="; ".join(problems)),
                 )
-            log.error("проблема с бэкапом: %s: %s", card.title, card.detail)
+            log.error("проблема с бэкапом: %s", card.render()[0])
             await alerts.maybe_alert(session_factory, settings, card)
         await asyncio.sleep(settings.backup_interval_hours * 3600)

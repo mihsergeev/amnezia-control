@@ -102,7 +102,8 @@ async def _run(cid: int, factory, settings) -> None:
         return
     steps = [
         ("exit", exit_, cascade.build_exit_script(transport, params["entry_ip"], cid, params)),
-        ("entry", entry, cascade.build_entry_script(transport, params["exit_ip"], cid, params)),
+        ("entry", entry, cascade.build_entry_script(transport, params["exit_ip"], cid, params,
+                                                     entry.country)),
     ]
     logs: dict[str, tuple[str, str]] = {}
     entry_log = ""
@@ -118,7 +119,7 @@ async def _run(cid: int, factory, settings) -> None:
             await _finish(factory, cid, "error", msg, _joined(logs), {"failed_phase": phase})
             await alerts.maybe_alert(
                 factory, settings,
-                alerts.Card("crit", "", "Каскад не собрался", msg, subject=entry.name),
+                alerts.Card("crit", "", alerts.t("Каскад не собрался"), msg, subject=entry.name),
             )
             return
         if phase == "entry":
