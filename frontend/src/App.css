@@ -1938,15 +1938,6 @@ button.linklike.srv-filter-only:hover {
   margin: 0.6rem 0;
 }
 
-/* удаление протокола: внизу модалки, отдельно от частых кнопок */
-.danger-zone {
-  display: flex;
-  justify-content: flex-end;
-  margin-top: 1rem;
-  padding-top: 0.8rem;
-  border-top: 1px solid var(--border);
-}
-
 /* ---------- страница серверов: список слева, выбранный сервер справа ---------- */
 .srv-split {
   display: grid;
