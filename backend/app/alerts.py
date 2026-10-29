@@ -46,6 +46,11 @@ EN = {
     "Место на диске снова есть": "Disk space is fine again",
     "занято {pct}%": "{pct}% used",
     "Пропали клиенты": "Clients are gone",
+    "Клиент качает торренты": "A client is downloading torrents",
+    "{name}, {proto}: {hits} попыток за {mins} мин, торренты на сервере блокируются":
+        "{name}, {proto}: {hits} attempts in {mins} min, torrents are blocked on the server",
+    "{detail}. Клиент поставлен на паузу": "{detail}. The client is paused",
+    "{detail}. Паузу поставить не вышло: {err}": "{detail}. Could not pause: {err}",
     "активных за 2 часа {cur}, вчера {yday}, неделю назад {week}. Сервер отвечает, "
     "похоже, адрес режут провайдеры":
         "active in 2 hours: {cur}, yesterday {yday}, a week ago {week}. The server answers, "

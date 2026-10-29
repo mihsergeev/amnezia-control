@@ -20,6 +20,8 @@ import { RollbackMenu } from './RollbackMenu'
 import { copyText } from './clipboard'
 import { formatBytes } from './format'
 import { useShareLink } from './ShareLink'
+import { TorrentBadge } from './Torrent'
+import { useTorrentHits } from './useTorrentHits'
 import { useI18n } from './i18n'
 
 type Props = {
@@ -41,6 +43,7 @@ export function OpenVpnClients({
 }: Props) {
   const { t } = useI18n()
   const [state, setState] = useState<OvpnState | null>(null)
+  const torrentHits = useTorrentHits(serverId)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState<string | null>(null)
@@ -354,6 +357,7 @@ export function OpenVpnClients({
                           name={c.paused ? `${c.name} ⏸` : c.name}
                           note={c.note || ''}
                           online={c.paused ? false : !!c.connected}
+                          badge={<TorrentBadge hit={torrentHits.get(`openvpn:${c.client_id}`)} />}
                           onSave={(note) => saveNote(c.client_id, note)}
                         />
                       </td>

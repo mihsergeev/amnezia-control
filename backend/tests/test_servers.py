@@ -74,6 +74,7 @@ def test_delete_covers_all_server_scoped_tables() -> None:
             models.AwgConfig, models.AwgNote, models.OvpnConfig, models.TrafficSample,
             models.ClientLimit, models.ClientName, models.ServerStatus,
             models.ClientTrafficSample, models.NodeMetric, models.PausedClient,
+            models.TorrentHit,
         ]
     }
     assert names == expected

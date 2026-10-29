@@ -71,6 +71,8 @@ class ServerUpdate(BaseModel):
     )
     note: str | None = None
     group_name: str | None = Field(default=None, max_length=64)
+    torrent_block: bool | None = None
+    torrent_autopause: bool | None = None
 
 
 class OrderItem(BaseModel):
@@ -103,8 +105,30 @@ class ServerOut(BaseModel):
     last_check_ok: bool | None
     last_check_at: datetime | None
     last_check_info: str
+    torrent_block: bool = False
+    torrent_autopause: bool = False
     created_at: datetime
     updated_at: datetime
+
+
+class TorrentClientOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    protocol: str
+    client_id: str
+    name: str
+    hits: int
+    first_seen: datetime
+    last_seen: datetime
+
+
+class TorrentOut(BaseModel):
+    # правила на ноде: None - еще не проверяли (блокировка выключена или
+    # коллектор не дошел), error - в каких контейнерах не встали
+    active: bool | None = None
+    checked_at: str | None = None
+    error: str = ""
+    clients: list[TorrentClientOut] = []
 
 
 class SetupScriptOut(BaseModel):
