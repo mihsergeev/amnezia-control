@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app import (
     alerts, audit, awg, deploy, geo, nodestat, onlinedrop, openvpn, server_ops,
-    settings_store, sshops, xray,
+    settings_store, sshops, torrent, xray,
 )
 from app.config import Settings
 from app.models import (
@@ -62,12 +62,15 @@ async def _awg_part(conn, host) -> tuple[dict, list[dict]]:
     totals = {"rx": 0, "tx": 0, "total": 0, "online": 0}
     clients: list[dict] = []
     parts: list[str] = []
+    nets: list[dict] = []
     for container, proto in targets:
         try:
             state = await awg.read_state(conn, host, container=container)
         except Exception:  # noqa: BLE001 — один протокол не должен ронять сбор
             continue
         parts.append(f"{proto}:{container}")
+        nets.append({"container": container, "protocol": proto,
+                     "ips": torrent.awg_ipmap(state.clients)})
         totals["rx"] += sum(c.rx_bytes for c in state.clients)
         totals["tx"] += sum(c.tx_bytes for c in state.clients)
         totals["total"] += len(state.clients)
@@ -83,6 +86,7 @@ async def _awg_part(conn, host) -> tuple[dict, list[dict]]:
         ]
     totals["parts"] = parts
     totals["known"] = [(c["protocol"], c["client_id"]) for c in clients]
+    totals["nets"] = nets
     return totals, clients
 
 
@@ -96,7 +100,11 @@ async def _openvpn_part(conn, host) -> tuple[dict, list[dict]]:
         for e in table
         if isinstance(e, dict)
     }
-    status_map = await openvpn.read_status_map(conn, container)
+    # из того же лога и адреса клиентов в туннеле (для блокировки торрентов)
+    status_text = await openvpn.read_status_text(conn, container)
+    status_map = openvpn.parse_status_log(status_text)
+    ips = {ip: (cid, ovpn_names.get(cid, ""))
+           for ip, cid in torrent.parse_ovpn_routes(status_text).items()}
     rx = tx = online = 0
     clients: list[dict] = []
     for cid, st in status_map.items():
@@ -110,7 +118,8 @@ async def _openvpn_part(conn, host) -> tuple[dict, list[dict]]:
     known = [("openvpn", e.get("clientId")) for e in table
              if isinstance(e, dict) and e.get("clientId")]
     return {"rx": rx, "tx": tx, "total": total, "online": online,
-            "parts": ["openvpn"], "known": known}, clients
+            "parts": ["openvpn"], "known": known,
+            "nets": [{"container": container, "protocol": "openvpn", "ips": ips}]}, clients
 
 
 async def _xray_part(conn, host) -> tuple[dict, list[dict]]:
@@ -150,6 +159,7 @@ async def _sample_server(
                 client_rows: list[dict] = []
                 parts: set[str] = set()
                 known: list[tuple[str, str]] = []
+                nets: list[dict] = []
                 for part in (_awg_part, _openvpn_part, _xray_part):
                     try:
                         totals, cl = await part(conn, server.host)
@@ -159,7 +169,14 @@ async def _sample_server(
                         agg[k] += totals[k]
                     parts.update(totals.get("parts") or [part.__name__])
                     known.extend(totals.get("known") or [])
+                    nets.extend(totals.get("nets") or [])
                     client_rows.extend(cl)
+                # блокировка торрентов: правила в контейнерах и кто попался
+                try:
+                    torrent_hits = await torrent.sample(conn, server, nets)
+                except Exception:  # noqa: BLE001 - не критично для метрик
+                    log.warning("торренты на %s не проверены", server.name, exc_info=True)
+                    torrent_hits = []
                 try:
                     res = await nodestat.read_resources(conn)
                 except Exception:  # noqa: BLE001 — ресурсы не критичны
@@ -199,6 +216,7 @@ async def _sample_server(
         "known": known,  # все клиенты на ноде, не только с трафиком
         "check": check,  # CheckResult | None (None = docker не ответил, не трогаем список)
         "egress": egress,  # str | None (None = в этот раз не спрашивали)
+        "torrent": torrent_hits,  # [{protocol, client_id, name, hits}]
     }
 
 
@@ -252,6 +270,12 @@ async def collect_once(
             await _store_client_names(session_factory, samples)
         except Exception:  # noqa: BLE001 — кэш имён не критичен
             log.exception("ошибка сохранения имён клиентов")
+        try:
+            await torrent.record(
+                session_factory, settings, samples, {s.id: s for s in servers}
+            )
+        except Exception:  # noqa: BLE001
+            log.exception("ошибка записи торрент-попаданий")
 
     # страна по IP (для флажка на карточке) — разово для серверов без country
     need_geo = [s for s in servers if not (s.country or "")]
@@ -499,6 +523,7 @@ async def _prune(session_factory, settings: Settings) -> None:
                 days=settings.audit_retention_days
             )
             await session.execute(delete(AuditLog).where(AuditLog.ts < audit_cutoff))
+        await torrent.prune(session)
         await session.commit()
 
 

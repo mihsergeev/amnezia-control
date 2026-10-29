@@ -2896,3 +2896,30 @@ button.srv-side-gh:hover .drag-handle {
     animation: none;
   }
 }
+
+/* блокировка торрентов: галочки в форме сервера, строка на карточке, отметка клиента */
+.torrent-opts {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.torrent-sub {
+  margin-left: 1.5rem;
+}
+
+.srv-torrent {
+  margin-top: 0.4rem;
+}
+
+.torrent-badge {
+  margin-left: 0.4rem;
+  background: rgba(230, 150, 40, 0.18);
+  color: #c77a12;
+  border-radius: 6px;
+  padding: 0.05rem 0.4rem;
+  font-size: 0.7rem;
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: help;
+}

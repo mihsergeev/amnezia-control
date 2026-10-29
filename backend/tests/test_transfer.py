@@ -115,7 +115,7 @@ async def test_every_server_scoped_table_is_accounted_for() -> None:
     # страховка от тихой потери: новая таблица с server_id обязана попасть либо
     # в перенос, либо в осознанные исключения
     known = {"server_status", "node_metrics", "traffic_samples",
-             "client_traffic_samples"}
+             "client_traffic_samples", "torrent_hits"}
     exported = {m.__tablename__ for m in _selected_models(False)}
     for model in server_scoped_models():
         t = model.__tablename__

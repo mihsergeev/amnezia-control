@@ -163,13 +163,16 @@ def parse_status_log(text: str) -> dict[str, dict]:
     return out
 
 
+async def read_status_text(conn: asyncssh.SSHClientConnection, container: str) -> str:
+    return await _run(
+        conn, _docker_exec(container, "cat /openvpn-status.log 2>/dev/null")
+    )
+
+
 async def read_status_map(
     conn: asyncssh.SSHClientConnection, container: str
 ) -> dict[str, dict]:
-    text = await _run(
-        conn, _docker_exec(container, "cat /openvpn-status.log 2>/dev/null")
-    )
-    return parse_status_log(text)
+    return parse_status_log(await read_status_text(conn, container))
 
 
 def _docker_exec_i(container: str, inner: str) -> str:

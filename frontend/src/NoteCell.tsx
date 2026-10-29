@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react'
+import { useRef, useState, type ReactNode } from 'react'
 import { useI18n } from './i18n'
 
 type Props = {
@@ -6,12 +6,14 @@ type Props = {
   note: string
   /** если задан — рисуем точку онлайн/оффлайн слева от имени */
   online?: boolean
+  /** отметка после имени (торренты и т.п.) */
+  badge?: ReactNode
   onSave: (note: string) => Promise<void> | void
 }
 
 /** Инлайновая заметка к клиенту (как у AmneziaWG): ✎ для правки, Enter — сохранить,
  * Esc — отмена. Опционально показывает индикатор онлайна. Общий для xray/openvpn. */
-export function NoteCell({ name, note, online, onSave }: Props) {
+export function NoteCell({ name, note, online, badge, onSave }: Props) {
   const { t } = useI18n()
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState('')
@@ -46,6 +48,7 @@ export function NoteCell({ name, note, online, onSave }: Props) {
         <span className="cname" title={name}>
           {name}
         </span>
+        {badge}
         {!editing && (
           <button className="note-edit" title={t('Заметка')} onClick={start}>
             ✎

@@ -189,6 +189,9 @@ export type Server = {
   last_check_ok: boolean | null
   last_check_at: string | null
   last_check_info: string
+  // блокировка торрентов в контейнерах AWG/OpenVPN и пауза тех, кто качает
+  torrent_block: boolean
+  torrent_autopause: boolean
   created_at: string
   updated_at: string
 }
@@ -234,6 +237,30 @@ export type ServerForm = {
   ssh_user: string
   note: string
   group_name: string
+  // только при изменении сервера
+  torrent_block?: boolean
+  torrent_autopause?: boolean
+}
+
+export type TorrentClient = {
+  protocol: string
+  client_id: string
+  name: string
+  hits: number
+  first_seen: string
+  last_seen: string
+}
+
+export type TorrentInfo = {
+  // правила на ноде: null - еще не проверяли
+  active: boolean | null
+  checked_at: string | null
+  error: string
+  clients: TorrentClient[]
+}
+
+export async function getTorrent(serverId: number): Promise<TorrentInfo> {
+  return api<TorrentInfo>(`/api/servers/${serverId}/torrent`)
 }
 
 export type PanelConfig = {
