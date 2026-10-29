@@ -4,6 +4,18 @@ All notable changes to Amnezia Control are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.78.0] - 2026-10-30
+
+### Added
+- **The cascade link test explains a GRE that does not pass because of the
+  host's NAT.** Some clouds give a server a private address on its interface
+  and reach it from outside through a public address on their NAT. Such NAT
+  passes TCP, UDP and ICMP, but usually not GRE, which has no ports. The
+  wizard used to show only "timed out" for GRE; now, when the entry or the
+  exit is behind such NAT, it says so under the result. Found on a cloud in
+  Uzbekistan: GRE packets left the server there, and none arrived in either
+  direction, while the same entry ran GRE to Kazakhstan without loss.
+
 ## [0.77.0] - 2026-10-30
 
 ### Changed

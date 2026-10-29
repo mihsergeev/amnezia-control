@@ -412,3 +412,30 @@ def test_upgrade_script_is_valid_shell() -> None:
     assert f"# rev {cascade.SCRIPTS_REV}" in cascade._fill(cascade._TPROXY_SH)
     # GRE-скрипт только там, где каскад на GRE
     assert f"if [ -f {cascade.GRE_DEFAULTS} ]; then" in script
+
+
+def test_behind_nat() -> None:
+    # облако: на интерфейсе внутренний адрес, снаружи публичный
+    assert cascade.behind_nat("192.168.0.221", "198.51.100.20")
+    # публичный адрес прямо на интерфейсе
+    assert not cascade.behind_nat("198.51.100.20", "198.51.100.20")
+    # оба в одной локальной сети - не NAT
+    assert not cascade.behind_nat("192.168.50.121", "192.168.50.122")
+    assert not cascade.behind_nat("", "198.51.100.20")
+
+
+class _RouteConn:
+    def __init__(self, src: str):
+        self.src = src
+
+    async def run(self, cmd, check=False, input=None, timeout=None):
+        out = f"{self.src}\n" if "route get" in cmd else ""
+        # python3 нет - сами пробы канала не идут, NAT все равно определяется
+        return type("R", (), {"stdout": out, "exit_status": 1})()
+
+
+async def test_probe_reports_nat_without_python() -> None:
+    res = await cascade.probe(_RouteConn("192.168.0.221"), _RouteConn("203.0.113.10"),
+                              "203.0.113.10", "198.51.100.20")
+    assert res["exit_nat"] is True and res["entry_nat"] is False
+    assert res["recommend"] == ""

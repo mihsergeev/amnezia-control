@@ -866,6 +866,8 @@ export type CascadeProbe = {
   tcp: ProbeSide
   gre: ProbeSide
   recommend: CascadeTransport | ''
+  entry_nat: boolean
+  exit_nat: boolean
 }
 
 export type Cascade = {
