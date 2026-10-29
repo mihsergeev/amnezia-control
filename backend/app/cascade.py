@@ -1084,11 +1084,41 @@ async def entry_source_ip(conn: asyncssh.SSHClientConnection, exit_ip: str) -> s
     return pick_source(src, exit_ip, nat)
 
 
+def behind_nat(route_src: str, public_ip: str) -> bool:
+    """Сервер за NAT хостера: на интерфейсе внутренний адрес, а снаружи он виден
+    по публичному (облачный floating IP). Такой NAT рассчитан на TCP, UDP и ICMP,
+    GRE через него обычно не проходит: у GRE нет портов. Оба адреса внутренние -
+    серверы в одной локальной сети, это не NAT."""
+    return _internal(route_src) and not _internal(public_ip) and bool(_ip_or_empty(public_ip))
+
+
+# внутренние сети за NAT хостеров: RFC 1918 и CGNAT
+_INTERNAL = tuple(ipaddress.ip_network(n) for n in
+                  ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "100.64.0.0/10"))
+
+
+def _internal(ip: str) -> bool:
+    try:
+        addr = ipaddress.ip_address(ip)
+    except ValueError:
+        return False
+    return any(addr in n for n in _INTERNAL)
+
+
+async def _route_src(conn, peer: str) -> str:
+    r = await conn.run(f"ip -4 route get {peer} | {_SRC_OF} | head -1", check=False)
+    return _ip_or_empty(r.stdout if isinstance(r.stdout, str) else "")
+
+
 async def probe(exit_conn, entry_conn, entry_ip: str, exit_ip: str) -> dict:
+    nat = {
+        "entry_nat": behind_nat(await _route_src(entry_conn, exit_ip), entry_ip),
+        "exit_nat": behind_nat(await _route_src(exit_conn, entry_ip), exit_ip),
+    }
     if not (await _has_python(exit_conn) and await _has_python(entry_conn)):
         missing = {"ok": False, "bytes": 0, "secs": 0, "mbps": 0,
                    "error": "на сервере нет python3, проверить нечем"}
-        return {"tcp": missing, "gre": missing, "recommend": ""}
+        return {"tcp": missing, "gre": missing, "recommend": "", **nat}
     tcp = await probe_tcp(exit_conn, entry_conn, entry_ip, exit_ip)
     gre = await probe_gre(exit_conn, entry_conn, entry_ip, exit_ip)
-    return {"tcp": tcp, "gre": gre, "recommend": recommend(tcp, gre)}
+    return {"tcp": tcp, "gre": gre, "recommend": recommend(tcp, gre), **nat}

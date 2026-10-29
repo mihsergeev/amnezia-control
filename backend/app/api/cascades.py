@@ -141,6 +141,7 @@ async def probe(body: CascadePair, _: CurrentUser, session: SessionDep) -> Casca
     return CascadeProbeOut(
         entry_ip=entry_ip, exit_ip=exit_ip, exit_country=country, exit_org=org,
         tcp=res["tcp"], gre=res["gre"], recommend=res["recommend"],
+        entry_nat=res.get("entry_nat", False), exit_nat=res.get("exit_nat", False),
     )
 
 

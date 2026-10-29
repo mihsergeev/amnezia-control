@@ -715,6 +715,9 @@ class CascadeProbeOut(BaseModel):
     tcp: ProbeSide
     gre: ProbeSide
     recommend: str  # vless | gre | "" (не проходит ничего)
+    # сервер за NAT хостера: GRE через такой NAT обычно не проходит
+    entry_nat: bool = False
+    exit_nat: bool = False
 
 
 class CascadeOut(BaseModel):
