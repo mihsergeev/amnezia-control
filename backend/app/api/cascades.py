@@ -222,26 +222,28 @@ async def check(cascade_id: int, _: CurrentUser, session: SessionDep) -> Cascade
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Сервер не найден")
     try:
         async with _locked(entry) as conn:
-            r = await conn.run(cascade.build_check_command(entry.country), check=False, timeout=60)
+            out = await cascade.run_check(conn, entry.country)
     except Exception as exc:  # noqa: BLE001
         raise _ssh_error(exc) from exc
-    kv = cascade.parse_kv(r.stdout if isinstance(r.stdout, str) else "")
+    kv = cascade.parse_kv(out)
     res = cascade.check_result(kv)
     now = datetime.now(timezone.utc)
     result = json.loads(c.result or "{}") | res | {"checked_at": now.isoformat()}
     c.result = json.dumps(result)
-    if res["egress"]:
+    # на карточку сервера - адрес, с которого реально выходят клиенты
+    if res["client"] or res["egress"]:
         server_ops.apply_egress(
-            entry, await server_ops.describe_egress(entry.host, res["egress"]), now
+            entry, await server_ops.describe_egress(entry.host, res["client"] or res["egress"]), now
         )
     await session.commit()
     tunnel = kv.get("tun", "") if c.transport == "gre" else ""
     gateway = kv.get("gw") == "yes"
     tproxy = kv.get("tproxy") == "active"
+    rule = kv.get("rule") != "no" and (c.transport != "gre" or kv.get("grerule") != "no")
     ok, _reason = cascade.health(c.transport, kv, res)
     return CascadeCheckOut(
-        ok=ok, gateway=gateway, tproxy=tproxy, tunnel=tunnel,
-        egress=res["egress"], ru=res["ru"], checked_at=now,
+        ok=ok, gateway=gateway, tproxy=tproxy, rule=rule, tunnel=tunnel,
+        egress=res["egress"], ru=res["ru"], client=res["client"], checked_at=now,
     )
 
 

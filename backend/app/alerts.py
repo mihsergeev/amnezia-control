@@ -39,6 +39,8 @@ EN = {
     "GRE-туннель выключен": "GRE tunnel is down",
     "клиенты идут мимо шлюза (tproxy выключен)": "clients bypass the gateway (tproxy is off)",
     "через выход интернет не открывается": "no internet through the exit",
+    "пропало правило маршрутизации в шлюз": "the routing rule into the gateway is gone",
+    "клиенты выходят в интернет мимо выхода": "clients reach the internet bypassing the exit",
     "Сменился SSH-ключ сервера": "Server SSH host key changed",
     "возможна подмена. Если сервер пересоздавали, удалите его строку из data/ssh/known_hosts":
         "possible spoofing. If the server was rebuilt, remove its line from data/ssh/known_hosts",

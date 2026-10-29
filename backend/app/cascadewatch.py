@@ -3,7 +3,8 @@
 сломанный выпуск в интернет на выходе - алерт о падении сервера тут молчит.
 
 Раз в пару минут на входе запускается та же проверка, что и кнопка «Каскад:
-проверить канал»: шлюз, туннель, tproxy и адрес выхода через шлюз. Алерт - только
+проверить канал»: шлюз, туннель, tproxy и адрес выхода через шлюз (скрипты входа
+старой ревизии она заодно обновляет, см. cascade.run_check). Алерт - только
 когда отказ держится непрерывно дольше cascade_down_minutes, и один на аварию;
 когда каскад снова работает - сообщение об этом. Состояние лежит в
 cascades.result["health"], рестарт панели алерт не повторяет.
@@ -31,8 +32,7 @@ START_DELAY = 60
 
 async def _ssh_check(entry: Server, settings: Settings) -> str:
     async with nodelock.connect("cascade", entry.id, cascadejob.connect(entry, settings)) as conn:
-        r = await conn.run(cascade.build_check_command(entry.country), check=False, timeout=90)
-    return r.stdout if isinstance(r.stdout, str) else ""
+        return await cascade.run_check(conn, entry.country, timeout=90)
 
 
 def _since(health: dict, now: datetime) -> datetime:

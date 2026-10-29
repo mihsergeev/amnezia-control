@@ -737,7 +737,9 @@ class CascadeCheckOut(BaseModel):
     ok: bool
     gateway: bool
     tproxy: bool
+    rule: bool = True  # ip rule в шлюз на месте
     tunnel: str  # состояние acgre (UP/DOWN) или "" без GRE
     egress: str
     ru: str
+    client: str = ""  # адрес изнутри VPN-контейнера, "" - спросить не вышло
     checked_at: datetime

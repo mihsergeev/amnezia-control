@@ -894,9 +894,11 @@ export type CascadeCheck = {
   ok: boolean
   gateway: boolean
   tproxy: boolean
+  rule: boolean
   tunnel: string
   egress: string
   ru: string
+  client: string
   checked_at: string
 }
 
