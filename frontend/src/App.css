@@ -2599,6 +2599,71 @@ button.srv-side-gh:hover .drag-handle {
   text-align: right;
 }
 
+/* полоса проверки канала: идет - бегущие штрихи, готово - доля дошедших 20 мб */
+.cas-pbar {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+
+.cas-pbar-track {
+  height: 8px;
+  border-radius: 4px;
+  background: var(--hover);
+  overflow: hidden;
+}
+
+.cas-pbar-fill {
+  height: 100%;
+  border-radius: 4px;
+  transition: width 0.6s cubic-bezier(0.2, 0.8, 0.2, 1), background 0.3s;
+}
+
+.cas-pbar-run .cas-pbar-fill {
+  background: repeating-linear-gradient(
+    -45deg,
+    #3563e9 0 8px,
+    #5b85f5 8px 16px
+  );
+  background-size: 22.6px 22.6px;
+  box-shadow: 0 0 10px #3563e966;
+  animation: cas-stripes 0.6s linear infinite;
+  transition: width 0.15s linear;
+}
+
+.cas-pbar-ok .cas-pbar-fill {
+  background: linear-gradient(90deg, #16a34a, #22c55e);
+}
+
+.cas-pbar-bad .cas-pbar-fill {
+  background: #ff7b6e;
+}
+
+.cas-pbar-wait {
+  opacity: 0.55;
+}
+
+/* свое время отработала, итог придет вместе со всей проверкой */
+.cas-pbar-held .cas-pbar-fill {
+  background: #3563e9;
+  opacity: 0.45;
+}
+
+@keyframes cas-stripes {
+  from {
+    background-position: 0 0;
+  }
+  to {
+    background-position: 22.6px 0;
+  }
+}
+
+/* линия вход - выход на шаге связи вместо стрелки */
+.cas-link {
+  flex: 1 1 3rem;
+  align-self: center;
+}
+
 .cas-opts {
   display: flex;
   flex-direction: column;
@@ -2918,6 +2983,7 @@ button.srv-side-gh:hover .drag-handle {
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .cas-pbar-run .cas-pbar-fill,
   .cc-link-run,
   .cc-step-wait .cc-icon,
   .cc-icon {
