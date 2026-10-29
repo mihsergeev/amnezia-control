@@ -745,6 +745,9 @@ export type ClientHit = {
   name: string
   note: string
   has_config: boolean
+  // на паузе: снят с ноды, возобновляется из панели
+  paused?: boolean
+  paused_at?: string | null
 }
 
 export type RevokeBulkResultItem = {
@@ -762,8 +765,10 @@ export type RevokeBulkResult = {
   items: RevokeBulkResultItem[]
 }
 
-export function searchClients(q: string): Promise<ClientHit[]> {
-  return api<ClientHit[]>(`/api/clients/search?q=${encodeURIComponent(q)}`)
+// paused - все клиенты на паузе по парку (q тогда необязателен и сужает список)
+export function searchClients(q: string, paused = false): Promise<ClientHit[]> {
+  const qs = `q=${encodeURIComponent(q)}${paused ? '&paused=true' : ''}`
+  return api<ClientHit[]>(`/api/clients/search?${qs}`)
 }
 
 export function revokeClientsBulk(

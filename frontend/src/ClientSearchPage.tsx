@@ -2,6 +2,7 @@ import { useCallback, useState } from 'react'
 import {
   ApiError,
   PROTOCOL_LABEL,
+  pauseClient,
   revokeClientsBulk,
   searchClients,
   type ClientHit,
@@ -15,6 +16,15 @@ function hitKey(h: ClientHit): string {
   return `${h.server_id}|${h.protocol}|${h.client_id}`
 }
 
+// протокол клиента -> путь API возобновления
+const RESUME_PATH: Record<string, 'awg' | 'awg-legacy' | 'awg3' | 'xray' | 'openvpn'> = {
+  awg: 'awg',
+  awg3: 'awg3',
+  awglegacy: 'awg-legacy',
+  xray: 'xray',
+  openvpn: 'openvpn',
+}
+
 export function ClientSearchPage({ onUnauthorized }: Props) {
   const { t } = useI18n()
   const [query, setQuery] = useState('')
@@ -25,6 +35,9 @@ export function ClientSearchPage({ onUnauthorized }: Props) {
   const [result, setResult] = useState<RevokeBulkResult | null>(null)
   // подтверждение: массовый отзыв необратим, поэтому спрашиваем явно
   const [confirming, setConfirming] = useState(false)
+  // что показано: результат поиска или список клиентов на паузе
+  const [pausedMode, setPausedMode] = useState(false)
+  const [resuming, setResuming] = useState<string | null>(null)
 
   const handleError = useCallback(
     (err: unknown) => {
@@ -34,21 +47,42 @@ export function ClientSearchPage({ onUnauthorized }: Props) {
     [onUnauthorized, t],
   )
 
-  async function run() {
-    if (query.trim().length < 2) return
+  async function run(paused = false) {
+    if (!paused && query.trim().length < 2) return
     setBusy(true)
     setResult(null)
     setConfirming(false)
     try {
-      const found = await searchClients(query.trim())
+      const found = await searchClients(query.trim(), paused)
       setHits(found)
-      // по умолчанию отмечаем всё найденное — обычно отзывают целиком
-      setPicked(new Set(found.map(hitKey)))
+      setPausedMode(paused)
+      // по умолчанию отмечаем все найденное - обычно отзывают целиком. Список
+      // пауз открывают посмотреть, его не отмечаем
+      setPicked(paused ? new Set() : new Set(found.map(hitKey)))
       setError(null)
     } catch (err) {
       handleError(err)
     } finally {
       setBusy(false)
+    }
+  }
+
+  async function resume(h: ClientHit) {
+    const path = RESUME_PATH[h.protocol]
+    if (!path) return
+    setResuming(hitKey(h))
+    setError(null)
+    try {
+      await pauseClient(h.server_id, path, h.client_id, true)
+      setHits((cur) =>
+        pausedMode
+          ? (cur ?? []).filter((x) => hitKey(x) !== hitKey(h))
+          : (cur ?? []).map((x) => (hitKey(x) === hitKey(h) ? { ...x, paused: false } : x)),
+      )
+    } catch (err) {
+      handleError(err)
+    } finally {
+      setResuming(null)
     }
   }
 
@@ -75,9 +109,9 @@ export function ClientSearchPage({ onUnauthorized }: Props) {
       const res = await revokeClientsBulk(items, query.trim())
       setResult(res)
       // перечитываем: успешно отозванные из выдачи исчезнут
-      const found = await searchClients(query.trim())
+      const found = await searchClients(query.trim(), pausedMode)
       setHits(found)
-      setPicked(new Set(found.map(hitKey)))
+      setPicked(pausedMode ? new Set() : new Set(found.map(hitKey)))
       setError(null)
     } catch (err) {
       handleError(err)
@@ -104,8 +138,16 @@ export function ClientSearchPage({ onUnauthorized }: Props) {
             onChange={(e) => setQuery(e.target.value)}
             onKeyDown={(e) => e.key === 'Enter' && void run()}
           />
-          <button onClick={run} disabled={busy || query.trim().length < 2}>
+          <button onClick={() => void run()} disabled={busy || query.trim().length < 2}>
             {busy ? t('Ищу…') : t('Найти')}
+          </button>
+          <button
+            className="ghost"
+            onClick={() => void run(true)}
+            disabled={busy}
+            title={t('Все клиенты на паузе по всем серверам; запрос в поле сужает список')}
+          >
+            {t('⏸ На паузе')}
           </button>
         </div>
         <p className="muted small">
@@ -151,7 +193,9 @@ export function ClientSearchPage({ onUnauthorized }: Props) {
 
       {hits !== null && hits.length === 0 && (
         <div className="card">
-          <p className="muted">{t('Ничего не найдено.')}</p>
+          <p className="muted">
+            {pausedMode ? t('Клиентов на паузе нет.') : t('Ничего не найдено.')}
+          </p>
         </div>
       )}
 
@@ -159,7 +203,10 @@ export function ClientSearchPage({ onUnauthorized }: Props) {
         <>
           <div className="page-head">
             <span className="muted">
-              {t('Найдено: {n}', { n: String(hits.length) })} ·{' '}
+              {pausedMode
+                ? t('На паузе: {n}', { n: String(hits.length) })
+                : t('Найдено: {n}', { n: String(hits.length) })}{' '}
+              ·{' '}
               {t('выбрано: {n}', { n: String(pickedCount) })}
             </span>
             <div className="page-head-actions">
@@ -213,6 +260,7 @@ export function ClientSearchPage({ onUnauthorized }: Props) {
                   <th>{t('Сервер')}</th>
                   <th>{t('Протокол')}</th>
                   <th>{t('Заметка')}</th>
+                  <th></th>
                 </tr>
               </thead>
               <tbody>
@@ -227,6 +275,14 @@ export function ClientSearchPage({ onUnauthorized }: Props) {
                     </td>
                     <td>
                       {h.name || <span className="muted">{t('без имени')}</span>}
+                      {h.paused && <span className="pause-badge">{t('⏸ пауза')}</span>}
+                      {h.paused && h.paused_at && (
+                        <div className="muted small">
+                          {t('на паузе с {at}', {
+                            at: new Date(h.paused_at).toLocaleString(),
+                          })}
+                        </div>
+                      )}
                       <div className="mono muted small">
                         {h.client_id.slice(0, 16)}…
                       </div>
@@ -236,6 +292,17 @@ export function ClientSearchPage({ onUnauthorized }: Props) {
                       {h.protocol_label || PROTOCOL_LABEL[h.protocol] || h.protocol}
                     </td>
                     <td className="muted small">{h.note}</td>
+                    <td>
+                      {h.paused && RESUME_PATH[h.protocol] && (
+                        <button
+                          className="ghost"
+                          disabled={resuming !== null}
+                          onClick={() => void resume(h)}
+                        >
+                          {resuming === hitKey(h) ? t('Возобновляю…') : t('Возобновить')}
+                        </button>
+                      )}
+                    </td>
                   </tr>
                 ))}
               </tbody>

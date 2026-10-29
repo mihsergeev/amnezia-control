@@ -4,6 +4,17 @@ All notable changes to Amnezia Control are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.74.0] - 2026-10-29
+
+### Added
+- **Paused clients across the fleet.** The Search page has a "Paused"
+  button: it lists every paused client on all servers and protocols, with the
+  server, protocol, note and when it was paused. A query in the field narrows
+  the list. Each row has "Resume", and paused clients can be revoked in bulk
+  like any search result. The list is not preselected, unlike a search.
+- Regular search finds paused clients too (their names live in the panel,
+  not on the node) and marks them "paused".
+
 ## [0.73.0] - 2026-10-29
 
 ### Changed
