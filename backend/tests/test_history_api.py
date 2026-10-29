@@ -197,3 +197,26 @@ async def test_overview_hides_cascade_exits(app_with_samples) -> None:
     to = int((now + timedelta(minutes=1)).timestamp() * 1000)
     hist = await _get(app, f"/api/stats/history?from_ms={frm}&to_ms={to}&by_server=true")
     assert sorted(s["name"] for s in hist["servers"]) == ["ru-a", "ru-b"]
+
+
+async def test_overview_shows_exit_with_own_protocols(app_with_samples) -> None:
+    # у выхода развернут свой протокол: это еще и обычный сервер со своими
+    # клиентами, в обзоре он считается отдельно
+    import json
+
+    from app.models import Cascade, Server
+
+    app = app_with_samples
+    info = json.dumps({"docker": True, "amnezia_containers": ["amnezia-awg2"]})
+    async with app.state.session_factory() as s:
+        s.add(Server(id=1, name="ru-entry", host="203.0.113.1", ssh_port=22, ssh_user="acontrol"))
+        s.add(Server(id=2, name="uz-exit", host="203.0.113.2", ssh_port=22, ssh_user="acontrol",
+                     last_check_info=info))
+        s.add(Cascade(entry_server_id=1, exit_server_id=2, transport="vless", status="ready"))
+        await s.commit()
+    now = datetime.now(timezone.utc)
+    await _seed(app, [(1, now, 10, 10, 2), (2, now, 10, 10, 1)])
+
+    body = await _get(app, "/api/stats/overview")
+    assert [s["name"] for s in body["per_server"]] == ["ru-entry", "uz-exit"]
+    assert body["servers_total"] == 2
