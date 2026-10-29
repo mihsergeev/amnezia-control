@@ -621,6 +621,9 @@ class ClientSearchHit(BaseModel):
     name: str = ""
     note: str = ""
     has_config: bool = False
+    # клиент на паузе: снят с ноды, данные для возобновления в панели
+    paused: bool = False
+    paused_at: datetime | None = None
 
 
 class ClientRenameRequest(BaseModel):
