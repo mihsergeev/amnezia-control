@@ -35,6 +35,7 @@ import { copyText } from './clipboard'
 import { countryFlag, formatBytes, formatUptime } from './format'
 import { CascadeWizard } from './CascadeWizard'
 import { CascadeCheckModal } from './CascadeCheck'
+import { EgressCheckModal } from './EgressCheck'
 import { TorrentLine } from './Torrent'
 import { useI18n } from './i18n'
 
@@ -97,10 +98,14 @@ function EgressRoute({
   server,
   cascade,
   exitServer,
+  onOpen,
+  onCheck,
 }: {
   server: Server
   cascade?: Cascade
   exitServer?: Server
+  onOpen: (s: Server) => void
+  onCheck: () => void
 }) {
   const { t } = useI18n()
   const viaGre = !cascade && greTunnels(server).length > 0
@@ -111,15 +116,7 @@ function EgressRoute({
     <div className="srv-route">
       <span className="srv-route-label">{t('Клиенты')}</span>
       <span className="srv-route-arrow">→</span>
-      <div className="srv-hop">
-        {countryFlag(server.country) && (
-          <span className="server-flag">{countryFlag(server.country)}</span>
-        )}
-        <div>
-          <div className="mono">{server.host}</div>
-          <div className="muted small">{t('этот сервер')}</div>
-        </div>
-      </div>
+      <Hop flag={countryFlag(server.country)} title={server.host} sub={t('этот сервер')} />
       <span className="srv-route-arrow">
         {viaGre && <GreBadge server={server} />}
         {cascade && (
@@ -127,19 +124,98 @@ function EgressRoute({
         )}
         →
       </span>
-      <div className="srv-hop srv-hop-exit">
-        {countryFlag(exitCountry) && (
-          <span className="server-flag">{countryFlag(exitCountry)}</span>
-        )}
-        <div>
-          <div className="mono">{exitIp}</div>
-          <div className="muted small">
-            {exitSub
-              ? t('выход в интернет, {org}', { org: exitSub })
-              : t('выход в интернет')}
-          </div>
-        </div>
+      <Hop
+        className="srv-hop-exit"
+        flag={countryFlag(exitCountry)}
+        title={exitIp}
+        sub={exitSub ? t('выход в интернет, {org}', { org: exitSub }) : t('выход в интернет')}
+        onClick={exitServer ? () => onOpen(exitServer) : undefined}
+        hint={t('Открыть сервер выхода')}
+      />
+      <button className="ghost srv-route-check" onClick={onCheck}>
+        {t('Проверить каскад')}
+      </button>
+    </div>
+  )
+}
+
+// маршрут на карточке выхода каскада: клиенты приходят со входа
+function ExitRoute({
+  server,
+  cascade,
+  entry,
+  onOpen,
+  onCheck,
+}: {
+  server: Server
+  cascade: Cascade
+  entry?: Server
+  onOpen: (s: Server) => void
+  onCheck: () => void
+}) {
+  const { t } = useI18n()
+  return (
+    <div className="srv-route">
+      <span className="srv-route-label">{t('Клиенты')}</span>
+      <span className="srv-route-arrow">→</span>
+      <Hop
+        flag={countryFlag(entry?.country || '')}
+        title={entry?.host || cascade.entry_ip}
+        sub={entry ? t('вход каскада, {name}', { name: entry.name }) : t('вход каскада')}
+        onClick={entry ? () => onOpen(entry) : undefined}
+        hint={t('Открыть сервер входа')}
+      />
+      <span className="srv-route-arrow">
+        <span className="tun-badge">{cascade.transport === 'gre' ? 'GRE' : 'VLESS'}</span>→
+      </span>
+      <Hop
+        className="srv-hop-exit"
+        flag={countryFlag(server.country)}
+        title={server.host}
+        sub={t('этот сервер, выход в интернет')}
+      />
+      <button className="ghost srv-route-check" onClick={onCheck}>
+        {t('Проверить каскад')}
+      </button>
+    </div>
+  )
+}
+
+// узел маршрута; с onClick - открывает соседний сервер каскада
+function Hop({
+  className = '',
+  flag,
+  title,
+  sub,
+  onClick,
+  hint,
+}: {
+  className?: string
+  flag: string
+  title: string
+  sub: string
+  onClick?: () => void
+  hint?: string
+}) {
+  return (
+    <div
+      className={`srv-hop ${className}${onClick ? ' srv-hop-link' : ''}`}
+      role={onClick ? 'button' : undefined}
+      tabIndex={onClick ? 0 : undefined}
+      title={onClick ? hint : undefined}
+      onClick={onClick}
+      onKeyDown={onClick ? (e) => e.key === 'Enter' && onClick() : undefined}
+    >
+      {flag && <span className="server-flag">{flag}</span>}
+      <div>
+        <div className="mono">{title}</div>
+        <div className="muted small">{sub}</div>
       </div>
+      {onClick && (
+        <span className="srv-hop-go" aria-hidden="true">
+          ↗
+        </span>
+      )}
     </div>
   )
 }
@@ -231,6 +307,9 @@ function ServerDetail({
   cascade,
   peer,
   onCascade,
+  onOpen,
+  onCascadeCheck,
+  onEgressCheck,
 }: {
   server: Server
   metric: NodeMetric | undefined
@@ -243,6 +322,10 @@ function ServerDetail({
   cascade?: Cascade
   peer?: Server
   onCascade: (c: Cascade) => void
+  onOpen: (s: Server) => void
+  onCascadeCheck: (c: Cascade) => void
+  // проверка выхода путем клиентов: для каскада, собранного руками
+  onEgressCheck: () => void
 }) {
   const { t, lang } = useI18n()
   const info = parseCheckInfo(server)
@@ -294,17 +377,30 @@ function ServerDetail({
       </div>
 
       {cascade && cascade.exit_server_id === server.id ? (
-        <div className="muted small">
-          {protocols.length > 0
-            ? t('Выход каскада для «{name}». Свои клиенты этого сервера выходят в интернет с него напрямую.', {
-                name: peer?.name ?? '?',
-              })
-            : t('Выход каскада: сюда идет трафик клиентов с «{name}». Чтобы завести здесь своих клиентов без каскада, разверните протокол в меню «Ещё».', {
-                name: peer?.name ?? '?',
-              })}
-        </div>
+        <>
+          <ExitRoute
+            server={server}
+            cascade={cascade}
+            entry={peer}
+            onOpen={onOpen}
+            onCheck={() => onCascadeCheck(cascade)}
+          />
+          <div className="muted small">
+            {protocols.length > 0
+              ? t('Свои клиенты этого сервера выходят в интернет с него напрямую, без каскада.')
+              : t('Чтобы завести здесь своих клиентов без каскада, разверните протокол в меню «Ещё».')}
+          </div>
+        </>
       ) : server.egress_ip || cascade ? (
-        <EgressRoute server={server} cascade={cascade} exitServer={peer} />
+        <EgressRoute
+          server={server}
+          cascade={cascade}
+          exitServer={peer}
+          onOpen={onOpen}
+          onCheck={() =>
+            cascade && cascade.status === 'ready' ? onCascadeCheck(cascade) : onEgressCheck()
+          }
+        />
       ) : (
         greTunnels(server).length > 0 && (
           <div>
@@ -531,6 +627,7 @@ export function ServersPage({ onUnauthorized }: Props) {
   const [unbuilding, setUnbuilding] = useState(false)
   // окно проверки канала каскада
   const [casCheck, setCasCheck] = useState<Cascade | null>(null)
+  const [egressCheck, setEgressCheck] = useState<Server | null>(null)
 
   // Escape закрывает открытую инлайновую модалку страницы (компонентные —
   // ClientsModal/DeployModal и т.п. — обрабатывают Escape сами)
@@ -974,22 +1071,8 @@ export function ServersPage({ onUnauthorized }: Props) {
     }
     const cas = cascadeOf(s)
     if (cas) {
-      if (cas.status === 'ready') {
-        items.push({
-          label: t('Каскад: проверить канал'),
-          onClick: () => setCasCheck(cas),
-        })
-        const peer = cascadePeer(s, cas)
-        if (peer) {
-          items.push({
-            label:
-              cas.entry_server_id === s.id
-                ? t('Открыть сервер выхода')
-                : t('Открыть сервер входа'),
-            onClick: () => select(peer),
-          })
-        }
-      } else {
+      // проверка каскада и переход на соседний сервер - на самой карточке, в маршруте
+      if (cas.status !== 'ready') {
         items.push({ label: t('Каскад: ход установки'), onClick: () => setWizard({ resume: cas }) })
       }
       items.push({
@@ -1303,6 +1386,9 @@ export function ServersPage({ onUnauthorized }: Props) {
                 cascade={cascadeOf(selected)}
                 peer={cascadePeer(selected, cascadeOf(selected))}
                 onCascade={(c) => setWizard({ resume: c })}
+                onOpen={select}
+                onCascadeCheck={setCasCheck}
+                onEgressCheck={() => setEgressCheck(selected)}
               />
             ) : (
               <div className="card srv-detail muted">{t('Ничего не найдено')}</div>
@@ -1755,6 +1841,14 @@ export function ServersPage({ onUnauthorized }: Props) {
         </div>
       )}
 
+      {egressCheck && (
+        <EgressCheckModal
+          server={egressCheck}
+          onClose={() => setEgressCheck(null)}
+          onChecked={() => void load()}
+          onUnauthorized={onUnauthorized}
+        />
+      )}
       {casCheck && (
         <CascadeCheckModal
           cascade={casCheck}

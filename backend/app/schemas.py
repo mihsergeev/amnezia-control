@@ -733,6 +733,24 @@ class CascadeOut(BaseModel):
     created_at: datetime
 
 
+class EgressSiteOut(BaseModel):
+    name: str
+    ok: bool
+    code: int
+    ms: int
+
+
+class EgressCheckOut(BaseModel):
+    error: str  # проверить не вышло (нет контейнера, нет curl); пусто - проверили
+    container: str
+    egress: str  # адрес, с которого клиенты выходят в интернет; пусто - не вышли
+    egress_country: str
+    egress_org: str
+    local: str  # адрес для сайтов страны сервера (есть не для всех стран)
+    sites: list[EgressSiteOut]
+    checked_at: datetime
+
+
 class CascadeCheckOut(BaseModel):
     ok: bool
     gateway: bool
@@ -742,4 +760,6 @@ class CascadeCheckOut(BaseModel):
     egress: str
     ru: str
     client: str = ""  # адрес изнутри VPN-контейнера, "" - спросить не вышло
+    direct: str = ""  # свой адрес входа: если клиенты выходят с него, каскад они обходят
+    leak: bool = False
     checked_at: datetime

@@ -114,14 +114,17 @@ export function CascadeCheckModal({ cascade, entry, exit, onClose, onChecked, on
         ? t('адрес {ip}', { ip: result.client })
         : t('из контейнера спросить нечем')
       : undefined,
-    // старая панель без поля client или контейнер не ответил - не судим
+    // контейнер не ответил - не судим. Другой адрес, но не адрес входа
+    // (у выхода их несколько) - не поломка, только предупреждение
     state: !result
       ? 'wait'
       : !result.client
         ? 'warn'
-        : !result.egress || result.client === result.egress
-          ? st(!!result.egress)
-          : 'bad',
+        : result.leak
+          ? 'bad'
+          : !result.egress || result.client === result.egress
+            ? st(!!result.egress)
+            : 'warn',
   })
   if (ru || result?.ru) {
     steps.push({

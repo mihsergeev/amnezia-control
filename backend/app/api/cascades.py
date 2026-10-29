@@ -243,7 +243,8 @@ async def check(cascade_id: int, _: CurrentUser, session: SessionDep) -> Cascade
     ok, _reason = cascade.health(c.transport, kv, res)
     return CascadeCheckOut(
         ok=ok, gateway=gateway, tproxy=tproxy, rule=rule, tunnel=tunnel,
-        egress=res["egress"], ru=res["ru"], client=res["client"], checked_at=now,
+        egress=res["egress"], ru=res["ru"], client=res["client"], direct=res["direct"],
+        leak=cascade.leaks(res), checked_at=now,
     )
 
 
