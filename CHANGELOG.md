@@ -4,6 +4,19 @@ All notable changes to Amnezia Control are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.71.0] - 2026-10-29
+
+### Changed
+- **Cascade link check is a window, not a one-line message.** It draws the
+  route clients, entry, tunnel, exit, internet. While the entry answers, the
+  links animate and a progress bar fills; then the steps light up one by one:
+  gateway running, clients through the gateway, GRE tunnel up, internet
+  through the exit, the entry country's sites directly. Broken parts of the
+  route turn red and the verdict names the reason. "Check again" reruns it.
+- **The whole protocol row in the server card opens its clients.** It
+  highlights on hover and works from the keyboard, the Clients button stays
+  as a hint.
+
 ## [0.70.1] - 2026-10-29
 
 ### Changed

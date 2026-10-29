@@ -10,7 +10,6 @@ import {
 import {
   api,
   ApiError,
-  checkCascade,
   deleteCascade,
   listCascades,
   parseCheckInfo,
@@ -34,6 +33,7 @@ import { ServerExportModal, ServerImportModal } from './ServerTransfer'
 import { copyText } from './clipboard'
 import { countryFlag, formatBytes, formatUptime } from './format'
 import { CascadeWizard } from './CascadeWizard'
+import { CascadeCheckModal } from './CascadeCheck'
 import { useI18n } from './i18n'
 
 const FALLBACK_USER = 'acontrol'
@@ -406,16 +406,41 @@ function ServerDetail({
                 : t('Протоколов нет. Развернуть можно в меню «Ещё».')}
           </p>
         ) : (
-          protocols.map((p) => (
-            <div className="srv-proto-row" key={p.key}>
-              <span className="proto-badge">{p.label}</span>
-              {online && (
-                <button className="primary-ghost" onClick={() => onClients(p.key)}>
+          protocols.map((p) =>
+            online ? (
+              // вся строка открывает клиентов протокола, кнопка - подсказка глазу
+              <div
+                className="srv-proto-row clickable"
+                key={p.key}
+                role="button"
+                tabIndex={0}
+                onClick={() => onClients(p.key)}
+                onKeyDown={(e) => {
+                  if (e.target !== e.currentTarget) return
+                  if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault()
+                    onClients(p.key)
+                  }
+                }}
+              >
+                <span className="proto-badge">{p.label}</span>
+                <button
+                  className="primary-ghost"
+                  tabIndex={-1}
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    onClients(p.key)
+                  }}
+                >
                   {t('Клиенты')}
                 </button>
-              )}
-            </div>
-          ))
+              </div>
+            ) : (
+              <div className="srv-proto-row" key={p.key}>
+                <span className="proto-badge">{p.label}</span>
+              </div>
+            ),
+          )
         )}
       </div>
     </div>
@@ -493,7 +518,8 @@ export function ServersPage({ onUnauthorized }: Props) {
   const [wizard, setWizard] = useState<{ resume?: Cascade } | null>(null)
   const [unbuild, setUnbuild] = useState<{ c: Cascade; error?: string } | null>(null)
   const [unbuilding, setUnbuilding] = useState(false)
-  const [casChecking, setCasChecking] = useState<number | null>(null)
+  // окно проверки канала каскада
+  const [casCheck, setCasCheck] = useState<Cascade | null>(null)
 
   // Escape закрывает открытую инлайновую модалку страницы (компонентные —
   // ClientsModal/DeployModal и т.п. — обрабатывают Escape сами)
@@ -870,32 +896,6 @@ export function ServersPage({ onUnauthorized }: Props) {
     return servers.find((x) => x.id === id)
   }
 
-  async function checkCas(c: Cascade) {
-    setCasChecking(c.id)
-    setNotice(null)
-    setError(null)
-    try {
-      const r = await checkCascade(c.id)
-      const parts = [
-        r.egress
-          ? t('остальное через {ip}', { ip: r.egress })
-          : t('через выход интернет не открывается'),
-        r.ru ? t('местное напрямую с {ip}', { ip: r.ru }) : '',
-        !r.gateway ? t('шлюз не запущен') : '',
-        !r.tproxy ? t('клиенты не заворачиваются в шлюз') : '',
-        c.transport === 'gre' && !r.tunnel ? t('GRE-туннеля нет') : '',
-      ].filter(Boolean)
-      const msg = t('Каскад: {parts}', { parts: parts.join(', ') })
-      if (r.ok) setNotice(msg)
-      else setError(msg)
-      await load()
-    } catch (err) {
-      handleError(err)
-    } finally {
-      setCasChecking(null)
-    }
-  }
-
   async function confirmUnbuild(force: boolean) {
     if (!unbuild) return
     setUnbuilding(true)
@@ -963,9 +963,8 @@ export function ServersPage({ onUnauthorized }: Props) {
     if (cas) {
       if (cas.status === 'ready') {
         items.push({
-          label: casChecking === cas.id ? t('Проверка…') : t('Каскад: проверить канал'),
-          disabled: casChecking === cas.id,
-          onClick: () => void checkCas(cas),
+          label: t('Каскад: проверить канал'),
+          onClick: () => setCasCheck(cas),
         })
       } else {
         items.push({ label: t('Каскад: ход установки'), onClick: () => setWizard({ resume: cas }) })
@@ -1692,6 +1691,16 @@ export function ServersPage({ onUnauthorized }: Props) {
         </div>
       )}
 
+      {casCheck && (
+        <CascadeCheckModal
+          cascade={casCheck}
+          entry={servers.find((x) => x.id === casCheck.entry_server_id)}
+          exit={servers.find((x) => x.id === casCheck.exit_server_id)}
+          onClose={() => setCasCheck(null)}
+          onChecked={() => void load()}
+          onUnauthorized={onUnauthorized}
+        />
+      )}
       {removeProto && (
         <RemoveProtocolModal
           serverId={removeProto.server.id}
