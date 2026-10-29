@@ -11,6 +11,7 @@ import {
   api,
   ApiError,
   deleteCascade,
+  hiddenExits,
   listCascades,
   parseCheckInfo,
   protocolsFromContainers,
@@ -294,9 +295,13 @@ function ServerDetail({
 
       {cascade && cascade.exit_server_id === server.id ? (
         <div className="muted small">
-          {t('Выход каскада: сюда идет трафик клиентов с «{name}», своих клиентов тут нет.', {
-            name: peer?.name ?? '?',
-          })}
+          {protocols.length > 0
+            ? t('Выход каскада для «{name}». Свои клиенты этого сервера выходят в интернет с него напрямую.', {
+                name: peer?.name ?? '?',
+              })
+            : t('Выход каскада: сюда идет трафик клиентов с «{name}». Чтобы завести здесь своих клиентов без каскада, разверните протокол в меню «Ещё».', {
+                name: peer?.name ?? '?',
+              })}
         </div>
       ) : server.egress_ip || cascade ? (
         <EgressRoute server={server} cascade={cascade} exitServer={peer} />
@@ -760,8 +765,8 @@ export function ServersPage({ onUnauthorized }: Props) {
   // серверы, сгруппированные по group_name; порядок карточек и групп — ручной
   // (position, drag-and-drop). Группа выводится по первому появлению в
   // отсортированном списке (= по минимальной позиции участника), пустая — в конце.
-  // выходы каскадов панели: своих клиентов нет, в списке они часть сервера-входа
-  const exitIds = useMemo(() => new Set(cascades.map((c) => c.exit_server_id)), [cascades])
+  // выходы каскадов без своих протоколов: в списке они часть сервера-входа
+  const exitIds = useMemo(() => hiddenExits(servers, cascades), [servers, cascades])
   const listed = useMemo(() => servers.filter((s) => !exitIds.has(s.id)), [servers, exitIds])
 
   const groupList = useMemo(() => {
@@ -974,6 +979,16 @@ export function ServersPage({ onUnauthorized }: Props) {
           label: t('Каскад: проверить канал'),
           onClick: () => setCasCheck(cas),
         })
+        const peer = cascadePeer(s, cas)
+        if (peer) {
+          items.push({
+            label:
+              cas.entry_server_id === s.id
+                ? t('Открыть сервер выхода')
+                : t('Открыть сервер входа'),
+            onClick: () => select(peer),
+          })
+        }
       } else {
         items.push({ label: t('Каскад: ход установки'), onClick: () => setWizard({ resume: cas }) })
       }
@@ -1043,8 +1058,15 @@ export function ServersPage({ onUnauthorized }: Props) {
   )
   const visibleFlat = visibleGroups.flatMap((g) => g.servers)
   const problemCount = listed.filter(problem).length
+  // спрятанный выход открывается из меню своего входа: его карточку показываем,
+  // хотя в списке его нет (так на нем разворачивают протокол для своих клиентов)
   const selected =
-    visibleFlat.find((s) => s.id === selectedId) ?? visibleFlat[0] ?? null
+    visibleFlat.find((s) => s.id === selectedId) ??
+    (selectedId !== null && exitIds.has(selectedId)
+      ? servers.find((s) => s.id === selectedId)
+      : undefined) ??
+    visibleFlat[0] ??
+    null
 
   function select(s: Server) {
     setSelectedId(s.id)

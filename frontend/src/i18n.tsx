@@ -823,8 +823,12 @@ const EN: Record<string, string> = {
   'Запустить еще раз': 'Run again',
   'вход': 'entry',
   'выход': 'exit',
-  'Выход каскада: сюда идет трафик клиентов с «{name}», своих клиентов тут нет.':
-    'Cascade exit: clients\' traffic from "{name}" comes out here, it has no clients of its own.',
+  'Выход каскада для «{name}». Свои клиенты этого сервера выходят в интернет с него напрямую.':
+    'Cascade exit for "{name}". Own clients of this server go to the internet from it directly.',
+  'Выход каскада: сюда идет трафик клиентов с «{name}». Чтобы завести здесь своих клиентов без каскада, разверните протокол в меню «Ещё».':
+    'Cascade exit: traffic of "{name}" clients comes out here. To have clients of its own here without the cascade, deploy a protocol from the More menu.',
+  'Открыть сервер выхода': 'Open the exit server',
+  'Открыть сервер входа': 'Open the entry server',
   'Каскад не собрался: {err}': 'Cascade build failed: {err}',
   'Каскад собирается…': 'Cascade is being built…',
   'Подробнее': 'Details',

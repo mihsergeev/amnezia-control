@@ -918,13 +918,25 @@ export function listCascades(): Promise<Cascade[]> {
   return api<Cascade[]>('/api/cascades')
 }
 
-// серверы без выходов каскадов: выход - часть своего входа, клиентов у него нет
+/** Выходы каскадов, которые в списках прячутся внутри своего входа. Выход со
+ * своими протоколами - еще и обычный сервер со своими клиентами (они выходят в
+ * интернет с него напрямую), такой показываем. */
+export function hiddenExits(servers: Server[], cascades: Cascade[]): Set<number> {
+  const own = new Set(
+    servers
+      .filter((s) => (parseCheckInfo(s)?.amnezia_containers ?? []).length > 0)
+      .map((s) => s.id),
+  )
+  return new Set(cascades.map((c) => c.exit_server_id).filter((id) => !own.has(id)))
+}
+
+// серверы без спрятанных выходов каскадов (см. hiddenExits)
 export async function listVpnServers(): Promise<Server[]> {
   const [servers, cascades] = await Promise.all([
     api<Server[]>('/api/servers'),
     listCascades().catch(() => [] as Cascade[]),
   ])
-  const exits = new Set(cascades.map((c) => c.exit_server_id))
+  const exits = hiddenExits(servers, cascades)
   return servers.filter((s) => !exits.has(s.id))
 }
 

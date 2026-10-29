@@ -4,6 +4,22 @@ All notable changes to Amnezia Control are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.75.0] - 2026-10-29
+
+### Added
+- **A cascade exit can also serve clients of its own.** The exit used to be
+  hidden inside its entry, so its own accounts (without the cascade) could
+  not be managed. The entry's More menu now has "Open the exit server": its
+  card opens, and protocols are deployed there as on any server. Once the exit
+  has a protocol of its own, it is listed as a regular server (counters,
+  Overview, filters), its clients go to the internet from it directly, and
+  the cascade keeps working. The exit card says which entry it serves and has
+  "Open the entry server". An exit without protocols stays hidden as before.
+- Checked end to end on two VMs with a VLESS cascade: AmneziaWG 3.1 on the
+  exit next to the cascade, live clients of the entry (through the cascade)
+  and of the exit (directly), the cascade check, and removing the cascade
+  with the exit's own protocol and clients kept.
+
 ## [0.74.0] - 2026-10-29
 
 ### Added
