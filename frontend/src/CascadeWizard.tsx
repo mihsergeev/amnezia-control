@@ -548,6 +548,21 @@ export function CascadeWizard({
                         {probeText(t, probe.gre)}
                       </span>
                     </div>
+                    {!probe.gre.ok && (probe.entry_nat || probe.exit_nat) && (
+                      <div className="muted small">
+                        {probe.entry_nat && probe.exit_nat
+                          ? t(
+                              'Вход и выход за NAT хостера: на интерфейсах внутренние адреса. GRE через такой NAT обычно не проходит, это настройки сети хостера, а не панели.',
+                            )
+                          : probe.exit_nat
+                            ? t(
+                                'Выход за NAT хостера: на его интерфейсе внутренний адрес. GRE через такой NAT обычно не проходит, это настройки сети хостера, а не панели.',
+                              )
+                            : t(
+                                'Вход за NAT хостера: на его интерфейсе внутренний адрес. GRE через такой NAT обычно не проходит, это настройки сети хостера, а не панели.',
+                              )}
+                      </div>
+                    )}
                     {!probe.tcp.ok && probe.tcp.bytes > 0 && (
                       <div className="muted small">
                         {t(
