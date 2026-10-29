@@ -50,7 +50,7 @@ const EN: Record<string, string> = {
   'Отозвать выбранные': 'Revoke selected',
   'Переименовать': 'Rename',
   'Новое имя клиента': 'New client name',
-  'Удалить протокол {proto}': 'Remove protocol {proto}',
+  'Удалить протокол {proto}…': 'Remove protocol {proto}…',
   'Удалить {proto} с сервера «{server}» вместе со ВСЕМИ его клиентами? Их конфиги перестанут работать. Перед удалением на ноде сохраняется снимок конфига.':
     'Remove {proto} from "{server}" together with ALL its clients? Their configs will stop working. A config snapshot is saved on the node first.',
   'Удаление {proto} с сервера «{server}». Все клиенты протокола потеряют доступ.':

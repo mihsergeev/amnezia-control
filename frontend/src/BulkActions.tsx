@@ -141,33 +141,22 @@ type RemoveProps = {
   serverName: string
   protocol: Protocol
   onRemoved: () => void
+  onCancel: () => void
   onUnauthorized: () => void
 }
 
-// Удаление протокола с ноды целиком, вместе со всеми клиентами. Внизу модалки,
-// подальше от частых кнопок, и только после повторного ввода пароля.
-export function RemoveProtocol({
+// Удаление протокола с ноды целиком, вместе со всеми клиентами: пункт в меню
+// «Ещё» карточки сервера (не рядом с выдачей конфигов), после подтверждения
+// там же. Здесь второй шаг - повторный ввод пароля
+export function RemoveProtocolModal({
   serverId,
   serverName,
   protocol,
   onRemoved,
+  onCancel,
   onUnauthorized,
 }: RemoveProps) {
   const { t } = useI18n()
-  const [asking, setAsking] = useState(false)
-
-  function start() {
-    if (
-      !window.confirm(
-        t('Удалить {proto} с сервера «{server}» вместе со ВСЕМИ его клиентами? Их конфиги перестанут работать. Перед удалением на ноде сохраняется снимок конфига.', {
-          proto: protocol.label,
-          server: serverName,
-        }),
-      )
-    )
-      return
-    setAsking(true)
-  }
 
   async function submit(password: string) {
     try {
@@ -179,25 +168,17 @@ export function RemoveProtocol({
       }
       throw err
     }
-    setAsking(false)
     onRemoved()
   }
 
   return (
-    <div className="danger-zone">
-      <button className="ghost danger" onClick={start}>
-        {t('Удалить протокол {proto}', { proto: protocol.label })}
-      </button>
-      {asking && (
-        <StepUpModal
-          text={t('Удаление {proto} с сервера «{server}». Все клиенты протокола потеряют доступ.', {
-            proto: protocol.label,
-            server: serverName,
-          })}
-          onSubmit={submit}
-          onCancel={() => setAsking(false)}
-        />
-      )}
-    </div>
+    <StepUpModal
+      text={t('Удаление {proto} с сервера «{server}». Все клиенты протокола потеряют доступ.', {
+        proto: protocol.label,
+        server: serverName,
+      })}
+      onSubmit={submit}
+      onCancel={onCancel}
+    />
   )
 }

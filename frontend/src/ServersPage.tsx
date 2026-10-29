@@ -26,6 +26,7 @@ import {
   type ServerStat,
 } from './api'
 import { ClientsModal } from './ClientsModal'
+import { RemoveProtocolModal } from './BulkActions'
 import { ImportModal } from './ImportModal'
 import { DeployModal } from './DeployModal'
 import { Menu, type MenuItem } from './Menu'
@@ -481,6 +482,8 @@ export function ServersPage({ onUnauthorized }: Props) {
   const [faPassword, setFaPassword] = useState('')
   const [scriptFor, setScriptFor] = useState<Server | null>(null)
   const [deleteFor, setDeleteFor] = useState<Server | null>(null)
+  // удаление протокола целиком: из меню «Ещё», после подтверждения и пароля
+  const [removeProto, setRemoveProto] = useState<{ server: Server; protocol: Protocol } | null>(null)
   const [deleteRemoveKey, setDeleteRemoveKey] = useState(false)
   const [deleting, setDeleting] = useState(false)
   const [scriptText, setScriptText] = useState('')
@@ -975,6 +978,25 @@ export function ServersPage({ onUnauthorized }: Props) {
     }
     items.push({ label: t('Выгрузить в файл'), onClick: () => setExportFor(s) })
     items.push({ label: t('Изменить'), onClick: () => openEdit(s) })
+    // опасное - в конце меню за чертой, подальше от выдачи конфигов в окне клиентов
+    items.push({ divider: true })
+    if (online) {
+      for (const p of protocols) {
+        items.push({
+          label: t('Удалить протокол {proto}…', { proto: p.label }),
+          danger: true,
+          onClick: () => {
+            const ok = window.confirm(
+              t('Удалить {proto} с сервера «{server}» вместе со ВСЕМИ его клиентами? Их конфиги перестанут работать. Перед удалением на ноде сохраняется снимок конфига.', {
+                proto: p.label,
+                server: s.name,
+              }),
+            )
+            if (ok) setRemoveProto({ server: s, protocol: p })
+          },
+        })
+      }
+    }
     items.push({
       label: t('Удалить сервер'),
       danger: true,
@@ -1447,12 +1469,6 @@ export function ServersPage({ onUnauthorized }: Props) {
           )}
           onClose={() => setClientsFor(null)}
           onUnauthorized={onUnauthorized}
-          onProtocolRemoved={() => {
-            const srv = clientsFor
-            setClientsFor(null)
-            if (srv) setNotice(t('Протокол удален с сервера «{name}», снимок конфига остался на ноде.', { name: srv.name }))
-            void load()
-          }}
           onRequestUpdate={(protocol) => {
             const srv = clientsFor
             if (!srv) return
@@ -1676,6 +1692,21 @@ export function ServersPage({ onUnauthorized }: Props) {
         </div>
       )}
 
+      {removeProto && (
+        <RemoveProtocolModal
+          serverId={removeProto.server.id}
+          serverName={removeProto.server.name}
+          protocol={removeProto.protocol}
+          onCancel={() => setRemoveProto(null)}
+          onUnauthorized={onUnauthorized}
+          onRemoved={() => {
+            const srv = removeProto.server
+            setRemoveProto(null)
+            setNotice(t('Протокол удален с сервера «{name}», снимок конфига остался на ноде.', { name: srv.name }))
+            void load()
+          }}
+        />
+      )}
       {deleteFor && (
         <div className="modal-backdrop">
           <div className="card modal" onClick={(e) => e.stopPropagation()}>

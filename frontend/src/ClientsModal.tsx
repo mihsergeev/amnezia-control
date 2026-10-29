@@ -22,7 +22,7 @@ import { XrayClients } from './XrayClients'
 import { AmneziaQr } from './AmneziaQr'
 import { ExpiryCell, ExpirySelect } from './Expiry'
 import { ClientStatsModal } from './ClientStatsModal'
-import { BulkRevokeBar, RemoveProtocol, SelectAllCell, SelectCell, useSelection } from './BulkActions'
+import { BulkRevokeBar, SelectAllCell, SelectCell, useSelection } from './BulkActions'
 import { useShareLink } from './ShareLink'
 import { useI18n } from './i18n'
 import { useModalDismiss } from './useModalDismiss'
@@ -35,7 +35,6 @@ type Props = {
   onRequestUpdate: (protocol: 'awg' | 'awg3' | 'xray' | 'openvpn') => void
   onRequestUpgrade31?: () => void
   onRequestAdopt?: () => void
-  onProtocolRemoved: () => void
   // вкладка, открытая сразу; без нее - первая (самый новый протокол)
   initialProtocol?: Protocol['key']
 }
@@ -52,7 +51,6 @@ export function ClientsModal({
   onRequestUpdate,
   onRequestUpgrade31,
   onRequestAdopt,
-  onProtocolRemoved,
   initialProtocol,
 }: Props) {
   const { t } = useI18n()
@@ -910,16 +908,6 @@ export function ClientsModal({
           </>
         )}
 
-        {current && (
-          <RemoveProtocol
-            key={current.key}
-            serverId={server.id}
-            serverName={server.name}
-            protocol={current}
-            onRemoved={onProtocolRemoved}
-            onUnauthorized={onUnauthorized}
-          />
-        )}
       </div>
     </div>
   )
