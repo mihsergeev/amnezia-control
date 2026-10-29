@@ -695,6 +695,10 @@ def health(transport: str, kv: dict[str, str], res: dict[str, str]) -> tuple[boo
         return False, "шлюз на входе не запущен"
     if transport == "gre" and not kv.get("tun"):
         return False, "нет GRE-туннеля"
+    # рабочий GRE-интерфейс Linux показывает как UNKNOWN (у него нет несущей),
+    # DOWN - туннель есть, но выключен
+    if transport == "gre" and kv.get("tun") == "DOWN":
+        return False, "GRE-туннель выключен"
     if kv.get("tproxy") != "active":
         return False, "клиенты идут мимо шлюза (tproxy выключен)"
     if not res.get("egress"):

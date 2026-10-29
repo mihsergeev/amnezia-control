@@ -108,6 +108,10 @@ The [AmneziaVPN desktop client](https://amnezia.org) is great for personal use â
 |---|---|
 | ![Cascade link test](docs/screenshots/cascade-link.png) | ![Cascade ready](docs/screenshots/cascade-done.png) |
 
+**Checking a running cascade** (More > Cascade: test the link) walks the route and marks each step; a broken part turns red and the verdict names the reason:
+
+<img src="docs/screenshots/cascade-check.png" alt="Cascade check" width="620" />
+
 **Alerts in Telegram**:
 
 <img src="docs/screenshots/telegram-alerts.png" alt="Alerts in Telegram" width="520" />

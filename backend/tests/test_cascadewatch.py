@@ -64,6 +64,8 @@ def test_health_reasons() -> None:
     kv = cascade.parse_kv(OK.replace("CASCADE_TUN=UNKNOWN", "CASCADE_TUN="))
     assert cascade.health("gre", kv, cascade.check_result(kv)) == (False, "нет GRE-туннеля")
     assert cascade.health("vless", kv, cascade.check_result(kv)) == (True, "")
+    kv = cascade.parse_kv(OK.replace("CASCADE_TUN=UNKNOWN", "CASCADE_TUN=DOWN"))
+    assert cascade.health("gre", kv, cascade.check_result(kv)) == (False, "GRE-туннель выключен")
 
 
 async def test_alert_only_after_grace_and_once(factory, sent) -> None:
