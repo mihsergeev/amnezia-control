@@ -899,6 +899,8 @@ export type CascadeCheck = {
   egress: string
   ru: string
   client: string
+  direct: string
+  leak: boolean
   checked_at: string
 }
 
@@ -966,6 +968,22 @@ export function createCascade(
 
 export function reinstallCascade(id: number): Promise<Cascade> {
   return api<Cascade>(`/api/cascades/${id}/install`, { method: 'POST' })
+}
+
+export type EgressCheck = {
+  error: string
+  container: string
+  egress: string
+  egress_country: string
+  egress_org: string
+  local: string
+  sites: { name: string; ok: boolean; code: number; ms: number }[]
+  checked_at: string
+}
+
+/** Откуда выходят клиенты и открываются ли сайты - путем трафика клиентов. */
+export function checkEgress(serverId: number): Promise<EgressCheck> {
+  return api<EgressCheck>(`/api/servers/${serverId}/egress-check`, { method: 'POST' })
 }
 
 export function checkCascade(id: number): Promise<CascadeCheck> {

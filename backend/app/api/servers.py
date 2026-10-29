@@ -1,8 +1,10 @@
+from datetime import datetime, timezone
+
 from fastapi import APIRouter, HTTPException, status
 from sqlalchemy import delete as sa_delete
 from sqlalchemy import func, select
 
-from app import audit, limits, server_ops, sshops, torrent
+from app import audit, cascadejob, egresscheck, geo, limits, nodelock, server_ops, sshops, torrent
 from app.config import get_settings
 from app.db import Base
 from app.deps import CurrentUser, SessionDep
@@ -10,6 +12,7 @@ from app.models import Cascade, Server, TorrentHit
 from app.schemas import (
     BootstrapRequest,
     DeleteServerResult,
+    EgressCheckOut,
     ReorderRequest,
     ServerCreate,
     ServerOut,
@@ -214,6 +217,33 @@ async def check_server(
     server = await _get_or_404(server_id, session)
     await server_ops.run_check(session, server, get_settings())
     return server
+
+
+@router.post("/{server_id}/egress-check", response_model=EgressCheckOut)
+async def egress_check(server_id: int, _: CurrentUser, session: SessionDep) -> EgressCheckOut:
+    """Откуда выходят клиенты и открываются ли сайты - путем трафика клиентов."""
+    server = await _get_or_404(server_id, session)
+    try:
+        async with nodelock.connect("egress", server.id, cascadejob.connect(server)) as conn:
+            r = await conn.run(egresscheck.build_command(server.country), check=False, timeout=90)
+    except HTTPException:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, f"Сервер не ответил: {exc}") from exc
+    res = egresscheck.parse(r.stdout if isinstance(r.stdout, str) else "")
+    country = org = ""
+    now = datetime.now(timezone.utc)
+    if res["egress"]:
+        country, org = await geo.ip_info(res["egress"])
+        server_ops.apply_egress(
+            server, await server_ops.describe_egress(server.host, res["egress"]), now
+        )
+        await session.commit()
+    return EgressCheckOut(
+        error=res["error"], container=res["container"], egress=res["egress"],
+        egress_country=country, egress_org=org, local=res["local"],
+        sites=res["sites"], checked_at=now,
+    )
 
 
 @router.post("/{server_id}/limit", status_code=status.HTTP_204_NO_CONTENT)

@@ -114,7 +114,7 @@ def test_probe_helpers_move_bytes_locally() -> None:
 def test_check_result_ignores_garbage() -> None:
     kv = cascade.parse_kv("CASCADE_EGRESS=198.51.100.20\nCASCADE_RU=<html>\nCASCADE_GW=yes\n")
     assert kv["gw"] == "yes"
-    assert cascade.check_result(kv) == {"egress": "198.51.100.20", "ru": "", "client": ""}
+    assert cascade.check_result(kv) == {"egress": "198.51.100.20", "ru": "", "client": "", "direct": ""}
 
 
 async def _servers(session_factory, n=3, ok=True) -> list[int]:
@@ -354,7 +354,8 @@ def test_heal_service_installed_and_removed() -> None:
 
 def test_check_looks_from_inside_the_vpn_container() -> None:
     cmd = cascade.build_check_command()
-    assert 'docker exec "$C"' in cmd and 'echo "CASCADE_CLIENT=$CL"' in cmd
+    assert 'nsenter -t "$P" -n curl' in cmd and 'echo "CASCADE_CLIENT=$CL"' in cmd
+    assert "CASCADE_DIRECT=" in cmd
     assert "fwmark 0x100 lookup 241" in cmd and "fwmark 0x200 lookup 242" in cmd
 
 
@@ -371,6 +372,10 @@ def test_health_catches_a_leak() -> None:
     assert health(base + "CASCADE_CLIENT=\n") == (True, "")
     assert health(base + "CASCADE_CLIENT=203.0.113.10\n") == (
         False, "клиенты выходят в интернет мимо выхода")
+    # адрес входа известен: обход - только если клиенты выходят именно с него
+    assert health(base + "CASCADE_DIRECT=203.0.113.10\nCASCADE_CLIENT=203.0.113.10\n") == (
+        False, "клиенты выходят в интернет мимо выхода")
+    assert health(base + "CASCADE_DIRECT=203.0.113.10\nCASCADE_CLIENT=198.51.100.99\n") == (True, "")
     no_rule = base.replace("CASCADE_RULE=yes", "CASCADE_RULE=no")
     assert health(no_rule)[1] == "пропало правило маршрутизации в шлюз"
     no_gre_rule = base.replace("CASCADE_GRERULE=yes", "CASCADE_GRERULE=no")

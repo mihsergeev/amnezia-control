@@ -2249,6 +2249,34 @@ button.srv-side-gh:hover .drag-handle {
   background: #3b82f60f;
 }
 
+/* узел маршрута, который открывает соседний сервер каскада */
+.srv-hop-link {
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+}
+
+.srv-hop-link:hover,
+.srv-hop-link:focus-visible {
+  border-color: #3b82f6;
+  background: #3b82f61f;
+  outline: none;
+}
+
+.srv-hop-go {
+  align-self: flex-start;
+  color: var(--text-muted);
+  font-size: 0.8rem;
+}
+
+.srv-hop-link:hover .srv-hop-go {
+  color: #3b82f6;
+}
+
+/* кнопка проверки каскада в конце маршрута */
+.srv-route-check {
+  margin-left: auto;
+}
+
 .srv-detail-note {
   color: var(--text-muted);
   font-size: 0.88rem;
