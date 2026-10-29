@@ -1,3 +1,4 @@
+import json
 from datetime import datetime, timedelta, timezone
 from typing import Annotated
 
@@ -171,8 +172,21 @@ async def client_history(
 
 
 async def _cascade_exits(session) -> set[int]:
-    """Выходы каскадов панели: своих клиентов у них нет, в обзоре они часть входа."""
-    return set(await session.scalars(select(Cascade.exit_server_id)))
+    """Выходы каскадов панели без своих протоколов: в обзоре они часть входа.
+    Выход со своими amnezia-контейнерами - еще и обычный сервер со своими
+    клиентами, его считаем как все (так же прячет фронт, api.ts hiddenExits)."""
+    ids = set(await session.scalars(select(Cascade.exit_server_id)))
+    if not ids:
+        return ids
+    hidden = set()
+    for srv in await session.scalars(select(Server).where(Server.id.in_(ids))):
+        try:
+            info = json.loads(srv.last_check_info or "{}")
+        except (json.JSONDecodeError, ValueError):
+            info = {}
+        if not (info.get("amnezia_containers") if isinstance(info, dict) else None):
+            hidden.add(srv.id)
+    return hidden
 
 
 @router.get("/overview", response_model=OverviewOut)
