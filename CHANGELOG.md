@@ -4,6 +4,18 @@ All notable changes to Amnezia Control are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.71.1] - 2026-10-29
+
+### Fixed
+- The cascade check no longer shows "state UNKNOWN" next to a working GRE
+  tunnel: Linux reports a working GRE interface as UNKNOWN. A tunnel that
+  exists but is switched off (DOWN) now counts as a failure, in the check
+  window and in the cascade-down alert ("GRE tunnel is down").
+
+### Changed
+- README: a screenshot of the cascade check window, and the check is a new
+  scene in the demo GIF.
+
 ## [0.71.0] - 2026-10-29
 
 ### Changed

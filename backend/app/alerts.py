@@ -36,6 +36,7 @@ EN = {
     "выход {exit}": "exit {exit}",
     "шлюз на входе не запущен": "the gateway on the entry is not running",
     "нет GRE-туннеля": "no GRE tunnel",
+    "GRE-туннель выключен": "GRE tunnel is down",
     "клиенты идут мимо шлюза (tproxy выключен)": "clients bypass the gateway (tproxy is off)",
     "через выход интернет не открывается": "no internet through the exit",
     "Сменился SSH-ключ сервера": "Server SSH host key changed",

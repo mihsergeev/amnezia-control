@@ -60,7 +60,7 @@ const EN: Record<string, string> = {
   'Интернет': 'Internet',
   'Сайты страны входа напрямую': "Entry country's sites go directly",
   'адрес {ip}': 'address {ip}',
-  'состояние {s}': 'state {s}',
+  'GRE-туннель выключен': 'GRE tunnel is down',
   'Каскад работает': 'Cascade works',
   'Каскад не работает': 'Cascade is down',
   'Каскад не работает: {reason}': 'Cascade is down: {reason}',
