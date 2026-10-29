@@ -53,6 +53,64 @@ function probeText(t: ReturnType<typeof useI18n>['t'], p: ProbeSide): string {
     : t('не проходит')
 }
 
+// проверка канала на сервере: подготовка, потом TCP и GRE по очереди, по 15 с
+// передачи (cascade.PROBE_SECONDS) плюс подключение и подъем туннеля. Ответ
+// один на все, поэтому ход показываем по времени, а результат - когда пришел
+const PROBE_BYTES = 20 * 1024 * 1024
+const PROBE_PHASES = { tcp: [2, 19], gre: [19, 38] } as const
+
+function phasePct(elapsed: number, [from, to]: readonly [number, number]): number {
+  return Math.max(0, Math.min(100, ((elapsed - from) / (to - from)) * 100))
+}
+
+// полоса одного способа связи: идет - бегущие штрихи до расчетной доли, готово -
+// сколько из 20 мб дошло до выхода (замерзший канал - красный огрызок)
+function ProbeBar({
+  label,
+  pct,
+  result,
+  allDone,
+}: {
+  label: string
+  pct: number
+  result: ProbeSide | null
+  // расчетное время всей проверки вышло, ждем только ответа
+  allDone: boolean
+}) {
+  const { t } = useI18n()
+  const state = result
+    ? result.ok
+      ? 'ok'
+      : 'bad'
+    : pct <= 0
+      ? 'wait'
+      : pct >= 100
+        ? 'held'
+        : 'run'
+  const width = result ? Math.max(3, Math.min(100, (result.bytes / PROBE_BYTES) * 100)) : pct
+  return (
+    <div className={`cas-pbar cas-pbar-${state}`}>
+      <div className="cas-probe-row">
+        <span>{label}</span>
+        <span className={result ? (result.ok ? 'ok-text' : 'err-text') : 'muted'}>
+          {result
+            ? probeText(t, result)
+            : state === 'wait'
+              ? t('в очереди')
+              : state === 'held'
+                ? allDone
+                  ? t('жду ответ сервера…')
+                  : t('передано, итог в конце')
+                : t('гоню данные со входа на выход…')}
+        </span>
+      </div>
+      <div className="cas-pbar-track">
+        <div className="cas-pbar-fill" style={{ width: `${width}%` }} />
+      </div>
+    </div>
+  )
+}
+
 // шаги установки по фазе: выход ставится первым, потом вход и проверка
 function installTasks(c: Cascade) {
   const gre = c.transport === 'gre'
@@ -106,6 +164,9 @@ export function CascadeWizard({
   const [script, setScript] = useState<{ server: Server; text: string } | null>(null)
   const [copied, setCopied] = useState(false)
   const [probe, setProbe] = useState<CascadeProbe | null>(null)
+  // когда началась проверка канала (null - не идет) и сколько прошло, с
+  const [probeAt, setProbeAt] = useState<number | null>(null)
+  const [probeSecs, setProbeSecs] = useState(0)
   const [transport, setTransport] = useState<CascadeTransport>('vless')
   const [cascade, setCascade] = useState<Cascade | null>(resume ?? null)
   const [extra, setExtra] = useState<Server[]>([])
@@ -215,11 +276,19 @@ export function CascadeWizard({
     }
   }
 
+  useEffect(() => {
+    if (probeAt == null) return
+    const id = window.setInterval(() => setProbeSecs((Date.now() - probeAt) / 1000), 150)
+    return () => window.clearInterval(id)
+  }, [probeAt])
+
   async function runProbe(eId = entryId, xId = exitId) {
     if (eId == null || xId == null) return
     setBusy(true)
     setError(null)
     setProbe(null)
+    setProbeSecs(0)
+    setProbeAt(Date.now())
     try {
       const p = await probeCascade(eId, xId)
       setProbe(p)
@@ -228,6 +297,7 @@ export function CascadeWizard({
       handleError(err)
     } finally {
       setBusy(false)
+      setProbeAt(null)
     }
   }
 
@@ -324,12 +394,20 @@ export function CascadeWizard({
           </>
         )}
         {hop(entry, cascade?.entry_ip || probe?.entry_ip || '', named(entry, 'вход'))}
-        <span className="srv-route-arrow">
-          {(step === 'done' || step === 'install') && (
-            <span className="tun-badge">{gre ? 'GRE' : 'VLESS'}</span>
-          )}
-          →
-        </span>
+        {step === 'link' ? (
+          <div
+            className={`cc-link cas-link ${
+              probeAt != null ? 'cc-link-run' : probe ? (probe.recommend ? 'cc-link-ok' : 'cc-link-bad') : ''
+            }`}
+          />
+        ) : (
+          <span className="srv-route-arrow">
+            {(step === 'done' || step === 'install') && (
+              <span className="tun-badge">{gre ? 'GRE' : 'VLESS'}</span>
+            )}
+            →
+          </span>
+        )}
         {hop(
           exit,
           exitIp,
@@ -529,25 +607,24 @@ export function CascadeWizard({
               <div className="muted small">
                 {t('Проверка канала: панель отправляет 20 мб со входа на выход')}
               </div>
-              {busy && !probe ? (
-                <div className="cas-probe-row">
-                  <span>{t('Проверяю, это до минуты…')}</span>
-                </div>
-              ) : (
-                probe && (
+              {(probeAt != null || probe) && (
+                <>
+                  <ProbeBar
+                    label={t('Обычный TCP')}
+                    pct={phasePct(probeSecs, PROBE_PHASES.tcp)}
+                    result={probe?.tcp ?? null}
+                    allDone={probeSecs >= PROBE_PHASES.gre[1]}
+                  />
+                  <ProbeBar
+                    label="GRE"
+                    pct={phasePct(probeSecs, PROBE_PHASES.gre)}
+                    result={probe?.gre ?? null}
+                    allDone={probeSecs >= PROBE_PHASES.gre[1]}
+                  />
+                </>
+              )}
+              {probe && (
                   <>
-                    <div className="cas-probe-row">
-                      <span>{t('Обычный TCP')}</span>
-                      <span className={probe.tcp.ok ? 'ok-text' : 'err-text'}>
-                        {probeText(t, probe.tcp)}
-                      </span>
-                    </div>
-                    <div className="cas-probe-row">
-                      <span>GRE</span>
-                      <span className={probe.gre.ok ? 'ok-text' : 'err-text'}>
-                        {probeText(t, probe.gre)}
-                      </span>
-                    </div>
                     {!probe.gre.ok && (probe.entry_nat || probe.exit_nat) && (
                       <div className="muted small">
                         {probe.entry_nat && probe.exit_nat
@@ -578,7 +655,6 @@ export function CascadeWizard({
                       </div>
                     )}
                   </>
-                )
               )}
             </div>
             <div className="cas-opts">

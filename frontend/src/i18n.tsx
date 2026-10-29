@@ -843,6 +843,10 @@ const EN: Record<string, string> = {
   'Выход в интернет: {ip}': 'Internet exit: {ip}',
   'Сайты страны сервера': "Sites of the server's country",
   '{ms} мс': '{ms} ms',
+  'в очереди': 'queued',
+  'передано, итог в конце': 'sent, the result comes at the end',
+  'жду ответ сервера…': 'waiting for the server…',
+  'гоню данные со входа на выход…': 'sending data from the entry to the exit…',
   'Вход и выход за NAT хостера: на интерфейсах внутренние адреса. GRE через такой NAT обычно не проходит, это настройки сети хостера, а не панели.':
     "Both the entry and the exit are behind the host's NAT: their interfaces have private addresses. GRE usually does not pass such NAT; it is the host's network, not the panel.",
   'Выход за NAT хостера: на его интерфейсе внутренний адрес. GRE через такой NAT обычно не проходит, это настройки сети хостера, а не панели.':

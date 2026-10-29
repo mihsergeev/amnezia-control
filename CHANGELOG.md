@@ -4,6 +4,17 @@ All notable changes to Amnezia Control are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.79.0] - 2026-10-30
+
+### Changed
+- **The cascade link test is visual now.** Instead of a "checking, up to a
+  minute" line, TCP and GRE each get a bar: the running one fills with moving
+  stripes, the next one waits in the queue, and the line between the entry
+  and the exit runs while data is sent. When the result comes, each bar stops
+  at the share of the 20 MB that reached the exit: a full green bar for a
+  working link, a short red stub where TCP stalls after a few dozen
+  kilobytes or GRE does not pass at all. The line turns green or red too.
+
 ## [0.78.0] - 2026-10-30
 
 ### Added
