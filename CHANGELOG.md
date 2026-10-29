@@ -4,6 +4,15 @@ All notable changes to Amnezia Control are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.70.1] - 2026-10-29
+
+### Changed
+- **Removing a protocol moved to the server's More menu.** The button sat at
+  the bottom of the clients window, next to issuing and reissuing configs.
+  Now each installed protocol has its own "Remove protocol ..." item at the
+  end of the server card's More menu, below a divider. The confirmation and
+  the password prompt are the same as before.
+
 ## [0.70.0] - 2026-10-29
 
 ### Changed
