@@ -63,6 +63,10 @@ class Server(Base):
         DateTime(timezone=True), nullable=True
     )
     last_check_info: Mapped[str] = mapped_column(Text, default="")
+    # блокировка торрентов в контейнерах AWG/OpenVPN (app/torrent.py) и пауза
+    # клиента, который их качает
+    torrent_block: Mapped[bool] = mapped_column(Boolean, default=False)
+    torrent_autopause: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
@@ -262,6 +266,26 @@ class PausedClient(Base):
     data: Mapped[str] = mapped_column(Text, default="")  # JSON restore payload
     paused_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
+    )
+
+
+class TorrentHit(Base):
+    """Клиент, у которого правила app/torrent.py ловили торрент-трафик: сколько
+    раз всего, когда впервые и в последний раз, когда о нем был алерт."""
+
+    __tablename__ = "torrent_hits"
+    __table_args__ = (UniqueConstraint("server_id", "protocol", "client_id"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    server_id: Mapped[int] = mapped_column(Integer, index=True)
+    protocol: Mapped[str] = mapped_column(String(16))
+    client_id: Mapped[str] = mapped_column(String(64))
+    name: Mapped[str] = mapped_column(String(128), default="")
+    hits: Mapped[int] = mapped_column(Integer, default=0)
+    first_seen: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    last_seen: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    alerted_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
     )
 
 

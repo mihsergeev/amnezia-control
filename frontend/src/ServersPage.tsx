@@ -34,6 +34,7 @@ import { copyText } from './clipboard'
 import { countryFlag, formatBytes, formatUptime } from './format'
 import { CascadeWizard } from './CascadeWizard'
 import { CascadeCheckModal } from './CascadeCheck'
+import { TorrentLine } from './Torrent'
 import { useI18n } from './i18n'
 
 const FALLBACK_USER = 'acontrol'
@@ -347,6 +348,8 @@ function ServerDetail({
 
       {server.note && <div className="srv-detail-note">{server.note}</div>}
 
+      {server.torrent_block && <TorrentLine server={server} />}
+
       {server.last_check_ok === false && info?.error && (
         <div className="small err-text">{info.error}</div>
       )}
@@ -600,6 +603,8 @@ export function ServersPage({ onUnauthorized }: Props) {
       ssh_user: server.ssh_user,
       note: server.note,
       group_name: server.group_name,
+      torrent_block: server.torrent_block,
+      torrent_autopause: server.torrent_autopause,
     })
     setEditingId(server.id)
     setFormOpen(true)
@@ -1352,6 +1357,40 @@ export function ServersPage({ onUnauthorized }: Props) {
                 ))}
               </datalist>
             </label>
+
+            {editingId !== null && (
+              <div className="torrent-opts">
+                <label className="checkbox">
+                  <input
+                    type="checkbox"
+                    checked={!!form.torrent_block}
+                    onChange={(e) =>
+                      setForm({
+                        ...form,
+                        torrent_block: e.target.checked,
+                        torrent_autopause: e.target.checked ? form.torrent_autopause : false,
+                      })
+                    }
+                  />
+                  {t('Блокировать торренты')}
+                </label>
+                {form.torrent_block && (
+                  <label className="checkbox torrent-sub">
+                    <input
+                      type="checkbox"
+                      checked={!!form.torrent_autopause}
+                      onChange={(e) => setForm({ ...form, torrent_autopause: e.target.checked })}
+                    />
+                    {t('Ставить на паузу того, кто качает')}
+                  </label>
+                )}
+                <p className="muted small">
+                  {t(
+                    'AmneziaWG и OpenVPN: торрент-трафик режется на сервере, у клиента в списке видна отметка, приходит алерт. Шифрованные торренты могут пройти, XRay не охвачен.',
+                  )}
+                </p>
+              </div>
+            )}
 
             {editingId === null && (
               <div className="bootstrap-block">

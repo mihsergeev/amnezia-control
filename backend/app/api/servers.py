@@ -2,11 +2,11 @@ from fastapi import APIRouter, HTTPException, status
 from sqlalchemy import delete as sa_delete
 from sqlalchemy import func, select
 
-from app import audit, limits, server_ops, sshops
+from app import audit, limits, server_ops, sshops, torrent
 from app.config import get_settings
 from app.db import Base
 from app.deps import CurrentUser, SessionDep
-from app.models import Cascade, Server
+from app.models import Cascade, Server, TorrentHit
 from app.schemas import (
     BootstrapRequest,
     DeleteServerResult,
@@ -16,6 +16,8 @@ from app.schemas import (
     ServerUpdate,
     SetLimitRequest,
     SetupScriptOut,
+    TorrentClientOut,
+    TorrentOut,
 )
 from app.sshkeys import ensure_panel_key, key_paths
 
@@ -89,14 +91,50 @@ async def get_server(server_id: int, _: CurrentUser, session: SessionDep) -> Ser
 
 @router.patch("/{server_id}", response_model=ServerOut)
 async def update_server(
-    server_id: int, body: ServerUpdate, _: CurrentUser, session: SessionDep
+    server_id: int, body: ServerUpdate, user: CurrentUser, session: SessionDep
 ) -> Server:
     server = await _get_or_404(server_id, session)
-    for field, value in body.model_dump(exclude_unset=True).items():
+    changes = body.model_dump(exclude_unset=True)
+    # None в булевых настройках - "не менять", колонка без NULL
+    for field in ("torrent_block", "torrent_autopause"):
+        if field in changes and changes[field] is None:
+            changes.pop(field)
+    block_changed = (
+        "torrent_block" in changes and changes["torrent_block"] != server.torrent_block
+    )
+    torrent_changed = block_changed or (
+        "torrent_autopause" in changes
+        and changes["torrent_autopause"] != server.torrent_autopause
+    )
+    for field, value in changes.items():
         setattr(server, field, value)
     await session.commit()
     await session.refresh(server)
+    if torrent_changed:
+        await audit.record(
+            session, user.username, "server_torrent", server.name,
+            f"block={server.torrent_block} autopause={server.torrent_autopause}",
+        )
+    if block_changed:
+        # правила на ноде сразу, а не через цикл коллектора
+        torrent.spawn_apply(server, get_settings())
     return server
+
+
+@router.get("/{server_id}/torrent", response_model=TorrentOut)
+async def server_torrent(server_id: int, _: CurrentUser, session: SessionDep) -> TorrentOut:
+    """Клиенты, у которых ловили торренты, и состояние правил на ноде."""
+    await _get_or_404(server_id, session)
+    rows = await session.scalars(
+        select(TorrentHit)
+        .where(TorrentHit.server_id == server_id)
+        .order_by(TorrentHit.last_seen.desc())
+    )
+    st = torrent.status(server_id) or {}
+    return TorrentOut(
+        active=st.get("ok"), checked_at=st.get("at"), error=st.get("error", ""),
+        clients=[TorrentClientOut.model_validate(r) for r in rows],
+    )
 
 
 @router.delete("/{server_id}", response_model=DeleteServerResult)

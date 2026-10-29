@@ -4,6 +4,30 @@ All notable changes to Amnezia Control are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.72.0] - 2026-10-29
+
+### Added
+- **Torrent blocking per server.** "Edit server" has a "Block torrents"
+  checkbox. The panel puts iptables rules into the AmneziaWG (2.0, 3.1,
+  Legacy) and OpenVPN containers of the node: packets from clients with
+  BitTorrent signatures (peer handshake, also inside uTP, DHT queries and
+  replies, HTTP tracker announces, UDP tracker connect) are dropped. Only the
+  first 8 KB of every connection are inspected, so the rest of the traffic
+  costs nothing. The rules come back by themselves after a container restart
+  and are removed when the checkbox is cleared.
+- The kernel `recent` list remembers who sent such packets; the collector
+  reads and clears it every cycle and maps the tunnel address to the client.
+  The client list shows a "torrent" mark with how many times and when, the
+  server card shows that blocking is on and who downloaded in the last day.
+- Alert "A client is downloading torrents" with the client's name, protocol
+  and attempts, at most once a day per client and only from 3 attempts per
+  cycle, so a random string match does not page anyone.
+- Optional "Pause whoever downloads them": such a client is paused the same
+  way as from the panel (resume brings it back), recorded in the audit log
+  as "paused for torrents", and the alert says so.
+- Encrypted torrents (MSE/PE) and HTTPS trackers may get through. XRay is not
+  covered: all its clients share one process, packets carry no client address.
+
 ## [0.71.1] - 2026-10-29
 
 ### Fixed

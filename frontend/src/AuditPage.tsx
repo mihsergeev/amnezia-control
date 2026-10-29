@@ -44,6 +44,12 @@ const LABELS: Record<string, string> = {
   awglegacy_expired: 'Истек срок AmneziaWG Legacy',
   openvpn_expired: 'Истек срок OpenVPN',
   xray_expired: 'Истек срок XRay',
+  // автопауза за торренты (torrent.py пишет {protocol}_torrent_pause от "система")
+  awg_torrent_pause: 'AmneziaWG на паузе за торренты',
+  awg3_torrent_pause: 'AmneziaWG 3.1 на паузе за торренты',
+  awglegacy_torrent_pause: 'AmneziaWG Legacy на паузе за торренты',
+  openvpn_torrent_pause: 'OpenVPN на паузе за торренты',
+  server_torrent: 'Изменена блокировка торрентов',
   limit_set: 'Задан срок клиента',
   limit_clear: 'Снят срок клиента',
   clients_bulk_revoke: 'Массовый отзыв клиентов',

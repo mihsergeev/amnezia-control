@@ -42,7 +42,7 @@ FORMAT_VERSION = 1
 # ноды. Рантайм-таблицы (статус проверки, метрики) осознанно пропускаем — они
 # наполнятся сами при первом же опросе, а перенос устаревших значений только
 # путал бы: новая панель показывала бы чужое «онлайн» до первой проверки.
-_RUNTIME_TABLES = {"server_status", "node_metrics"}
+_RUNTIME_TABLES = {"server_status", "node_metrics", "torrent_hits"}
 
 # История трафика на активной ноде — сотни тысяч строк (у боевого сервера это
 # ~0.8 млн). Тащим только по явному запросу, иначе файл раздувается в сотни
@@ -52,7 +52,7 @@ _HISTORY_TABLES = {"traffic_samples", "client_traffic_samples"}
 # поля сервера, которые имеет смысл переносить: адрес, доступ и то, как карточка
 # выглядит. id/position/результаты последней проверки — местные, их не берём
 _SERVER_FIELDS = ("name", "host", "ssh_port", "ssh_user", "note", "group_name",
-                  "country")
+                  "country", "torrent_block", "torrent_autopause")
 
 _MAX_IMPORT_BYTES = 200 * 1024 * 1024
 
@@ -219,6 +219,8 @@ async def import_server_file(
         note=spec.get("note") or "",
         group_name=(spec.get("group_name") or "")[:64],
         country=(spec.get("country") or "")[:2],
+        torrent_block=bool(spec.get("torrent_block")),
+        torrent_autopause=bool(spec.get("torrent_autopause")),
         position=(max_pos or 0) + 1,
     )
     session.add(server)

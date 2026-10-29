@@ -24,6 +24,8 @@ import { ExpiryCell, ExpirySelect } from './Expiry'
 import { ClientStatsModal } from './ClientStatsModal'
 import { BulkRevokeBar, SelectAllCell, SelectCell, useSelection } from './BulkActions'
 import { useShareLink } from './ShareLink'
+import { TorrentBadge } from './Torrent'
+import { useTorrentHits } from './useTorrentHits'
 import { useI18n } from './i18n'
 import { useModalDismiss } from './useModalDismiss'
 
@@ -70,6 +72,7 @@ export function ClientsModal({
   const limitProto: 'awg' | 'awg3' | 'awglegacy' =
     proto === 'awg3' ? 'awg3' : proto === 'awglegacy' ? 'awglegacy' : 'awg'
   const [state, setState] = useState<AwgState | null>(null)
+  const torrentHits = useTorrentHits(server.id)
   const [version, setVersion] = useState<VersionInfo | null>(null)
   // /awg/version падает, если недоступен Docker Hub; откат и пересборка при
   // этом нужны как раз сильнее всего, поэтому блок показываем и без версии
@@ -692,6 +695,7 @@ export function ClientsModal({
                               {c.paused && (
                                 <span className="pause-badge">{t('⏸ пауза')}</span>
                               )}
+                              <TorrentBadge hit={torrentHits.get(`${limitProto}:${c.public_key}`)} />
                               {!editing && (
                                 <button
                                   className="note-edit"

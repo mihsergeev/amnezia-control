@@ -78,6 +78,7 @@ The [AmneziaVPN desktop client](https://amnezia.org) is great for personal use â
 - **Expiry**: set a lifetime per client (7 / 30 / 90 days or a custom date) â€” a background task auto-revokes on the node when it lapses
 - **Per-client traffic history** (AmneziaWG & OpenVPN) with a speed chart and cumulative totals
 - **Top clients by traffic** across all servers on the dashboard
+- **Torrent blocking** per server (a checkbox in "Edit server"): AmneziaWG and OpenVPN containers drop clients' torrent traffic (peer handshake, DHT, HTTP and UDP trackers). Whoever downloads gets a "torrent" mark in the client list and an alert with the client's name, at most once a day. Optionally the panel pauses such a client by itself. Encrypted torrents and HTTPS trackers may get through, XRay clients are not covered
 
 **Monitoring & alerts**
 - Overview dashboard: aggregate traffic and online-clients charts (24 h), per-server breakdown
