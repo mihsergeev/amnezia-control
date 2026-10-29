@@ -60,13 +60,17 @@ CHECK_COMMAND = (
 # собственный трафик ноды идет напрямую, а клиентский - через другой выход.
 # В alpine-контейнерах есть busybox wget, в xray еще и curl.
 EGRESS_COMMAND = (
-    "if docker ps >/dev/null 2>&1; then D=docker; "
-    "elif sudo -n docker ps >/dev/null 2>&1; then D='sudo -n docker'; "
+    "if [ -w /var/run/docker.sock ] || [ -w /run/docker.sock ]; then D=docker; "
+    "elif sudo -n true 2>/dev/null; then D='sudo -n docker'; "
     "else exit 0; fi; "
     "c=$($D ps --format '{{.Names}}' 2>/dev/null | grep -i '^amnezia' | head -1); "
     '[ -n "$c" ] || exit 0; '
-    "for u in https://api.ipify.org https://ifconfig.me/ip; do "
-    'ip=$($D exec "$c" sh -c "wget -qO- -T 6 $u 2>/dev/null || curl -fsS -m 6 $u 2>/dev/null" '
+    # busybox wget по https запускает помощника ssl_client и не дожидается его:
+    # тот становится сиротой у PID 1 контейнера, а `tail -f /dev/null` детей не
+    # собирает - по зомби в час. Поэтому curl по https, а wget только по http
+    # (адрес выхода - справка на карточке, подмена в пути ничего не ломает)
+    "for u in api.ipify.org ifconfig.me/ip; do "
+    'ip=$($D exec "$c" sh -c "curl -fsS -m 6 https://$u 2>/dev/null || wget -qO- -T 6 http://$u 2>/dev/null" '
     "2>/dev/null); "
     'case "$ip" in *.*.*.*) echo "EGRESS=$ip"; exit 0 ;; esac; '
     "done"

@@ -39,7 +39,7 @@ FLOW = "xtls-rprx-vision"
 FINGERPRINT = "firefox"
 CONTAINER_NAME = "amnezia-xray"
 STATS_API_PORT = 10085  # локальный gRPC-API xray (127.0.0.1) для чтения статистики
-_DOCKER = 'DOCKER=$(docker info >/dev/null 2>&1 && echo docker || echo "sudo -n docker"); '
+_DOCKER = 'DOCKER=$({ [ -w /var/run/docker.sock ] || [ -w /run/docker.sock ]; } && echo docker || echo "sudo -n docker"); '
 
 
 class XrayError(Exception):
@@ -288,11 +288,33 @@ async def read_client_stats(conn, container) -> dict[str, dict]:
     return res
 
 
-async def read_clients(conn: asyncssh.SSHClientConnection) -> list[XrayClient]:
-    container = await detect_container(conn)
-    server = await _read_server(conn, container)
-    default = await _default_uuid(conn, container)
-    table = await _read_table(conn, container)
+async def _read_all(conn, container) -> tuple[dict, str, list]:
+    """server.json, UUID по умолчанию и clientsTable одним docker exec: сбор
+    статистики читает их каждый цикл, а каждый exec стоит демону docker."""
+    inner = (
+        f"cat {SERVER_JSON}; echo; echo ===UUID===; "
+        f"cat {XRAY_DIR}/xray_uuid.key 2>/dev/null; echo; echo ===TABLE===; "
+        f"cat {CLIENTS_TABLE} 2>/dev/null"
+    )
+    text = await _run(conn, _docker_exec(container, inner))
+    head, _, rest = text.partition("===UUID===")
+    uuid_text, _, table_text = rest.partition("===TABLE===")
+    try:
+        server = json.loads(head)
+    except (json.JSONDecodeError, ValueError) as exc:
+        raise XrayError("не удалось прочитать server.json") from exc
+    try:
+        table = json.loads(table_text)
+    except (json.JSONDecodeError, ValueError):
+        table = []
+    return server, uuid_text.strip(), table if isinstance(table, list) else []
+
+
+async def read_clients(
+    conn: asyncssh.SSHClientConnection, container: str | None = None
+) -> list[XrayClient]:
+    container = container or await detect_container(conn)
+    server, default, table = await _read_all(conn, container)
     names = {
         e.get("clientId"): e.get("userData", {})
         for e in table

@@ -277,7 +277,7 @@ const EN: Record<string, string> = {
   'проблем: {n}': 'problems: {n}',
   'Клиенты онлайн': 'Clients online',
   'аптайм {t}': 'uptime {t}',
-  'загрузка {l} на {n} ядер': 'load {l} on {n} cores',
+  'load {l}, ядер {n}': 'load {l}, cores {n}',
   'выход в интернет: {ip}': 'internet exit: {ip}',
   'этот сервер': 'this server',
   'GRE-туннель до {ip}': 'GRE tunnel to {ip}',

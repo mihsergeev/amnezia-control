@@ -4,6 +4,36 @@ All notable changes to Amnezia Control are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.73.0] - 2026-10-29
+
+### Changed
+- **CPU in the server card is real CPU usage now**, not load average divided
+  by cores. On a 1 vCPU node load easily goes above 1 while waiting for IO,
+  and the card showed 171% in red with the CPU 30% busy. The collector reads
+  the /proc/stat counters and computes the share of busy time (user, system,
+  irq, softirq, steal) between two samples. Load is shown below without
+  percent ("load 1.71, cores 1"). The card turns amber from 70% CPU and red
+  from 90%, or from CPU pressure (PSI some avg60) of 30% and 60%.
+
+### Performance
+- Lighter collection on nodes. Every panel command used to call `docker info`
+  first to decide between `docker` and `sudo docker`; that is now a check of
+  the docker socket permissions, with no call to the daemon. The container
+  list and protocol versions (docker ps plus an exec into every container) are
+  checked at most every 5 minutes instead of every cycle, and XRay reads its
+  three files in one exec and looks up its container once. On a 1 vCPU node
+  with collection every minute this was a few percent of CPU in dockerd.
+
+### Fixed
+- Zombie `ssl_client` processes piled up in AmneziaWG containers, one per
+  hour. The client egress probe ran busybox wget over HTTPS, its helper was
+  left an orphan, and the container's PID 1 (`tail -f /dev/null`) never reaps
+  children. The probe now uses curl for HTTPS and busybox wget only over HTTP.
+- PID 1 of AmneziaWG containers built by the panel now reaps orphans and stops
+  right away on `docker stop` (tail ignored SIGTERM, so stop waited 10
+  seconds). Running containers get it with the next Rebuild or install; the
+  zombies they already have go away with that restart.
+
 ## [0.72.0] - 2026-10-29
 
 ### Added

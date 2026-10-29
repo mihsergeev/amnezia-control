@@ -3,6 +3,7 @@
 import asyncio
 import json
 import logging
+import time
 from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import delete, select
@@ -39,6 +40,13 @@ _ZERO = {"rx": 0, "tx": 0, "total": 0, "online": 0}
 # Поэтому, пока набор протоколов не повторился два цикла подряд, общий снимок
 # сервера не пишем: дельта считается между двумя снимками с одним набором.
 _last_parts: dict[int, frozenset[str]] = {}
+
+# Список контейнеров и версии протоколов (sshops.CHECK_COMMAND: docker ps и
+# exec в каждый контейнер) меняются редко, а на ноде с 1 vCPU эти вызовы заметно
+# грузят dockerd. При частом сборе (VPNPANEL_STATS_INTERVAL=60) проверяем их не
+# чаще CHECK_EVERY секунд; ручная "Проверить" идет мимо этого.
+CHECK_EVERY = 300
+_checked_at: dict[int, float] = {}
 
 
 async def _awg_part(conn, host) -> tuple[dict, list[dict]]:
@@ -125,7 +133,7 @@ async def _openvpn_part(conn, host) -> tuple[dict, list[dict]]:
 async def _xray_part(conn, host) -> tuple[dict, list[dict]]:
     # трафик по клиентам — из xray StatsService (если включён на сервере)
     container = await xray.detect_container(conn)
-    clients = await xray.read_clients(conn)
+    clients = await xray.read_clients(conn, container)
     stats = await xray.read_client_stats(conn, container)
     names = {c.client_id: c.name for c in clients}
     rows: list[dict] = []
@@ -183,10 +191,15 @@ async def _sample_server(
                     res = None
                 # живой список контейнеров — чтобы удаление протокола извне
                 # (через десктоп-клиент/руками) отражалось без ручной «Проверки»
-                try:
-                    check = await sshops.probe_containers(conn)
-                except Exception:  # noqa: BLE001 — список не критичен
-                    check = None
+                check = None
+                mono = time.monotonic()
+                if mono - _checked_at.get(server.id, -CHECK_EVERY) >= CHECK_EVERY:
+                    try:
+                        check = await sshops.probe_containers(conn)
+                    except Exception:  # noqa: BLE001 - список не критичен
+                        check = None
+                    if check is not None:
+                        _checked_at[server.id] = mono
                 # адрес выхода клиентов - раз в EGRESS_TTL (ходит во внешний сервис)
                 egress = None
                 if (
@@ -452,6 +465,23 @@ async def _store_client_names(session_factory, samples) -> None:
         await session.commit()
 
 
+def cpu_percent(row, res, now: datetime, interval: int) -> float | None:
+    """Загрузка CPU, %, между прошлым снимком (row) и новым (res). None, если
+    сравнивать не с чем: первый снимок, счетчики сбросились (перезагрузка) или
+    прошлый снимок слишком старый (нода долго не отвечала - вышло бы среднее за часы)."""
+    if row is None or not row.cpu_total or not res.cpu_total:
+        return None
+    total = res.cpu_total - row.cpu_total
+    busy = res.cpu_busy - row.cpu_busy
+    if total <= 0 or busy < 0:
+        return None
+    if row.ts is not None and interval > 0:
+        ts = row.ts if row.ts.tzinfo else row.ts.replace(tzinfo=timezone.utc)
+        if (now - ts).total_seconds() > interval * 3 + 60:
+            return None
+    return round(min(100.0, busy * 100 / total), 1)
+
+
 async def _store_node_metrics(session_factory, settings: Settings, samples, names):
     """Апсерт снимка ресурсов нод + алерт о нехватке места (с гистерезисом)."""
     now = datetime.now(timezone.utc)
@@ -476,6 +506,10 @@ async def _store_node_metrics(session_factory, settings: Settings, samples, name
             if row is None:
                 row = NodeMetric(server_id=sid)
                 session.add(row)
+            row.cpu_pct = cpu_percent(row, res, now, settings.stats_interval)
+            row.cpu_busy = res.cpu_busy
+            row.cpu_total = res.cpu_total
+            row.psi_cpu = res.psi_cpu
             row.cpu_count = res.cpu_count
             row.load1 = res.load1
             row.mem_total = res.mem_total

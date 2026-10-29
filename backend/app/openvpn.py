@@ -27,7 +27,7 @@ SS_DIR = "/opt/amnezia/shadowsocks"
 PKI = f"{OVPN_DIR}/pki"
 EASYRSA = "/usr/share/easy-rsa"
 CONTAINER_NAME = "amnezia-openvpn-cloak"
-_DOCKER = 'DOCKER=$(docker info >/dev/null 2>&1 && echo docker || echo "sudo -n docker"); '
+_DOCKER = 'DOCKER=$({ [ -w /var/run/docker.sock ] || [ -w /run/docker.sock ]; } && echo docker || echo "sudo -n docker"); '
 
 # Шаблон .ovpn (формат «Для приложения AmneziaVPN»): DNS шаблонизирован,
 # remote — на локальный Cloak-клиент (127.0.0.1:1194), сертификаты встроены.
