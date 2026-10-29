@@ -4,6 +4,32 @@ All notable changes to Amnezia Control are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.77.0] - 2026-10-30
+
+### Changed
+- **Cascade actions moved from the More menu onto the card.** The route on
+  the server card has a **Check the cascade** button, and a click on the
+  exit in the route opens the exit server. The exit's card now shows the
+  route too (clients, the entry, this server) with the same button, and a
+  click on the entry opens it. **Remove the cascade** stays in More.
+
+### Added
+- **Checking a cascade set up by hand.** The panel only sees that such a
+  server's clients go out in another country, so it had no cascade check.
+  Now **Check the cascade** on its route opens a client exit check: from
+  inside a VPN container, the way client traffic goes, it shows the exit
+  address with its country and provider, where sites of the server's
+  country go (directly or through the exit), and whether Google, Telegram,
+  Instagram and YouTube open, with response times. The probes run the
+  host's curl in the container's network namespace, so they work with any
+  container (AmneziaWG and OpenVPN images have no curl) and leave nothing
+  behind in it.
+
+### Fixed
+- The cascade check could report "clients reach the internet bypassing the
+  exit" when the address service answered from different servers. It is now
+  reported only when clients go out from the entry's own address.
+
 ## [0.76.0] - 2026-10-29
 
 ### Fixed

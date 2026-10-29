@@ -754,12 +754,16 @@ def build_check_command(country: str = "") -> str:
         f"if [ -f {DIR}/cascade-tproxy.sh ]; then REV=$(sed -n 's/^# rev //p' {DIR}/cascade-tproxy.sh); "
         'echo "CASCADE_REV=${REV:-0}"; fi',
         *_check_lines(country),
-        "C=$(sudo docker ps --format '{{.Names}}' 2>/dev/null | grep -i '^amnezia' | head -1)",
+        # адрес самого входа: свой трафик хоста в шлюз не заворачивается
+        'echo "CASCADE_DIRECT=$(curl -4 -fsS -m 10 https://api.ipify.org 2>/dev/null)"',
+        # curl хоста в сети VPN-контейнера (см. egresscheck): свой curl в
+        # контейнере не нужен и зомби там не остаются. DNS резолвит хост
+        "C=$(sudo docker ps --format '{{.Names}}' 2>/dev/null | grep -i '^amnezia' | grep -vx amnezia-dns | head -1)",
         'CL=""',
-        # wget только по http: по https busybox оставляет зомби ssl_client
-        'if [ -n "$C" ]; then CL=$(sudo docker exec "$C" sh -c '
-        '"curl -4 -fsS -m 15 https://api.ipify.org 2>/dev/null || wget -qO- -T 15 http://api.ipify.org 2>/dev/null" '
-        "2>/dev/null); fi",
+        'P=""; [ -z "$C" ] || P=$(sudo docker inspect -f \'{{.State.Pid}}\' "$C" 2>/dev/null)',
+        "A=$(getent ahostsv4 api.ipify.org | awk 'NR == 1 {print $1}')",
+        'if [ -n "$P" ] && [ "$P" != 0 ] && [ -n "$A" ]; then CL=$(sudo -n nsenter -t "$P" -n '
+        'curl -4 -fsS -m 15 --resolve "api.ipify.org:443:$A" https://api.ipify.org 2>/dev/null); fi',
         'echo "CASCADE_CLIENT=$CL"',
     ]) + "\n"
 
@@ -820,6 +824,7 @@ def check_result(kv: dict[str, str]) -> dict[str, str]:
     return {
         "egress": _ip_or_empty(kv.get("egress", "")), "ru": _ip_or_empty(kv.get("ru", "")),
         "client": _ip_or_empty(kv.get("client", "")),
+        "direct": _ip_or_empty(kv.get("direct", "")),
     }
 
 
@@ -840,10 +845,21 @@ def health(transport: str, kv: dict[str, str], res: dict[str, str]) -> tuple[boo
         return False, "пропало правило маршрутизации в шлюз"
     if not res.get("egress"):
         return False, "через выход интернет не открывается"
-    # контейнер не ответил - не судим: у xray и openvpn бывает нечем спросить
-    if res.get("client") and res["client"] != res["egress"]:
+    if leaks(res):
         return False, "клиенты выходят в интернет мимо выхода"
     return True, ""
+
+
+def leaks(res: dict[str, str]) -> bool:
+    """Клиенты выходят в интернет мимо выхода: адрес из VPN-контейнера не адрес
+    выхода, а свой адрес входа. Просто другой адрес (у выхода их несколько,
+    сайт адреса отвечает с разных серверов) обходом не считаем. Адрес входа
+    узнать не вышло - судим по несовпадению с выходом. Контейнер не ответил -
+    не судим совсем."""
+    client = res.get("client")
+    if not client or not res.get("egress") or client == res["egress"]:
+        return False
+    return client == res["direct"] if res.get("direct") else True
 
 
 def build_remove_entry() -> str:
