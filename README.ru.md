@@ -108,6 +108,10 @@
 |---|---|
 | ![Проверка канала](docs/screenshots/ru/cascade-link.png) | ![Каскад собран](docs/screenshots/ru/cascade-done.png) |
 
+**Проверка работающего каскада** (Ещё > Каскад: проверить канал) проходит путь и отмечает каждый шаг; сломанный участок краснеет, а итог называет причину:
+
+<img src="docs/screenshots/ru/cascade-check.png" alt="Проверка каскада" width="620" />
+
 **Алерты в Telegram**:
 
 <img src="docs/screenshots/ru/telegram-alerts.png" alt="Алерты в Telegram" width="520" />

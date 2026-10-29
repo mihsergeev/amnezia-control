@@ -86,11 +86,12 @@ export function CascadeCheckModal({ cascade, entry, exit, onClose, onChecked, on
     state: st(result?.tproxy),
   })
   if (gre) {
+    // рабочий GRE-интерфейс Linux показывает как UNKNOWN, DOWN - выключен
+    const down = result?.tunnel === 'DOWN'
     steps.push({
       label: t('GRE-туннель до выхода поднят'),
-      fail: t('GRE-туннеля нет'),
-      detail: result?.tunnel ? t('состояние {s}', { s: result.tunnel }) : undefined,
-      state: st(result ? !!result.tunnel : undefined),
+      fail: down ? t('GRE-туннель выключен') : t('GRE-туннеля нет'),
+      state: st(result ? !!result.tunnel && !down : undefined),
     })
   }
   const egressIdx = steps.length
