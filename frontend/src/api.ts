@@ -386,6 +386,10 @@ export type NodeMetric = {
   server_id: number
   cpu_count: number
   load1: number
+  // загрузка CPU между двумя снимками сборщика, %; null - еще не с чем сравнить
+  cpu_pct: number | null
+  // PSI cpu some avg60: доля времени, когда задачам не хватало процессора, %
+  psi_cpu: number | null
   mem_total: number
   mem_used: number
   disk_total: number

@@ -41,8 +41,10 @@ AWG_PARAM_KEYS = [
     "I1", "I2", "I3", "I4", "I5",
     *AWG3_PARAM_KEYS,
 ]
-# выбирает docker или sudo docker в зависимости от прав ssh-пользователя
-_DOCKER = 'DOCKER=$(docker info >/dev/null 2>&1 && echo docker || echo "sudo -n docker"); '
+# выбирает docker или sudo docker в зависимости от прав ssh-пользователя: по
+# правам на сокет, а не через docker info - тот идет к демону перед каждой
+# командой панели и на ноде с 1 vCPU заметно грузит dockerd
+_DOCKER = 'DOCKER=$({ [ -w /var/run/docker.sock ] || [ -w /run/docker.sock ]; } && echo docker || echo "sudo -n docker"); '
 
 
 class AwgError(Exception):

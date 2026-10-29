@@ -290,3 +290,23 @@ def test_parse_check_output_gre_tunnels() -> None:
     assert result.tunnels == [{"kind": "gre", "name": "gre-a", "remote": "203.0.113.9"}]
     assert result.containers == ["amnezia-xray"]
     assert result.as_dict()["tunnels"] == result.tunnels
+
+
+def test_egress_probe_leaves_no_ssl_client_zombies():
+    # busybox wget по https оставлял сироту ssl_client у PID 1 контейнера:
+    # https только через curl, wget только по http
+    cmd = sshops.EGRESS_COMMAND
+    assert "curl -fsS -m 6 https://$u" in cmd
+    assert "wget -qO- -T 6 http://$u" in cmd
+    assert "wget -qO- -T 6 https" not in cmd
+    # доступ к docker по правам на сокет, без docker info и docker ps на каждом шаге
+    assert "docker info" not in cmd and "docker ps >/dev/null" not in cmd
+
+
+def test_docker_prefix_without_docker_info():
+    from app import awg, deploy, fullaccess, openvpn, xray
+    import inspect
+
+    for mod in (awg, deploy, fullaccess, openvpn, sshops, xray):
+        assert "docker info >" not in inspect.getsource(mod), mod.__name__
+    assert "[ -w /var/run/docker.sock ]" in awg._DOCKER

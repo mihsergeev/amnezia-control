@@ -302,6 +302,12 @@ class NodeMetric(Base):
     disk_total: Mapped[int] = mapped_column(BigInteger, default=0)
     disk_used: Mapped[int] = mapped_column(BigInteger, default=0)
     uptime_seconds: Mapped[int] = mapped_column(BigInteger, default=0)
+    # счетчики /proc/stat прошлого снимка и загрузка CPU между снимками, %
+    # (None - первый снимок или нода перезагрузилась); psi_cpu - PSI some avg60
+    cpu_busy: Mapped[int] = mapped_column(BigInteger, default=0)
+    cpu_total: Mapped[int] = mapped_column(BigInteger, default=0)
+    cpu_pct: Mapped[float | None] = mapped_column(Float, nullable=True)
+    psi_cpu: Mapped[float | None] = mapped_column(Float, nullable=True)
     disk_alerted: Mapped[bool] = mapped_column(Boolean, default=False)
     ts: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()

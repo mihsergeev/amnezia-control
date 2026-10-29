@@ -167,12 +167,15 @@ function pct(used: number, total: number): number {
   return total > 0 ? Math.round((used / total) * 100) : 0
 }
 
-// пороги те же, что подсвечивают метрики в карточке: диск и память от 90%,
-// загрузка от 1 на ядро - это уже проблема, а не "много"
-function loadLevel(m: NodeMetric): string {
-  if (m.cpu_count <= 0) return ''
-  const r = m.load1 / m.cpu_count
-  return r >= 1 ? 'res-crit' : r >= 0.7 ? 'res-warn' : ''
+// пороги те же, что подсвечивают метрики в карточке: диск и память от 90%.
+// CPU - по настоящей загрузке и PSI (задачи ждут процессор), а не по load на
+// ядро: на 1 vCPU load выше 1 бывает от ожидания IO при свободном процессоре
+function cpuLevel(m: NodeMetric): string {
+  const cpu = m.cpu_pct ?? 0
+  const psi = m.psi_cpu ?? 0
+  if (cpu >= 90 || psi >= 60) return 'res-crit'
+  if (cpu >= 70 || psi >= 30) return 'res-warn'
+  return ''
 }
 
 function pctLevel(p: number, warn: number): string {
@@ -183,7 +186,7 @@ function isProblem(s: Server, m: NodeMetric | undefined): boolean {
   if (s.last_check_ok === false) return true
   if (!m) return false
   return (
-    loadLevel(m) === 'res-crit' ||
+    cpuLevel(m) === 'res-crit' ||
     pct(m.mem_used, m.mem_total) >= 90 ||
     pct(m.disk_used, m.disk_total) >= 90
   )
@@ -249,7 +252,7 @@ function ServerDetail({
   const online = server.last_check_ok === true
   const memPct = m ? pct(m.mem_used, m.mem_total) : 0
   const diskPct = m ? pct(m.disk_used, m.disk_total) : 0
-  const loadPct = m && m.cpu_count > 0 ? Math.round((m.load1 / m.cpu_count) * 100) : 0
+  const cpuPct = m?.cpu_pct != null ? Math.round(m.cpu_pct) : null
   const isEntry = cascade?.entry_server_id === server.id
   const health = isEntry ? cascade?.result.health : undefined
   const exitDown = isEntry && (peer?.last_check_ok === false || health?.ok === false)
@@ -371,13 +374,13 @@ function ServerDetail({
             <>
               <Kpi
                 label="CPU"
-                value={`${loadPct}%`}
-                sub={t('загрузка {l} на {n} ядер', {
+                value={cpuPct != null ? `${cpuPct}%` : '…'}
+                sub={t('load {l}, ядер {n}', {
                   l: m.load1.toFixed(2),
                   n: m.cpu_count,
                 })}
-                bar={loadPct}
-                level={loadLevel(m)}
+                bar={cpuPct ?? undefined}
+                level={cpuLevel(m)}
               />
               <Kpi
                 label="RAM"
