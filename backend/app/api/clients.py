@@ -16,13 +16,13 @@ import asyncio
 import json
 import logging
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, HTTPException, Query, status
 from sqlalchemy import select
 
 from app import audit, expiry, pausestore, protolabel
 from app.config import get_settings
 from app.deps import CurrentUser, SessionDep
-from app.models import AwgConfig, AwgNote, ClientName, OvpnConfig, Server
+from app.models import AwgConfig, AwgNote, ClientName, OvpnConfig, PausedClient, Server
 from app.schemas import (
     ClientSearchHit,
     RevokeBulkRequest,
@@ -54,10 +54,16 @@ def _key(server_id: int, protocol: str, client_id: str) -> tuple:
 async def search_clients(
     _: CurrentUser,
     session: SessionDep,
-    q: str = Query(min_length=2, description="Часть имени, заметки или ключа клиента"),
+    q: str = Query(default="", description="Часть имени, заметки или ключа клиента"),
+    paused: bool = Query(default=False, description="Только клиенты на паузе"),
 ) -> list[ClientSearchHit]:
-    """Ищет клиентов по всем серверам и протоколам: по имени, заметке и id/ключу."""
+    """Ищет клиентов по всем серверам и протоколам: по имени, заметке и id/ключу.
+    paused=true - все клиенты на паузе (q тогда необязателен и сужает список)."""
     raw = q.strip()
+    if len(raw) < 2 and not paused:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_CONTENT, "Запрос короче 2 символов"
+        )
     needle = raw.lower()
     servers = {s.id: s for s in await session.scalars(select(Server))}
     hits: dict[tuple, dict] = {}
@@ -97,24 +103,48 @@ async def search_clients(
             if value:
                 item[key] = value
 
+    # клиенты на паузе: с ноды они сняты, но имя и время паузы есть в панели
+    paused_rows = {
+        _key(r.server_id, r.protocol, r.client_id): r
+        for r in await session.scalars(select(PausedClient))
+    }
+    for k, row in paused_rows.items():
+        if (paused and not needle) or needle in (row.name or "").lower() or id_match(
+            row.client_id
+        ):
+            add(row.server_id, row.protocol, row.client_id, name=row.name)
+    # в режиме "на паузе" остальные таблицы только дополняют найденных
+    # (заметка, выданный конфиг, имя с ноды), новых клиентов не добавляют
+    only = set(hits) if paused else None
+
+    def want(server_id: int, protocol: str, client_id: str, *texts: str) -> bool:
+        if only is not None:
+            return _key(server_id, protocol, client_id) in only
+        return any(needle in (t or "").lower() for t in texts) or id_match(client_id)
+
     # имена с нод (кэш сборщика) — покрывают и клиентов, созданных мимо панели
     for row in await session.scalars(select(ClientName)):
-        if needle in (row.name or "").lower() or id_match(row.client_id):
+        if want(row.server_id, row.protocol, row.client_id, row.name):
             add(row.server_id, row.protocol, row.client_id, name=row.name)
-    # заметки панели
+    # заметки панели (по ключу их не ищем: ключ найдется по имени)
     for row in await session.scalars(select(AwgNote)):
-        if needle in (row.note or "").lower():
+        k = _key(row.server_id, row.protocol, row.public_key)
+        if k in only if only is not None else needle in (row.note or "").lower():
             add(row.server_id, row.protocol, row.public_key, note=row.note)
     # выданные конфиги: имя хранится вместе с ними
     for row in await session.scalars(select(AwgConfig)):
-        if needle in (row.name or "").lower() or id_match(row.public_key):
-            add(
-                row.server_id, row.protocol or "awg", row.public_key,
-                name=row.name, has_config=True,
-            )
+        proto = row.protocol or "awg"
+        if want(row.server_id, proto, row.public_key, row.name):
+            add(row.server_id, proto, row.public_key, name=row.name, has_config=True)
     for row in await session.scalars(select(OvpnConfig)):
-        if needle in (row.name or "").lower() or id_match(row.client_id):
+        if want(row.server_id, "openvpn", row.client_id, row.name):
             add(row.server_id, "openvpn", row.client_id, name=row.name, has_config=True)
+
+    for k, item in hits.items():
+        row = paused_rows.get(k)
+        if row is not None:
+            item["paused"] = True
+            item["paused_at"] = row.paused_at
 
     # заметки хранятся без привязки к тому, жив ли клиент, поэтому сортируем
     # предсказуемо: сервер → протокол → имя

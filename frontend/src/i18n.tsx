@@ -44,6 +44,13 @@ const EN: Record<string, string> = {
   'Найти': 'Search',
   'Ищу…': 'Searching…',
   'Найдено: {n}': 'Found: {n}',
+  'На паузе: {n}': 'Paused: {n}',
+  '⏸ На паузе': '⏸ Paused',
+  'Все клиенты на паузе по всем серверам; запрос в поле сужает список':
+    'All paused clients across all servers; the query in the field narrows the list',
+  'Клиентов на паузе нет.': 'No paused clients.',
+  'на паузе с {at}': 'paused since {at}',
+  'Возобновляю…': 'Resuming…',
   'выбрано: {n}': 'selected: {n}',
   'Выбрать все': 'Select all',
   'Снять все': 'Clear selection',

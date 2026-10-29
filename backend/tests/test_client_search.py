@@ -199,3 +199,46 @@ async def test_search_does_not_match_random_key_substring(
         "/api/clients/search?q=Z6RCBNX9/IFED", headers=auth_headers
     )).json()
     assert hits == []
+
+
+async def test_paused_list_and_mark(client, auth_headers, session_factory):
+    """Список клиентов на паузе по всему парку (без запроса), пометка паузы в
+    обычном поиске. Живые клиенты в список пауз не попадают."""
+    from app.models import PausedClient
+
+    ids = await _seed(client, auth_headers)
+    async with session_factory() as s:
+        # на паузе: AWG (имя только в записи паузы) и OpenVPN с заметкой и конфигом
+        s.add(PausedClient(server_id=ids["srv-a"], protocol="awg", client_id="KEY_P1=",
+                           name="Сидоров ноутбук", data='{"ip": "10.8.1.5"}'))
+        s.add(PausedClient(server_id=ids["srv-b"], protocol="awg3", client_id="KEY_P2=",
+                           name="Иванов телефон", data="{}"))
+        s.add(AwgNote(server_id=ids["srv-b"], protocol="awg3",
+                      public_key="KEY_P2=", note="уволен"))
+        s.add(AwgConfig(server_id=ids["srv-b"], public_key="KEY_P2=", protocol="awg3",
+                        name="Иванов телефон", config="[Interface]"))
+        # живой клиент - не на паузе
+        s.add(ClientName(server_id=ids["srv-a"], protocol="awg",
+                         client_id="KEY_LIVE=", name="Сидоров телефон"))
+        await s.commit()
+
+    r = await client.get("/api/clients/search?paused=true", headers=auth_headers)
+    assert r.status_code == 200, r.text
+    hits = {h["client_id"]: h for h in r.json()}
+    assert set(hits) == {"KEY_P1=", "KEY_P2="}
+    assert all(h["paused"] and h["paused_at"] for h in hits.values())
+    # заметка и конфиг подтянулись к клиенту на паузе
+    assert hits["KEY_P2="]["note"] == "уволен" and hits["KEY_P2="]["has_config"]
+
+    # запрос сужает список пауз
+    r = await client.get("/api/clients/search?paused=true&q=сидоров", headers=auth_headers)
+    assert [h["client_id"] for h in r.json()] == ["KEY_P1="]
+
+    # обычный поиск находит и живого, и на паузе, пауза помечена
+    r = await client.get("/api/clients/search?q=сидоров", headers=auth_headers)
+    found = {h["client_id"]: h["paused"] for h in r.json()}
+    assert found == {"KEY_P1=": True, "KEY_LIVE=": False}
+
+    # без режима паузы короткий запрос по-прежнему отклоняется
+    r = await client.get("/api/clients/search?q=a", headers=auth_headers)
+    assert r.status_code == 422
