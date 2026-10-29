@@ -82,8 +82,10 @@ export function CascadeCheckModal({ cascade, entry, exit, onClose, onChecked, on
   })
   steps.push({
     label: t('Клиенты идут через шлюз'),
-    fail: t('клиенты идут мимо шлюза'),
-    state: st(result?.tproxy),
+    fail: result && result.tproxy && !result.rule
+      ? t('пропало правило маршрутизации в шлюз')
+      : t('клиенты идут мимо шлюза'),
+    state: st(result ? result.tproxy && result.rule !== false : undefined),
   })
   if (gre) {
     // рабочий GRE-интерфейс Linux показывает как UNKNOWN, DOWN - выключен
@@ -100,6 +102,26 @@ export function CascadeCheckModal({ cascade, entry, exit, onClose, onChecked, on
     fail: t('через выход интернет не открывается'),
     detail: result?.egress ? t('адрес {ip}', { ip: result.egress }) : undefined,
     state: st(result ? !!result.egress : undefined),
+  })
+  // путь клиентов целиком: адрес изнутри VPN-контейнера на входе. Шлюз выше
+  // проверяется напрямую и не заметит, если клиенты идут в интернет мимо него
+  const clientIdx = steps.length
+  steps.push({
+    label: t('Клиенты выходят с адреса выхода'),
+    fail: t('клиенты выходят в интернет мимо выхода'),
+    detail: result
+      ? result.client
+        ? t('адрес {ip}', { ip: result.client })
+        : t('из контейнера спросить нечем')
+      : undefined,
+    // старая панель без поля client или контейнер не ответил - не судим
+    state: !result
+      ? 'wait'
+      : !result.client
+        ? 'warn'
+        : !result.egress || result.client === result.egress
+          ? st(!!result.egress)
+          : 'bad',
   })
   if (ru || result?.ru) {
     steps.push({
@@ -129,7 +151,7 @@ export function CascadeCheckModal({ cascade, entry, exit, onClose, onChecked, on
   }
   const toEntry = link([view(0), view(1)])
   const toExit = link(gre ? [view(2)] : [view(egressIdx)])
-  const toNet = link([view(egressIdx)])
+  const toNet = link([view(egressIdx), view(clientIdx)])
   const done = !running && !!result && shown >= steps.length
 
   const reason = (() => {

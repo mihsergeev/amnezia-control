@@ -3,7 +3,7 @@
 
 Устройство на нодах (все в /opt/acontrol/cascade, службы systemd):
 - вход: шлюз acontrol-cascade (xray-core в сети хоста). Исходящий трафик
-  VPN-контейнеров с docker0 заворачивается в него через tproxy
+  VPN-контейнеров с docker0 и amnezia-dns-net заворачивается в него через tproxy
   (cascade-tproxy.sh), он раскладывает по геобазам runetfreedom: сайты страны
   входа напрямую, остальное на выход. Если шлюз лежит, трафик клиентов не уходит
   никуда, утечки мимо выхода нет;
@@ -51,6 +51,9 @@ REALITY_SITE = "www.googletagmanager.com"
 VLESS_PORTS = (443, 8443, 2083, 2096)
 TAG = "cascade"  # каталог деплоя на нодах ($HOME/.acontrol/cascade)
 TRANSPORTS = ("vless", "gre")
+# ревизия скриптов входа: проверка видит старую и обновляет их на месте
+# (upgrade_entry), без переустановки каскада
+SCRIPTS_REV = "2"
 
 # проверка канала: сколько отправляем со входа на выход и сколько ждем
 PROBE_BYTES = 20 * 1024 * 1024
@@ -99,6 +102,7 @@ def new_vless_params() -> dict[str, str]:
 # --- скрипты на нодах --------------------------------------------------------
 
 _GRE_TUN_SH = r"""#!/bin/sh
+# rev @REV@
 # Amnezia Control: GRE-туннель каскада. Параметры в @DEFAULTS@:
 #   IF, LOCAL, REMOTE, INNER (адрес/30 внутри туннеля), ROLE=entry|exit
 #   entry: трафик с меткой MARK уходит в туннель (таблица TABLE), без туннеля никуда
@@ -130,7 +134,25 @@ up() {
     # туннеля нет - таблица пустая, помеченный трафик упирается в unreachable
     ip rule show | grep -q "fwmark $MARK lookup $TABLE" || ip rule add fwmark "$MARK" lookup "$TABLE" pref 1010
     ip rule show | grep -q "fwmark $MARK unreachable" || ip rule add fwmark "$MARK" unreachable pref 1011
+    # обе ip rule networkd снимает на networkctl reconfigure и netplan apply,
+    # тогда помеченное ушло бы напрямую с адреса входа. Пока heal не вернет,
+    # выбрасываем. Сам GRE не трогаем: внешний пакет может унаследовать метку
+    rule filter OUTPUT -m mark --mark "$MARK" ! -o "$IF" ! -p gre -j DROP
   fi
+}
+
+# вызывается таймером: все на месте - ничего не трогаем, иначе ставим заново
+heal() {
+  if ip link show "$IF" >/dev/null 2>&1; then
+    [ "$ROLE" = exit ] && return 0
+    ip rule show | grep -q "fwmark $MARK lookup $TABLE" \
+      && ip rule show | grep -q "fwmark $MARK unreachable" \
+      && ip route show table "$TABLE" | grep -q "^default dev $IF" \
+      && iptables -C OUTPUT -m mark --mark "$MARK" ! -o "$IF" ! -p gre -j DROP 2>/dev/null \
+      && return 0
+  fi
+  up
+  logger -t acontrol-cascade "GRE tunnel rules restored"
 }
 
 down() {
@@ -139,6 +161,7 @@ down() {
     unrule filter FORWARD -i "$EGRESS" -o "$IF" -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT
     unrule nat POSTROUTING -s "$NET" -o "$EGRESS" -j MASQUERADE
   else
+    unrule filter OUTPUT -m mark --mark "$MARK" ! -o "$IF" ! -p gre -j DROP
     while ip rule del fwmark "$MARK" lookup "$TABLE" 2>/dev/null; do :; done
     while ip rule del fwmark "$MARK" unreachable 2>/dev/null; do :; done
     ip route flush table "$TABLE" 2>/dev/null || true
@@ -157,8 +180,9 @@ status() {
 case "${1:-}" in
   up) up ;;
   down) down ;;
+  heal) heal ;;
   status) status ;;
-  *) echo "usage: $0 up|down|status" >&2; exit 2 ;;
+  *) echo "usage: $0 up|down|heal|status" >&2; exit 2 ;;
 esac
 """
 
@@ -180,17 +204,29 @@ WantedBy=multi-user.target
 """
 
 _TPROXY_SH = r"""#!/bin/sh
-# Amnezia Control: заворачивает исходящий трафик VPN-контейнеров (docker0) в
-# шлюз каскада (tproxy на 127.0.0.1:@PORT@). Дальше шлюз решает, куда выпустить.
-#   cascade-tproxy.sh up|down|status
+# rev @REV@
+# Amnezia Control: заворачивает исходящий трафик VPN-контейнеров в шлюз каскада
+# (tproxy на 127.0.0.1:@PORT@). Дальше шлюз решает, куда выпустить.
+#   cascade-tproxy.sh up|down|heal|status
 set -u
-IF=docker0
 PORT=@PORT@
 MARK=@MARK@
 TABLE=@TABLE@
 CHAIN=ACONTROL_CASCADE
 # не трогаем локальные и служебные сети (в т.ч. docker) и адреса самой ноды
 SKIP="0.0.0.0/8 10.0.0.0/8 100.64.0.0/10 127.0.0.0/8 169.254.0.0/16 172.16.0.0/12 192.168.0.0/16 224.0.0.0/4 240.0.0.0/4"
+
+# мосты, через которые VPN-контейнеры выходят в интернет. Приложение Amnezia
+# подключает их еще и к amnezia-dns-net, и тогда docker ведет маршрут по
+# умолчанию через нее (первая сеть по алфавиту), а не через docker0
+bridges() {
+  echo docker0
+  l=$(docker network inspect -f '{{.Id}}|{{index .Options "com.docker.network.bridge.name"}}' amnezia-dns-net 2>/dev/null) || return 0
+  name=${l#*|}
+  # имя моста не задано - docker печатает "<no value>", мост тогда br-<начало id>
+  case "$name" in ""|"<no value>") name="br-$(echo "${l%%|*}" | cut -c1-12)" ;; esac
+  ip link show "$name" >/dev/null 2>&1 && echo "$name"
+}
 
 up() {
   modprobe xt_TPROXY 2>/dev/null || true
@@ -205,14 +241,38 @@ up() {
   iptables -t mangle -A $CHAIN -m conntrack --ctstate DNAT -j RETURN
   iptables -t mangle -A $CHAIN -p tcp -j TPROXY --on-ip 127.0.0.1 --on-port $PORT --tproxy-mark $MARK/$MARK
   iptables -t mangle -A $CHAIN -p udp -j TPROXY --on-ip 127.0.0.1 --on-port $PORT --tproxy-mark $MARK/$MARK
-  iptables -t mangle -C PREROUTING -i $IF -j $CHAIN 2>/dev/null || iptables -t mangle -A PREROUTING -i $IF -j $CHAIN
-  # INPUT бывает по умолчанию DROP (ufw): пропускаем то, что завернули в шлюз
-  iptables -C INPUT -i $IF -m mark --mark $MARK/$MARK -j ACCEPT 2>/dev/null || iptables -I INPUT 1 -i $IF -m mark --mark $MARK/$MARK -j ACCEPT
+  for IF in $(bridges); do
+    iptables -t mangle -C PREROUTING -i $IF -j $CHAIN 2>/dev/null || iptables -t mangle -A PREROUTING -i $IF -j $CHAIN
+    # INPUT бывает по умолчанию DROP (ufw): пропускаем то, что завернули в шлюз
+    iptables -C INPUT -i $IF -m mark --mark $MARK/$MARK -j ACCEPT 2>/dev/null || iptables -I INPUT 1 -i $IF -m mark --mark $MARK/$MARK -j ACCEPT
+  done
+}
+
+# heal зовет служба раз в 20 секунд: все на месте - ничего не трогаем. networkd
+# снимает чужие ip rule на networkctl reconfigure и netplan apply, сам при этом не
+# перезапускаясь. Утечки тогда нет (ядро не пересылает пакеты, уже отданные
+# сокету шлюза), но у клиентов пропадает интернет
+heal() {
+  ok=1
+  ip rule show | grep -q "fwmark $MARK lookup $TABLE" || ok=0
+  ip route show table $TABLE | grep -q "^local default" || ok=0
+  for IF in $(bridges); do
+    iptables -t mangle -C PREROUTING -i $IF -j $CHAIN 2>/dev/null || ok=0
+    iptables -C INPUT -i $IF -m mark --mark $MARK/$MARK -j ACCEPT 2>/dev/null || ok=0
+  done
+  [ $ok = 1 ] && return 0
+  up
+  logger -t acontrol-cascade "tproxy rules restored"
 }
 
 down() {
-  iptables -D INPUT -i $IF -m mark --mark $MARK/$MARK -j ACCEPT 2>/dev/null || true
-  iptables -t mangle -D PREROUTING -i $IF -j $CHAIN 2>/dev/null || true
+  # снимаем все переходы в цепочку, в том числе на мосты, которых уже нет
+  iptables -S INPUT | sed -n "s/^-A \(INPUT .*--mark $MARK\/$MARK -j ACCEPT\)$/\1/p" | while read -r r; do
+    iptables -D $r 2>/dev/null
+  done
+  iptables -t mangle -S PREROUTING | sed -n "s/^-A \(PREROUTING .*-j $CHAIN\)$/\1/p" | while read -r r; do
+    iptables -t mangle -D $r 2>/dev/null
+  done
   iptables -t mangle -F $CHAIN 2>/dev/null || true
   iptables -t mangle -X $CHAIN 2>/dev/null || true
   ip rule del fwmark $MARK lookup $TABLE 2>/dev/null || true
@@ -227,8 +287,9 @@ status() {
 case "${1:-}" in
   up) up ;;
   down) down ;;
+  heal) heal ;;
   status) status ;;
-  *) echo "usage: $0 up|down|status" >&2; exit 2 ;;
+  *) echo "usage: $0 up|down|heal|status" >&2; exit 2 ;;
 esac
 """
 
@@ -243,6 +304,20 @@ Type=oneshot
 RemainAfterExit=yes
 ExecStart=@DIR@/cascade-tproxy.sh up
 ExecStop=@DIR@/cascade-tproxy.sh down
+
+[Install]
+WantedBy=multi-user.target
+"""
+
+# циклом в одной службе, а не таймером: таймер раз в 20 секунд засорял бы журнал
+_HEAL_UNIT = """[Unit]
+Description=Amnezia Control: restore cascade routing rules if they are gone
+After=acontrol-cascade-tproxy.service acontrol-gre.service
+
+[Service]
+ExecStart=/bin/sh -c 'while :; do if systemctl is-active -q acontrol-cascade-tproxy.service; then @DIR@/cascade-tproxy.sh heal; fi; if systemctl is-active -q acontrol-gre.service; then @DIR@/gre-tun.sh heal; fi; sleep 20; done'
+Restart=always
+RestartSec=20
 
 [Install]
 WantedBy=multi-user.target
@@ -323,6 +398,7 @@ _UNITS = {
     "acontrol-cascade-tproxy.service": _TPROXY_UNIT,
     "acontrol-cascade-geo.service": _GEO_UNIT,
     "acontrol-cascade-geo.timer": _GEO_TIMER,
+    "acontrol-cascade-heal.service": _HEAL_UNIT,
 }
 
 
@@ -336,6 +412,7 @@ def _fill(text: str) -> str:
         .replace("@IMAGE@", XRAY_IMAGE)
         .replace("@GATEWAY@", GATEWAY)
         .replace("@SOCKS@", str(SOCKS_PORT))
+        .replace("@REV@", SCRIPTS_REV)
     )
 
 
@@ -622,7 +699,7 @@ def build_entry_script(transport: str, exit_ip: str, cascade_id: int, params: di
         _put(f"{DIR}/cascade-tproxy.sh", _fill(_TPROXY_SH), "755"),
     ]
     for name in ("acontrol-cascade-tproxy.service", "acontrol-cascade-geo.service",
-                 "acontrol-cascade-geo.timer"):
+                 "acontrol-cascade-geo.timer", "acontrol-cascade-heal.service"):
         lines.append(_put(f"/etc/systemd/system/{name}", _fill(_UNITS[name])))
     lines += [
         "sudo systemctl daemon-reload",
@@ -650,22 +727,76 @@ def build_entry_script(transport: str, exit_ip: str, cascade_id: int, params: di
         "sudo systemctl enable --now acontrol-cascade-tproxy.service >/dev/null 2>&1 "
         "|| fail 'tproxy'",
         "sudo systemctl enable --now acontrol-cascade-geo.timer >/dev/null 2>&1",
+        # restart: при переустановке подхватить новый скрипт
+        "sudo systemctl enable acontrol-cascade-heal.service >/dev/null 2>&1",
+        "sudo systemctl restart acontrol-cascade-heal.service || fail 'heal'",
         'echo "DEPLOY_DONE"',
     ]
     return "\n".join(lines) + "\n"
 
 
 def build_check_command(country: str = "") -> str:
-    """Разовая проверка каскада на входе: службы, шлюз, адреса через шлюз."""
+    """Разовая проверка каскада на входе: службы, шлюз, адреса через шлюз.
+    CASCADE_CLIENT - адрес изнутри VPN-контейнера, путем трафика клиентов: socks
+    шлюза его не показывает, он идет в шлюз мимо tproxy и ip rule."""
     return "\n".join([
         f"GW=$(sudo docker ps --format '{{{{.Names}}}}' | grep -qx {GATEWAY} && echo yes || echo no)",
         "TP=$(systemctl is-active acontrol-cascade-tproxy.service 2>/dev/null)",
         f"TUN=$(ip -br link show {GRE_IF} 2>/dev/null | awk '{{print $2}}')",
+        f"RULE=$(ip rule show | grep -q 'fwmark {TPROXY_MARK} lookup {TPROXY_TABLE}' && echo yes || echo no)",
+        f"GRERULE=$(ip rule show | grep -q 'fwmark {hex(GRE_MARK)} lookup {GRE_TABLE}' && echo yes || echo no)",
         'echo "CASCADE_GW=$GW"',
         'echo "CASCADE_TPROXY=$TP"',
         'echo "CASCADE_TUN=$TUN"',
+        'echo "CASCADE_RULE=$RULE"',
+        'echo "CASCADE_GRERULE=$GRERULE"',
+        # скрипт без строки rev - ставили до ревизий, это 0
+        f"if [ -f {DIR}/cascade-tproxy.sh ]; then REV=$(sed -n 's/^# rev //p' {DIR}/cascade-tproxy.sh); "
+        'echo "CASCADE_REV=${REV:-0}"; fi',
         *_check_lines(country),
+        "C=$(sudo docker ps --format '{{.Names}}' 2>/dev/null | grep -i '^amnezia' | head -1)",
+        'CL=""',
+        # wget только по http: по https busybox оставляет зомби ssl_client
+        'if [ -n "$C" ]; then CL=$(sudo docker exec "$C" sh -c '
+        '"curl -4 -fsS -m 15 https://api.ipify.org 2>/dev/null || wget -qO- -T 15 http://api.ipify.org 2>/dev/null" '
+        "2>/dev/null); fi",
+        'echo "CASCADE_CLIENT=$CL"',
     ]) + "\n"
+
+
+def build_entry_upgrade() -> str:
+    """Новые скрипты входа поверх старых: шлюз, туннель и клиентов не трогает.
+    Недостающие правила ставит служба heal на первом же круге."""
+    lines = [_HEAD, _put(f"{DIR}/cascade-tproxy.sh", _fill(_TPROXY_SH), "755")]
+    # GRE-скрипт только там, где каскад на GRE: его параметры уже лежат рядом
+    lines.append(f"if [ -f {GRE_DEFAULTS} ]; then")
+    lines.append("  " + _put(f"{DIR}/gre-tun.sh", _fill(_GRE_TUN_SH), "755"))
+    lines.append("fi")
+    lines += [
+        _put("/etc/systemd/system/acontrol-cascade-heal.service", _fill(_HEAL_UNIT)),
+        "sudo systemctl daemon-reload",
+        "sudo systemctl enable acontrol-cascade-heal.service >/dev/null 2>&1",
+        "sudo systemctl restart acontrol-cascade-heal.service || fail 'heal'",
+        # первый круг heal
+        "sleep 3",
+        'echo "DEPLOY_DONE"',
+    ]
+    return "\n".join(lines) + "\n"
+
+
+async def run_check(conn: asyncssh.SSHClientConnection, country: str = "",
+                    timeout: int = 60) -> str:
+    """Проверка каскада на входе; скрипты входа старой ревизии сначала обновляет
+    и проверяет заново. Вывод - для parse_kv."""
+    r = await conn.run(build_check_command(country), check=False, timeout=timeout)
+    out = r.stdout if isinstance(r.stdout, str) else ""
+    rev = parse_kv(out).get("rev")
+    # rev пустой - на входе нет скрипта tproxy, это не наш каскад или он разобран
+    if rev and rev != SCRIPTS_REV:
+        await conn.run(build_entry_upgrade(), check=False, timeout=timeout)
+        r = await conn.run(build_check_command(country), check=False, timeout=timeout)
+        out = r.stdout if isinstance(r.stdout, str) else ""
+    return out
 
 
 def parse_kv(text: str) -> dict[str, str]:
@@ -686,7 +817,10 @@ def _ip_or_empty(value: str) -> str:
 
 def check_result(kv: dict[str, str]) -> dict[str, str]:
     """Адреса из вывода проверки: мусор вместо адреса (страница ошибки) - пусто."""
-    return {"egress": _ip_or_empty(kv.get("egress", "")), "ru": _ip_or_empty(kv.get("ru", ""))}
+    return {
+        "egress": _ip_or_empty(kv.get("egress", "")), "ru": _ip_or_empty(kv.get("ru", "")),
+        "client": _ip_or_empty(kv.get("client", "")),
+    }
 
 
 def health(transport: str, kv: dict[str, str], res: dict[str, str]) -> tuple[bool, str]:
@@ -701,13 +835,20 @@ def health(transport: str, kv: dict[str, str], res: dict[str, str]) -> tuple[boo
         return False, "GRE-туннель выключен"
     if kv.get("tproxy") != "active":
         return False, "клиенты идут мимо шлюза (tproxy выключен)"
+    # "no" - правило сняли; пусто - старая проверка, не судим
+    if kv.get("rule") == "no" or (transport == "gre" and kv.get("grerule") == "no"):
+        return False, "пропало правило маршрутизации в шлюз"
     if not res.get("egress"):
         return False, "через выход интернет не открывается"
+    # контейнер не ответил - не судим: у xray и openvpn бывает нечем спросить
+    if res.get("client") and res["client"] != res["egress"]:
+        return False, "клиенты выходят в интернет мимо выхода"
     return True, ""
 
 
 def build_remove_entry() -> str:
-    units = "acontrol-cascade-tproxy.service acontrol-cascade-geo.timer acontrol-gre.service"
+    units = ("acontrol-cascade-heal.service acontrol-cascade-tproxy.service "
+             "acontrol-cascade-geo.timer acontrol-gre.service")
     return "\n".join([
         f"sudo systemctl disable --now {units} >/dev/null 2>&1",
         f"sudo docker rm -f {GATEWAY} >/dev/null 2>&1",

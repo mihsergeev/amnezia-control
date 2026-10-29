@@ -114,7 +114,7 @@ def test_probe_helpers_move_bytes_locally() -> None:
 def test_check_result_ignores_garbage() -> None:
     kv = cascade.parse_kv("CASCADE_EGRESS=198.51.100.20\nCASCADE_RU=<html>\nCASCADE_GW=yes\n")
     assert kv["gw"] == "yes"
-    assert cascade.check_result(kv) == {"egress": "198.51.100.20", "ru": ""}
+    assert cascade.check_result(kv) == {"egress": "198.51.100.20", "ru": "", "client": ""}
 
 
 async def _servers(session_factory, n=3, ok=True) -> list[int]:
@@ -323,3 +323,87 @@ def test_local_ip_check_only_where_known() -> None:
     assert "ip.nic.ru" not in kz and 'RU=""' in kz and "CASCADE_RU=$RU" in kz
     script = cascade.build_entry_script("gre", "198.51.100.20", 3, VLESS, "KZ")
     assert "ip.nic.ru" not in script
+
+
+def test_tproxy_catches_amnezia_dns_net() -> None:
+    tp = cascade._fill(cascade._TPROXY_SH)
+    # контейнеры приложения Amnezia выходят через amnezia-dns-net, а не docker0
+    assert "amnezia-dns-net" in tp and "for IF in $(bridges)" in tp
+    # переходы снимаются все, в том числе на мосты, которых уже нет
+    assert "iptables -t mangle -S PREROUTING | sed -n" in tp
+
+
+def test_lost_gre_rule_drops_instead_of_leaking() -> None:
+    tp = cascade._fill(cascade._TPROXY_SH)
+    gre = cascade._GRE_TUN_SH
+    # сам GRE не режем: внешний пакет туннеля может унаследовать метку
+    assert 'rule filter OUTPUT -m mark --mark "$MARK" ! -o "$IF" ! -p gre -j DROP' in gre
+    assert 'unrule filter OUTPUT -m mark --mark "$MARK" ! -o "$IF" ! -p gre -j DROP' in gre
+    for text in (tp, gre):
+        assert "heal) heal ;;" in text
+
+
+def test_heal_service_installed_and_removed() -> None:
+    script = cascade.build_entry_script("vless", "198.51.100.20", 3, VLESS)
+    assert "/etc/systemd/system/acontrol-cascade-heal.service" in script
+    assert "systemctl restart acontrol-cascade-heal.service" in script
+    unit = cascade._fill(cascade._HEAL_UNIT)
+    assert f"{cascade.DIR}/cascade-tproxy.sh heal" in unit and f"{cascade.DIR}/gre-tun.sh heal" in unit
+    assert "acontrol-cascade-heal.service" in cascade.build_remove_entry()
+
+
+def test_check_looks_from_inside_the_vpn_container() -> None:
+    cmd = cascade.build_check_command()
+    assert 'docker exec "$C"' in cmd and 'echo "CASCADE_CLIENT=$CL"' in cmd
+    assert "fwmark 0x100 lookup 241" in cmd and "fwmark 0x200 lookup 242" in cmd
+
+
+def test_health_catches_a_leak() -> None:
+    base = ("CASCADE_GW=yes\nCASCADE_TPROXY=active\nCASCADE_TUN=UNKNOWN\nCASCADE_RULE=yes\n"
+            "CASCADE_GRERULE=yes\nCASCADE_EGRESS=198.51.100.20\n")
+
+    def health(text, transport="vless"):
+        kv = cascade.parse_kv(text)
+        return cascade.health(transport, kv, cascade.check_result(kv))
+
+    assert health(base + "CASCADE_CLIENT=198.51.100.20\n") == (True, "")
+    # из контейнера спросить нечем - не судим
+    assert health(base + "CASCADE_CLIENT=\n") == (True, "")
+    assert health(base + "CASCADE_CLIENT=203.0.113.10\n") == (
+        False, "клиенты выходят в интернет мимо выхода")
+    no_rule = base.replace("CASCADE_RULE=yes", "CASCADE_RULE=no")
+    assert health(no_rule)[1] == "пропало правило маршрутизации в шлюз"
+    no_gre_rule = base.replace("CASCADE_GRERULE=yes", "CASCADE_GRERULE=no")
+    assert health(no_gre_rule, "gre")[1] == "пропало правило маршрутизации в шлюз"
+    assert health(no_gre_rule, "vless") == (True, "")
+
+
+class _Conn:
+    def __init__(self, outputs):
+        self.outputs = list(outputs)
+        self.ran: list[str] = []
+
+    async def run(self, cmd, check=False, timeout=None):
+        self.ran.append(cmd)
+        out = self.outputs.pop(0) if "CASCADE_GW" in cmd else "DEPLOY_DONE\n"
+        return type("R", (), {"stdout": out})()
+
+
+@pytest.mark.parametrize("rev, upgraded", [("0", True), ("1", True), (cascade.SCRIPTS_REV, False), ("", False)])
+async def test_check_upgrades_old_entry_scripts(rev, upgraded) -> None:
+    first = "CASCADE_GW=yes\n" + (f"CASCADE_REV={rev}\n" if rev else "")
+    conn = _Conn([first, f"CASCADE_GW=yes\nCASCADE_REV={cascade.SCRIPTS_REV}\n"])
+    out = await cascade.run_check(conn)
+    assert any("acontrol-cascade-heal.service" in c and "CASCADE_GW" not in c for c in conn.ran) is upgraded
+    assert len(conn.ran) == (3 if upgraded else 1)
+    if upgraded:
+        assert cascade.parse_kv(out)["rev"] == cascade.SCRIPTS_REV
+
+
+@pytest.mark.skipif(shutil.which("bash") is None, reason="нужен bash")
+def test_upgrade_script_is_valid_shell() -> None:
+    script = cascade.build_entry_upgrade()
+    _bash_ok(script)
+    assert f"# rev {cascade.SCRIPTS_REV}" in cascade._fill(cascade._TPROXY_SH)
+    # GRE-скрипт только там, где каскад на GRE
+    assert f"if [ -f {cascade.GRE_DEFAULTS} ]; then" in script

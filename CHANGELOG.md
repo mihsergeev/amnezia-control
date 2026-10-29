@@ -4,6 +4,41 @@ All notable changes to Amnezia Control are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.76.0] - 2026-10-29
+
+### Fixed
+- **Cascade entries set up by the Amnezia app sent clients around the
+  cascade.** The app also attaches its containers to `amnezia-dns-net`, and
+  Docker then routes them to the internet through that network instead of
+  `docker0`, where the cascade picked traffic up. Clients went out from the
+  entry's own address while the cascade check stayed green. The entry now
+  sends traffic from the `amnezia-dns-net` bridge into the cascade too.
+- **Clients lost the internet when networkd dropped the cascade routing
+  rules.** `networkctl reconfigure` and `netplan apply` remove ip rules that
+  networkd did not create, without restarting itself. A VLESS cascade then
+  stopped passing client traffic; a GRE cascade sent it out from the entry
+  directly. A small service on the entry now checks the rules every 20
+  seconds and restores them, and a GRE entry drops marked traffic instead of
+  letting it out directly while the rules are missing.
+
+### Added
+- The cascade check looks from inside a VPN container on the entry, the way
+  client traffic goes, and fails with "clients reach the internet bypassing
+  the exit" when that address differs from the exit's. It also reports a
+  missing routing rule. The server card shows the address from the
+  container.
+
+- Existing cascades get the fix by themselves: the check (the button and the
+  one every two minutes) sees entry scripts of an older revision and replaces
+  them in place, without touching the gateway, the tunnel or the VPN
+  containers.
+- Checked on VMs: a container attached to `amnezia-dns-net` went out directly
+  with the 0.75.0 scripts and through the gateway after one check; a live
+  AmneziaWG client worked through the cascade; after `networkctl
+  reconfigure` the rules came back within 20 seconds; a GRE entry without
+  its rules sent the gateway's traffic out directly before the fix and
+  dropped it after.
+
 ## [0.75.0] - 2026-10-29
 
 ### Added
