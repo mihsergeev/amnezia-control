@@ -378,6 +378,8 @@ class NodeMetricOut(BaseModel):
     server_id: int
     cpu_count: int
     load1: float
+    cpu_pct: float | None = None
+    psi_cpu: float | None = None
     mem_total: int
     mem_used: int
     disk_total: int

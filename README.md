@@ -65,7 +65,7 @@ The [AmneziaVPN desktop client](https://amnezia.org) is great for personal use �
 - AmneziaWG 3.1 is built from source at pinned tags and installs on old Docker too (19.03 and early 20.10)
 - **Cascade of two servers** (**+ Cascade**): clients connect to the entry in one country and reach the internet from the exit server in another. Sites of the entry's country (its national domains and IP ranges) open from the entry directly, everything else leaves through the exit server's address. For Russia the entry also sends sites blocked there through the exit. The wizard picks both servers (or adds new ones), tests the link between them and offers VLESS Reality or a bare GRE tunnel for providers that stall TCP to the exit's network. The panel then sets up both sides itself: a gateway with geo databases on the entry, the tunnel and internet access on the exit, all as systemd services. If the exit goes down, clients' traffic does not leak past it. The card shows the route; **More** has a link check that walks the route (gateway, tunnel, internet through the exit) and marks each step, and **Remove the cascade**. The exit server has no clients of its own, so the list shows the pair as one server: the entry
 - Update the server core in one click; live deploy log
-- Per-node resource monitoring: CPU load, RAM, disk, uptime — right on the card
+- Per-node resource monitoring: real CPU usage (with load average shown separately), RAM, disk, uptime - right on the card
 - Organize servers into collapsible **groups** (folders) — by company, location, etc.
 
 **Clients**

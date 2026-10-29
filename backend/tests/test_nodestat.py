@@ -86,3 +86,45 @@ async def test_store_metrics_and_disk_alert(factory, monkeypatch):
     async with factory() as s:
         assert (await s.get(NodeMetric, 1)).disk_alerted is False
     assert len(sent) == 2 and "снова есть" in sent[1]
+
+
+def test_parse_cpu_counters_and_psi():
+    # вывод команды с настоящей ноды (1 vCPU)
+    r = _parse("CPU=1\nLOAD=0.90\nCPUBUSY=29387215\nCPUTOTAL=189630025\nPSICPU=23.45\n")
+    assert (r.cpu_busy, r.cpu_total, r.psi_cpu) == (29387215, 189630025, 23.45)
+    # ядро без PSI - None, а не 0 (0 значило бы "CPU хватает")
+    assert _parse("CPU=1\n").psi_cpu is None
+
+
+def _res(busy, total):
+    return NodeResources(
+        cpu_count=1, load1=1.7, mem_total=1, mem_used=1, disk_total=1, disk_used=1,
+        uptime_seconds=1, cpu_busy=busy, cpu_total=total,
+    )
+
+
+def test_cpu_percent_from_counters():
+    from datetime import datetime, timedelta, timezone
+
+    now = datetime.now(timezone.utc)
+    prev = NodeMetric(server_id=1, cpu_busy=1000, cpu_total=10000, ts=now - timedelta(seconds=60))
+    # за минуту 6000 тиков, из них занято 1620 - 27%, хотя load 1.7 на 1 ядро
+    assert collector.cpu_percent(prev, _res(2620, 16000), now, 60) == 27.0
+    # первый снимок, перезагрузка (счетчики сбросились), старый снимок - не знаем
+    assert collector.cpu_percent(None, _res(2620, 16000), now, 60) is None
+    assert collector.cpu_percent(prev, _res(50, 900), now, 60) is None
+    old = NodeMetric(server_id=1, cpu_busy=1000, cpu_total=10000, ts=now - timedelta(hours=2))
+    assert collector.cpu_percent(old, _res(2620, 16000), now, 60) is None
+
+
+async def test_store_keeps_cpu_counters(factory, monkeypatch):
+    settings = config.get_settings()
+    s1 = {"server_id": 1, "resources": _res(1000, 10000)}
+    await collector._store_node_metrics(factory, settings, [s1], {1: "n1"})
+    async with factory() as s:
+        row = await s.get(NodeMetric, 1)
+        assert row.cpu_pct is None and row.cpu_total == 10000
+    s2 = {"server_id": 1, "resources": _res(1500, 12000)}
+    await collector._store_node_metrics(factory, settings, [s2], {1: "n1"})
+    async with factory() as s:
+        assert (await s.get(NodeMetric, 1)).cpu_pct == 25.0

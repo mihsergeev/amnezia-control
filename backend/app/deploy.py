@@ -75,8 +75,8 @@ WORK_ROOT = "$HOME/.acontrol"
 HUB_TAGS_URL = "https://hub.docker.com/v2/repositories/amneziavpn/amneziawg-go/tags?page_size=50"
 
 def _start_sh(subnet: str = SUBNET) -> str:
-    """Точка входа контейнера. Параметр — подсеть клиентов: у 3.0 она своя, а
-    для 2.0 подставляется прежняя, поэтому её скрипт остаётся байт-в-байт тем же."""
+    """Точка входа контейнера. Параметр - подсеть клиентов: у 3.0 она своя, у 2.0
+    прежняя."""
     return f"""#!/bin/sh
 # Amnezia Control: точка входа контейнера AmneziaWG
 awg-quick down /opt/amnezia/awg/awg0.conf >/dev/null 2>&1
@@ -86,7 +86,11 @@ iptables -t nat -C POSTROUTING -s {subnet} -o eth0 -j MASQUERADE 2>/dev/null \\
 iptables -C FORWARD -i awg0 -j ACCEPT 2>/dev/null || iptables -A FORWARD -i awg0 -j ACCEPT
 iptables -C FORWARD -m state --state ESTABLISHED,RELATED -j ACCEPT 2>/dev/null \\
   || iptables -A FORWARD -m state --state ESTABLISHED,RELATED -j ACCEPT
-exec tail -f /dev/null
+# PID 1 контейнера: ждет и собирает осиротевшие процессы (от docker exec
+# панели оставались зомби, `tail -f /dev/null` их не собирал) и сразу выходит
+# по docker stop
+trap 'exit 0' TERM INT
+while :; do sleep 3600 & wait $!; done
 """
 
 
@@ -924,7 +928,7 @@ async def foreign_awg_containers(
     клиенты остались бы на старом — поэтому deploy/update надо запрещать, а при
     adopt — снять снимок КАЖДОГО из них до замены."""
     cmd = (
-        'D=$(docker info >/dev/null 2>&1 && echo docker || echo "sudo -n docker"); '
+        'D=$({ [ -w /var/run/docker.sock ] || [ -w /run/docker.sock ]; } && echo docker || echo "sudo -n docker"); '
         '$D ps --format "{{.Names}}\t{{.Image}}" | grep -iE "amnezia-awg|acontrol-awg" || true'
     )
     result = await conn.run(cmd, check=False)
@@ -968,7 +972,7 @@ async def _publishers(
     protos = [proto] if proto in ("tcp", "udp") else ["udp", "tcp"]
     filters = " ".join(f'--filter "publish={port}/{x}"' for x in protos)
     cmd = (
-        'D=$(docker info >/dev/null 2>&1 && echo docker || echo "sudo -n docker"); '
+        'D=$({ [ -w /var/run/docker.sock ] || [ -w /run/docker.sock ]; } && echo docker || echo "sudo -n docker"); '
         f'$D ps {filters} --format "{{{{.Names}}}}|{{{{.Ports}}}}"'
     )
     result = await conn.run(cmd, check=False)
@@ -1055,7 +1059,7 @@ async def awg3_containers(conn: asyncssh.SSHClientConnection) -> list[str]:
     """Контейнеры AmneziaWG 3.0 на ноде (по образу панели, а не по имени —
     имя мог бы занять кто угодно)."""
     cmd = (
-        'D=$(docker info >/dev/null 2>&1 && echo docker || echo "sudo -n docker"); '
+        'D=$({ [ -w /var/run/docker.sock ] || [ -w /run/docker.sock ]; } && echo docker || echo "sudo -n docker"); '
         '$D ps --format "{{.Names}}\t{{.Image}}" | grep -iE "awg3" || true'
     )
     result = await conn.run(cmd, check=False)
@@ -1074,7 +1078,7 @@ async def all_awg_containers(conn: asyncssh.SSHClientConnection) -> list[str]:
     """Имена ВСЕХ awg-контейнеров на ноде — и панельных, и чужих. Для пре-оп
     бэкапа (снимок каждого перед операцией)."""
     cmd = (
-        'D=$(docker info >/dev/null 2>&1 && echo docker || echo "sudo -n docker"); '
+        'D=$({ [ -w /var/run/docker.sock ] || [ -w /run/docker.sock ]; } && echo docker || echo "sudo -n docker"); '
         '$D ps --format "{{.Names}}\t{{.Image}}" | grep -iE "amnezia-awg|acontrol-awg" || true'
     )
     result = await conn.run(cmd, check=False)
@@ -1123,7 +1127,7 @@ async def awg_adoptable(
     if not container or not _CONT_NAME_RE.match(container):
         return False
     cmd = (
-        'D=$(docker info >/dev/null 2>&1 && echo docker || echo "sudo -n docker"); '
+        'D=$({ [ -w /var/run/docker.sock ] || [ -w /run/docker.sock ]; } && echo docker || echo "sudo -n docker"); '
         "$D exec " + container + " sh -c '"
         "for f in awg0.conf wg0.conf; do "
         'grep -qiE "^(Jc|H1) *=" "/opt/amnezia/awg/$f" 2>/dev/null '
@@ -1140,7 +1144,7 @@ async def detect_openvpn_container(
     или родного Amnezia с иным именем), если есть — чтобы снять с него снимок
     перед перезаписью PKI."""
     cmd = (
-        'D=$(docker info >/dev/null 2>&1 && echo docker || echo "sudo -n docker"); '
+        'D=$({ [ -w /var/run/docker.sock ] || [ -w /run/docker.sock ]; } && echo docker || echo "sudo -n docker"); '
         '$D ps --format "{{.Names}}" | grep -iE "openvpn|cloak" | head -1 || true'
     )
     result = await conn.run(cmd, check=False)
@@ -1192,7 +1196,7 @@ async def node_base_digest(conn: asyncssh.SSHClientConnection) -> str | None:
 async def node_awg_go_version(conn: asyncssh.SSHClientConnection) -> str | None:
     """Версия бинаря amneziawg-go из работающего контейнера (напр. 0.0.20250522)."""
     cmd = (
-        'D=$(docker info >/dev/null 2>&1 && echo docker || echo "sudo -n docker"); '
+        'D=$({ [ -w /var/run/docker.sock ] || [ -w /run/docker.sock ]; } && echo docker || echo "sudo -n docker"); '
         'C=$($D ps --format "{{.Names}}" | grep -m1 amnezia-awg); '
         '[ -n "$C" ] && $D exec "$C" amneziawg-go --version 2>/dev/null'
     )

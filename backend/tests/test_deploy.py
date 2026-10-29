@@ -159,7 +159,9 @@ def test_embedded_dockerfile_decodes() -> None:
 
 
 def test_start_sh_and_systemd_present() -> None:
-    assert "exec tail -f /dev/null" in deploy.START_SH
+    # PID 1 собирает сирот (раньше tail копил зомби) и выходит по docker stop
+    assert "while :; do sleep 3600 & wait $!; done" in deploy.START_SH
+    assert "trap 'exit 0' TERM INT" in deploy.START_SH
     unit = deploy._systemd_unit()
     assert "After=docker.service" in unit
     assert "amnezia-awg2" in unit
