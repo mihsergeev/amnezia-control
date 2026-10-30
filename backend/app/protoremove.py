@@ -6,6 +6,7 @@
 иначе повторное развертывание протокола подхватило бы старый конфиг, и
 удаленные клиенты снова получили бы доступ."""
 
+import shlex
 from dataclasses import dataclass, field
 
 from sqlalchemy import delete, select
@@ -19,6 +20,7 @@ from app.models import (
     ClientName,
     OvpnConfig,
     PausedClient,
+    TorrentHit,
 )
 
 PROTOCOLS = ("awg", "awglegacy", "awg3", "openvpn", "xray")
@@ -30,17 +32,26 @@ _SNAP_TAG = {
 }
 
 # каталоги хоста, которые можно переименовать: только конфиги Amnezia и панели,
-# не системные маунты вроде /lib/modules
+# не системные маунты вроде /lib/modules. OpenVPN монтирует /opt/amnezia
+# целиком - тогда переименовываются только каталоги протокола (SUB), иначе
+# повторная установка подхватила бы старый конфиг вместе с клиентами.
+# Юнит подъема (awg-up, awg3-up) этого контейнера снимается: иначе он на
+# каждой загрузке падает на docker exec в несуществующий контейнер.
 _REMOVE_SCRIPT = (
-    'C={cont}; '
+    'C={cont}; SUB={sub}; '
     'sudo docker inspect "$C" >/dev/null 2>&1 || {{ echo NO_CONT; exit 0; }}; '
     "IMG=$(sudo docker inspect -f '{{{{.Config.Image}}}}' \"$C\"); "
     "MNT=$(sudo docker inspect -f '{{{{range .Mounts}}}}{{{{if eq .Type \"bind\"}}}}"
     "{{{{println .Source}}}}{{{{end}}}}{{{{end}}}}' \"$C\"); "
     'sudo docker rm -f "$C" >/dev/null || {{ echo RM_FAIL; exit 1; }}; '
     'echo REMOVED; TS=$(date +%Y%m%d-%H%M%S); '
-    'for d in $MNT; do case "$d" in /opt/amnezia/*|/opt/acontrol/*) '
+    'for d in $MNT; do case "$d" in /opt/amnezia) for s in $SUB; do '
+    '[ -d "$s" ] && sudo mv "$s" "$s.removed-$TS" && echo "MOVED $s.removed-$TS"; done ;; '
+    '/opt/amnezia/*|/opt/acontrol/*) '
     '[ -d "$d" ] && sudo mv "$d" "$d.removed-$TS" && echo "MOVED $d.removed-$TS" ;; esac; done; '
+    'for u in /etc/systemd/system/awg-up.service /etc/systemd/system/awg3-up.service; do '
+    '[ -f "$u" ] && grep -qw -- "$C" "$u" && {{ sudo systemctl disable --now "${{u##*/}}" >/dev/null 2>&1; '
+    'sudo rm -f "$u"; sudo systemctl daemon-reload; echo "UNIT ${{u##*/}}"; }}; done; '
     'sudo docker image rm "$IMG" >/dev/null 2>&1 && echo "IMAGE $IMG"; true'
 )
 
@@ -94,7 +105,11 @@ async def remove(conn, protocol: str) -> RemoveResult:
             "Не удалось снять снимок конфига, удаление отменено: без него "
             "клиентов было бы не вернуть"
         )
-    out = await conn.run(_REMOVE_SCRIPT.format(cont=container), check=False)
+    sub = deploy._SNAP_SPECS["openvpn"]["paths"] if protocol == "openvpn" else ""
+    out = await conn.run(
+        _REMOVE_SCRIPT.format(cont=shlex.quote(container), sub=shlex.quote(sub)),
+        check=False,
+    )
     lines = (out.stdout or "").splitlines()
     if "REMOVED" not in lines:
         raise RemoveError(f"Контейнер {container} не удалился: {(out.stderr or '').strip()}")
@@ -115,7 +130,7 @@ async def cleanup_db(session: AsyncSession, server_id: int, protocols: set[str])
                 AwgConfig.server_id == server_id, AwgConfig.protocol == proto))
         if proto == "openvpn":
             await session.execute(delete(OvpnConfig).where(OvpnConfig.server_id == server_id))
-        for model in (AwgNote, ClientLimit, ClientName, PausedClient):
+        for model in (AwgNote, ClientLimit, ClientName, PausedClient, TorrentHit):
             await session.execute(delete(model).where(
                 model.server_id == server_id, model.protocol == proto))
 
