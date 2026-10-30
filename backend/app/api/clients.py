@@ -117,28 +117,36 @@ async def search_clients(
     # (заметка, выданный конфиг, имя с ноды), новых клиентов не добавляют
     only = set(hits) if paused else None
 
-    def want(server_id: int, protocol: str, client_id: str, *texts: str) -> bool:
-        if only is not None:
-            return _key(server_id, protocol, client_id) in only
-        return any(needle in (t or "").lower() for t in texts) or id_match(client_id)
-
+    # Сначала все сведения о клиентах, потом отбор, потом дополнение. Совпасть
+    # может одно поле (заметка), а имя и выданный конфиг лежат в других
+    # таблицах. Раньше дополнялись только таблицы, где совпал запрос, и
+    # найденные по заметке клиенты выходили "без имени".
+    # (сервер, протокол, клиент), поля, текст для поиска, искать ли по ключу
+    rows: list[tuple[tuple[int, str, str], dict, str, bool]] = []
     # имена с нод (кэш сборщика) — покрывают и клиентов, созданных мимо панели
     for row in await session.scalars(select(ClientName)):
-        if want(row.server_id, row.protocol, row.client_id, row.name):
-            add(row.server_id, row.protocol, row.client_id, name=row.name)
+        rows.append(((row.server_id, row.protocol, row.client_id), {"name": row.name},
+                     row.name, True))
     # заметки панели (по ключу их не ищем: ключ найдется по имени)
     for row in await session.scalars(select(AwgNote)):
-        k = _key(row.server_id, row.protocol, row.public_key)
-        if k in only if only is not None else needle in (row.note or "").lower():
-            add(row.server_id, row.protocol, row.public_key, note=row.note)
+        rows.append(((row.server_id, row.protocol, row.public_key), {"note": row.note},
+                     row.note, False))
     # выданные конфиги: имя хранится вместе с ними
     for row in await session.scalars(select(AwgConfig)):
-        proto = row.protocol or "awg"
-        if want(row.server_id, proto, row.public_key, row.name):
-            add(row.server_id, proto, row.public_key, name=row.name, has_config=True)
+        rows.append(((row.server_id, row.protocol or "awg", row.public_key),
+                     {"name": row.name, "has_config": True}, row.name, True))
     for row in await session.scalars(select(OvpnConfig)):
-        if want(row.server_id, "openvpn", row.client_id, row.name):
-            add(row.server_id, "openvpn", row.client_id, name=row.name, has_config=True)
+        rows.append(((row.server_id, "openvpn", row.client_id),
+                     {"name": row.name, "has_config": True}, row.name, True))
+
+    for (sid, proto, cid), _fields, text, by_key in rows:
+        if only is not None:
+            continue  # режим "на паузе": новых клиентов не добавляем
+        if needle in (text or "").lower() or (by_key and id_match(cid)):
+            add(sid, proto, cid)
+    for (sid, proto, cid), fields, _text, _by_key in rows:
+        if _key(sid, proto, cid) in hits:
+            add(sid, proto, cid, **fields)
 
     for k, item in hits.items():
         row = paused_rows.get(k)

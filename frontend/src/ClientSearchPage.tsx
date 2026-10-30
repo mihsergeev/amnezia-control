@@ -1,13 +1,19 @@
 import { useCallback, useState } from 'react'
 import {
+  api,
   ApiError,
   PROTOCOL_LABEL,
+  parseCheckInfo,
   pauseClient,
+  protocolsFromContainers,
   revokeClientsBulk,
   searchClients,
   type ClientHit,
+  type Protocol,
   type RevokeBulkResult,
+  type Server,
 } from './api'
+import { ClientsModal } from './ClientsModal'
 import { useI18n } from './i18n'
 
 type Props = { onUnauthorized: () => void }
@@ -38,6 +44,8 @@ export function ClientSearchPage({ onUnauthorized }: Props) {
   // что показано: результат поиска или список клиентов на паузе
   const [pausedMode, setPausedMode] = useState(false)
   const [resuming, setResuming] = useState<string | null>(null)
+  // карточка клиента: окно клиентов его сервера, где показан только он
+  const [opened, setOpened] = useState<{ hit: ClientHit; server: Server } | null>(null)
 
   const handleError = useCallback(
     (err: unknown) => {
@@ -83,6 +91,16 @@ export function ClientSearchPage({ onUnauthorized }: Props) {
       handleError(err)
     } finally {
       setResuming(null)
+    }
+  }
+
+  async function open(h: ClientHit) {
+    setError(null)
+    try {
+      const server = await api<Server>(`/api/servers/${h.server_id}`)
+      setOpened({ hit: h, server })
+    } catch (err) {
+      handleError(err)
     }
   }
 
@@ -265,8 +283,13 @@ export function ClientSearchPage({ onUnauthorized }: Props) {
               </thead>
               <tbody>
                 {hits.map((h) => (
-                  <tr key={hitKey(h)}>
-                    <td>
+                  <tr
+                    key={hitKey(h)}
+                    className="row-link"
+                    title={t('Нажмите на строку, чтобы открыть клиента')}
+                    onClick={() => void open(h)}
+                  >
+                    <td onClick={(e) => e.stopPropagation()}>
                       <input
                         type="checkbox"
                         checked={picked.has(hitKey(h))}
@@ -292,7 +315,7 @@ export function ClientSearchPage({ onUnauthorized }: Props) {
                       {h.protocol_label || PROTOCOL_LABEL[h.protocol] || h.protocol}
                     </td>
                     <td className="muted small">{h.note}</td>
-                    <td>
+                    <td onClick={(e) => e.stopPropagation()}>
                       {h.paused && RESUME_PATH[h.protocol] && (
                         <button
                           className="ghost"
@@ -309,6 +332,24 @@ export function ClientSearchPage({ onUnauthorized }: Props) {
             </table>
           </div>
         </>
+      )}
+
+      {opened && (
+        <ClientsModal
+          server={opened.server}
+          protocols={protocolsFromContainers(
+            parseCheckInfo(opened.server)?.amnezia_containers ?? [],
+            parseCheckInfo(opened.server)?.protocols ?? {},
+          )}
+          initialProtocol={opened.hit.protocol as Protocol['key']}
+          focusClient={opened.hit.client_id}
+          onClose={() => {
+            setOpened(null)
+            // в карточке могли переименовать, поставить на паузу или отозвать
+            if (pausedMode || query.trim().length >= 2) void run(pausedMode)
+          }}
+          onUnauthorized={onUnauthorized}
+        />
       )}
     </section>
   )

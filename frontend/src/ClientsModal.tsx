@@ -34,11 +34,14 @@ type Props = {
   protocols: Protocol[]
   onClose: () => void
   onUnauthorized: () => void
-  onRequestUpdate: (protocol: 'awg' | 'awg3' | 'xray' | 'openvpn') => void
+  // без него кнопок обновления протокола нет (окно открыто из поиска)
+  onRequestUpdate?: (protocol: 'awg' | 'awg3' | 'xray' | 'openvpn') => void
   onRequestUpgrade31?: () => void
   onRequestAdopt?: () => void
   // вкладка, открытая сразу; без нее - первая (самый новый протокол)
   initialProtocol?: Protocol['key']
+  // карточка одного клиента (открыт из поиска): показываем только его
+  focusClient?: string
 }
 
 type SortKey = 'name' | 'handshake' | 'traffic'
@@ -54,9 +57,11 @@ export function ClientsModal({
   onRequestUpgrade31,
   onRequestAdopt,
   initialProtocol,
+  focusClient,
 }: Props) {
   const { t } = useI18n()
   const dismiss = useModalDismiss(onClose)
+  const [focus, setFocus] = useState<string | null>(focusClient ?? null)
   const [proto, setProto] = useState<Protocol['key']>(
     initialProtocol && protocols.some((p) => p.key === initialProtocol)
       ? initialProtocol
@@ -395,7 +400,9 @@ export function ClientsModal({
   const visibleClients = useMemo(() => {
     if (!state) return []
     const q = search.trim().toLowerCase()
-    const filtered = q
+    const filtered = focus
+      ? state.clients.filter((c) => c.public_key === focus)
+      : q
       ? state.clients.filter(
           (c) =>
             c.name.toLowerCase().includes(q) || c.address.toLowerCase().includes(q),
@@ -410,7 +417,7 @@ export function ClientsModal({
       return sortAsc ? cmp : -cmp
     })
     return filtered
-  }, [state, search, sortKey, sortAsc])
+  }, [state, search, sortKey, sortAsc, focus])
 
   const sel = useSelection(useMemo(() => visibleClients.map((c) => c.public_key), [visibleClients]))
   const current = protocols.find((p) => p.key === proto)
@@ -437,11 +444,23 @@ export function ClientsModal({
               <button
                 key={p.key}
                 className={proto === p.key ? 'tab tab-active' : 'tab'}
-                onClick={() => setProto(p.key)}
+                onClick={() => {
+                  setProto(p.key)
+                  setFocus(null)
+                }}
               >
                 {p.label}
               </button>
             ))}
+          </div>
+        )}
+
+        {focus && (
+          <div className="focus-line">
+            <span className="muted small">{t('Показан один клиент из поиска')}</span>
+            <button className="link-btn" onClick={() => setFocus(null)}>
+              {t('Показать всех клиентов сервера')}
+            </button>
           </div>
         )}
 
@@ -451,7 +470,8 @@ export function ClientsModal({
             serverName={server.name}
             groupName={server.group_name}
             onUnauthorized={onUnauthorized}
-            onRequestUpdate={() => onRequestUpdate('openvpn')}
+            onRequestUpdate={onRequestUpdate && (() => onRequestUpdate('openvpn'))}
+            focusClient={focus}
           />
         )}
 
@@ -461,7 +481,8 @@ export function ClientsModal({
             serverName={server.name}
             groupName={server.group_name}
             onUnauthorized={onUnauthorized}
-            onRequestUpdate={() => onRequestUpdate('xray')}
+            onRequestUpdate={onRequestUpdate && (() => onRequestUpdate('xray'))}
+            focusClient={focus}
           />
         )}
 
@@ -484,7 +505,7 @@ export function ClientsModal({
           </div>
         )}
 
-        {proto === 'awg' && (version || versionFailed) && (
+        {proto === 'awg' && !focus && (version || versionFailed) && (
           <div className="version-line">
             <span className="muted small">
               AmneziaWG:{' '}
@@ -553,6 +574,7 @@ export function ClientsModal({
                   : null
               ) : (
                 // на 3.1 бэкенд пересобирает движком 3.1 с тем же конфигом
+                onRequestUpdate && (
                 <button className="ghost" onClick={() => onRequestUpdate('awg')}>
                   {state?.params_v31 === true
                     ? t('Пересобрать')
@@ -560,12 +582,13 @@ export function ClientsModal({
                       ? t('Обновить версию')
                       : t('Переустановить')}
                 </button>
+                )
               )}
             </div>
           </div>
         )}
 
-        {proto === 'awg3' && state && (
+        {proto === 'awg3' && state && !focus && (
           <div className="version-line">
             <span className="muted small">
               {state.params_v31 === false
@@ -581,9 +604,11 @@ export function ClientsModal({
                 onRestored={load}
                 onUnauthorized={onUnauthorized}
               />
-              <button className="ghost" onClick={() => onRequestUpdate('awg3')}>
-                {t('Пересобрать')}
-              </button>
+              {onRequestUpdate && (
+                <button className="ghost" onClick={() => onRequestUpdate('awg3')}>
+                  {t('Пересобрать')}
+                </button>
+              )}
             </div>
           </div>
         )}
