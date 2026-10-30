@@ -2599,6 +2599,23 @@ button.srv-side-gh:hover .drag-handle {
   text-align: right;
 }
 
+/* строка, которая открывает карточку (поиск клиентов) */
+tr.row-link {
+  cursor: pointer;
+}
+
+tr.row-link:hover td {
+  background: var(--hover);
+}
+
+/* окно клиентов открыто на одном клиенте из поиска */
+.focus-line {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+}
+
 /* полоса проверки канала: идет - бегущие штрихи, готово - доля дошедших 20 мб */
 .cas-pbar {
   display: flex;

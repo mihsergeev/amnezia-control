@@ -242,3 +242,27 @@ async def test_paused_list_and_mark(client, auth_headers, session_factory):
     # без режима паузы короткий запрос по-прежнему отклоняется
     r = await client.get("/api/clients/search?q=a", headers=auth_headers)
     assert r.status_code == 422
+
+
+async def test_hit_found_by_note_gets_its_name(client, auth_headers, session_factory):
+    """Совпала только заметка - имя с ноды и выданный конфиг все равно подтягиваются
+    (раньше такие клиенты выходили "без имени")."""
+    ids = await _seed(client, auth_headers)
+    async with session_factory() as s:
+        s.add(AwgNote(server_id=ids["srv-a"], protocol="awg3", public_key="KEY_N=",
+                      note="Болгар Иван"))
+        s.add(ClientName(server_id=ids["srv-a"], protocol="awg3", client_id="KEY_N=",
+                         name="bolgar-phone"))
+        s.add(AwgConfig(server_id=ids["srv-a"], protocol="awg3", public_key="KEY_N=",
+                        name="bolgar-phone", config="[Interface]"))
+        # чужой клиент без совпадений в выдачу не попадает
+        s.add(ClientName(server_id=ids["srv-a"], protocol="awg3", client_id="KEY_X=",
+                         name="someone"))
+        await s.commit()
+
+    r = await client.get("/api/clients/search?q=иван", headers=auth_headers)
+    assert r.status_code == 200
+    hits = r.json()
+    assert [(h["client_id"], h["name"], h["note"], h["has_config"]) for h in hits] == [
+        ("KEY_N=", "bolgar-phone", "Болгар Иван", True)
+    ]

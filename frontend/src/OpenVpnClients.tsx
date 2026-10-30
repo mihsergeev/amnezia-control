@@ -30,6 +30,8 @@ type Props = {
   groupName?: string
   onUnauthorized: () => void
   onRequestUpdate?: () => void
+  // карточка одного клиента (открыт из поиска)
+  focusClient?: string | null
 }
 
 type ConfigView = { name: string; amnezia: string }
@@ -40,6 +42,7 @@ export function OpenVpnClients({
   groupName = '',
   onUnauthorized,
   onRequestUpdate,
+  focusClient,
 }: Props) {
   const { t } = useI18n()
   const [state, setState] = useState<OvpnState | null>(null)
@@ -349,7 +352,9 @@ export function OpenVpnClients({
                   </tr>
                 </thead>
                 <tbody>
-                  {state.clients.map((c) => (
+                  {state.clients
+                    .filter((c) => !focusClient || c.client_id === focusClient)
+                    .map((c) => (
                     <tr key={c.client_id}>
                       <SelectCell sel={sel} id={c.client_id} />
                       <td className="name-cell">
