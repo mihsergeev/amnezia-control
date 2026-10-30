@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { AmneziaQr } from './AmneziaQr'
 import {
   api,
@@ -23,6 +23,7 @@ import { useShareLink } from './ShareLink'
 import { TorrentBadge } from './Torrent'
 import { useTorrentHits } from './useTorrentHits'
 import { useI18n } from './i18n'
+import { useModalLayer } from './useModalDismiss'
 
 type Props = {
   serverId: number
@@ -55,8 +56,12 @@ export function OpenVpnClients({
   const [newName, setNewName] = useState('')
   const [newExpiry, setNewExpiry] = useState<string | null>(null)
   const [creating, setCreating] = useState(false)
+  // повторный Enter до ответа не выдает второго клиента (state обновится позже)
+  const creatingRef = useRef(false)
 
   const [view, setView] = useState<ConfigView | null>(null)
+  // Escape в окне конфига закрывает его, а не все окно клиентов
+  useModalLayer(view !== null, () => setView(null))
   const shareLink = useShareLink(view?.amnezia ?? '', view?.name ?? '', groupName)
   const [statsFor, setStatsFor] = useState<{ id: string; name: string } | null>(
     null,
@@ -96,7 +101,8 @@ export function OpenVpnClients({
   }
 
   async function addClient() {
-    if (!newName.trim()) return
+    if (!newName.trim() || creatingRef.current) return
+    creatingRef.current = true
     setCreating(true)
     setError(null)
     try {
@@ -115,6 +121,7 @@ export function OpenVpnClients({
     } catch (err) {
       handleError(err)
     } finally {
+      creatingRef.current = false
       setCreating(false)
     }
   }

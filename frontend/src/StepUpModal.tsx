@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { useI18n } from './i18n'
+import { useModalDismiss } from './useModalDismiss'
 
 type Props = {
   text: string
@@ -14,6 +15,7 @@ export function StepUpModal({ text, onSubmit, onCancel }: Props) {
   const [password, setPassword] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  useModalDismiss(onCancel)
 
   return (
     <div className="modal-backdrop">

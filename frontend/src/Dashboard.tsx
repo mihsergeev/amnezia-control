@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   api,
   ApiError,
@@ -158,7 +158,11 @@ export function Dashboard({ onUnauthorized }: Props) {
     [onUnauthorized, t],
   )
 
+  // номер загрузки: ответ за прежний период (7 дн, нажали 24 ч) приходит
+  // позже и не должен перерисовать график
+  const loadSeq = useRef(0)
   const load = useCallback(async () => {
+    const seq = ++loadSeq.current
     const q = custom
       ? `from_ms=${custom.from}&to_ms=${custom.to}`
       : `hours=${hours}`
@@ -185,15 +189,16 @@ export function Dashboard({ onUnauthorized }: Props) {
         // при открытом "Обзоре", появится в нем без перезагрузки страницы
         listVpnServers(),
       ])
+      if (seq !== loadSeq.current) return
       setOverview(ov)
       setHistory(hist)
       setTop(tc)
       setServers(srv)
       setError(null)
     } catch (err) {
-      handleError(err)
+      if (seq === loadSeq.current) handleError(err)
     } finally {
-      setLoading(false)
+      if (seq === loadSeq.current) setLoading(false)
     }
   }, [handleError, hours, custom, filterKey])
 

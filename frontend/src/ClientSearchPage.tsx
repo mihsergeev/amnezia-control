@@ -1,4 +1,4 @@
-import { useCallback, useState } from 'react'
+import { useCallback, useRef, useState } from 'react'
 import {
   api,
   ApiError,
@@ -34,6 +34,12 @@ const RESUME_PATH: Record<string, 'awg' | 'awg-legacy' | 'awg3' | 'xray' | 'open
 export function ClientSearchPage({ onUnauthorized }: Props) {
   const { t } = useI18n()
   const [query, setQuery] = useState('')
+  // запрос, по которому показана выдача: отзыв идет по ней, а строку поиска
+  // могли уже поменять
+  const [shownQuery, setShownQuery] = useState('')
+  // номер поиска: опоздавший ответ прежнего поиска не подменяет выдачу (все
+  // найденное отмечено, и "Отозвать" задело бы не тех клиентов)
+  const runSeq = useRef(0)
   const [hits, setHits] = useState<ClientHit[] | null>(null)
   const [picked, setPicked] = useState<Set<string>>(new Set())
   const [error, setError] = useState<string | null>(null)
@@ -57,21 +63,25 @@ export function ClientSearchPage({ onUnauthorized }: Props) {
 
   async function run(paused = false) {
     if (!paused && query.trim().length < 2) return
+    const seq = ++runSeq.current
+    const q = query.trim()
     setBusy(true)
     setResult(null)
     setConfirming(false)
     try {
-      const found = await searchClients(query.trim(), paused)
+      const found = await searchClients(q, paused)
+      if (seq !== runSeq.current) return
       setHits(found)
+      setShownQuery(q)
       setPausedMode(paused)
       // по умолчанию отмечаем все найденное - обычно отзывают целиком. Список
       // пауз открывают посмотреть, его не отмечаем
       setPicked(paused ? new Set() : new Set(found.map(hitKey)))
       setError(null)
     } catch (err) {
-      handleError(err)
+      if (seq === runSeq.current) handleError(err)
     } finally {
-      setBusy(false)
+      if (seq === runSeq.current) setBusy(false)
     }
   }
 
@@ -124,10 +134,10 @@ export function ClientSearchPage({ onUnauthorized }: Props) {
     setBusy(true)
     setConfirming(false)
     try {
-      const res = await revokeClientsBulk(items, query.trim())
+      const res = await revokeClientsBulk(items, shownQuery)
       setResult(res)
       // перечитываем: успешно отозванные из выдачи исчезнут
-      const found = await searchClients(query.trim(), pausedMode)
+      const found = await searchClients(shownQuery, pausedMode)
       setHits(found)
       setPicked(pausedMode ? new Set() : new Set(found.map(hitKey)))
       setError(null)
@@ -154,7 +164,7 @@ export function ClientSearchPage({ onUnauthorized }: Props) {
             value={query}
             placeholder={t('Имя клиента, заметка или ключ')}
             onChange={(e) => setQuery(e.target.value)}
-            onKeyDown={(e) => e.key === 'Enter' && void run()}
+            onKeyDown={(e) => e.key === 'Enter' && !busy && void run()}
           />
           <button onClick={() => void run()} disabled={busy || query.trim().length < 2}>
             {busy ? t('Ищу…') : t('Найти')}

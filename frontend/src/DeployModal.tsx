@@ -51,11 +51,19 @@ export function DeployModal({
   // сколько опросов статуса подряд упали; pollWarn - показать, что связь сбоит
   const pollFailsRef = useRef(0)
   const [pollWarn, setPollWarn] = useState(false)
+  // колбэки родителя пересоздаются при каждой его перерисовке (тема, язык):
+  // через ref, чтобы опрос не перезапускал эффект и не обрывался
+  const onDoneRef = useRef(onDone)
+  const onUnauthorizedRef = useRef(onUnauthorized)
+  useEffect(() => {
+    onDoneRef.current = onDone
+    onUnauthorizedRef.current = onUnauthorized
+  })
 
   const handleError = useCallback(
     (err: unknown) => {
       if (err instanceof ApiError && err.status === 401) {
-        onUnauthorized()
+        onUnauthorizedRef.current()
         return
       }
       // 409 бывает разный (чужой контейнер, уже 3.1, идет другая установка).
@@ -77,7 +85,7 @@ export function DeployModal({
       }
       setError(err instanceof Error ? err.message : t('Ошибка'))
     },
-    [onUnauthorized, t, protocol, mode],
+    [t, protocol, mode],
   )
 
   const poll = useCallback(async () => {
@@ -91,14 +99,14 @@ export function DeployModal({
       setPollWarn(false)
       setStatus(s)
       if (s.state === 'done') {
-        onDone()
+        onDoneRef.current()
         return
       }
       if (s.state === 'error') return
     } catch (err) {
       if (!aliveRef.current) return
       if (err instanceof ApiError && err.status === 401) {
-        onUnauthorized()
+        onUnauthorizedRef.current()
         return
       }
       // разовый сбой сети/панели не должен останавливать опрос: установка на
@@ -114,8 +122,16 @@ export function DeployModal({
         return
       }
     }
-    timerRef.current = window.setTimeout(() => void poll(), 3000)
-  }, [serverId, protocol, onDone, onUnauthorized, t])
+    schedule(3000)
+  }, [serverId, protocol, t])
+
+  // один отложенный опрос за раз: новый заменяет прежний
+  const schedule = (ms: number) => {
+    window.clearTimeout(timerRef.current)
+    timerRef.current = window.setTimeout(() => void pollRef.current(), ms)
+  }
+  const pollRef = useRef(poll)
+  pollRef.current = poll
 
   const start = useCallback(
     async (p: number) => {
@@ -140,21 +156,33 @@ export function DeployModal({
         handleError(err)
         return
       }
-      timerRef.current = window.setTimeout(() => void poll(), 2500)
+      schedule(2500)
     },
-    [serverId, mode, protocol, handleError, poll],
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [serverId, mode, protocol, handleError],
   )
 
+  // установка запускается один раз за жизнь окна; остановка опроса - только
+  // при закрытии окна, а не при пересоздании start (иначе опрос обрывался, а
+  // повторный запуск эффект пропускал, и окно висело на "выполняется")
+  const startRef = useRef(start)
+  startRef.current = start
   useEffect(() => {
-    if (startedRef.current) return
-    startedRef.current = true
     aliveRef.current = true
-    void start(defaultPort)
+    if (!startedRef.current) {
+      startedRef.current = true
+      void startRef.current(defaultPort)
+    } else if (timerRef.current === undefined) {
+      // StrictMode: первый cleanup снял таймер - продолжаем опрос
+      schedule(1000)
+    }
     return () => {
       aliveRef.current = false
       if (timerRef.current) window.clearTimeout(timerRef.current)
+      timerRef.current = undefined
     }
-  }, [start, defaultPort])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   const running = !error && (!status || status.state === 'running' || status.state === 'unknown')
   const done = status?.state === 'done'

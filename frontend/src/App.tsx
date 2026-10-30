@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   ApiError,
   api,
@@ -127,7 +127,10 @@ function App() {
 
   // Локальный выход (токен истек или отозван). Окна закрываем, иначе они
   // оставались висеть поверх формы входа.
-  function logout() {
+  // useCallback: logout уходит детям как onUnauthorized и сидит в зависимостях
+  // их загрузок - новая функция на каждую перерисовку (тема, язык) заново
+  // запрашивала все открытые списки и обрывала опрос установки
+  const logout = useCallback(() => {
     setToken(null)
     setAuthed(false)
     setStepUp(null)
@@ -135,7 +138,8 @@ function App() {
     setAlertsOpen(false)
     setTwoFaOpen(false)
     setPwOpen(false)
-  }
+    setShareOpen(false)
+  }, [])
 
   // Выход по кнопке: токен отзывается и на сервере
   async function logoutClick() {
