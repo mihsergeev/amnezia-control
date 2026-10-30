@@ -632,7 +632,9 @@ async def pause_client(
         raise AwgError("Клиент не найден")
     ip = target.address.split("/")[0] if target.address else ""
     await revoke_client(conn, state.container, state.interface, public_key)
-    return {"ip": ip}
+    # с ноды клиент уходит вместе со счетчиками: на паузе список показывает эти
+    return {"ip": ip, "rx": target.rx_bytes, "tx": target.tx_bytes,
+            "handshake": target.latest_handshake}
 
 
 async def resume_client(

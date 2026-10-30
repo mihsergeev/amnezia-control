@@ -4,6 +4,17 @@ All notable changes to Amnezia Control are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.81.0] - 2026-10-30
+
+### Fixed
+- **Paused clients showed zero traffic and "never connected".** A paused
+  client is removed from the node, so the node reports nothing for it. Now
+  AmneziaWG remembers the client's traffic counters and last handshake at the
+  moment of the pause, and the list shows them. For clients paused before
+  this version, and for XRay and OpenVPN, the traffic comes from the panel's
+  own per-client history (the last sample before the pause), and the last
+  connection is taken as the last time that traffic grew.
+
 ## [0.80.0] - 2026-10-30
 
 ### Added
