@@ -1,6 +1,11 @@
 """Удаление протокола с ноды и массовый отзыв из карточки протокола."""
 
 import json
+import os
+import shlex
+import shutil
+import subprocess
+import sys
 
 import pytest
 from sqlalchemy import select
@@ -284,3 +289,31 @@ async def test_api_rename_unknown_client_is_404(client, auth_headers, monkeypatc
         json={"client_id": "nope", "name": "x"}, headers=auth_headers,
     )
     assert r.status_code == 404
+
+
+@pytest.mark.skipif(
+    not os.environ.get("TEST_BASH") and (shutil.which("bash") is None or sys.platform == "win32"),
+    reason="нужен bash (на Windows это bash из WSL со своим sudo)",
+)
+def test_remove_script_moves_openvpn_dirs_from_whole_amnezia_mount(tmp_path):
+    """OpenVPN монтирует /opt/amnezia целиком: переименоваться должны каталоги
+    протокола, а не остаться на месте (иначе переустановка вернет клиентов)."""
+    root = tmp_path.as_posix()
+    for d in ("openvpn", "cloak", "shadowsocks", "awg"):
+        (tmp_path / "amnezia" / d).mkdir(parents=True)
+    sub = deploy._SNAP_SPECS["openvpn"]["paths"].replace("/opt/", f"{root}/")
+    script = protoremove._REMOVE_SCRIPT.format(
+        cont="amnezia-openvpn-cloak", sub=shlex.quote(sub)
+    ).replace("/opt/", f"{root}/")
+    fake = (
+        "sudo() { \"$@\"; }; systemctl() { :; }\n"
+        "docker() { case \"$1 $2\" in\n"
+        "  'inspect -f') case \"$3\" in *Mounts*) echo " + root + "/amnezia;; *) echo img;; esac;;\n"
+        "  *) :;; esac; }\n"
+    )
+    out = subprocess.run([os.environ.get("TEST_BASH", "bash"), "-c", fake + script], capture_output=True, text=True)
+    assert "REMOVED" in out.stdout, out.stderr
+    moved = sorted(p.name.split(".removed-")[0] for p in (tmp_path / "amnezia").iterdir()
+                   if ".removed-" in p.name)
+    assert moved == ["cloak", "openvpn", "shadowsocks"]
+    assert (tmp_path / "amnezia" / "awg").is_dir()  # чужой протокол не тронут
