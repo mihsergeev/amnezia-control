@@ -103,17 +103,20 @@ async def get_openvpn(
     lim = await limits.limits_map(session, server_id, "openvpn")
     note_map = await notes.notes_map(session, server_id, "openvpn")
     paused = await pausestore.list_paused(session, server_id, "openvpn")
+    # на паузе клиент не подключен: трафик - из истории панели
+    last = await pausestore.last_traffic(session, server_id, "openvpn", set(paused))
     out_clients = []
     for c in clients:
         st = status_map.get(c.client_id)
+        was = last.get(c.client_id, {}) if c.client_id in paused else {}
         out_clients.append(
             c.__dict__
             | {
                 "has_config": c.client_id in stored,
                 "expires_at": lim.get(c.client_id),
                 "note": note_map.get(c.client_id, ""),
-                "rx_bytes": st["rx"] if st else 0,
-                "tx_bytes": st["tx"] if st else 0,
+                "rx_bytes": st["rx"] if st else was.get("rx", 0),
+                "tx_bytes": st["tx"] if st else was.get("tx", 0),
                 "connected": bool(st),
                 "since": st["since"] if st else "",
                 "paused": c.client_id in paused,
