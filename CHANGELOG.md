@@ -4,6 +4,22 @@ All notable changes to Amnezia Control are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.80.0] - 2026-10-30
+
+### Added
+- **A search result opens the client.** A click on a row of the Search page
+  (or of the paused list) opens the Clients window of that server on this
+  one client: traffic, last handshake, config and QR, pause, rename, expiry
+  and the traffic chart, the same actions as from the server card. "Show all
+  the server's clients" switches to the full list. The search results stay
+  in place and are refreshed when the window is closed.
+
+### Fixed
+- **Search showed "no name" for clients found by their note.** The name from
+  the node, the name of an issued config and the note live in different
+  tables, and a hit only took fields from the table where the query matched.
+  Now every hit gets its name, note and config mark whatever matched.
+
 ## [0.79.0] - 2026-10-30
 
 ### Changed
