@@ -12,7 +12,12 @@ export function resetShareServices() {
 }
 
 function loadServices(): Promise<ShareService[]> {
-  if (!cache) cache = getShareServices().catch(() => [])
+  // сбой не запоминаем: иначе кнопка не появится до перезагрузки страницы
+  if (!cache)
+    cache = getShareServices().catch(() => {
+      cache = null
+      return []
+    })
   return cache
 }
 

@@ -444,24 +444,29 @@ async def bootstrap_server(
     panel_ip: str,
     become_password: str | None = None,
     timeout: int = 10,
+    *,
+    key_path: Path,
 ) -> BootstrapResult:
-    """Заходит по паролю, ставит ключ панели и настраивает фаервол."""
+    """Заходит по паролю, ставит ключ панели и настраивает фаервол.
+    Ключ хоста - как у остальных подключений (TOFU): у знакомой ноды
+    проверяется строго, иначе пароли SSH и sudo ушли бы подменному хосту."""
     script = _build_bootstrap_script(public_key, port, panel_ip)
     sudo_input = (become_password or password) + "\n"
     try:
         async with asyncio.timeout(timeout * 3):
-            conn = await asyncssh.connect(
-                host,
-                port=port,
-                username=username,
-                password=password,
-                known_hosts=None,
-                connect_timeout=timeout,
+            conn = await _tofu_connect(
+                host, port, username, key_path, password=password, timeout=timeout
             )
             async with conn:
                 run = await conn.run(script, input=sudo_input, check=False)
     except asyncio.TimeoutError:
         return BootstrapResult(ok=False, error="Таймаут подключения")
+    except HostKeyChangedError:
+        return BootstrapResult(
+            ok=False,
+            error="Host-ключ ноды ИЗМЕНИЛСЯ — возможна подмена/MITM. Если вы "
+            "пересоздавали ноду, удалите её строку из data/ssh/known_hosts.",
+        )
     except asyncssh.PermissionDenied:
         return BootstrapResult(
             ok=False,

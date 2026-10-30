@@ -147,6 +147,32 @@ async def test_bootstrap_wrong_password(
     assert "Неверный пароль" in response.json()["detail"]
 
 
+async def test_bootstrap_real_signature_and_host_key(
+    client: httpx.AsyncClient, auth_headers, monkeypatch
+) -> None:
+    """Настоящий bootstrap_server (без подмены): вызов из server_ops совпадает с
+    его сигнатурой (раньше лишний key_path ронял настройку в 500), а подключение
+    идет через TOFU и подмену ключа хоста не пропускает."""
+    seen = {}
+
+    async def fake_tofu(host, port, username, key_path, *, password=None, timeout=10):
+        seen["password"] = password
+        seen["key_path"] = key_path
+        raise sshops.HostKeyChangedError(f"{host}:{port}")
+
+    monkeypatch.setattr(sshops, "_tofu_connect", fake_tofu)
+    server_id = await _create_server(client, auth_headers)
+    response = await client.post(
+        f"/api/servers/{server_id}/bootstrap",
+        json={"password": "s3cret"},
+        headers=auth_headers,
+    )
+    assert response.status_code == 400
+    assert "MITM" in response.json()["detail"]
+    assert seen["password"] == "s3cret"
+    assert seen["key_path"].name
+
+
 async def test_config_endpoint(client: httpx.AsyncClient, auth_headers) -> None:
     response = await client.get("/api/config", headers=auth_headers)
     assert response.status_code == 200

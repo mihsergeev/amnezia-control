@@ -101,3 +101,11 @@ export function useModalDismiss(onClose: () => void) {
   useEffect(() => push(() => ref.current()), [])
   return () => {}
 }
+
+/** То же для окна, которое рисуется внутри другого по условию (конфиг
+ * клиента в окне клиентов): пока open, Escape закрывает его, а не родителя. */
+export function useModalLayer(open: boolean, onClose: () => void) {
+  const ref = useRef(onClose)
+  ref.current = onClose
+  useEffect(() => (open ? push(() => ref.current()) : undefined), [open])
+}

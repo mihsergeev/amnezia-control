@@ -27,7 +27,7 @@ import { useShareLink } from './ShareLink'
 import { TorrentBadge } from './Torrent'
 import { useTorrentHits } from './useTorrentHits'
 import { useI18n } from './i18n'
-import { useModalDismiss } from './useModalDismiss'
+import { useModalDismiss, useModalLayer } from './useModalDismiss'
 
 type Props = {
   server: Server
@@ -93,6 +93,8 @@ export function ClientsModal({
 
   const [statsFor, setStatsFor] = useState<AwgClient | null>(null)
   const [view, setView] = useState<ConfigView | null>(null)
+  // Escape в окне конфига закрывает его, а не все окно клиентов
+  useModalLayer(view !== null, () => setView(null))
   // по умолчанию открываем формат «Для приложения AmneziaVPN» (vpn://) — он нужен
   // чаще; .conf вторичен (для WireGuard/AmneziaWG-приложений)
   const [cfgFormat, setCfgFormat] = useState<CfgFormat>('amnezia')
@@ -740,7 +742,11 @@ export function ClientsModal({
                                 onChange={(e) => setDraft(e.target.value)}
                                 onKeyDown={(e) => {
                                   if (e.key === 'Enter') commitNote(c)
-                                  if (e.key === 'Escape') cancelEdit()
+                                  if (e.key === 'Escape') {
+                                    // иначе Escape закроет и окно клиентов
+                                    e.preventDefault()
+                                    cancelEdit()
+                                  }
                                 }}
                                 onBlur={() => commitNote(c)}
                               />
