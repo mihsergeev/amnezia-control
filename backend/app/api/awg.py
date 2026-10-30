@@ -149,14 +149,18 @@ async def build_client_list(session, server_id: int, state) -> list[dict]:
         )
     # клиенты на паузе: их нет в живом конфиге — показываем из хранилища
     live = {c["public_key"] for c in clients}
+    # с ноды клиент на паузе снят: трафик и подключение - из истории панели
+    last = await pausestore.paused_view(session, server_id, "awg", paused, set(paused) - live)
     for cid, p in paused.items():
         if cid in live:
             continue
         ip = p["data"].get("ip", "")
+        seen = last.get(cid, {})
         clients.append({
             "name": p["name"], "public_key": cid,
             "address": f"{ip}/32" if ip else "",
-            "latest_handshake": None, "rx_bytes": 0, "tx_bytes": 0, "endpoint": "",
+            "latest_handshake": seen.get("seen"), "rx_bytes": seen.get("rx", 0),
+            "tx_bytes": seen.get("tx", 0), "endpoint": "",
             "has_config": cid in stored, "note": notes_by_pk.get(cid, ""),
             "expires_at": lim.get(cid), "paused": True,
         })

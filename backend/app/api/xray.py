@@ -85,13 +85,16 @@ async def get_xray(server_id: int, _: CurrentUser, session: SessionDep) -> XrayS
         for c in clients
     ]
     live = {c["client_id"] for c in out}
+    # с ноды клиент на паузе снят: трафик - из истории панели
+    last = await pausestore.last_traffic(session, server_id, "xray", set(paused) - live)
     for cid, p in paused.items():
         if cid in live:
             continue
         out.append({
             "client_id": cid, "name": p["name"], "creation_date": "",
             "expires_at": lim.get(cid), "note": note_map.get(cid, ""),
-            "rx_bytes": 0, "tx_bytes": 0, "paused": True,
+            "rx_bytes": last.get(cid, {}).get("rx", 0),
+            "tx_bytes": last.get(cid, {}).get("tx", 0), "paused": True,
         })
     return XrayStateOut(container=container, clients=out)
 
