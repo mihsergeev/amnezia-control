@@ -17,6 +17,8 @@ All notable changes to Amnezia Control are documented here. The format is based 
   revoke API keys and existing sessions; integrations need new keys afterward.
 
 ### Fixed
+- Update frontend build dependencies to address reported development-tool
+  vulnerabilities without changing dependency version ranges.
 - Prevent spoofed forwarded client addresses and login lockout abuse.
 - Preserve node configs and SSH authorized keys on write failures; validate
   node-supplied keys before using them in client configurations.
