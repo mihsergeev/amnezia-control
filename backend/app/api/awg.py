@@ -61,6 +61,10 @@ async def _guard_foreign_awg(conn) -> None:
 
 
 def _ssh_error(exc: Exception) -> HTTPException:
+    if isinstance(exc, HTTPException):
+        return exc  # например, "нода занята" от nodelock
+    if isinstance(exc, deploy.DeployBusy):
+        return HTTPException(status.HTTP_409_CONFLICT, str(exc))
     if isinstance(exc, awg.AwgError):
         return HTTPException(status.HTTP_502_BAD_GATEWAY, str(exc))
     if isinstance(exc, (asyncssh.Error, OSError)):
@@ -213,10 +217,12 @@ async def create_client(
 ) -> CreateClientResponse:
     server = await _get_or_404(server_id, session)
     dns = body.dns or get_settings().awg_client_dns
-    reserved = await pausestore.paused_ips(session, server_id, "awg")
     try:
         async with _connect(server) as conn:
             state = await awg.read_state(conn, server.host)
+            # адреса клиентов на паузе читаем под блокировкой ноды: пауза пишет
+            # запись тоже под ней, иначе ее адрес успевал уйти новому клиенту
+            reserved = await pausestore.paused_ips(session, server_id, "awg")
             client, config = await awg.create_client(
                 conn, state, body.name, dns, reserved=reserved
             )
@@ -344,7 +350,13 @@ async def deploy_awg(
     script = deploy.build_script("deploy", body.port, cfg)
     try:
         async with _connect(server) as conn:
+            await deploy.ensure_idle(conn, tag="awg")
             await _guard_foreign_awg(conn)
+            current = await deploy.existing_port(conn)
+            if current and current != body.port:
+                raise HTTPException(
+                    status.HTTP_409_CONFLICT, deploy.port_mismatch_detail(current, body.port)
+                )
             # Занятый порт ловим до запуска: сценарий сносит того, кто держит
             # целевой UDP-порт (так заменяется свой же контейнер), и чужой рабочий
             # протокол на этом порту погиб бы вместе с клиентами.
@@ -390,6 +402,7 @@ async def update_awg(
     detail = ""
     try:
         async with _connect(server) as conn:
+            await deploy.ensure_idle(conn, tag="awg")
             await _guard_foreign_awg(conn)
             # amnezia-awg2, обновленный до 3.1 на месте, пересобирать образом 2.x
             # нельзя: конфиг сохранится, а движок 2.x его не поднимет, и отвалятся
@@ -432,6 +445,7 @@ async def adopt_awg(
     script = deploy.build_script("adopt", 47180, cfg)
     try:
         async with _connect(server) as conn:
+            await deploy.ensure_idle(conn, tag="awg")
             foreign_list = await deploy.foreign_awg_containers(conn)
             if not foreign_list:
                 raise HTTPException(
@@ -534,6 +548,7 @@ async def upgrade_to_31(
     server = await _get_or_404(server_id, session)
     try:
         async with _connect(server) as conn:
+            await deploy.ensure_idle(conn, tag="awg")
             state = await awg.read_state(conn, server.host)
             if all(state.params.get(k) for k in ("RandomTrailers", "DisableCookies")):
                 raise HTTPException(
@@ -629,11 +644,12 @@ async def pause_client(
                 raise HTTPException(status.HTTP_404_NOT_FOUND, "Клиент не найден")
             name = target.name
             data = await awg.pause_client(conn, state, body.public_key)
+            # запись о паузе (с адресом) - до снятия блокировки, см. create_client
+            await pausestore.add(session, server_id, "awg", body.public_key, name, data)
     except HTTPException:
         raise
     except Exception as exc:  # noqa: BLE001
         raise _ssh_error(exc) from exc
-    await pausestore.add(session, server_id, "awg", body.public_key, name, data)
     await audit.record(
         session, user.username, "awg_pause", server.name, name or body.public_key
     )

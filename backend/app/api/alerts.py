@@ -1,6 +1,7 @@
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, HTTPException, Request, status
 
-from app import alerts, audit, settings_store
+from app import alerts, audit, settings_store, stepup
+from app.clientip import client_ip
 from app.config import get_settings
 from app.deps import CurrentUser, SessionDep
 from app.schemas import AlertConfigIn, AlertConfigOut, AlertTestResult
@@ -20,8 +21,12 @@ async def get_alerts(_: CurrentUser, session: SessionDep) -> AlertConfigOut:
 
 @router.put("", response_model=AlertConfigOut)
 async def put_alerts(
-    body: AlertConfigIn, user: CurrentUser, session: SessionDep
+    body: AlertConfigIn, request: Request, user: CurrentUser, session: SessionDep
 ) -> AlertConfigOut:
+    # со степ-апом: подменой адреса Telegram API или вебхука укравший сессию
+    # увел бы токен бота и дальше читал бы security-алерты
+    await stepup.verify(user, body.password, request, otp=body.otp)
+    old = await settings_store.get_alert_config(session, get_settings())
     await settings_store.set_alert_config(
         session, body.telegram_token, body.telegram_chat, body.webhook,
         telegram_api=body.telegram_api, lang=body.lang,
@@ -36,6 +41,18 @@ async def put_alerts(
         session, user.username, "alerts_update", "",
         ", ".join(channels) or "выключено",
     )
+    # алерт уходит в старые каналы: туда, где его увидит настоящий админ
+    if alerts.alerts_enabled(old) and any(
+        old[k] != cfg[k] for k in ("telegram_token", "telegram_chat", "telegram_api", "webhook")
+    ):
+        try:
+            await alerts.send_card(
+                old, get_settings(),
+                alerts.Card("warn", "🔔", alerts.t("Изменены каналы алертов"),
+                            alerts.t("{user} с {ip}", user=user.username, ip=client_ip(request))),
+            )
+        except Exception:  # noqa: BLE001 - best-effort, как security_alert
+            pass
     return _out(cfg)
 
 

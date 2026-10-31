@@ -7,7 +7,7 @@ import {
   type Snapshot,
 } from './api'
 import { Menu } from './Menu'
-import { useI18n } from './i18n'
+import { plural, useI18n } from './i18n'
 
 type Props = {
   serverId: number
@@ -32,7 +32,7 @@ export function RollbackMenu({
   onRestored,
   onUnauthorized,
 }: Props) {
-  const { t } = useI18n()
+  const { t, lang } = useI18n()
   const [snaps, setSnaps] = useState<Snapshot[]>([])
 
   const reload = useCallback(() => {
@@ -71,7 +71,7 @@ export function RollbackMenu({
       className="ghost"
       label={t('Откатить')}
       items={snaps.map((s) => ({
-        label: `${fmtSnap(s.id)} · ${t('{n} клиентов', { n: String(s.clients) })}`,
+        label: `${fmtSnap(s.id)} · ${plural(lang, s.clients, ['{n} клиент', '{n} клиента', '{n} клиентов'], ['{n} client', '{n} clients'])}`,
         onClick: () => restore(s),
       }))}
     />

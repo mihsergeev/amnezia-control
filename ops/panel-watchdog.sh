@@ -38,6 +38,22 @@ NOW=$(date +%s)
 
 val(){ grep -m1 "^$1=" "$HB" 2>/dev/null | cut -d= -f2-; }
 
+# {"text": ...} для вебхука. Раньше экранировали sed'ом построчно, переводы
+# строк оставались как есть, и JSON многострочной карточки был битым всегда.
+# python3 или jq, без них - экранирование самим bash
+json_text(){
+  if command -v python3 >/dev/null 2>&1; then
+    printf '%s' "$1" | python3 -c 'import json, sys; print(json.dumps({"text": sys.stdin.read()}, ensure_ascii=False))'
+  elif command -v jq >/dev/null 2>&1; then
+    printf '%s' "$1" | jq -cRs '{text: .}'
+  else
+    local s=$1
+    s=${s//\\/\\\\}; s=${s//\"/\\\"}
+    s=${s//$'\n'/\\n}; s=${s//$'\r'/\\r}; s=${s//$'\t'/\\t}
+    printf '{"text": "%s"}' "$s"
+  fi
+}
+
 send(){
   local msg="$1" token chat api hook
   token=$(val tg_token); chat=$(val tg_chat); api=$(val tg_api); hook=$(val webhook)
@@ -48,7 +64,7 @@ send(){
       --data-urlencode "disable_web_page_preview=true" >/dev/null 2>&1
   fi
   [ -n "$hook" ] && curl -s --max-time 15 -H 'Content-Type: application/json' \
-    --data "{\"text\": \"$(printf '%s' "$msg" | sed 's/\\/\\\\/g; s/"/\\"/g')\"}" "$hook" >/dev/null 2>&1
+    --data "$(json_text "$msg")" "$hook" >/dev/null 2>&1
 }
 
 # язык алертов из пульса (настройка алертов панели), без пульса - русский

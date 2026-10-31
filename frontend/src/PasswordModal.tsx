@@ -62,7 +62,7 @@ export function PasswordModal({ onClose, onUnauthorized }: Props) {
         ) : (
           <>
             <p className="muted small">
-              {t('Смена пароля завершит все другие активные сессии.')}
+              {t('Смена пароля завершит все другие активные сессии и отзовет все API-ключи. Для интеграций потребуется выпустить новые ключи.')}
             </p>
             <label className="field">
               <span>{t('Текущий пароль')}</span>

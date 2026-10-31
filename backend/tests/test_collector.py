@@ -145,3 +145,72 @@ async def test_client_names_of_revoked_are_dropped(factory, monkeypatch):
         left = sorted(r.client_id for r in await s.scalars(select(ClientName)))
     assert left == ["live", "x1"]
     collector._last_parts.clear()
+
+
+def _traffic(sid, parts, clients):
+    return {
+        **_sample(sid, None),
+        "parts": frozenset(parts),
+        "rx_total": sum(c[1] for c in clients),
+        "clients": [{"protocol": p, "client_id": c, "rx": rx, "tx": 0, "name": ""}
+                    for c, rx, p in ((c[0], c[1], c[2]) for c in clients)],
+    }
+
+
+async def test_traffic_delta_counted_per_client(factory, monkeypatch):
+    """Сброс счетчика одного клиента (отзыв, рестарт xray) не обнуляет прирост
+    остальных: раньше прирост сервера был дельтой суммы счетчиков."""
+    from sqlalchemy import select
+
+    from app.models import TrafficSample
+
+    sid = await _seed(factory, ["amnezia-awg2"])
+    for st in (collector._last_parts, collector._last_clients, collector._pending):
+        st.clear()
+    gb = 1024 ** 3
+    parts = {"awg:amnezia-awg2", "xray"}
+    cycles = [
+        [("A", 100 * gb, "awg"), ("B", gb, "awg"), ("X", 5 * gb, "xray")],
+        [("A", 100 * gb, "awg"), ("B", 2 * gb, "awg"), ("X", 6 * gb, "xray")],
+        # A отозвали, xray перезапустился (счетчик X с нуля)
+        [("B", 4 * gb, "awg"), ("X", gb, "xray")],
+    ]
+    for clients in cycles:
+        await _run(factory, monkeypatch, _traffic(sid, parts, clients))
+    # xray не прочитался: снимок не пишем, прирост awg переносим в следующий
+    await _run(factory, monkeypatch, _traffic(sid, {"awg:amnezia-awg2"}, [("B", 5 * gb, "awg")]))
+    await _run(factory, monkeypatch, _traffic(sid, parts, [("B", 6 * gb, "awg"), ("X", 2 * gb, "xray")]))
+    await _run(factory, monkeypatch, _traffic(sid, parts, [("B", 6 * gb, "awg"), ("X", 2 * gb, "xray")]))
+    async with factory() as s:
+        rows = list(await s.scalars(select(TrafficSample).order_by(TrafficSample.id)))
+    # первый цикл - сравнивать не с чем; четвертый и пятый (набор протоколов
+    # менялся) не записаны, их прирост B +2 ГБ и X +1 ГБ ушел в шестой
+    assert [r.rx_delta for r in rows] == [None, 2 * gb, 3 * gb, 3 * gb]
+    for st in (collector._last_parts, collector._last_clients, collector._pending):
+        st.clear()
+
+
+async def test_deleted_during_collect_leaves_no_orphans(factory, monkeypatch):
+    from sqlalchemy import delete, select
+
+    from app.models import ClientName, NodeMetric, ServerStatus, TrafficSample
+
+    sid = await _seed(factory, ["amnezia-awg2"])
+    collector._last_parts.clear()
+
+    async def _sample_and_delete(server, *a, **k):
+        # пользователь удалил сервер, пока шел сбор
+        async with factory() as s:
+            await s.execute(delete(Server).where(Server.id == server.id))
+            await s.commit()
+        return {
+            **_sample(server.id, None), "parts": frozenset({"awg:amnezia-awg2"}),
+            "resources": type("R", (), {"disk_used": 1, "disk_total": 2})(),
+            "clients": [{"protocol": "awg", "client_id": "K=", "rx": 1, "tx": 1, "name": "n"}],
+        }
+
+    monkeypatch.setattr(collector, "_sample_server", _sample_and_delete)
+    await collector.collect_once(factory, config.get_settings())
+    async with factory() as s:
+        for model in (TrafficSample, NodeMetric, ClientName, ServerStatus):
+            assert list(await s.scalars(select(model))) == [], model.__tablename__

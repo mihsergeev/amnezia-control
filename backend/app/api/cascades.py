@@ -2,6 +2,7 @@
 (см. app/cascade.py и app/cascadejob.py)."""
 
 import json
+from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 
 import asyncssh
@@ -38,6 +39,16 @@ def _ssh_error(exc: Exception) -> HTTPException:
 
 def _locked(server: Server):
     return nodelock.connect("cascade", server.id, cascadejob.connect(server))
+
+
+@asynccontextmanager
+async def _locked_pair(entry: Server, exit_: Server):
+    """Обе ноды под блокировкой, всегда в порядке id: встречные пары A-B и B-A,
+    взятые как вход-выход, ждали бы друг друга. Отдает (вход, выход)."""
+    first, second = sorted((entry, exit_), key=lambda s: s.id)
+    async with _locked(first) as c1, _locked(second) as c2:
+        conns = {first.id: c1, second.id: c2}
+        yield conns[entry.id], conns[exit_.id]
 
 
 async def _ipv4(host: str) -> str:
@@ -92,6 +103,17 @@ async def _pair(body: CascadePair, session) -> tuple[Server, Server]:
     exit_ = await session.get(Server, body.exit_id)
     if entry is None or exit_ is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Сервер не найден")
+    await _ensure_free(session, entry, exit_)
+    for s in (entry, exit_):
+        if s.last_check_ok is not True:
+            raise HTTPException(
+                status.HTTP_409_CONFLICT,
+                f"«{s.name}» не на связи: проверьте сервер и повторите",
+            )
+    return entry, exit_
+
+
+async def _ensure_free(session, entry: Server, exit_: Server) -> None:
     ids = (entry.id, exit_.id)
     busy = (await session.execute(
         select(Cascade).where(
@@ -100,13 +122,6 @@ async def _pair(body: CascadePair, session) -> tuple[Server, Server]:
     )).scalars().first()
     if busy is not None:
         raise HTTPException(status.HTTP_409_CONFLICT, "Сервер уже входит в каскад")
-    for s in (entry, exit_):
-        if s.last_check_ok is not True:
-            raise HTTPException(
-                status.HTTP_409_CONFLICT,
-                f"«{s.name}» не на связи: проверьте сервер и повторите",
-            )
-    return entry, exit_
 
 
 async def _addresses(entry_conn, entry: Server, exit_: Server) -> tuple[str, str]:
@@ -130,7 +145,7 @@ async def list_cascades(_: CurrentUser, session: SessionDep) -> list[CascadeOut]
 async def probe(body: CascadePair, _: CurrentUser, session: SessionDep) -> CascadeProbeOut:
     entry, exit_ = await _pair(body, session)
     try:
-        async with _locked(entry) as ec, _locked(exit_) as xc:
+        async with _locked_pair(entry, exit_) as (ec, xc):
             entry_ip, exit_ip = await _addresses(ec, entry, exit_)
             res = await cascade.probe(xc, ec, entry_ip, exit_ip)
     except Exception as exc:  # noqa: BLE001
@@ -162,25 +177,28 @@ async def create(
 ) -> CascadeOut:
     entry, exit_ = await _pair(body, session)
     try:
-        async with _locked(entry) as ec, _locked(exit_) as xc:
+        async with _locked_pair(entry, exit_) as (ec, xc):
+            # проверка в _pair шла до блокировки: двойной клик проходил ее дважды
+            # и создавал два каскада. Перепроверяем и пишем строку под блокировкой
+            await _ensure_free(session, entry, exit_)
             entry_ip, exit_ip = await _addresses(ec, entry, exit_)
             params: dict = {"entry_ip": entry_ip, "exit_ip": exit_ip}
             if body.transport == "vless":
                 params |= cascade.new_vless_params()
                 params["port"] = await _vless_port(xc)
+            c = Cascade(
+                entry_server_id=entry.id,
+                exit_server_id=exit_.id,
+                transport=body.transport,
+                status="installing",
+                params=json.dumps(params),
+                probe=json.dumps(_last_probe.get((entry.id, exit_.id), {})),
+            )
+            session.add(c)
+            await session.commit()
+            await session.refresh(c)
     except Exception as exc:  # noqa: BLE001
         raise _ssh_error(exc) from exc
-    c = Cascade(
-        entry_server_id=entry.id,
-        exit_server_id=exit_.id,
-        transport=body.transport,
-        status="installing",
-        params=json.dumps(params),
-        probe=json.dumps(_last_probe.get((entry.id, exit_.id), {})),
-    )
-    session.add(c)
-    await session.commit()
-    await session.refresh(c)
     cascadejob.spawn(request.app, c.id)
     await audit.record(
         session, user.username, "cascade_create", entry.name,

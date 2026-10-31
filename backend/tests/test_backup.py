@@ -86,7 +86,7 @@ async def _make_state(client: httpx.AsyncClient, h: dict) -> int:
         "/api/alerts",
         headers=h,
         json={"telegram_token": "secret-token-42", "telegram_chat": "12345",
-              "webhook": ""},
+              "webhook": "", "password": "testpass"},
     )
     assert r.status_code == 200, r.text
     return sid
@@ -129,7 +129,7 @@ async def test_backup_restore_roundtrip_preserves_expiry_and_alerts(
     )
     await client.put(
         "/api/alerts", headers=auth_headers,
-        json={"telegram_token": "", "telegram_chat": "", "webhook": ""},
+        json={"telegram_token": "", "telegram_chat": "", "webhook": "", "password": "testpass"},
     )
     cfg = (await client.get("/api/alerts", headers=auth_headers)).json()
     assert not cfg["telegram_token_set"] if "telegram_token_set" in cfg else True
@@ -141,6 +141,8 @@ async def test_backup_restore_roundtrip_preserves_expiry_and_alerts(
     )
     assert r.status_code == 200, r.text
     restored = r.json()["restored"]
+    # старые токены restore отзывает, новый приходит в ответе
+    auth_headers = {"Authorization": f"Bearer {r.json()['access_token']}"}
     assert restored["client_limits"] >= 1
     assert restored["app_settings"] >= 1
 
@@ -163,3 +165,97 @@ async def test_backup_archive_is_gzip(client, auth_headers):
     assert r.headers["content-type"] == "application/gzip"
     # реально распаковывается
     assert gzip.decompress(r.content)[:2] != b""
+
+
+def test_backup_covers_every_table():
+    """Новая таблица должна попасть в бэкап или в явный список исключений:
+    так из бэкапа пропадали каскады и торрент-попадания."""
+    from app.api.backup import _MODELS, _NOT_BACKED_UP
+    from app.db import Base
+
+    covered = {m.__tablename__ for m in _MODELS}
+    assert covered | set(_NOT_BACKED_UP) == set(Base.metadata.tables)
+    names = [m.__tablename__ for m in _MODELS]
+    # зависимые от серверов таблицы восстанавливаются после servers
+    assert names.index("servers") < names.index("cascades")
+
+
+def test_skip_data_dir_excludes_tls_and_heartbeat():
+    # ключи TLS/ACME Caddy и пульс с токеном Telegram в бэкап не идут
+    for d in ("caddy", "heartbeat", "heartbeat.tmp"):
+        assert _skip_data_dir(d), d
+
+
+def _tar(files: dict[str, bytes]) -> bytes:
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w:gz") as tar:
+        for n, d in files.items():
+            info = tarfile.TarInfo(n)
+            info.size = len(d)
+            tar.addfile(info, io.BytesIO(d))
+    return buf.getvalue()
+
+
+async def test_backup_restores_cascades_and_skips_secrets(client, auth_headers, tmp_path):
+    from sqlalchemy import select, text
+
+    from app.models import Cascade, Server, TorrentHit
+
+    async with client.session_factory() as s:
+        srv = Server(name="srv-bkp", host="203.0.113.50", ssh_port=22, ssh_user="acontrol")
+        s.add(srv)
+        await s.commit()
+        sid = srv.id
+    data = tmp_path / "data"
+    (data / "caddy" / "data").mkdir(parents=True)
+    (data / "caddy" / "data" / "acme.key").write_bytes(b"TLS-KEY")
+    (data / "heartbeat").write_text("tg_token=secret\n")
+    (data / "ssh").mkdir(exist_ok=True)
+    (data / "ssh" / "id_ed25519").write_bytes(b"FAKE-KEY")
+    from datetime import datetime, timezone
+    now = datetime(2026, 10, 1, tzinfo=timezone.utc)
+    async with client.session_factory() as s:
+        s.add(Cascade(id=7, entry_server_id=sid, exit_server_id=sid + 100,
+                      transport="gre", status="ready"))
+        s.add(TorrentHit(server_id=sid, protocol="awg", client_id="K=", hits=3,
+                         first_seen=now, last_seen=now))
+        await s.commit()
+
+    archive = (await client.post("/api/backup/download", headers=auth_headers,
+                                 json={"password": "testpass"})).content
+    with tarfile.open(fileobj=io.BytesIO(archive), mode="r:gz") as tar:
+        names = set(tar.getnames())
+    assert "data/ssh/id_ed25519" in names
+    assert not any(n.startswith("data/caddy") or n == "data/heartbeat" for n in names)
+    dump = _read_db_json(archive)
+    assert dump["cascades"][0]["id"] == 7 and dump["torrent_hits"]
+
+    async with client.session_factory() as s:
+        await s.execute(text("DELETE FROM cascades"))
+        await s.commit()
+    h = {**auth_headers, "X-Confirm-Password": "testpass"}
+    r = await client.post("/api/backup/restore", content=archive, headers=h)
+    assert r.status_code == 200, r.text
+    assert r.json()["restored"]["cascades"] == 1
+    async with client.session_factory() as s:
+        assert [c.id for c in await s.scalars(select(Cascade))] == [7]
+        # новый каскад после restore получает свободный id
+        s.add(Cascade(entry_server_id=sid + 1, exit_server_id=sid + 2, transport="gre"))
+        await s.commit()
+        assert sorted(await s.scalars(select(Cascade.id))) == [7, 8]
+
+    # старый архив (без cascades и torrent_hits) не падает и их не трогает;
+    # restore мог отозвать токены - входим заново
+    login = await client.post("/api/auth/login", json={"username": "admin", "password": "testpass"})
+    h = {"Authorization": f"Bearer {login.json()['access_token']}", "X-Confirm-Password": "testpass"}
+    old = dict(dump)
+    old.pop("cascades")
+    old.pop("torrent_hits")
+    r = await client.post(
+        "/api/backup/restore", headers=h,
+        content=_tar({"db.json": json.dumps(old).encode(), "data/ssh/id_ed25519": b"FAKE-KEY"}),
+    )
+    assert r.status_code == 200, r.text
+    assert "cascades" not in r.json()["restored"]
+    async with client.session_factory() as s:
+        assert sorted(await s.scalars(select(Cascade.id))) == [7, 8]

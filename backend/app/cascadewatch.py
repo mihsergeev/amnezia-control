@@ -82,25 +82,52 @@ async def watch_once(session_factory, settings: Settings, *, now: datetime | Non
     async with session_factory() as session:
         rows = list(await session.scalars(select(Cascade).where(Cascade.status == "ready")))
         names = dict((await session.execute(select(Server.id, Server.name))).all())
-        for c in rows:
-            entry = await session.get(Server, c.entry_server_id)
-            if entry is None or cascadejob.running(c.id):
+        ids = {c.entry_server_id for c in rows}
+        entries = {
+            s.id: s for s in await session.scalars(select(Server).where(Server.id.in_(ids)))
+        } if ids else {}
+    # SSH-проверка идет до 90 с: сессию БД на это время не держим (на Postgres
+    # висела idle in transaction), а результат пишем в перечитанную строку -
+    # каскад могли удалить или проверить вручную, пока шла наша проверка
+    for c in rows:
+        entry = entries.get(c.entry_server_id)
+        if entry is None or cascadejob.running(c.id):
+            continue
+        try:
+            out = await check(entry)
+        except Exception as exc:  # noqa: BLE001 - вход недоступен: скажет алерт о сервере
+            log.info("каскад %s: вход не проверить: %s", c.id, exc)
+            continue
+        kv = cascade.parse_kv(out)
+        res = cascade.check_result(kv)
+        ok, reason = cascade.health(c.transport, kv, res)
+        stamp = now or datetime.now(timezone.utc)
+        async with session_factory() as session:
+            fresh = await session.get(Cascade, c.id)
+            if fresh is None or fresh.status != "ready" or cascadejob.running(c.id):
                 continue
-            try:
-                out = await check(entry)
-            except Exception as exc:  # noqa: BLE001 - вход недоступен: скажет алерт о сервере
-                log.info("каскад %s: вход не проверить: %s", c.id, exc)
-                continue
-            kv = cascade.parse_kv(out)
-            res = cascade.check_result(kv)
-            ok, reason = cascade.health(c.transport, kv, res)
-            stamp = now or datetime.now(timezone.utc)
-            result = json.loads(c.result or "{}")
-            health, event = next_health(result.get("health") or {}, ok, reason, stamp, grace)
+            result = json.loads(fresh.result or "{}")
+            # SSH мог идти полторы минуты: галочку успели выключить во время
+            # проверки, поэтому разрешение отправки перечитываем сейчас.
+            cascade_alerts = bool(await session.scalar(
+                select(Server.id).where(
+                    Server.id.in_((fresh.entry_server_id, fresh.exit_server_id)),
+                    Server.alerts_enabled.is_(True),
+                ).limit(1)
+            ))
+            old_health = (result.get("health") or {}) if cascade_alerts else {}
+            health, event = next_health(old_health, ok, reason, stamp, grace)
+            if not cascade_alerts:
+                # Пока обе стороны выключены, отсчет аварии не копим и не
+                # запоминаем отправленный алерт.
+                event = None
+                if not ok:
+                    health["since"] = stamp.isoformat()
+                    health["alerted"] = False
             result["health"] = health
             if res["egress"]:
                 result.update(res, checked_at=stamp.isoformat())
-            c.result = json.dumps(result)
+            fresh.result = json.dumps(result)
             await session.commit()
             if event:
                 await _send(

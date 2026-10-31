@@ -3036,3 +3036,24 @@ tr.row-link:hover td {
   white-space: nowrap;
   cursor: help;
 }
+
+/* светлая тема: светлые акценты темной (#8aa5ff, #58d68d, #ff7b6e) на белом
+   давали контраст 1.8-2.5, текст бейджей и счетчиков почти не читался */
+:root[data-theme='light'] .group-count,
+:root[data-theme='light'] button.primary-ghost,
+:root[data-theme='light'] .proto-chip,
+:root[data-theme='light'] .badge-amnezia,
+:root[data-theme='light'] .deploy-spinner {
+  color: #2a55d6;
+}
+
+:root[data-theme='light'] .proto-badge {
+  color: #15803d;
+}
+
+:root[data-theme='light'] .group-sum-bad,
+:root[data-theme='light'] button.srv-item.server-down .srv-item-name,
+:root[data-theme='light'] .srv-kpi.res-crit .srv-kpi-value,
+:root[data-theme='light'] .cc-verdict-bad {
+  color: #c0392b;
+}

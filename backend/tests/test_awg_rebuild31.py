@@ -106,6 +106,7 @@ async def test_update_on_inplace_31_uses_31_engine(
     monkeypatch.setattr(deploy, "hub_info", fake_hub)
     monkeypatch.setattr(deploy, "snapshot_all", fake_none)
     monkeypatch.setattr(deploy, "launch", fake_launch)
+    monkeypatch.setattr(deploy, "ensure_idle", lambda conn, *, tag: fake_none())
     monkeypatch.setattr(awg, "detect_awg_containers", fake_containers)
     monkeypatch.setattr(awg, "read_state", fake_state)
     monkeypatch.setattr(awg, "read_awg_conf", fake_conf)

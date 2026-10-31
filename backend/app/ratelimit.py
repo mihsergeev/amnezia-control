@@ -12,12 +12,17 @@ import time
 WINDOW = 300  # сек: окно подсчёта неудачных попыток
 MAX_FAILURES = 10  # неудач в окне до блокировки
 LOCKOUT = 900  # сек: длительность блокировки после превышения
+# Потолок числа ключей: ключ берется из запроса (адрес, логин), и без потолка
+# поток неудач с разными логинами раздувал бы словари без предела
+MAX_KEYS = 10000
+PRUNE_EVERY = 60  # сек: как часто вычищать протухшие записи
 
 _failures: dict[str, list[float]] = {}
 # до какого момента ключ заблокирован. Раньше блокировки как таковой не было:
 # считались только попытки в окне WINDOW, и через 5 минут после десятой ключ
 # снова получал 10 попыток - LOCKOUT ни на что не влиял
 _locked_until: dict[str, float] = {}
+_last_prune = 0.0
 
 
 def _now(now: float | None) -> float:
@@ -54,12 +59,38 @@ def is_locked(key: str, *, now: float | None = None) -> bool:
     return False
 
 
+def _prune(t: float) -> None:
+    """Убирает протухшие записи, а при переполнении - самые старые."""
+    global _last_prune
+    _last_prune = t
+    for key in [k for k, until in _locked_until.items() if t >= until]:
+        _locked_until.pop(key, None)
+        _failures.pop(key, None)
+    for key in [k for k, ts in _failures.items() if not ts or t - ts[-1] >= WINDOW]:
+        if key not in _locked_until:
+            _failures.pop(key, None)
+    if len(_failures) > MAX_KEYS:
+        # первыми уходят незаблокированные ключи с самой давней неудачей
+        free = sorted(
+            (k for k in _failures if k not in _locked_until),
+            key=lambda k: _failures[k][-1],
+        )
+        for key in free[: len(_failures) - MAX_KEYS]:
+            _failures.pop(key, None)
+    if len(_locked_until) > MAX_KEYS:
+        for key in sorted(_locked_until, key=_locked_until.get)[: len(_locked_until) - MAX_KEYS]:
+            _locked_until.pop(key, None)
+            _failures.pop(key, None)
+
+
 def record_failure(
     key: str, *, now: float | None = None, max_failures: int = MAX_FAILURES
 ) -> bool:
     """Регистрирует неудачную попытку. Возвращает True, если ИМЕННО эта попытка
     перевела ключ в состояние блокировки (для однократного алерта)."""
     t = _now(now)
+    if t - _last_prune >= PRUNE_EVERY or len(_failures) >= MAX_KEYS:
+        _prune(t)
     times = [ts for ts in _failures.get(key, []) if t - ts < WINDOW]
     times.append(t)
     _failures[key] = times

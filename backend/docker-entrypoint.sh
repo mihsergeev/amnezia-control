@@ -13,9 +13,12 @@ as_app() {
 
 # что в /data не принадлежит панели или ей не видно (первые строки);
 # ./data/postgres в compose лежит внутри того же каталога, это база со своим
-# владельцем, ее не трогаем
+# владельцем, ее не трогаем. ./data/caddy - ключи TLS/ACME контейнера caddy
+# (compose.tls.yml): процессу панели они не нужны, отдавать их ему нельзя.
+# heartbeat панель перезаписывает сама
 foreign() {
-  as_app find /data -path /data/postgres -prune -o ! -user "$APP_UID" -print 2>&1 | head -n 5
+  as_app find /data \( -path '/data/postgres*' -o -path '/data/pgdata*' -o -path /data/caddy -o -path /data/heartbeat \) \
+    -prune -o ! -user "$APP_UID" -print 2>&1 | head -n 5
 }
 
 if [ "$(id -u)" = "0" ]; then
@@ -26,14 +29,15 @@ if [ "$(id -u)" = "0" ]; then
     # панели он не попадет, но там и так все ее. -depth отдает каталог после
     # содержимого, чтобы прерванный старт не оставил каталог панели с чужими
     # файлами внутри. Что не вышло, покажет повторная проверка
-    find /data -depth ! -path /data/postgres ! -path '/data/postgres/*' \
+    find /data -depth ! -path '/data/postgres*' ! -path '/data/pgdata*' \
+      ! -path /data/caddy ! -path '/data/caddy/*' ! -path /data/heartbeat \
       ! -user "$APP_UID" -exec chown -h "$APP_UID:$APP_UID" {} + 2>/dev/null || true
     left=$(foreign)
     if [ -n "$left" ]; then
       echo "acontrol: в /data есть файлы не пользователя панели ($APP_UID), отдать их не вышло:" >&2
       echo "$left" >&2
       echo "acontrol: контейнеру нужны cap_add CHOWN, SETUID, SETGID (см. compose.yml), либо на хосте в каталоге панели:" >&2
-      echo "acontrol:   sudo find data -path data/postgres -prune -o -exec chown -h $APP_UID:$APP_UID {} +" >&2
+      echo "acontrol:   sudo find data \\( -path 'data/postgres*' -o -path 'data/pgdata*' -o -path data/caddy -o -path data/heartbeat \\) -prune -o -exec chown -h $APP_UID:$APP_UID {} +" >&2
       exit 1
     fi
   fi

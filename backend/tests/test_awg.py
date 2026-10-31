@@ -102,8 +102,8 @@ def test_build_client_config_mirrors_awg_params() -> None:
     config = awg.build_client_config(
         client_private="CLIENTPRIV",
         address="10.8.1.3",
-        server_public="SERVERPUB",
-        preshared="PSK123",
+        server_public="NSzHmLC7cq08Y7FK1EeAzPu51yZeOZiuoLIPYeeH3yk=",
+        preshared="7jE5uKQj63MXTY7KX6oL90Oe5sCYvUCe/uab9fY3kao=",
         endpoint="203.0.113.10:47180",
         params=params,
         dns="1.1.1.1",
@@ -115,8 +115,8 @@ def test_build_client_config_mirrors_awg_params() -> None:
     # H1–H4 (2.0) зеркалятся диапазоном verbatim, НЕ схлопываются в одно число
     assert "H1 = 1204862887-1882451066" in config
     assert "H4 = 2147211240-2147260204" in config
-    assert "PublicKey = SERVERPUB" in config
-    assert "PresharedKey = PSK123" in config
+    assert "PublicKey = NSzHmLC7cq08Y7FK1EeAzPu51yZeOZiuoLIPYeeH3yk=" in config
+    assert "PresharedKey = 7jE5uKQj63MXTY7KX6oL90Oe5sCYvUCe/uab9fY3kao=" in config
     assert "Endpoint = 203.0.113.10:47180" in config
     assert "AllowedIPs = 0.0.0.0/0, ::/0" in config
 

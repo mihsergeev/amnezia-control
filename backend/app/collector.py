@@ -41,6 +41,41 @@ _ZERO = {"rx": 0, "tx": 0, "total": 0, "online": 0}
 # сервера не пишем: дельта считается между двумя снимками с одним набором.
 _last_parts: dict[int, frozenset[str]] = {}
 
+# Прошлые счетчики клиентов: server_id -> протокол -> {client_id: (rx, tx)}.
+# Прирост сервера (TrafficSample.rx_delta/tx_delta) считаем по каждому клиенту:
+# дельта суммы обнуляла трафик всех за интервал, стоило счетчику одного
+# клиента сброситься (отзыв, пауза, рестарт xray, отключение в OpenVPN).
+# Пропавших клиентов не забываем: вернувшийся сравнивается со своим счетчиком.
+_last_clients: dict[int, dict[str, dict[str, tuple[int, int]]]] = {}
+# прирост циклов, в которые общий снимок сервера не писался (см. _last_parts)
+_pending: dict[int, tuple[int, int]] = {}
+
+
+def _client_delta(sample: dict) -> tuple[int, int] | None:
+    """Прирост rx/tx сервера с прошлого цикла по клиентам. None - сравнивать
+    не с чем (первый цикл после старта панели)."""
+    sid = sample["server_id"]
+    prev = _last_clients.get(sid)
+    cur: dict[str, dict[str, tuple[int, int]]] = {
+        p.split(":", 1)[0]: {} for p in sample.get("parts", ())
+    }
+    for c in sample.get("clients", []):
+        cur.setdefault(c["protocol"], {})[c["client_id"]] = (c["rx"], c["tx"])
+    drx = dtx = 0
+    merged = dict(prev or {})
+    for proto, clients in cur.items():
+        before = merged.get(proto)
+        if prev is not None and before is not None:
+            for cid, (rx, tx) in clients.items():
+                prx, ptx = before.get(cid, (0, 0))
+                # счетчик меньше прошлого - сбросился, прирост считаем с нуля
+                drx += rx - prx if rx >= prx else rx
+                dtx += tx - ptx if tx >= ptx else tx
+        # протокол прочитался впервые - только запоминаем, прирост со следующего
+        merged[proto] = {**(before or {}), **clients}
+    _last_clients[sid] = merged
+    return None if prev is None else (drx, dtx)
+
 # Список контейнеров и версии протоколов (sshops.CHECK_COMMAND: docker ps и
 # exec в каждый контейнер) меняются редко, а на ноде с 1 vCPU эти вызовы заметно
 # грузят dockerd. При частом сборе (VPNPANEL_STATS_INTERVAL=60) проверяем их не
@@ -248,15 +283,37 @@ async def collect_once(
             for s in servers
         ]
     )
+    # сервер могли удалить, пока шел сбор: его снимки, метрики, имена клиентов
+    # и статус остались бы в БД сиротами
+    async with session_factory() as session:
+        alive = set(await session.scalars(select(Server.id)))
+    kept = [(s, r) for s, r in zip(servers, results) if s.id in alive]
+    servers = [s for s, _r in kept]
+    results = [r for _s, r in kept]
+    hostkey_changed &= alive
+    for state in (_last_parts, _last_clients, _pending):
+        for sid in [k for k in state if k not in alive]:
+            del state[sid]
     names = {s.id: s.name for s in servers}
+    enabled_server_ids = {s.id for s in servers if s.alerts_enabled}
     samples = [r for r in results if r is not None]
     stable = []
     for s in samples:
-        prev = _last_parts.get(s["server_id"])
+        sid = s["server_id"]
+        delta = _client_delta(s)
+        prev = _last_parts.get(sid)
         parts = s.get("parts", frozenset())
-        _last_parts[s["server_id"]] = parts
+        _last_parts[sid] = parts
         if prev is None or prev == parts:
+            pend = _pending.pop(sid, None)
+            if delta is not None and pend:
+                delta = (delta[0] + pend[0], delta[1] + pend[1])
+            s["delta"] = delta
             stable.append(s)
+        elif delta is not None:
+            # снимок не пишем, но прирост не теряем - уйдет в следующий
+            pend = _pending.get(sid, (0, 0))
+            _pending[sid] = (pend[0] + delta[0], pend[1] + delta[1])
     if samples:
         if stable:
             async with session_factory() as session:
@@ -267,12 +324,16 @@ async def collect_once(
                         tx_total=s["tx_total"],
                         clients_total=s["clients_total"],
                         clients_online=s["clients_online"],
+                        rx_delta=s["delta"][0] if s["delta"] else None,
+                        tx_delta=s["delta"][1] if s["delta"] else None,
                     )
                     for s in stable
                 )
                 await session.commit()
         try:
-            await _store_node_metrics(session_factory, settings, samples, names)
+            await _store_node_metrics(
+                session_factory, settings, samples, names, enabled_server_ids
+            )
         except Exception:  # noqa: BLE001 — метрики нод не критичны
             log.exception("ошибка сохранения ресурсов нод")
         try:
@@ -351,16 +412,23 @@ async def collect_once(
     if online_map:
         try:
             async with session_factory() as session:
-                await alerts.reconcile(session, settings, online_map, names)
+                await alerts.reconcile(
+                    session, settings, online_map, names,
+                    enabled_server_ids=enabled_server_ids,
+                )
         except Exception:  # noqa: BLE001 — алерты не должны ронять сбор метрик
             log.exception("ошибка сверки статусов серверов")
         try:
-            await onlinedrop.check(session_factory, settings, online_map, names)
+            await onlinedrop.check(
+                session_factory, settings, online_map, names,
+                enabled_server_ids=enabled_server_ids,
+            )
         except Exception:  # noqa: BLE001
             log.exception("ошибка проверки просадки онлайна")
     try:
         await _handle_hostkey_alerts(
-            session_factory, settings, hostkey_changed, online_map, names
+            session_factory, settings, hostkey_changed, online_map, names,
+            enabled_server_ids,
         )
     except Exception:  # noqa: BLE001
         log.exception("ошибка обработки смены host-ключей")
@@ -370,13 +438,18 @@ async def collect_once(
 async def _handle_hostkey_alerts(
     session_factory, settings: Settings, hostkey_changed: set[int],
     online_map: dict[int, bool], names: dict[int, str],
+    enabled_server_ids: set[int] | None = None,
 ) -> None:
     """Однократный security-алерт о смене host-ключа ноды (возможен MITM)."""
     # нода снова успешно подключилась (ключ совпал) — разрешаем алертить заново
     for sid, online in online_map.items():
         if online:
             _hostkey_alerted.discard(sid)
-    fresh = [sid for sid in hostkey_changed if sid not in _hostkey_alerted]
+    fresh = [
+        sid for sid in hostkey_changed
+        if sid not in _hostkey_alerted
+        and (enabled_server_ids is None or sid in enabled_server_ids)
+    ]
     if not fresh:
         return
     async with session_factory() as session:
@@ -394,6 +467,7 @@ async def _handle_hostkey_alerts(
                     ),
                     subject=name,
                 ),
+                server_id=sid,
             )
 
 
@@ -482,7 +556,10 @@ def cpu_percent(row, res, now: datetime, interval: int) -> float | None:
     return round(min(100.0, busy * 100 / total), 1)
 
 
-async def _store_node_metrics(session_factory, settings: Settings, samples, names):
+async def _store_node_metrics(
+    session_factory, settings: Settings, samples, names,
+    enabled_server_ids: set[int] | None = None,
+):
     """Апсерт снимка ресурсов нод + алерт о нехватке места (с гистерезисом)."""
     now = datetime.now(timezone.utc)
     disk_alerts: list[tuple[int, bool, int]] = []  # (server_id, over_threshold, pct)
@@ -496,11 +573,12 @@ async def _store_node_metrics(session_factory, settings: Settings, samples, name
             pct = round(res.disk_used / res.disk_total * 100) if res.disk_total else 0
             row = await session.get(NodeMetric, sid)
             prev_alerted = row.disk_alerted if row else False
-            new_alerted = prev_alerted
-            if th > 0 and pct >= th and not prev_alerted:
+            enabled = enabled_server_ids is None or sid in enabled_server_ids
+            new_alerted = prev_alerted if enabled else False
+            if enabled and th > 0 and pct >= th and not prev_alerted:
                 new_alerted = True
                 disk_alerts.append((sid, True, pct))
-            elif prev_alerted and (th <= 0 or pct < th - 5):
+            elif enabled and prev_alerted and (th <= 0 or pct < th - 5):
                 new_alerted = False
                 disk_alerts.append((sid, False, pct))
             if row is None:

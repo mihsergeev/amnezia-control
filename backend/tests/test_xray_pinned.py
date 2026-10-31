@@ -54,6 +54,7 @@ def node(monkeypatch):
     monkeypatch.setattr(deploy, "snapshot_all", nothing)
     monkeypatch.setattr(deploy, "snapshot_config", nothing)
     monkeypatch.setattr(deploy, "launch", fake_launch)
+    monkeypatch.setattr(deploy, "ensure_idle", lambda conn, *, tag: nothing())
     monkeypatch.setattr(deploywatch, "spawn", lambda *a, **kw: None)
     monkeypatch.setattr(xray, "detect_container", container)
     monkeypatch.setattr(xray, "read_server_bits", bits)

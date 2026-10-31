@@ -12,7 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import settings_store
 from app.config import Settings
-from app.models import ServerStatus
+from app.models import Server, ServerStatus
 
 log = logging.getLogger("acontrol.alerts")
 
@@ -71,6 +71,10 @@ EN = {
     "Скачан бэкап панели": "Panel backup downloaded",
     "Скачан бэкап панели {name}": "Panel backup {name} downloaded",
     "Панель восстановлена из бэкапа": "Panel restored from a backup",
+    "Выпущен API-ключ «{name}»": "API key \"{name}\" issued",
+    "Изменен API-ключ «{name}»": "API key \"{name}\" changed",
+    "Изменены каналы алертов": "Alert channels changed",
+    "Выгружен сервер {name}": "Server {name} exported",
     "Авто-бэкап снова проходит": "Auto-backup works again",
     "самопроверка ок": "self-test passed",
     "Авто-бэкап не создан": "Auto-backup failed",
@@ -154,6 +158,14 @@ def alerts_enabled(cfg: dict) -> bool:
     )
 
 
+async def server_alerts_enabled(session: AsyncSession, server_id: int) -> bool:
+    """Включены ли алерты конкретной ноды. Отсутствующий сервер = выключено."""
+    value = await session.scalar(
+        select(Server.alerts_enabled).where(Server.id == server_id)
+    )
+    return bool(value)
+
+
 async def send_alert(cfg: dict, text: str, *, html_text: str | None = None) -> list[str]:
     """Шлёт текст во все настроенные каналы. Возвращает список ошибок (пустой = ок).
 
@@ -198,11 +210,18 @@ async def send_alert(cfg: dict, text: str, *, html_text: str | None = None) -> l
     return errors
 
 
-async def maybe_alert(session_factory, settings: Settings, card: Card) -> None:
+async def maybe_alert(
+    session_factory, settings: Settings, card: Card, *, server_id: int | None = None
+) -> None:
     """Разовый алерт (бэкап упал, отзыв отложен, клиент скоро истекает и т.п.):
     открывает свою сессию, шлёт если каналы настроены. Best-effort."""
     try:
         async with session_factory() as session:
+            if (
+                server_id is not None
+                and not await server_alerts_enabled(session, server_id)
+            ):
+                return
             cfg = await settings_store.get_alert_config(session, settings)
         if alerts_enabled(cfg):
             await send_card(cfg, settings, card)
@@ -210,10 +229,17 @@ async def maybe_alert(session_factory, settings: Settings, card: Card) -> None:
         log.warning("разовый алерт не отправлен", exc_info=True)
 
 
-async def security_alert(session: AsyncSession, settings: Settings, card: Card) -> None:
+async def security_alert(
+    session: AsyncSession, settings: Settings, card: Card, *, server_id: int | None = None
+) -> None:
     """Шлёт security-событие (брутфорс, смена host-ключа, смена пароля и т.п.)
     во все настроенные каналы. Best-effort — не роняет вызывающую операцию."""
     try:
+        if (
+            server_id is not None
+            and not await server_alerts_enabled(session, server_id)
+        ):
+            return
         cfg = await settings_store.get_alert_config(session, settings)
         if alerts_enabled(cfg):
             await send_card(cfg, settings, card)
@@ -228,6 +254,7 @@ async def reconcile(
     names: dict[int, str],
     *,
     now: datetime | None = None,
+    enabled_server_ids: set[int] | None = None,
 ) -> list[tuple[int, bool]]:
     """Сверяет текущий статус с сохранённым, шлёт алерты на переходах.
 
@@ -243,8 +270,24 @@ async def reconcile(
     transitions: list[tuple[int, bool]] = []
     for sid, online in online_map.items():
         prev = known.get(sid)
+        if enabled_server_ids is not None and sid not in enabled_server_ids:
+            # Пока алерты выключены, статус держим в нейтральной точке. После
+            # включения офлайн-нода должна выдержать полный grace-период.
+            if prev is None:
+                session.add(ServerStatus(server_id=sid, online=True, changed_at=now))
+            else:
+                prev.online = True
+                prev.down_since = None
+            continue
         if prev is None:
-            session.add(ServerStatus(server_id=sid, online=online, changed_at=now))
+            # Впервые увиден офлайн (только добавили): считаем онлайн с
+            # запущенным таймером недоступности. Иначе поднявшийся сервер слал
+            # "снова онлайн" без алерта о падении, а долгое молчание - алерт
+            # о падении после того же порога, что и у остальных.
+            session.add(ServerStatus(
+                server_id=sid, online=True, changed_at=now,
+                down_since=None if online else now,
+            ))
             continue
         if online:
             # онлайн подтверждает состояние сразу (быстрое восстановление) и

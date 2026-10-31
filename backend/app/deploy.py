@@ -549,6 +549,12 @@ def build_script(
         'if [ -z "$DPORT" ] && [ -n "$SRC" ]; then DPORT=$(sudo docker inspect "$SRC" '
         '--format "{{range \\$p,\\$c := .NetworkSettings.Ports}}{{\\$p}} {{end}}" '
         '2>/dev/null | grep -o "[0-9]*" | head -1 || true); fi',
+        # deploy на другой порт поверх готового конфига: скрипт сохранил бы
+        # старый порт молча, а проверка занятости и ufw шли по новому
+        *([
+            'if [ -n "$DPORT" ] && [ "$DPORT" != "$PORT" ]; then '
+            'echo "DEPLOY_ERROR: протокол уже стоит на порту $DPORT"; exit 1; fi',
+        ] if mode == "deploy" else []),
         '[ -n "$DPORT" ] && PORT=$DPORT',
         'if command -v ufw >/dev/null 2>&1; then sudo ufw allow $PORT/udp >/dev/null 2>&1 || true; '
         'sudo ufw route allow proto udp from any to any port $PORT >/dev/null 2>&1 || true; fi',
@@ -671,6 +677,12 @@ def build_script_v3(mode: str, port: int, cfg: dict[str, str]) -> str:
         # у выданных клиентов протухнет endpoint
         'DPORT=$(sudo grep -iE "^ *ListenPort" "$D/awg0.conf" 2>/dev/null '
         '| head -1 | tr -dc "0-9" || true)',
+        # deploy на другой порт поверх готового конфига: скрипт сохранил бы
+        # старый порт молча, а проверка занятости и ufw шли по новому
+        *([
+            'if [ -n "$DPORT" ] && [ "$DPORT" != "$PORT" ]; then '
+            'echo "DEPLOY_ERROR: протокол уже стоит на порту $DPORT"; exit 1; fi',
+        ] if mode == "deploy" else []),
         '[ -n "$DPORT" ] && PORT=$DPORT',
         'if command -v ufw >/dev/null 2>&1; then sudo ufw allow $PORT/udp >/dev/null 2>&1 || true; '
         'sudo ufw route allow proto udp from any to any port $PORT >/dev/null 2>&1 || true; fi',
@@ -883,10 +895,13 @@ async def launch(
     """Кладёт скрипт в $HOME/.acontrol/<tag> (свой каталог протокола) и запускает
     детачед. Отдельный каталог на протокол не даёт логам деплоя перемешиваться."""
     d, run, log = _paths(tag)
-    await conn.run(f'mkdir -p "{d}"', check=False)
+    await conn.run(f'mkdir -p "{d}"', check=True)
+    # Пишем во временный файл и подменяем через mv (новый inode): bash читает
+    # скрипт по ходу выполнения, и `cat >` поверх живого run.sh подсунул бы ему
+    # новый текст со старого смещения.
     await conn.run(
-        f'cat > "{run}" && rm -f "{log}"',
-        input=script, check=False,
+        f'cat > "{run}.tmp" && mv -f "{run}.tmp" "{run}" && rm -f "{log}"',
+        input=script, check=True,
     )
     await conn.run(
         f'nohup setsid bash "{run}" > "{log}" 2>&1 </dev/null & disown',
@@ -1168,6 +1183,58 @@ async def read_status(
         state = "unknown"
     tail = "\n".join(log.strip().splitlines()[-15:])
     return {"state": state, "log": tail}
+
+
+async def existing_port(conn: asyncssh.SSHClientConnection, *, v3: bool = False) -> int | None:
+    """ListenPort уже стоящего AWG 2.0 (v3=False) или 3.1: тот порт, который
+    скрипт деплоя сохранит вместо запрошенного. None - конфига нет."""
+    if v3:
+        src = f"sudo -n cat {HOST_DIR_V3}/awg0.conf 2>/dev/null"
+    else:
+        # как в build_script: сначала живой контейнер, потом хост-маунт
+        src = (
+            f"{{ $DOCKER exec {CONTAINER} cat /opt/amnezia/awg/awg0.conf 2>/dev/null "
+            "|| sudo -n cat /opt/amnezia/awg/awg0.conf 2>/dev/null; }"
+        )
+    out = await conn.run(
+        awg._DOCKER + src + " | grep -iE '^ *ListenPort' | head -1 | tr -dc 0-9",
+        check=False,
+    )
+    text = (out.stdout if isinstance(out.stdout, str) else "").strip()
+    return int(text) if text.isdigit() else None
+
+
+def port_mismatch_detail(current: int, port: int) -> str:
+    return (
+        f"Протокол уже стоит на порту {current}, а не {port}: повторная установка "
+        "сохраняет конфиг и клиентов вместе с портом. Укажите порт "
+        f"{current} или сначала удалите протокол."
+    )
+
+
+class DeployBusy(Exception):
+    """Установка этого протокола на ноде еще идет - вторую поверх не запускаем."""
+
+
+async def ensure_idle(conn: asyncssh.SSHClientConnection, *, tag: str) -> None:
+    """DeployBusy, если прежний run.sh этого протокола еще выполняется.
+
+    Лог без DONE/ERROR остается и от убитого скрипта (ребут ноды посреди
+    установки), поэтому при running проверяем еще и живой процесс - иначе
+    протокол навсегда залип бы в "уже идет". Скобки в шаблоне не дают pgrep
+    найти собственную командную строку."""
+    st = await read_status(conn, tag=tag)
+    # Пустой лог бывает и у уже запущенного bash до первой строки вывода.
+    if st["state"] in ("done", "error"):
+        return
+    out = await conn.run(
+        f"pgrep -f '[.]acontrol/{tag}/run[.]sh' >/dev/null && echo BUSY",
+        check=False,
+    )
+    if "BUSY" in (out.stdout if isinstance(out.stdout, str) else ""):
+        raise DeployBusy(
+            "Установка уже идет - дождитесь ее окончания и повторите."
+        )
 
 
 async def node_base_digest(conn: asyncssh.SSHClientConnection) -> str | None:

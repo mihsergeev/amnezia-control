@@ -26,7 +26,8 @@ from fastapi import APIRouter, HTTPException, Request, status
 from fastapi.responses import Response
 from sqlalchemy import DateTime, func, insert, select
 
-from app import audit, sshops
+from app import alerts, audit, sshops, stepup
+from app.clientip import client_ip
 from app.config import get_settings
 from app.db import Base
 from app.deps import CurrentUser, SessionDep
@@ -52,7 +53,7 @@ _HISTORY_TABLES = {"traffic_samples", "client_traffic_samples"}
 # поля сервера, которые имеет смысл переносить: адрес, доступ и то, как карточка
 # выглядит. id/position/результаты последней проверки — местные, их не берём
 _SERVER_FIELDS = ("name", "host", "ssh_port", "ssh_user", "note", "group_name",
-                  "country", "torrent_block", "torrent_autopause")
+                  "country", "torrent_block", "torrent_autopause", "alerts_enabled")
 
 _MAX_IMPORT_BYTES = 200 * 1024 * 1024
 
@@ -106,9 +107,14 @@ def _selected_models(history: bool) -> list:
 
 @router.get("/servers/{server_id}/export")
 async def export_server(
-    server_id: int, user: CurrentUser, session: SessionDep, history: bool = False
+    server_id: int, request: Request, user: CurrentUser, session: SessionDep,
+    history: bool = False,
 ) -> Response:
-    """Выгрузка одного сервера со всей его панельной обвязкой в JSON-файл."""
+    """Выгрузка одного сервера со всей его панельной обвязкой в JSON-файл.
+
+    В файле приватные ключи всех клиентов сервера, поэтому нужен пароль (и код
+    2FA): заголовками X-Confirm-Password и X-Confirm-OTP, как у восстановления."""
+    await stepup.verify(user, request.headers.get("x-confirm-password", ""), request)
     server = await session.get(Server, server_id)
     if server is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Сервер не найден")
@@ -141,6 +147,11 @@ async def export_server(
     body = json.dumps(payload, ensure_ascii=False, indent=2).encode()
 
     await audit.record(session, user.username, "server_export", server.name, server.host)
+    await alerts.security_alert(
+        session, get_settings(),
+        alerts.Card("warn", "🗄", alerts.t("Выгружен сервер {name}", name=server.name),
+                    alerts.t("{user} с {ip}", user=user.username, ip=client_ip(request))),
+    )
     safe = "".join(ch if ch.isalnum() or ch in "-_." else "-" for ch in server.name)
     return Response(
         content=body,
@@ -221,6 +232,8 @@ async def import_server_file(
         country=(spec.get("country") or "")[:2],
         torrent_block=bool(spec.get("torrent_block")),
         torrent_autopause=bool(spec.get("torrent_autopause")),
+        # Уведомления новой панели включаются только в настройках сервера.
+        alerts_enabled=False,
         position=(max_pos or 0) + 1,
     )
     session.add(server)

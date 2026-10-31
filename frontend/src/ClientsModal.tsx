@@ -146,6 +146,11 @@ export function ClientsModal({
       if (seq === loadSeq.current) setLoading(false)
     }
   }, [server.id, awgBase, handleError])
+  // действия (отзыв, пауза, переименование) перезагружают список через ref: если
+  // за время запроса переключили вкладку 2.0/3.1/Legacy, load из замыкания
+  // загрузил бы клиентов старого протокола на новую вкладку
+  const loadRef = useRef(load)
+  loadRef.current = load
 
   useEffect(() => {
     if (!isAwg) return
@@ -222,7 +227,7 @@ export function ClientsModal({
       )
       setAddOpen(false)
       showConfig(result.client.name, result.config, result.config_amnezia)
-      await load()
+      await loadRef.current()
     } catch (err) {
       handleError(err)
     } finally {
@@ -255,7 +260,7 @@ export function ClientsModal({
         method: 'POST',
         body: JSON.stringify({ public_key: client.public_key, note: value }),
       })
-      await load()
+      await loadRef.current()
     } catch (err) {
       handleError(err)
     }
@@ -298,7 +303,7 @@ export function ClientsModal({
         { method: 'POST', body: JSON.stringify({ public_key: client.public_key }) },
       )
       showConfig(result.client.name, result.config, result.config_amnezia)
-      await load()
+      await loadRef.current()
     } catch (err) {
       handleError(err)
     } finally {
@@ -320,7 +325,7 @@ export function ClientsModal({
     setBusyKey(client.public_key)
     try {
       await pauseClient(server.id, awgBase, client.public_key, resume)
-      await load()
+      await loadRef.current()
     } catch (err) {
       handleError(err)
     } finally {
@@ -334,7 +339,7 @@ export function ClientsModal({
     setBusyKey(client.public_key)
     try {
       await renameClient(server.id, limitProto, client.public_key, next)
-      await load()
+      await loadRef.current()
     } catch (err) {
       handleError(err)
     } finally {
@@ -355,7 +360,7 @@ export function ClientsModal({
         method: 'POST',
         body: JSON.stringify({ public_key: client.public_key }),
       })
-      await load()
+      await loadRef.current()
     } catch (err) {
       handleError(err)
     } finally {
@@ -366,7 +371,7 @@ export function ClientsModal({
   async function changeLimit(client: AwgClient, iso: string | null) {
     try {
       await setClientLimit(server.id, limitProto, client.public_key, client.name, iso)
-      await load()
+      await loadRef.current()
     } catch (err) {
       handleError(err)
     }

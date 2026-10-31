@@ -1,3 +1,5 @@
+import { translate } from './i18n'
+
 const TOKEN_KEY = 'acontrol_token'
 
 export function getToken(): string | null {
@@ -21,6 +23,51 @@ export class ApiError extends Error {
   }
 }
 
+// --- Код 2FA для степ-апа ---------------------------------------------------
+// При включенной 2FA опасные действия просят и код. Окно подтверждения
+// (StepUpModal) кладет код сюда на время своего запроса, и он уходит заголовком
+// X-Confirm-OTP: так не пришлось менять все вызовы с паролем. Бэкенд просит код
+// ответом 403 с заголовком X-Need-OTP.
+let stepUpOtp = ''
+let stepUpNeedOtp: (() => void) | null = null
+
+export async function withStepUpOtp<T>(
+  otp: string,
+  onNeedOtp: () => void,
+  fn: () => Promise<T>,
+): Promise<T> {
+  stepUpOtp = otp.trim()
+  stepUpNeedOtp = onNeedOtp
+  try {
+    return await fn()
+  } finally {
+    stepUpOtp = ''
+    stepUpNeedOtp = null
+  }
+}
+
+function withOtp(init: RequestInit, otp: string): RequestInit {
+  if (!otp) return init
+  return {
+    ...init,
+    headers: { ...(init.headers as Record<string, string> | undefined), 'X-Confirm-OTP': otp },
+  }
+}
+
+// fetch с поддержкой кода 2FA: вне окна подтверждения (свои формы с паролем)
+// код спрашиваем prompt-ом и повторяем запрос один раз
+async function stepUpFetch(path: string, init: RequestInit = {}): Promise<Response> {
+  const res = await fetch(path, withOtp(init, stepUpOtp))
+  if (res.status !== 403 || res.headers.get('X-Need-OTP') !== '1') return res
+  if (stepUpNeedOtp) {
+    stepUpNeedOtp()
+    return res
+  }
+  const code = window.prompt(translate('Введите код 2FA из приложения'))?.trim()
+  if (!code) return res
+  return fetch(path, withOtp(init, code))
+}
+
 export async function api<T>(path: string, options: RequestInit = {}): Promise<T> {
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
@@ -29,7 +76,7 @@ export async function api<T>(path: string, options: RequestInit = {}): Promise<T
   const token = getToken()
   if (token) headers['Authorization'] = `Bearer ${token}`
 
-  const res = await fetch(path, { ...options, headers })
+  const res = await stepUpFetch(path, { ...options, headers })
   if (res.status === 204) return undefined as T
 
   const body = await res.json().catch(() => null)
@@ -50,7 +97,7 @@ export function errorDetail(body: unknown, status: number): string {
       })
       .join('; ')
   }
-  return `Ошибка HTTP ${status}`
+  return translate('Ошибка HTTP {status}', { status })
 }
 
 // Выход: токен отзывается и на сервере, иначе украденный жил бы до конца срока.
@@ -65,7 +112,7 @@ export async function logoutServer(): Promise<void> {
 // Скачивание файла с POST-запроса: fetch с токеном -> blob -> загрузка.
 async function downloadPost(path: string, body: unknown, fallback: string): Promise<void> {
   const token = getToken()
-  const res = await fetch(path, {
+  const res = await stepUpFetch(path, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -111,7 +158,7 @@ export async function restoreBackup(
   password: string,
 ): Promise<{ restored: Record<string, number> }> {
   const token = getToken()
-  const res = await fetch('/api/backup/restore', {
+  const res = await stepUpFetch('/api/backup/restore', {
     method: 'POST',
     headers: {
       ...(token ? { Authorization: `Bearer ${token}` } : {}),
@@ -121,6 +168,8 @@ export async function restoreBackup(
   })
   const body = await res.json().catch(() => null)
   if (!res.ok) throw new ApiError(errorDetail(body, res.status), res.status)
+  // старые токены restore отзывает, новый приходит в ответе
+  if (body?.access_token) setToken(body.access_token)
   return body
 }
 
@@ -142,12 +191,23 @@ export type ServerImportResult = {
   skipped_tables: string[]
 }
 
-export async function exportServer(id: number, history: boolean): Promise<void> {
+// В файле приватные ключи клиентов: пароль заголовком, как у восстановления.
+export async function exportServer(
+  id: number,
+  history: boolean,
+  password: string,
+): Promise<void> {
   const token = getToken()
-  const res = await fetch(`/api/servers/${id}/export?history=${history}`, {
-    headers: token ? { Authorization: `Bearer ${token}` } : {},
+  const res = await stepUpFetch(`/api/servers/${id}/export?history=${history}`, {
+    headers: {
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      'X-Confirm-Password': password,
+    },
   })
-  if (!res.ok) throw new ApiError(`Ошибка HTTP ${res.status}`, res.status)
+  if (!res.ok) {
+    const err = await res.json().catch(() => null)
+    throw new ApiError(errorDetail(err, res.status), res.status)
+  }
   const cd = res.headers.get('Content-Disposition') || ''
   const m = cd.match(/filename="?([^"]+)"?/)
   const blob = await res.blob()
@@ -192,6 +252,7 @@ export type Server = {
   // блокировка торрентов в контейнерах AWG/OpenVPN и пауза тех, кто качает
   torrent_block: boolean
   torrent_autopause: boolean
+  alerts_enabled: boolean
   created_at: string
   updated_at: string
 }
@@ -240,6 +301,7 @@ export type ServerForm = {
   // только при изменении сервера
   torrent_block?: boolean
   torrent_autopause?: boolean
+  alerts_enabled?: boolean
 }
 
 export type TorrentClient = {
@@ -552,12 +614,14 @@ export function getAlerts(): Promise<AlertConfig> {
   return api<AlertConfig>('/api/alerts')
 }
 
+// сохранение каналов - с паролем (степ-ап)
 export function putAlerts(cfg: {
   telegram_token: string
   telegram_chat: string
   telegram_api: string
   webhook: string
   lang: 'ru' | 'en'
+  password: string
 }): Promise<AlertConfig> {
   return api<AlertConfig>('/api/alerts', {
     method: 'PUT',
@@ -700,6 +764,7 @@ export type ApiKey = {
   revoked: boolean
   expires_at: string | null
   server_ids: number[]
+  all_servers: boolean
 }
 
 // Полный ключ приходит ТОЛЬКО в ответе на создание — показать и не терять.
@@ -709,22 +774,31 @@ export async function listApiKeys(): Promise<ApiKey[]> {
   return api<ApiKey[]>('/api/apikeys')
 }
 
-export async function createApiKey(name: string): Promise<ApiKeyCreated> {
+// выпуск и изменение ключа - с паролем (степ-ап)
+export async function createApiKey(name: string, password: string): Promise<ApiKeyCreated> {
   return api<ApiKeyCreated>('/api/apikeys', {
     method: 'POST',
-    body: JSON.stringify({ name }),
+    body: JSON.stringify({ name, password }),
   })
 }
 
-// срок (null = бессрочно) и серверы (пусто = все) задаются целиком
+// срок (null = бессрочно) и серверы задаются целиком; все серверы - только
+// явным all_servers, пустой список без него бэкенд не примет
 export async function updateApiKey(
   id: number,
   expires_at: string | null,
   server_ids: number[],
+  all_servers: boolean,
+  password: string,
 ): Promise<ApiKey> {
   return api<ApiKey>(`/api/apikeys/${id}`, {
     method: 'PUT',
-    body: JSON.stringify({ expires_at, server_ids }),
+    body: JSON.stringify({
+      expires_at,
+      server_ids: all_servers ? [] : server_ids,
+      all_servers,
+      password,
+    }),
   })
 }
 

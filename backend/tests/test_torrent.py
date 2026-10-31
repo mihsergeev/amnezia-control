@@ -115,7 +115,7 @@ class _Conn:
 
 def _server(**kw) -> Server:
     base = dict(id=1, name="vpn-a", host="203.0.113.10", ssh_port=22, ssh_user="root",
-                torrent_block=True, torrent_autopause=False)
+                torrent_block=True, torrent_autopause=False, alerts_enabled=True)
     base.update(kw)
     return Server(**base)
 
@@ -213,6 +213,23 @@ async def test_record_below_threshold_no_alert(factory, sent):
     assert row.hits == 1 and row.alerted_at is None
 
 
+async def test_record_keeps_blocking_but_alert_is_opt_in(factory, sent, monkeypatch):
+    calls = []
+
+    async def _pause(server, settings, protocol, client_id):
+        calls.append(client_id)
+        return {"ip": "10.8.1.2"}
+
+    monkeypatch.setattr(torrent, "_pause", _pause)
+    server = _server(alerts_enabled=False, torrent_autopause=True)
+    await torrent.record(factory, config.get_settings(), [_hit(5)], {1: server})
+    async with factory() as session:
+        row = await session.scalar(select(TorrentHit))
+    assert calls == ["pk1"]
+    assert row.hits == 5 and row.alerted_at is None
+    assert sent == []
+
+
 async def test_record_realerts_after_a_day(factory, sent):
     settings = config.get_settings()
     srv = _server()
@@ -263,11 +280,14 @@ async def test_patch_and_get_torrent(client, auth_headers, monkeypatch):
         "name": "vpn-a", "host": "203.0.113.10", "ssh_port": 22, "ssh_user": "root"})
     sid = r.json()["id"]
     assert r.json()["torrent_block"] is False
+    assert r.json()["alerts_enabled"] is False
 
     r = await client.patch(f"/api/servers/{sid}", headers=auth_headers,
-                           json={"torrent_block": True, "torrent_autopause": True})
+                           json={"torrent_block": True, "torrent_autopause": True,
+                                 "alerts_enabled": True})
     assert r.status_code == 200
     assert r.json()["torrent_block"] is True and r.json()["torrent_autopause"] is True
+    assert r.json()["alerts_enabled"] is True
     assert applied == [sid]
     # та же настройка повторно - на ноду не ходим
     await client.patch(f"/api/servers/{sid}", headers=auth_headers, json={"torrent_block": True})

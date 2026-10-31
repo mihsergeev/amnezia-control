@@ -166,7 +166,7 @@ def test_client_config_mirrors_v3_params() -> None:
     interface, _ = awg.parse_conf(conf)
     params = {k: interface[k] for k in awg.AWG_PARAM_KEYS if k in interface}
     client = awg.build_client_config(
-        client_private="k", address="10.8.3.2", server_public="s", preshared="p",
+        client_private="k", address="10.8.3.2", server_public="NSzHmLC7cq08Y7FK1EeAzPu51yZeOZiuoLIPYeeH3yk=", preshared="7jE5uKQj63MXTY7KX6oL90Oe5sCYvUCe/uab9fY3kao=",
         endpoint="203.0.113.10:47300", params=params, dns="1.1.1.1",
     )
     for key in awg.AWG3_PARAM_KEYS:

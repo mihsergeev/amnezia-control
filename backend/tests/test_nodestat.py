@@ -88,6 +88,25 @@ async def test_store_metrics_and_disk_alert(factory, monkeypatch):
     assert len(sent) == 2 and "снова есть" in sent[1]
 
 
+async def test_disabled_server_does_not_latch_disk_alert(factory, monkeypatch):
+    settings = config.get_settings()
+    async with factory() as s:
+        await settings_store.set_alert_config(s, "", "", "https://ex/hook")
+    sent = []
+
+    async def fake_send(cfg, text, *, html_text=None):
+        sent.append(text)
+        return []
+
+    monkeypatch.setattr(alerts, "send_alert", fake_send)
+    await collector._store_node_metrics(
+        factory, settings, [_sample(1, 95)], {1: "n1"}, set()
+    )
+    async with factory() as s:
+        assert (await s.get(NodeMetric, 1)).disk_alerted is False
+    assert sent == []
+
+
 def test_parse_cpu_counters_and_psi():
     # вывод команды с настоящей ноды (1 vCPU)
     r = _parse("CPU=1\nLOAD=0.90\nCPUBUSY=29387215\nCPUTOTAL=189630025\nPSICPU=23.45\n")

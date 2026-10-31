@@ -14,6 +14,7 @@ import {
   type ServerImportResult,
 } from './api'
 import { useI18n } from './i18n'
+import { StepUpModal } from './StepUpModal'
 import { useModalDismiss } from './useModalDismiss'
 
 /** Заголовок окна: длинное имя сервера отдельной строкой, чтобы оно не
@@ -53,19 +54,22 @@ export function ServerExportModal({ server, onClose, onUnauthorized }: ExportPro
   const [history, setHistory] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  // в файле приватные ключи клиентов: скачивание после повторного ввода пароля
+  const [stepUp, setStepUp] = useState(false)
 
-  async function run() {
+  // ошибку (неверный пароль и прочее) показывает окно подтверждения
+  async function run(password: string) {
     setBusy(true)
     setError(null)
     try {
-      await exportServer(server.id, history)
-      onClose()
+      await exportServer(server.id, history, password)
     } catch (err) {
       if (err instanceof ApiError && err.status === 401) return onUnauthorized()
-      setError(err instanceof Error ? err.message : t('Ошибка'))
+      throw err
     } finally {
       setBusy(false)
     }
+    onClose()
   }
 
   return (
@@ -115,11 +119,18 @@ export function ServerExportModal({ server, onClose, onUnauthorized }: ExportPro
           <button className="ghost" onClick={onClose}>
             {t('Отмена')}
           </button>
-          <button onClick={run} disabled={busy}>
+          <button onClick={() => setStepUp(true)} disabled={busy}>
             {busy ? t('Готовим…') : t('Скачать файл')}
           </button>
         </div>
       </div>
+      {stepUp && (
+        <StepUpModal
+          text={t('В файле приватные ключи клиентов сервера. Введите пароль от панели, чтобы скачать его.')}
+          onSubmit={run}
+          onCancel={() => setStepUp(false)}
+        />
+      )}
     </div>
   )
 }

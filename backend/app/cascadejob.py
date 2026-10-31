@@ -63,7 +63,9 @@ async def _side(
     """Запускает скрипт на стороне и ждет итог. (state, хвост лога)."""
     logs[phase] = (server.name, "")
     _progress[cid] = {"phase": phase, "log": _joined(logs)}
-    async with connect(server, settings) as conn:
+    # шаг SSH без своего срока: зависшая нода иначе держала бы установку вечно
+    step = max(settings.ssh_connect_timeout * 4, 30)
+    async with asyncio.timeout(step), connect(server, settings) as conn:
         await deploy.launch(conn, script, tag=cascade.TAG)
     waited = 0
     st: dict = {"state": "unknown", "log": ""}
@@ -71,7 +73,7 @@ async def _side(
         await asyncio.sleep(_POLL_SECONDS)
         waited += _POLL_SECONDS
         try:
-            async with connect(server, settings) as conn:
+            async with asyncio.timeout(step), connect(server, settings) as conn:
                 st = await deploy.read_status(conn, tag=cascade.TAG)
         except Exception:  # noqa: BLE001 — нода моргнула, спросим еще раз
             continue
@@ -117,10 +119,14 @@ async def _run(cid: int, factory, settings) -> None:
             # хвост этой стороны кладем на ее место (при сбое SSH его там еще нет)
             logs[phase] = (server.name, tail)
             await _finish(factory, cid, "error", msg, _joined(logs), {"failed_phase": phase})
-            await alerts.maybe_alert(
-                factory, settings,
-                alerts.Card("crit", "", alerts.t("Каскад не собрался"), msg, subject=entry.name),
-            )
+            if entry.alerts_enabled or exit_.alerts_enabled:
+                await alerts.maybe_alert(
+                    factory, settings,
+                    alerts.Card(
+                        "crit", "", alerts.t("Каскад не собрался"), msg,
+                        subject=entry.name,
+                    ),
+                )
             return
         if phase == "entry":
             entry_log = tail

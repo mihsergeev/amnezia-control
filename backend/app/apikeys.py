@@ -7,7 +7,10 @@
 хэш только с ней (иначе пришлось бы прогонять bcrypt по всей таблице).
 """
 
+import asyncio
+import hashlib
 import secrets
+import time
 from datetime import datetime, timezone
 
 import bcrypt
@@ -19,6 +22,13 @@ from app.models import ApiKey
 PREFIX_LEN = 8
 SECRET_LEN = 32
 _ALPHABET = "abcdefghijklmnopqrstuvwxyz0123456789"
+
+# Кэш успешных проверок: sha256 полного ключа -> (id строки, хэш в БД, до когда).
+# bcrypt ~0.2 с на запрос, а интеграция ходит часто. Отзыв и срок проверяются
+# по строке из БД на каждом запросе, так что кэш их не обходит.
+CACHE_TTL = 300
+CACHE_MAX = 1000
+_ok_cache: dict[str, tuple[int, str, float]] = {}
 
 
 def _token(n: int) -> str:
@@ -49,6 +59,13 @@ def split(key: str) -> tuple[str, str] | None:
     return parts[1], parts[2]
 
 
+def _check(secret: str, key_hash: str) -> bool:
+    try:
+        return bcrypt.checkpw(secret.encode(), key_hash.encode())
+    except ValueError:  # битый хэш в БД — считаем ключ негодным, а не падаем
+        return False
+
+
 async def authenticate(session: AsyncSession, key: str) -> ApiKey | None:
     """Ищет действующий ключ по префиксу и сверяет секрет. None — не подошёл.
 
@@ -62,11 +79,18 @@ async def authenticate(session: AsyncSession, key: str) -> ApiKey | None:
     row = await session.scalar(select(ApiKey).where(ApiKey.prefix == prefix))
     if row is None or row.revoked or expired(row):
         return None
-    try:
-        if not bcrypt.checkpw(secret.encode(), row.key_hash.encode()):
+    digest = hashlib.sha256(key.strip().encode()).hexdigest()
+    now = time.monotonic()
+    cached = _ok_cache.get(digest)
+    if not (cached and cached[0] == row.id and cached[1] == row.key_hash and cached[2] > now):
+        # bcrypt в отдельном потоке: в event loop он вешал панель на время
+        # перебора по известному префиксу
+        if not await asyncio.to_thread(_check, secret, row.key_hash):
+            _ok_cache.pop(digest, None)
             return None
-    except ValueError:  # битый хэш в БД — считаем ключ негодным, а не падаем
-        return None
+        if len(_ok_cache) >= CACHE_MAX:
+            _ok_cache.clear()
+        _ok_cache[digest] = (row.id, row.key_hash, now + CACHE_TTL)
     row.last_used_at = datetime.now(timezone.utc)
     await session.commit()
     return row

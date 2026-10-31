@@ -85,6 +85,10 @@ class OpenVpnError(Exception):
     pass
 
 
+class OpenVpnNotDeployed(OpenVpnError):
+    """Контейнера OpenVPN на ноде нет (API отвечает 409, как AWG 3.1)."""
+
+
 @dataclass
 class OvpnClient:
     client_id: str
@@ -105,10 +109,13 @@ def _docker_exec(container: str, inner: str) -> str:
 
 
 async def detect_container(conn: asyncssh.SSHClientConnection) -> str:
-    cmd = _DOCKER + "$DOCKER ps --format '{{.Names}}' | grep -m1 amnezia-openvpn"
+    # || true: без контейнера grep отдает 1, и наружу уходило голое "код 1"
+    cmd = _DOCKER + "$DOCKER ps --format '{{.Names}}' | grep -m1 amnezia-openvpn || true"
     out = (await _run(conn, cmd)).strip()
     if not out:
-        raise OpenVpnError("Контейнер amnezia-openvpn на сервере не найден")
+        raise OpenVpnNotDeployed(
+            "OpenVPN на сервере не развернут - сначала разверните его."
+        )
     return out.splitlines()[0].strip()
 
 
@@ -163,9 +170,17 @@ def parse_status_log(text: str) -> dict[str, dict]:
     return out
 
 
+# предел на статус-лог: его читает сборщик каждый цикл, и разросшийся файл
+# (зависший openvpn, мусор) не должен целиком тянуться в память панели
+STATUS_LOG_LIMIT = 4 * 1024 * 1024
+
+
 async def read_status_text(conn: asyncssh.SSHClientConnection, container: str) -> str:
     return await _run(
-        conn, _docker_exec(container, "cat /openvpn-status.log 2>/dev/null")
+        conn,
+        _docker_exec(
+            container, f"cat /openvpn-status.log 2>/dev/null | head -c {STATUS_LOG_LIMIT}"
+        ),
     )
 
 
@@ -341,15 +356,22 @@ async def reissue_client(
     dns1: str,
     dns2: str,
 ) -> tuple[OvpnClient, str]:
-    """Перевыпуск: отзыв старого сертификата + выдача нового (новый clientId)."""
+    """Перевыпуск: выдача нового сертификата (новый clientId) + отзыв старого.
+
+    Сначала выдаем, потом отзываем (как в AWG): если выдача упадет (оборвался
+    SSH, CA не подписал), старый клиент останется рабочим."""
+    if not old_client_id or "/" in old_client_id or ".." in old_client_id:
+        raise OpenVpnError("некорректный clientId")
+    issued = await issue_client(conn, container, name, host, description, dns1, dns2)
     await revoke_client(conn, container, old_client_id)
-    return await issue_client(conn, container, name, host, description, dns1, dns2)
+    return issued
 
 
 async def revoke_client(
     conn: asyncssh.SSHClientConnection, container: str, client_id: str
-) -> None:
-    """Отзывает клиента: easy-rsa revoke + gen-crl + CRL + чистка файлов + table."""
+) -> bool:
+    """Отзывает клиента: easy-rsa revoke + gen-crl + CRL + чистка файлов + table.
+    True - контейнер перезапускался (клиент был онлайн)."""
     if not client_id or "/" in client_id or ".." in client_id:
         raise OpenVpnError("некорректный clientId")
     cid = shlex.quote(client_id)
@@ -380,6 +402,7 @@ async def revoke_client(
         online = False
     if online:
         await _restart_ovpn(conn, container)
+    return online
 
 
 async def _restart_ovpn(conn, container) -> None:

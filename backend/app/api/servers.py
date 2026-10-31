@@ -1,14 +1,15 @@
+import json
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, HTTPException, status
 from sqlalchemy import delete as sa_delete
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update as sa_update
 
 from app import audit, cascadejob, egresscheck, geo, limits, nodelock, server_ops, sshops, torrent
 from app.config import get_settings
 from app.db import Base
 from app.deps import CurrentUser, SessionDep
-from app.models import Cascade, Server, TorrentHit
+from app.models import Cascade, NodeMetric, Server, ServerStatus, TorrentHit
 from app.schemas import (
     BootstrapRequest,
     DeleteServerResult,
@@ -99,7 +100,7 @@ async def update_server(
     server = await _get_or_404(server_id, session)
     changes = body.model_dump(exclude_unset=True)
     # None в булевых настройках - "не менять", колонка без NULL
-    for field in ("torrent_block", "torrent_autopause"):
+    for field in ("torrent_block", "torrent_autopause", "alerts_enabled"):
         if field in changes and changes[field] is None:
             changes.pop(field)
     block_changed = (
@@ -109,14 +110,50 @@ async def update_server(
         "torrent_autopause" in changes
         and changes["torrent_autopause"] != server.torrent_autopause
     )
+    alerts_changed = (
+        "alerts_enabled" in changes
+        and changes["alerts_enabled"] != server.alerts_enabled
+    )
     for field, value in changes.items():
         setattr(server, field, value)
+    if alerts_changed:
+        cascades = await session.scalars(
+            select(Cascade).where(
+                (Cascade.entry_server_id == server_id)
+                | (Cascade.exit_server_id == server_id)
+            )
+        )
+        for cascade in cascades:
+            result = json.loads(cascade.result or "{}")
+            result.pop("health", None)
+            cascade.result = json.dumps(result)
+        # После включения наблюдаем с чистого состояния: иначе мог прийти
+        # ложный "снова онлайн" по аварии, о которой раньше не уведомляли.
+        status_row = await session.get(ServerStatus, server_id)
+        if status_row is not None:
+            status_row.online = True
+            status_row.down_since = None
+            status_row.drop_alerted = False
+            status_row.drop_alerted_at = None
+        metric = await session.get(NodeMetric, server_id)
+        if metric is not None:
+            metric.disk_alerted = False
+        await session.execute(
+            sa_update(TorrentHit)
+            .where(TorrentHit.server_id == server_id)
+            .values(alerted_at=None)
+        )
     await session.commit()
     await session.refresh(server)
     if torrent_changed:
         await audit.record(
             session, user.username, "server_torrent", server.name,
             f"block={server.torrent_block} autopause={server.torrent_autopause}",
+        )
+    if alerts_changed:
+        await audit.record(
+            session, user.username, "server_alerts", server.name,
+            "enabled" if server.alerts_enabled else "disabled",
         )
     if block_changed:
         # правила на ноде сразу, а не через цикл коллектора

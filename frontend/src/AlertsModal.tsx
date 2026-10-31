@@ -1,6 +1,7 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { ApiError, getAlerts, putAlerts, testAlerts } from './api'
 import { useI18n } from './i18n'
+import { StepUpModal } from './StepUpModal'
 import { useModalDismiss } from './useModalDismiss'
 
 type Props = {
@@ -22,29 +23,42 @@ export function AlertsModal({ onClose, onUnauthorized }: Props) {
   const [msg, setMsg] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [loadError, setLoadError] = useState<string | null>(null)
+  // каналы сохраняются только с паролем (подменой адреса бота уводили бы
+  // токен и security-алерты); тест без правок пароля не просит
+  const [stepUp, setStepUp] = useState<'save' | 'test' | null>(null)
+  const [saved, setSaved] = useState('')
+  const callbacks = useRef({ onUnauthorized, t, lang })
+  callbacks.current = { onUnauthorized, t, lang }
 
   useEffect(() => {
+    let cancelled = false
     getAlerts()
       .then((c) => {
+        if (cancelled) return
         setToken(c.telegram_token)
         setChat(c.telegram_chat)
         setApiUrl(c.telegram_api)
         setWebhook(c.webhook)
         // язык еще не выбирали: настроенные раньше алерты шли по-русски
-        setAlertLang(c.lang || (c.enabled ? 'ru' : lang))
+        const l = c.lang || (c.enabled ? 'ru' : callbacks.current.lang)
+        setAlertLang(l)
+        setSaved(JSON.stringify([c.telegram_token, c.telegram_chat, c.telegram_api, c.webhook, l]))
       })
       .catch((err) => {
-        if (err instanceof ApiError && err.status === 401) onUnauthorized()
+        if (cancelled) return
+        if (err instanceof ApiError && err.status === 401) callbacks.current.onUnauthorized()
         // форму не показываем: сохранение пустых полей стерло бы настройки
-        else setLoadError(err instanceof Error ? err.message : t('Ошибка'))
+        else setLoadError(err instanceof Error ? err.message : callbacks.current.t('Ошибка'))
       })
-      .finally(() => setLoading(false))
-  }, [onUnauthorized, t, lang])
+      .finally(() => { if (!cancelled) setLoading(false) })
+    return () => { cancelled = true }
+  }, [])
 
-  async function save() {
-    setSaving(true)
-    setError(null)
-    setMsg(null)
+  const current = JSON.stringify([token, chat, apiUrl, webhook, alertLang])
+  const dirty = current !== saved
+
+  // ошибку пароля показывает окно подтверждения, остальное - само окно алертов
+  async function put(password: string) {
     try {
       await putAlerts({
         telegram_token: token,
@@ -52,25 +66,50 @@ export function AlertsModal({ onClose, onUnauthorized }: Props) {
         telegram_api: apiUrl,
         webhook,
         lang: alertLang,
+        password,
       })
-      setMsg(t('Сохранено.'))
     } catch (err) {
-      setError(err instanceof Error ? err.message : t('Ошибка'))
+      if (err instanceof ApiError && err.status === 401) {
+        onUnauthorized()
+        return false
+      }
+      throw err
+    }
+    setSaved(current)
+    setStepUp(null)
+    return true
+  }
+
+  async function save(password: string) {
+    setSaving(true)
+    setError(null)
+    setMsg(null)
+    try {
+      if (await put(password)) setMsg(t('Сохранено.'))
     } finally {
       setSaving(false)
     }
   }
 
-  async function runTest() {
+  async function runTest(password?: string) {
+    if (dirty && password === undefined) {
+      setStepUp('test')
+      return
+    }
     setTesting(true)
     setError(null)
     setMsg(null)
     try {
       // сначала сохраняем, чтобы тест шёл по текущим полям
-      await putAlerts({
-        telegram_token: token, telegram_chat: chat, telegram_api: apiUrl, webhook,
-        lang: alertLang,
-      })
+      if (password !== undefined && !(await put(password))) {
+        setTesting(false)
+        return
+      }
+    } catch (err) {
+      setTesting(false)
+      throw err
+    }
+    try {
       const r = await testAlerts()
       if (r.sent) setMsg(t('Тестовый алерт отправлен — проверьте канал.'))
       else setError(t('Не отправлено: {err}', { err: r.errors.join('; ') }))
@@ -176,18 +215,25 @@ export function AlertsModal({ onClose, onUnauthorized }: Props) {
             <div className="modal-actions">
               <button
                 className="ghost"
-                onClick={runTest}
+                onClick={() => void runTest()}
                 disabled={testing || !canTest}
               >
                 {testing ? t('Отправка…') : t('Проверить')}
               </button>
-              <button onClick={save} disabled={saving}>
+              <button onClick={() => setStepUp('save')} disabled={saving || !dirty}>
                 {saving ? t('Сохранение…') : t('Сохранить')}
               </button>
             </div>
           </>
         )}
       </div>
+      {stepUp && (
+        <StepUpModal
+          text={t('Каналы алертов получают и события безопасности. Введите пароль от панели, чтобы сохранить их.')}
+          onSubmit={(pw) => (stepUp === 'save' ? save(pw) : runTest(pw))}
+          onCancel={() => setStepUp(null)}
+        />
+      )}
     </div>
   )
 }

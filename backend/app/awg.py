@@ -506,6 +506,20 @@ def _names_from_table(table_text: str) -> dict[str, str]:
     return names
 
 
+def _safe_key(value: str, what: str) -> str:
+    """Ключ WireGuard с ноды: base64 ровно на 32 байта. Ключ сервера и PSK
+    читаются из файлов ноды и вставляются в конфиг клиента как есть - враждебная
+    нода дописала бы туда переводы строк и секцию [Interface] с PostUp, то есть
+    выполнение команд на устройстве клиента."""
+    try:
+        raw = base64.b64decode(value, validate=True)
+    except (ValueError, TypeError):
+        raw = b""
+    if len(raw) != 32 or len(value) != 44:
+        raise AwgError(f"Недопустимый {what} от ноды")
+    return value
+
+
 def build_client_config(
     *,
     client_private: str,
@@ -516,6 +530,8 @@ def build_client_config(
     params: dict[str, str],
     dns: str,
 ) -> str:
+    server_public = _safe_key(server_public, "публичный ключ сервера")
+    preshared = _safe_key(preshared, "PSK")
     lines = [
         "[Interface]",
         f"Address = {address}/32",
@@ -561,6 +577,24 @@ async def create_client(
         used = {c.address.split("/")[0] for c in state.clients if c.address}
         ip = allocate_ip(state.address, used | (reserved or set()))
     client_priv, client_pub = generate_keypair()
+    # таблицу читаем ДО изменений на ноде: неразбираемая остановит выдачу раньше,
+    # чем пир попадет в конфиг без строки в таблице
+    table = await _read_table(conn, state.container)
+
+    # Проверяем данные ноды до добавления пира: ошибка конфига не должна
+    # оставлять на сервере клиента, который не получил свой приватный ключ.
+    psk = (await _run(conn, _docker_exec(
+        state.container, f"cat {AWG_DIR}/wireguard_psk.key"
+    ))).strip()
+    config = build_client_config(
+        client_private=client_priv,
+        address=ip,
+        server_public=state.server_public_key,
+        preshared=psk,
+        endpoint=state.endpoint,
+        params=state.params,
+        dns=dns,
+    )
 
     # PSK читаем на ноде, чтобы не гонять секрет через панель
     inner = (
@@ -573,38 +607,57 @@ async def create_client(
     )
     psk = (await _run(conn, _docker_exec(state.container, inner))).strip()
 
-    await _append_to_table(conn, state, client_pub, name, ip)
+    await _append_to_table(conn, state, client_pub, name, ip, table)
 
-    config = build_client_config(
-        client_private=client_priv,
-        address=ip,
-        server_public=state.server_public_key,
-        preshared=psk,
-        endpoint=state.endpoint,
-        params=state.params,
-        dns=dns,
-    )
     client = AwgClient(name=name, public_key=client_pub, address=f"{ip}/32")
     return client, config
 
 
 async def _read_table(conn, container) -> list:
-    text = await _run(conn, _docker_exec(container, f"cat {AWG_DIR}/clientsTable"))
-    try:
-        return json.loads(text)
-    except (json.JSONDecodeError, ValueError):
+    """Пустая или отсутствующая таблица - []. Непустая, но неразбираемая -
+    AwgError: [] здесь значил бы, что следующая запись оставит в таблице одного
+    клиента и имена остальных пропадут."""
+    path = f"{AWG_DIR}/clientsTable"
+    text = await _run(conn, _docker_exec(container, f"if [ -e {path} ]; then cat {path}; fi"))
+    if not text.strip():
         return []
+    try:
+        data = json.loads(text)
+    except (json.JSONDecodeError, ValueError):
+        data = None
+    if not isinstance(data, list) or any(not isinstance(row, dict) for row in data):
+        raise AwgError("clientsTable на ноде не разбирается - запись отменена, "
+                       "чтобы не потерять имена клиентов")
+    return data
+
+
+async def _write_file(conn, container: str, path: str, payload: str) -> None:
+    """Пишет файл в контейнер через временный и mv (как xray._write_file): при
+    ошибке (полный диск) старый файл остается целым, а не 0 байт. Если файл
+    смонтирован отдельно и mv на него нельзя, запись отменяется.
+    umask 077: в awg0.conf приватный ключ и PSK."""
+    tmp = f"{path}.acontrol-tmp"
+    inner = (
+        f"umask 077; cat > {tmp} && {{ mv -f {tmp} {path} 2>/dev/null; }} "
+        f"|| {{ rm -f {tmp}; exit 1; }}"
+    )
+    result = await conn.run(
+        _docker_exec(container, inner, interactive=True), input=payload, check=False
+    )
+    if result.exit_status != 0:
+        err = (result.stderr or "").strip() or f"код {result.exit_status}"
+        raise AwgError(f"не удалось записать {path}: {err}")
 
 
 async def _write_table(conn, container, data: list) -> None:
     # завершающий \n обязателен: без него разбор секций при следующем чтении рвётся
     payload = json.dumps(data, indent=4, ensure_ascii=False) + "\n"
-    cmd = _docker_exec(container, f"cat > {AWG_DIR}/clientsTable", interactive=True)
-    await _run(conn, cmd, stdin=payload)
+    await _write_file(conn, container, f"{AWG_DIR}/clientsTable", payload)
 
 
-async def _append_to_table(conn, state, pub, name, ip) -> None:
-    data = await _read_table(conn, state.container)
+async def _append_to_table(conn, state, pub, name, ip, data: list | None = None) -> None:
+    if data is None:
+        data = await _read_table(conn, state.container)
     date = (await _run(conn, 'date "+%a %b %e %H:%M:%S %Y"')).strip()
     data.append(
         {
@@ -658,6 +711,7 @@ async def resume_client(
             f"адрес {ip} занят клиентом «{holder.name or holder.public_key[:8]}», "
             "возобновить нельзя: перевыпустите конфиг"
         )
+    table = await _read_table(conn, state.container)
     inner = (
         f'PSK=$(cat {AWG_DIR}/wireguard_psk.key); '
         f"wg set {state.interface} peer {shlex.quote(public_key)} "
@@ -666,13 +720,15 @@ async def resume_client(
         f'{shlex.quote(public_key)} "$PSK" {ip} >> {AWG_DIR}/{state.interface}.conf'
     )
     await _run(conn, _docker_exec(state.container, inner))
-    await _append_to_table(conn, state, public_key, name, ip)
+    await _append_to_table(conn, state, public_key, name, ip, table)
 
 
 async def revoke_client(
     conn: asyncssh.SSHClientConnection, container: str, interface: str, public_key: str
 ) -> None:
     interface = _safe_interface(interface)
+    # таблицу читаем до изменений: неразбираемая остановит отзыв целиком
+    data = await _read_table(conn, container)
     # снимаем пира вживую
     await _run(
         conn,
@@ -681,12 +737,7 @@ async def revoke_client(
     # убираем из конфига
     conf = await _run(conn, _docker_exec(container, f"cat {AWG_DIR}/{interface}.conf"))
     new_conf = remove_peer_from_conf(conf, public_key)
-    await _run(
-        conn,
-        _docker_exec(container, f"cat > {AWG_DIR}/{interface}.conf", interactive=True),
-        stdin=new_conf,
-    )
+    await _write_file(conn, container, f"{AWG_DIR}/{interface}.conf", new_conf)
     # убираем из clientsTable
-    data = await _read_table(conn, container)
     data = [e for e in data if e.get("clientId") != public_key]
     await _write_table(conn, container, data)

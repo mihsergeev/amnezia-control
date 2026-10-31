@@ -11,7 +11,7 @@ from app import apikeys
 
 
 async def _make_key(client: httpx.AsyncClient, headers: dict, name="integration") -> str:
-    r = await client.post("/api/apikeys", json={"name": name}, headers=headers)
+    r = await client.post("/api/apikeys", json={"name": name, "password": "testpass"}, headers=headers)
     assert r.status_code == 201, r.text
     return r.json()["key"]
 
@@ -31,7 +31,7 @@ def test_split_rejects_foreign_format() -> None:
 
 
 async def test_key_created_once_and_listed(client, auth_headers):
-    r = await client.post("/api/apikeys", json={"name": "other-panel"}, headers=auth_headers)
+    r = await client.post("/api/apikeys", json={"name": "other-panel", "password": "testpass"}, headers=auth_headers)
     assert r.status_code == 201
     body = r.json()
     assert body["key"].startswith("ack_") and body["name"] == "other-panel"
@@ -93,7 +93,7 @@ async def test_api_key_cannot_manage_servers(client, auth_headers):
         await client.post("/api/servers/1/fullaccess", json={"password": "x"}, headers=hdr)
     ).status_code == 401
     assert (
-        await client.post("/api/apikeys", json={"name": "self"}, headers=hdr)
+        await client.post("/api/apikeys", json={"name": "self", "password": "testpass"}, headers=hdr)
     ).status_code == 401
 
 
@@ -147,7 +147,7 @@ async def test_key_limited_to_servers(client, auth_headers):
     assert len((await client.get("/api/v1/servers", headers=h)).json()) == 2
 
     r = await client.put(
-        f"/api/apikeys/{key_id}", json={"server_ids": [a]}, headers=auth_headers
+        f"/api/apikeys/{key_id}", json={"server_ids": [a], "password": "testpass"}, headers=auth_headers
     )
     assert r.status_code == 200, r.text
     assert r.json()["server_ids"] == [a]
@@ -156,7 +156,7 @@ async def test_key_limited_to_servers(client, auth_headers):
     assert r.status_code == 404
 
     bad = await client.put(
-        f"/api/apikeys/{key_id}", json={"server_ids": [9999]}, headers=auth_headers
+        f"/api/apikeys/{key_id}", json={"server_ids": [9999], "password": "testpass"}, headers=auth_headers
     )
     assert bad.status_code == 400
 
@@ -167,14 +167,14 @@ async def test_expired_key_rejected(client, auth_headers):
     h = {"X-API-Key": key}
     r = await client.put(
         f"/api/apikeys/{key_id}",
-        json={"expires_at": "2099-01-01T00:00:00+00:00"},
+        json={"expires_at": "2099-01-01T00:00:00+00:00", "password": "testpass"},
         headers=auth_headers,
     )
     assert r.status_code == 200
     assert (await client.get("/api/v1/servers", headers=h)).status_code == 200
     await client.put(
         f"/api/apikeys/{key_id}",
-        json={"expires_at": "2020-01-01T00:00:00+00:00"},
+        json={"expires_at": "2020-01-01T00:00:00+00:00", "password": "testpass"},
         headers=auth_headers,
     )
     assert (await client.get("/api/v1/servers", headers=h)).status_code == 401

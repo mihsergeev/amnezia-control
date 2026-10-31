@@ -143,3 +143,28 @@ def test_clients_by_server_aligned_with_gaps() -> None:
     per = stats_calc.clients_by_server(samples, interval=300)
     assert per == {1: [4, 3], 2: [7, None]}
     assert len(stats_calc.aggregate_history(samples, interval=300)) == 2
+
+
+def test_aggregate_history_uses_client_deltas() -> None:
+    """Прирост по клиентам (rx_delta) важнее разности сумм: отзыв клиента со
+    100 ГБ не обнуляет 2 ГБ, которые за интервал скачал другой."""
+    gb = 1024 ** 3
+    t0 = datetime(2026, 10, 30, 12, 0, tzinfo=timezone.utc)
+    rows = [
+        _smp(1, t0, 101 * gb, 0, 2),
+        _smp(1, t0.replace(minute=5), 102 * gb, 0, 2),
+        _smp(1, t0.replace(minute=10), 4 * gb, 0, 1),
+    ]
+    rows[1].rx_delta, rows[1].tx_delta = gb, 0
+    rows[2].rx_delta, rows[2].tx_delta = 2 * gb, 0
+    pts = stats_calc.aggregate_history(rows, 300)
+    assert [p["throughput"] for p in pts] == [0, gb, 2 * gb]
+
+
+def test_naive_sqlite_ts_is_utc() -> None:
+    """SQLite отдает наивные datetime: это UTC, а не местное время."""
+    t0 = datetime(2026, 10, 30, 12, 0, tzinfo=timezone.utc)
+    naive = _smp(1, t0.replace(tzinfo=None), 0, 0, 0)
+    assert stats_calc.aggregate_history([naive], 300)[0]["ts"] == t0.isoformat()
+    c = SimpleNamespace(ts=t0.replace(tzinfo=None), rx=1, tx=1)
+    assert stats_calc.aggregate_client_history([c], 300)[0]["ts"] == t0.isoformat()

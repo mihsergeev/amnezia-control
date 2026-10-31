@@ -160,7 +160,6 @@ const EN: Record<string, string> = {
   'Сменить пароль': 'Change password',
   'Меню': 'Menu',
   'Откатить': 'Roll back',
-  '{n} клиентов': '{n} clients',
   'Откатить конфиг «{name}» к снимку от {ts} ({n} клиентов)? Текущий конфиг будет заменён.':
     'Roll back the config on “{name}” to the {ts} snapshot ({n} clients)? The current config will be replaced.',
   'Пересобрать образ на «{name}»? Текущие клиенты и ключи сохраняются.':
@@ -191,8 +190,8 @@ const EN: Record<string, string> = {
   'Повторите новый пароль': 'Repeat new password',
   'Пароль изменён. Все прежние сессии завершены.':
     'Password changed. All previous sessions have been ended.',
-  'Смена пароля завершит все другие активные сессии.':
-    'Changing the password ends all other active sessions.',
+  'Смена пароля завершит все другие активные сессии и отзовет все API-ключи. Для интеграций потребуется выпустить новые ключи.':
+    'Changing the password ends all other active sessions and revokes all API keys. Issue new keys for integrations.',
   'Пароль должен быть не короче 8 символов':
     'Password must be at least 8 characters',
   'Пароли не совпадают': 'Passwords do not match',
@@ -724,8 +723,11 @@ const EN: Record<string, string> = {
   'AmneziaWG Legacy на паузе за торренты': 'AmneziaWG Legacy paused for torrents',
   'OpenVPN на паузе за торренты': 'OpenVPN paused for torrents',
   'Изменена блокировка торрентов': 'Torrent blocking changed',
-  'AmneziaWG и OpenVPN: торрент-трафик режется на сервере, у клиента в списке видна отметка, приходит алерт. Шифрованные торренты могут пройти, XRay не охвачен.':
-    'AmneziaWG and OpenVPN: torrent traffic is dropped on the server, the client gets a mark in the list and an alert is sent. Encrypted torrents may get through, XRay is not covered.',
+  'Присылать алерты этого сервера': 'Send alerts for this server',
+  'По умолчанию выключено. Включает алерты о доступности, каскаде, клиентах, диске и торрентах этого сервера.':
+    'Off by default. Enables availability, cascade, client, disk and torrent alerts for this server.',
+  'AmneziaWG и OpenVPN: торрент-трафик режется на сервере, у клиента в списке видна отметка. При включенных алертах приходит уведомление. Шифрованные торренты могут пройти, XRay не охвачен.':
+    'AmneziaWG and OpenVPN: torrent traffic is dropped on the server and the client gets a mark in the list. A notification is sent when server alerts are enabled. Encrypted torrents may get through, XRay is not covered.',
   'Блокировать торренты': 'Block torrents',
   'За сутки качали: {names}': 'Downloaded in the last day: {names}',
   'Правила на сервере не встали: {err}': 'Rules did not apply on the server: {err}',
@@ -896,6 +898,19 @@ const EN: Record<string, string> = {
   'Каскад собран панелью': 'Cascade built',
   'Каскад разобран': 'Cascade removed',
   'Каскад: повторная установка': 'Cascade reinstalled',
+  // --- степ-ап (пароль и код 2FA перед опасным действием) ---
+  'Код 2FA из приложения': '2FA code from the app',
+  'Введите код 2FA из приложения': 'Enter the 2FA code from the app',
+  'Ошибка HTTP {status}': 'HTTP error {status}',
+  'Ключ действует, пока его не отзовут, и видит приватные конфиги клиентов. Введите пароль от панели, чтобы выпустить его.':
+    'The key works until revoked and sees private client configs. Enter the panel password to issue it.',
+  'Изменение серверов и срока API-ключа. Введите пароль от панели.':
+    "Changing the API key's servers and expiry. Enter the panel password.",
+  'отметьте хотя бы один сервер': 'select at least one server',
+  'Каналы алертов получают и события безопасности. Введите пароль от панели, чтобы сохранить их.':
+    'Alert channels also receive security events. Enter the panel password to save them.',
+  'В файле приватные ключи клиентов сервера. Введите пароль от панели, чтобы скачать его.':
+    "The file holds the server's private client keys. Enter the panel password to download it.",
 }
 
 type Ctx = {
@@ -938,6 +953,21 @@ export function getLang(): Lang {
 // eslint-disable-next-line react-refresh/only-export-components
 export function translate(s: string, params?: Record<string, string | number>): string {
   return fill(currentLang === 'en' ? EN[s] ?? s : s, params)
+}
+
+/** Число со словом в нужной форме: ru - 1 клиент, 2 клиента, 5 клиентов;
+ *  en - 1 client, 2 clients. Формы с {n}. */
+// eslint-disable-next-line react-refresh/only-export-components
+export function plural(
+  lang: Lang,
+  n: number,
+  ru: [string, string, string],
+  en: [string, string],
+): string {
+  const cat = new Intl.PluralRules(lang).select(n)
+  const form =
+    lang === 'en' ? en[cat === 'one' ? 0 : 1] : ru[cat === 'one' ? 0 : cat === 'few' ? 1 : 2]
+  return fill(form, { n })
 }
 
 export function I18nProvider({ children }: { children: ReactNode }) {

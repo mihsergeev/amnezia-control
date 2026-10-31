@@ -282,10 +282,14 @@ async def remove_authorized_key(
 ) -> None:
     """Убирает строку с публичным ключом панели из authorized_keys юзера."""
     quoted = _sh_quote(public_key)
+    # Подменяем файл только при успешной записи: grep -v отдает 1, если строк не
+    # осталось (это норма), а 2 - ошибка (полный диск). Иначе обрезанный до 0 байт
+    # authorized_keys отнял бы вход у админа.
     cmd = (
-        'f="$HOME/.ssh/authorized_keys"; '
-        f'if [ -f "$f" ]; then grep -vF {quoted} "$f" > "$f.acontrol.tmp" 2>/dev/null; '
-        'mv "$f.acontrol.tmp" "$f"; chmod 600 "$f"; fi'
+        'f="$HOME/.ssh/authorized_keys"; t="$f.acontrol.tmp"; '
+        f'if [ -f "$f" ]; then grep -vF {quoted} "$f" > "$t" 2>/dev/null; '
+        'if [ $? -le 1 ] && chmod 600 "$t"; then mv -f "$t" "$f"; '
+        'else rm -f "$t"; fi; fi'
     )
     await conn.run(cmd, check=False)
 
@@ -360,7 +364,12 @@ async def _tofu_connect(
     timeout: int = 10,
 ):
     kh = _kh_path(key_path)
-    common = dict(host=host, port=port, username=username, connect_timeout=timeout)
+    # keepalive: нода, пропавшая посреди операции (обрыв маршрута, зависший
+    # ядром хост), иначе держала бы соединение и ручку бесконечно
+    common = dict(
+        host=host, port=port, username=username, connect_timeout=timeout,
+        keepalive_interval=15, keepalive_count_max=3,
+    )
     if password is not None:
         common["password"] = password
     else:

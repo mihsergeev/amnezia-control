@@ -10,6 +10,7 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    false,
     func,
 )
 from sqlalchemy.orm import Mapped, mapped_column
@@ -67,6 +68,11 @@ class Server(Base):
     # клиента, который их качает
     torrent_block: Mapped[bool] = mapped_column(Boolean, default=False)
     torrent_autopause: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Серверные алерты выключены до явного включения в карточке. Общие события
+    # панели (вход, пароль, API-ключи, авто-бэкап) этой настройкой не глушатся.
+    alerts_enabled: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default=false()
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
@@ -124,6 +130,12 @@ class TrafficSample(Base):
     tx_total: Mapped[int] = mapped_column(BigInteger, default=0)
     clients_total: Mapped[int] = mapped_column(Integer, default=0)
     clients_online: Mapped[int] = mapped_column(Integer, default=0)
+    # прирост с прошлого снимка, посчитанный по каждому клиенту (сброс счетчика
+    # одного клиента не обнуляет трафик остальных). NULL - считать не с чем
+    # (первый снимок после старта панели, старая история): тогда график берет
+    # разность rx_total/tx_total, как раньше
+    rx_delta: Mapped[int | None] = mapped_column(BigInteger, nullable=True, default=None)
+    tx_delta: Mapped[int | None] = mapped_column(BigInteger, nullable=True, default=None)
 
 
 class ClientLimit(Base):

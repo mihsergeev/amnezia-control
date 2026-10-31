@@ -272,6 +272,10 @@ def _geo_run(tmp_path, gateway_up: bool) -> str:
         f.chmod(0o755)
     script = cascade._fill(cascade._GEO_SH.replace("@DIR@", base))
     env = {**os.environ, "PATH": str(bin_) + os.pathsep + os.environ["PATH"]}
+    if os.name == "nt":
+        # Git Bash переводит Windows PATH при старте, но каталог с тестовыми
+        # shell-файлами без расширений должен стоять первым в POSIX PATH.
+        script = f'export PATH="$(cygpath -u "{bin_.as_posix()}"):$PATH"\n' + script
     r = subprocess.run(
         [shutil.which("bash"), "-c", script], capture_output=True, text=True, timeout=60, env=env,
     )

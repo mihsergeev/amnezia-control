@@ -72,8 +72,8 @@ def test_server_cps_roundtrips_to_client() -> None:
     # варьируются в пределах диапазона; одиночное значение → клиент отверг бы
     # ответ сервера и хендшейк завис бы). Приложение строит клиента так же.
     client = awg.build_client_config(
-        client_private="k", address="10.8.1.2", server_public="s",
-        preshared="p", endpoint="1.2.3.4:47180", params=interface, dns="1.1.1.1",
+        client_private="k", address="10.8.1.2", server_public="NSzHmLC7cq08Y7FK1EeAzPu51yZeOZiuoLIPYeeH3yk=",
+        preshared="7jE5uKQj63MXTY7KX6oL90Oe5sCYvUCe/uab9fY3kao=", endpoint="1.2.3.4:47180", params=interface, dns="1.1.1.1",
     )
     import re as _re
     for h in ("H1", "H2", "H3", "H4"):

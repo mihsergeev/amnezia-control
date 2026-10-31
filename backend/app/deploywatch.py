@@ -26,10 +26,12 @@ async def _watch(
     server_id: int, session_factory, settings,
 ) -> None:
     key_path, _pub = key_paths(settings.data_dir)
+    # срок на один опрос: зависшая нода иначе остановила бы слежку навсегда
+    step = max(settings.ssh_connect_timeout * 4, 30)
     for _ in range(_MAX_POLLS):
         await asyncio.sleep(_POLL_SECONDS)
         try:
-            async with sshops.connect(
+            async with asyncio.timeout(step), sshops.connect(
                 host, port, user, key_path, settings.ssh_connect_timeout
             ) as conn:
                 st = await deploy.read_status(conn, tag=tag)
@@ -57,6 +59,7 @@ async def _watch(
                 alerts.Card("crit", "🚀", alerts.t("Развертывание {proto} не удалось",
                                                     proto=tag.upper()),
                             alerts.t("лог в карточке сервера"), subject=label),
+                server_id=server_id,
             )
             return
 
