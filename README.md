@@ -82,6 +82,12 @@ The [AmneziaVPN desktop client](https://amnezia.org) is great for personal use â
 - **Torrent blocking** per server (a checkbox in "Edit server"): AmneziaWG and OpenVPN containers drop clients' torrent traffic (peer handshake, DHT, HTTP and UDP trackers). Whoever downloads gets a "torrent" mark in the client list and an alert with the client's name, at most once a day. Optionally the panel pauses such a client by itself. Encrypted torrents and HTTPS trackers may get through, XRay clients are not covered
 
 **Monitoring & alerts**
+
+Server alerts are off by default, including existing servers after upgrading to
+0.82.0. Enable "Send alerts for this server" in "Edit server" for each server
+you want to monitor. Cascade alerts are enabled when either endpoint is opted
+in. Torrent blocking works independently. Panel security and backup alerts are
+global and use the configured channels.
 - Overview dashboard: aggregate traffic and online-clients charts (24 h), per-server breakdown
 - **Server-down alerts** and **low-disk alerts** to Telegram and/or a webhook, configured from the UI. Every alert is a short card: level, server, what happened, one line of detail. Alerts come in English or Russian, set in âš™ > Alerts
 - **"Clients gone" alert**: the node still answers, but far fewer clients are active than at the same time yesterday and a week ago. This is what it looks like when ISPs start blocking a node's address. One alert per drop, at most once a day per server, and no "clients are back" message

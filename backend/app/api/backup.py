@@ -8,7 +8,7 @@ from datetime import date, datetime, timezone
 
 from fastapi import APIRouter, HTTPException, Request, status
 from fastapi.responses import Response
-from sqlalchemy import DateTime, delete, insert, select, text
+from sqlalchemy import DateTime, delete, insert, select, text, update
 
 from app import alerts, audit, sshops, stepup
 from app.clientip import client_ip
@@ -20,6 +20,7 @@ from app.models import (
     AuditLog,
     AwgConfig,
     AwgNote,
+    Cascade,
     ClientLimit,
     ClientName,
     ClientTrafficSample,
@@ -28,21 +29,26 @@ from app.models import (
     PausedClient,
     Server,
     ServerStatus,
+    TorrentHit,
     TrafficSample,
     User,
 )
 from app.schemas import StepUpRequest
+from app.security import create_access_token
 
 router = APIRouter(prefix="/backup", tags=["backup"])
 
 _MAX_RESTORE_BYTES = 100 * 1024 * 1024  # 100 МБ — бэкапы много меньше
 
-# ВСЕ таблицы БД (нет FK, но держим осмысленный порядок). Раньше сюда не входили
-# client_limits (сроки авто-отзыва), app_settings (токен/чат/вебхук алертов),
-# audit_log и client_names — их потеря при restore была тихой и опасной.
+# ВСЕ таблицы БД (нет FK, но держим осмысленный порядок: зависимые после
+# servers). Раньше сюда не входили client_limits (сроки авто-отзыва),
+# app_settings (токен/чат/вебхук алертов), audit_log, client_names, а потом
+# cascades и torrent_hits - их потеря при restore была тихой и опасной.
+# Новая таблица обязана попасть сюда или в _NOT_BACKED_UP (тест сверяет).
 _MODELS = [
     User,
     Server,
+    Cascade,
     AwgConfig,
     AwgNote,
     OvpnConfig,
@@ -53,10 +59,14 @@ _MODELS = [
     PausedClient,
     ApiKey,
     ServerStatus,
+    TorrentHit,
     NodeMetric,
     TrafficSample,
     ClientTrafficSample,
 ]
+
+# таблицы, которые в бэкап сознательно не берем: {имя: причина}
+_NOT_BACKED_UP: dict[str, str] = {}
 
 # история трафика — объёмная и некритичная; в «лёгком» бэкапе её пропускаем
 _TRAFFIC_MODELS = (TrafficSample, ClientTrafficSample)
@@ -66,25 +76,30 @@ _RESTORE = """# Восстановление Amnezia Control
 Архив содержит полное состояние панели на момент бэкапа.
 
 ## Что внутри
-- `db.json` — все таблицы БД (пользователи, серверы, выданные конфиги, заметки,
-  сроки действия клиентов, настройки алертов, журнал действий, метрики). Содержит
-  СЕКРЕТЫ (хэш пароля админа, приватные ключи в сохранённых awg/ovpn-конфигах,
-  токен Telegram) — храните архив в безопасном месте.
-- `data/` — рабочий каталог панели, включая SSH-ключ панели
+- `db.json` - все таблицы БД (пользователи, серверы, каскады, выданные конфиги,
+  заметки, сроки действия клиентов, настройки алертов, журнал действий, метрики).
+  Содержит СЕКРЕТЫ (хэш пароля админа, приватные ключи в сохраненных
+  awg/ovpn-конфигах, токен Telegram) - храните архив в безопасном месте.
+- `data/` - рабочий каталог панели, включая SSH-ключ панели
   (`ssh/id_ed25519`). БЕЗ него восстановленная панель сгенерирует новый ключ и
-  потеряет доступ ко всем нодам — ключ критичен.
+  потеряет доступ ко всем нодам - ключ критичен. Сертификаты TLS (`caddy/`) и
+  файл пульса (`heartbeat`) в архив не входят: Caddy выпустит сертификат заново,
+  пульс панель перепишет сама.
 
 ## Как восстановить
-1. Разверните панель заново (docker compose up), дайте применить миграции.
-2. Остановите backend: `docker compose stop backend`.
-3. Верните каталог: распакуйте `data/` в бинд-маунт `./data` панели
-   (перезапишите `ssh/`), выставьте права `chmod 600 data/ssh/id_ed25519`.
-4. Залейте `db.json` в БД: для каждой таблицы очистите её и вставьте строки из
-   JSON (например, скриптом на стороне панели или psql/COPY). Даты — в ISO-8601.
-5. Запустите backend: `docker compose start backend`.
+1. Разверните панель той же или более новой версии (docker compose up) и
+   войдите в нее.
+2. Меню -> "Восстановить из файла..." и выберите этот архив (или
+   "Авто-бэкапы...", если архив лежит в data/backups). Панель спросит пароль,
+   заменит все таблицы и data/, страница перезагрузится.
+3. Учетная запись админа и пароль после восстановления - из архива. Значения
+   из `.env` при старте их не трогают; пароль из `.env` применится только с
+   `ACONTROL_ADMIN_PASSWORD_RESET=1` (аварийный сброс, флаг потом убрать).
 
-Учётка админа также берётся из `.env` при старте — при восстановлении убедитесь,
-что `.env` соответствует ожиданиям (иначе пароль пересинхронизируется из `.env`).
+Откат на СТАРУЮ версию панели: старый образ не стартует на базе новой схемы
+(alembic "Can't locate revision"). Остановите панель, удалите data/postgres,
+поднимите старую версию на пустой базе и восстановите архив, лучше снятый
+до обновления (данные, которых старая версия не знает, она пропустит).
 """
 
 
@@ -106,10 +121,12 @@ def _add_bytes(tar: tarfile.TarFile, name: str, data: bytes) -> None:
 
 
 def _skip_data_dir(name: str) -> bool:
-    """Каталоги внутри ./data, которые НЕ кладём в бэкап: сырые файлы кластера
-    Postgres (postgres, pgdata и откатные postgres.v17 и т.п.) и сами бэкапы."""
+    """Что внутри ./data НЕ кладём в бэкап и не восстанавливаем: сырые файлы
+    кластера Postgres (postgres, pgdata и откатные postgres.v17 и т.п.), сами
+    бэкапы, ключи TLS/ACME Caddy (caddy) и пульс с токеном Telegram (heartbeat,
+    панель перепишет его сама через минуту)."""
     return (
-        name == "backups"
+        name in ("backups", "caddy", "heartbeat", "heartbeat.tmp")
         or name.startswith("postgres")
         or name.startswith("pgdata")
     )
@@ -178,6 +195,8 @@ async def _build_archive(
         if os.path.isdir(data_dir):
             for root, dirs, files in os.walk(data_dir):
                 dirs[:] = [d for d in dirs if not _skip_data_dir(d)]
+                if os.path.samefile(root, data_dir):
+                    files = [f for f in files if not _skip_data_dir(f)]
                 for fn in files:
                     full = os.path.join(root, fn)
                     rel = os.path.relpath(full, data_dir).replace(os.sep, "/")
@@ -362,6 +381,15 @@ async def restore_backup(
                 f"в архиве недопустимое имя SSH-пользователя: {row.get('ssh_user')!r}",
             )
     present = [m for m in _MODELS if m.__tablename__ in dump]
+    # версии токенов и отозванные ключи до замены: старый архив не должен
+    # оживлять украденные JWT (версия из архива меньше текущей) и ключи,
+    # отозванные после бэкапа
+    old_versions = dict(
+        (await session.execute(select(User.username, User.token_version))).all()
+    )
+    revoked_prefixes = set(
+        await session.scalars(select(ApiKey.prefix).where(ApiKey.revoked.is_(True)))
+    )
     restored: dict[str, int] = {}
     for model in reversed(present):  # чистим в обратном порядке (FK нет)
         await session.execute(delete(model))
@@ -371,6 +399,20 @@ async def restore_backup(
             if isinstance(row, dict):
                 await session.execute(insert(model).values(**_coerce_row(model, row)))
         restored[model.__tablename__] = len(rows)
+    if User in present:
+        rows = (
+            await session.execute(select(User.id, User.username, User.token_version))
+        ).all()
+        for uid, name, ver in rows:
+            await session.execute(
+                update(User).where(User.id == uid).values(
+                    token_version=max(old_versions.get(name, 0), ver or 0) + 1
+                )
+            )
+    if ApiKey in present and revoked_prefixes:
+        await session.execute(
+            update(ApiKey).where(ApiKey.prefix.in_(revoked_prefixes)).values(revoked=True)
+        )
 
     # Postgres: строки вставлены с явными id, но identity-sequence не сдвинулась →
     # следующий INSERT упал бы на duplicate key. Догоняем sequence до max(id).
@@ -430,4 +472,14 @@ async def restore_backup(
         alerts.Card("warn", "🗄", alerts.t("Панель восстановлена из бэкапа"),
                     alerts.t("{user} с {ip}", user=user.username, ip=client_ip(request))),
     )
-    return {"restored": restored}
+    out: dict = {"restored": restored}
+    # все старые токены отозваны версией; тому, кто восстанавливал (он только
+    # что ввел пароль), выдаем новый, чтобы не выкидывать его на вход
+    ver = await session.scalar(
+        select(User.token_version).where(User.username == user.username)
+    )
+    if ver is not None:
+        out["access_token"] = create_access_token(
+            user.username, settings.jwt_secret, settings.jwt_ttl_minutes, ver
+        )
+    return out

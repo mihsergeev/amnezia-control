@@ -46,12 +46,18 @@ async def install_desktop_key(
     conn: asyncssh.SSHClientConnection, pubkey: str
 ) -> None:
     """Кладёт desktop-ключ в authorized_keys ssh_user, заменяя прошлый."""
+    # Новый файл собираем целиком во временном и подменяем через mv только при
+    # успехе каждого шага: на полном диске authorized_keys иначе становился 0 байт
+    # и админ терял вход. grep -v: 1 = строк не осталось (норма), 2 = ошибка;
+    # [ -f ] ловит несозданный временный файл (тогда и grep не запускался).
     inner = (
         "mkdir -p ~/.ssh && chmod 700 ~/.ssh && touch ~/.ssh/authorized_keys && "
-        f"(grep -v {DESKTOP_KEY_TAG} ~/.ssh/authorized_keys > ~/.ssh/ak.tmp 2>/dev/null || true) && "
-        "mv ~/.ssh/ak.tmp ~/.ssh/authorized_keys 2>/dev/null; "
-        f"printf '%s\\n' {shlex.quote(pubkey)} >> ~/.ssh/authorized_keys && "
-        "chmod 600 ~/.ssh/authorized_keys && echo KEY_OK"
+        "rm -f ~/.ssh/ak.tmp && "
+        f"{{ grep -v {DESKTOP_KEY_TAG} ~/.ssh/authorized_keys > ~/.ssh/ak.tmp 2>/dev/null; "
+        "[ $? -le 1 ] && [ -f ~/.ssh/ak.tmp ]; } && "
+        f"printf '%s\\n' {shlex.quote(pubkey)} >> ~/.ssh/ak.tmp && "
+        "chmod 600 ~/.ssh/ak.tmp && mv -f ~/.ssh/ak.tmp ~/.ssh/authorized_keys && "
+        "echo KEY_OK || rm -f ~/.ssh/ak.tmp"
     )
     result = await conn.run(inner, check=False)
     if "KEY_OK" not in (result.stdout or ""):

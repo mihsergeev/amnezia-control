@@ -39,13 +39,18 @@ async def client(tmp_path, monkeypatch) -> AsyncIterator[httpx.AsyncClient]:
 @pytest.fixture(autouse=True)
 def _reset_ratelimit():
     """Сбрасываем in-memory лимитер входа между тестами (глобальное состояние)."""
-    from app import ratelimit
+    from app import apikeys, ratelimit
+    from app.api import auth
 
-    ratelimit._failures.clear()
-    ratelimit._locked_until.clear()
+    def reset():
+        ratelimit._failures.clear()
+        ratelimit._locked_until.clear()
+        auth._known_ips.clear()
+        apikeys._ok_cache.clear()
+
+    reset()
     yield
-    ratelimit._failures.clear()
-    ratelimit._locked_until.clear()
+    reset()
 
 
 @pytest.fixture

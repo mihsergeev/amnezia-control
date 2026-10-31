@@ -1,13 +1,15 @@
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, computed_field
 
 
 class LoginRequest(BaseModel):
-    username: str
-    password: str
-    otp: str | None = None
+    # длина ограничена: логин уходит в ключ лимитера, и мегабайтные логины
+    # раздували бы его память
+    username: str = Field(max_length=128)
+    password: str = Field(max_length=128)
+    otp: str | None = Field(default=None, max_length=16)
 
 
 class TwoFAStatusOut(BaseModel):
@@ -34,6 +36,8 @@ class PasswordChangeRequest(BaseModel):
 class StepUpRequest(BaseModel):
     """Повторный ввод пароля для опасного действия (степ-ап аутентификация)."""
     password: str = Field(min_length=1, max_length=128)
+    # код 2FA, если она включена (можно и заголовком X-Confirm-OTP)
+    otp: str | None = Field(default=None, max_length=16)
 
 
 class TokenResponse(BaseModel):
@@ -73,6 +77,7 @@ class ServerUpdate(BaseModel):
     group_name: str | None = Field(default=None, max_length=64)
     torrent_block: bool | None = None
     torrent_autopause: bool | None = None
+    alerts_enabled: bool | None = None
 
 
 class OrderItem(BaseModel):
@@ -107,6 +112,7 @@ class ServerOut(BaseModel):
     last_check_info: str
     torrent_block: bool = False
     torrent_autopause: bool = False
+    alerts_enabled: bool = False
     created_at: datetime
     updated_at: datetime
 
@@ -529,6 +535,10 @@ class AlertConfigIn(BaseModel):
     telegram_api: str = Field(default="", max_length=256)
     webhook: str = Field(default="", max_length=512)
     lang: Literal["", "ru", "en"] = ""
+    # смена каналов - со степ-апом: подменой адреса Telegram API или вебхука
+    # укравший сессию увел бы токен бота и security-алерты
+    password: str = Field(default="", max_length=128)
+    otp: str | None = Field(default=None, max_length=16)
 
 
 class AlertTestResult(BaseModel):
@@ -573,9 +583,17 @@ class ApiKeyOut(BaseModel):
         default_factory=list, description="Серверы, с которыми работает ключ (пусто = все)"
     )
 
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def all_servers(self) -> bool:
+        return not self.server_ids
+
 
 class ApiKeyCreateRequest(BaseModel):
     name: str = Field(min_length=1, max_length=120, description="Кому выдан ключ")
+    # ключ бессрочный и переживает выход и смену пароля - выпуск со степ-апом
+    password: str = Field(min_length=1, max_length=128)
+    otp: str | None = Field(default=None, max_length=16)
 
 
 class ApiKeyUpdateRequest(BaseModel):
@@ -583,6 +601,11 @@ class ApiKeyUpdateRequest(BaseModel):
 
     expires_at: datetime | None = None
     server_ids: list[int] = Field(default_factory=list, max_length=500)
+    # явное "все серверы": пустой список без него раньше молча давал доступ ко
+    # всем. None - старое поведение (пусто = все), False с пустым списком - 400
+    all_servers: bool | None = None
+    password: str = Field(min_length=1, max_length=128)
+    otp: str | None = Field(default=None, max_length=16)
 
 
 class ApiKeyCreated(ApiKeyOut):

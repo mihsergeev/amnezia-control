@@ -97,7 +97,9 @@ def create_app() -> FastAPI:
     show_docs = settings.debug or settings.api_docs
     app = FastAPI(
         title=settings.app_name,
-        version=settings.version,
+        # версия контракта /api/v1, а не версия панели: схема открыта без входа,
+        # а по версии панели подбирают известные уязвимости (/health ее прячет)
+        version="1",
         # Штатную страницу доков отключаем и отдаём свою (см. ниже): встроенная
         # тянет JS/CSS с внешнего CDN и инициализируется ИНЛАЙН-скриптом, а CSP
         # панели (script-src 'self', без 'unsafe-inline') блокирует и то, и то —

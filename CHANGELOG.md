@@ -4,6 +4,34 @@ All notable changes to Amnezia Control are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.82.0] - 2026-10-31
+
+### Changed
+- Server alerts are off by default, including on existing servers after upgrade.
+  Enable "Send alerts for this server" in its settings to receive availability,
+  cascade, disk, client expiry, deployment and torrent alerts. Torrent blocking
+  and automatic pausing still work with alerts off. Panel security and backup
+  alerts remain global. Imported servers start with alerts off.
+- API key creation and changes, alert channel changes and server exports now
+  require password confirmation and a 2FA code when enabled. Password changes
+  revoke API keys and existing sessions; integrations need new keys afterward.
+
+### Fixed
+- Prevent spoofed forwarded client addresses and login lockout abuse.
+- Preserve node configs and SSH authorized keys on write failures; validate
+  node-supplied keys before using them in client configurations.
+- Serialize node operations and reject overlapping protocol deployments and
+  cascade creation. Preserve operation conflict and timeout responses.
+- Fix password-based server setup, legacy client expiry and protocol removal.
+- Include cascades in backups, reject unsafe restore data, preserve revoked
+  credentials across restores, and avoid replacing daily backups on restarts.
+- Aggregate long traffic history in SQL and preserve traffic totals when a
+  client is revoked. Bound SSH waits and release idle database transactions.
+- Fix deployment polling, stale search responses, duplicate client creation,
+  confirmation dialogs and unsaved alert settings after theme/language changes.
+- Allow large backup restores and server imports through the frontend proxy,
+  preserve certificate ownership at startup and send valid watchdog webhook JSON.
+
 ## [0.81.0] - 2026-10-30
 
 ### Fixed

@@ -25,6 +25,11 @@ SERVER = {
 }
 
 
+def _pw(headers: dict) -> dict:
+    """Выгрузка сервера - со степ-апом: пароль заголовком."""
+    return {**headers, "X-Confirm-Password": "testpass"}
+
+
 async def _make_server(client: httpx.AsyncClient, auth_headers, **over) -> int:
     r = await client.post(
         "/api/servers", json={**SERVER, **over}, headers=auth_headers
@@ -64,7 +69,7 @@ async def test_export_requires_auth(client: httpx.AsyncClient) -> None:
 async def test_export_missing_server_is_404(
     client: httpx.AsyncClient, auth_headers
 ) -> None:
-    r = await client.get("/api/servers/999/export", headers=auth_headers)
+    r = await client.get("/api/servers/999/export", headers=_pw(auth_headers))
     assert r.status_code == 404
 
 
@@ -74,7 +79,7 @@ async def test_export_carries_panel_side_data(
     sid = await _make_server(client, auth_headers)
     await _seed(session_factory, sid)
 
-    r = await client.get(f"/api/servers/{sid}/export", headers=auth_headers)
+    r = await client.get(f"/api/servers/{sid}/export", headers=_pw(auth_headers))
     assert r.status_code == 200
     assert "attachment" in r.headers["content-disposition"]
     data = r.json()
@@ -127,7 +132,8 @@ async def test_import_restores_server_with_its_data(
 ) -> None:
     sid = await _make_server(client, auth_headers)
     await _seed(session_factory, sid)
-    dump = (await client.get(f"/api/servers/{sid}/export", headers=auth_headers)).json()
+    dump = (await client.get(f"/api/servers/{sid}/export", headers=_pw(auth_headers))).json()
+    dump["server"]["alerts_enabled"] = True
 
     # эмулируем другую панель: исходного сервера тут нет
     assert (await client.delete(f"/api/servers/{sid}", headers=auth_headers)).status_code == 200
@@ -141,6 +147,8 @@ async def test_import_restores_server_with_its_data(
     assert res["imported"]["awg_configs"] == 1
     assert res["imported"]["awg_notes"] == 1
     new_id = res["server_id"]
+    server = (await client.get(f"/api/servers/{new_id}", headers=auth_headers)).json()
+    assert server["alerts_enabled"] is False
 
     # строки перепривязаны к НОВОМУ id, а не тащат старый
     async with session_factory() as session:
@@ -162,7 +170,7 @@ async def test_import_refuses_duplicate_host(
 ) -> None:
     # две карточки одной ноды правили бы один конфиг вслепую друг от друга
     sid = await _make_server(client, auth_headers)
-    dump = (await client.get(f"/api/servers/{sid}/export", headers=auth_headers)).json()
+    dump = (await client.get(f"/api/servers/{sid}/export", headers=_pw(auth_headers))).json()
     r = await client.post(
         "/api/servers/import-file", content=json.dumps(dump), headers=auth_headers
     )

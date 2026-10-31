@@ -2,7 +2,10 @@ import asyncssh
 from fastapi import APIRouter, HTTPException, Request, status
 from sqlalchemy import delete, select
 
-from app import audit, awg, deploy, deploywatch, limits, nodelock, notes, openvpn, pausestore, sshops
+from app import (
+    audit, awg, deploy, deploywatch, limits, nodelock, notes, openvpn, pausestore, sshops,
+    torrent,
+)
 from app.config import get_settings
 from app.deps import CurrentUser, SessionDep
 from app.models import ClientLimit, OvpnConfig, Server
@@ -49,6 +52,12 @@ def _dns_pair() -> tuple[str, str]:
 
 
 def _ovpn_error(exc: Exception) -> HTTPException:
+    if isinstance(exc, HTTPException):
+        return exc
+    if isinstance(exc, deploy.DeployBusy):
+        return HTTPException(status.HTTP_409_CONFLICT, str(exc))
+    if isinstance(exc, openvpn.OpenVpnNotDeployed):
+        return HTTPException(status.HTTP_409_CONFLICT, str(exc))
     if isinstance(exc, openvpn.OpenVpnError):
         return HTTPException(status.HTTP_502_BAD_GATEWAY, str(exc))
     if isinstance(exc, (asyncssh.Error, OSError)):
@@ -86,12 +95,8 @@ async def get_openvpn(
                 status_map = await openvpn.read_status_map(conn, container)
             except Exception:  # noqa: BLE001 — статус-лог не критичен
                 status_map = {}
-    except openvpn.OpenVpnError as exc:
-        raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(exc)) from exc
-    except (asyncssh.Error, OSError) as exc:
-        raise HTTPException(
-            status.HTTP_502_BAD_GATEWAY, f"Ошибка SSH: {exc or type(exc).__name__}"
-        ) from exc
+    except (openvpn.OpenVpnError, asyncssh.Error, OSError) as exc:
+        raise _ovpn_error(exc) from exc
 
     stored = set(
         (
@@ -192,6 +197,8 @@ async def reissue_client(
                 conn, container, body.client_id, name,
                 server.host, server.name, dns1, dns2,
             )
+            # отзыв старого мог перезапустить контейнер (клиент был онлайн)
+            await _torrent_after_restart(conn, container, server)
     except HTTPException:
         raise
     except Exception as exc:  # noqa: BLE001
@@ -242,6 +249,18 @@ async def get_client_config(
     return OvpnConfigResponse(config_amnezia=row.config_amnezia, name=row.name)
 
 
+async def _torrent_after_restart(conn, container: str, server: Server) -> None:
+    """Рестарт контейнера сносит правила блокировки торрентов, а сборщик вернул бы
+    их только на следующем цикле (до 5 минут). Ставим сразу; не вышло - вернет
+    сборщик."""
+    if not server.torrent_block:
+        return
+    try:
+        await torrent.sync_container(conn, container, True)
+    except Exception:  # noqa: BLE001 - операция над клиентом уже прошла
+        pass
+
+
 @router.post("/pause", status_code=status.HTTP_204_NO_CONTENT)
 async def pause_client(
     server_id: int, body: OvpnRevokeRequest, user: CurrentUser, session: SessionDep
@@ -257,8 +276,16 @@ async def pause_client(
             match = next(
                 (c for c in clients if c.client_id == body.client_id), None
             )
-            name = match.name if match else ""
+            # сертификат на паузе цел и клиент остается в таблице, поэтому
+            # повторную паузу ловим по записи о паузе - ответ как у AWG/XRay
+            paused = await pausestore.list_paused(session, server_id, "openvpn")
+            if match is None or body.client_id in paused:
+                raise HTTPException(status.HTTP_404_NOT_FOUND, "Клиент не найден")
+            name = match.name
             await openvpn.pause_client(conn, container, body.client_id)
+            await _torrent_after_restart(conn, container, server)
+    except HTTPException:
+        raise
     except Exception as exc:  # noqa: BLE001
         raise _ovpn_error(exc) from exc
     await pausestore.add(session, server_id, "openvpn", body.client_id, name, {})
@@ -280,6 +307,7 @@ async def resume_client(
         async with _connect(server) as conn:
             container = await openvpn.detect_container(conn)
             await openvpn.resume_client(conn, container, body.client_id)
+            await _torrent_after_restart(conn, container, server)
     except Exception as exc:  # noqa: BLE001
         raise _ovpn_error(exc) from exc
     await pausestore.drop(session, server_id, "openvpn", body.client_id)
@@ -297,7 +325,8 @@ async def revoke_client(
     try:
         async with _connect(server) as conn:
             container = await openvpn.detect_container(conn)
-            await openvpn.revoke_client(conn, container, body.client_id)
+            if await openvpn.revoke_client(conn, container, body.client_id):
+                await _torrent_after_restart(conn, container, server)
     except Exception as exc:  # noqa: BLE001
         raise _ovpn_error(exc) from exc
     await audit.record(
@@ -330,6 +359,7 @@ async def deploy_openvpn(
     script = openvpn.build_deploy_script(body.port, body.site, server.host)
     try:
         async with _connect(server) as conn:
+            await deploy.ensure_idle(conn, tag="openvpn")
             # порт проверяем до сборки: иначе упираемся в него только на docker run
             owner = await deploy.port_owner(
                 conn, body.port, "tcp", own=openvpn.CONTAINER_NAME
@@ -369,6 +399,7 @@ async def update_openvpn(
     script = openvpn.build_deploy_script(8443, "tile.openstreetmap.org", server.host)
     try:
         async with _connect(server) as conn:
+            await deploy.ensure_idle(conn, tag="openvpn")
             src = await deploy.detect_openvpn_container(conn)
             await deploy.snapshot_config(conn, "openvpn", container=src)
             await deploy.launch(conn, script, tag="openvpn")

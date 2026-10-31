@@ -4,6 +4,7 @@ import asyncio
 import logging
 from datetime import datetime, timedelta, timezone
 
+import asyncssh
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -83,7 +84,10 @@ async def _revoker(conn, server: Server, protocol: str):
     # Исключение откладывает отзыв до следующего прохода.
     if protocol in ("awg", "awg3", "awglegacy"):
         if protocol == "awg":
-            cont = (await awg.detect_awg_containers(conn))["new"]
+            # на ноде только со старым AmneziaWG клиенты "awg" живут в legacy-
+            # контейнере (как в awg.detect_container), иначе отзыв не шел никогда
+            conts = await awg.detect_awg_containers(conn)
+            cont = conts["new"] or conts["legacy"]
             missing = "контейнер AmneziaWG 2.0 не запущен"
         elif protocol == "awg3":
             # у 3.0 свой контейнер — читаем состояние именно из него, иначе
@@ -158,56 +162,77 @@ async def expiry_once(
                 )
             )
         )
-    revoked = 0
+    # одно SSH-соединение на (сервер, протокол): раньше шел отдельный SSH на
+    # каждого клиента подряд, и зависшая нода тормозила отзыв всех остальных
+    groups: dict[tuple[int, str], list[ClientLimit]] = {}
     for lim in expired:
+        groups.setdefault((lim.server_id, lim.protocol), []).append(lim)
+    revoked = 0
+    unreachable: set[int] = set()  # ноды, к которым в этом проходе не подключились
+    for (server_id, protocol), lims in groups.items():
         async with session_factory() as session:
-            server = await session.get(Server, lim.server_id)
+            server = await session.get(Server, server_id)
         if server is None:
             async with session_factory() as session:
                 await session.execute(
-                    delete(ClientLimit).where(ClientLimit.id == lim.id)
+                    delete(ClientLimit).where(ClientLimit.id.in_([lim.id for lim in lims]))
                 )
                 await session.commit()
             continue
-        detail = lim.name or lim.client_id
-        try:
-            await revoke_on_node(
-                server, lim.protocol, lim.client_id, key_path,
-                settings.ssh_connect_timeout,
-            )
-        except ProtocolGone:
-            # протокол удалили с ноды: без этого алерт "не отозван" шел бы
-            # каждый день по каждому его клиенту, пока срок не снимут руками
-            log.info(
-                "истекший %s/%s: протокола на %s нет, снимаю срок",
-                lim.protocol, lim.client_id, server.name,
-            )
-            detail += " (протокола на ноде нет)"
-        except Exception:  # noqa: BLE001 — нода недоступна: оставим, повторим позже
-            log.warning(
-                "истёкший %s/%s: нода %s недоступна, отложил",
-                lim.protocol, lim.client_id, server.name,
-            )
-            # разово (раз в день) сигналим: клиент должен быть отключён, но не смогли
-            key = (lim.id, now.strftime("%Y-%m-%d"))
-            if key not in _deferred_alerted:
-                _deferred_alerted.add(key)
-                await alerts.maybe_alert(
-                    session_factory, settings,
-                    alerts.Card(
-                        "warn", "⏳", alerts.t("Клиент истек, но не отозван"),
-                        alerts.t("{client}: сервер недоступен, повторю позже",
-                                 client=lim.name or lim.client_id),
-                        subject=server.name,
-                    ),
+        gone = False
+        if server_id in unreachable:
+            errors: dict[str, Exception] = {
+                lim.client_id: NodeNotReady("нода недоступна") for lim in lims
+            }
+        else:
+            try:
+                errors = await revoke_many_on_node(
+                    server, protocol, [lim.client_id for lim in lims], key_path,
+                    settings.ssh_connect_timeout,
                 )
-            continue
-        async with session_factory() as session:
-            await cleanup_client_db(session, lim.server_id, lim.protocol, lim.client_id)
-            await audit.record(
-                session, "система", f"{lim.protocol}_expired", server.name, detail,
-            )
-        revoked += 1
+            except ProtocolGone:
+                # протокол удалили с ноды: без этого алерт "не отозван" шел бы
+                # каждый день по каждому его клиенту, пока срок не снимут руками
+                log.info(
+                    "истекшие %s: протокола на %s нет, снимаю сроки", protocol, server.name,
+                )
+                errors, gone = {}, True
+            except Exception as exc:  # noqa: BLE001 — нода недоступна: оставим, повторим позже
+                errors = {lim.client_id: exc for lim in lims}
+                if isinstance(exc, (OSError, asyncssh.Error)):
+                    # не подключились или нода зависла (TimeoutError - тоже
+                    # OSError): остальные протоколы этой ноды в этот проход не ждем
+                    unreachable.add(server_id)
+        for lim in lims:
+            detail = lim.name or lim.client_id
+            if lim.client_id in errors:
+                log.warning(
+                    "истёкший %s/%s: нода %s недоступна, отложил",
+                    lim.protocol, lim.client_id, server.name,
+                )
+                # разово (раз в день) сигналим: клиент должен быть отключён, но не смогли
+                key = (lim.id, now.strftime("%Y-%m-%d"))
+                if server.alerts_enabled and key not in _deferred_alerted:
+                    _deferred_alerted.add(key)
+                    await alerts.maybe_alert(
+                        session_factory, settings,
+                        alerts.Card(
+                            "warn", "⏳", alerts.t("Клиент истек, но не отозван"),
+                            alerts.t("{client}: сервер недоступен, повторю позже",
+                                     client=lim.name or lim.client_id),
+                            subject=server.name,
+                        ),
+                        server_id=server.id,
+                    )
+                continue
+            if gone:
+                detail += " (протокола на ноде нет)"
+            async with session_factory() as session:
+                await cleanup_client_db(session, lim.server_id, lim.protocol, lim.client_id)
+                await audit.record(
+                    session, "система", f"{lim.protocol}_expired", server.name, detail,
+                )
+            revoked += 1
     if revoked:
         log.info("авто-отзыв истёкших клиентов: %d", revoked)
     return revoked
@@ -233,8 +258,8 @@ async def warn_expiring(
                 )
             )
         )
-        names = {
-            s.id: s.name
+        servers = {
+            s.id: s
             for s in await session.scalars(
                 select(Server).where(
                     Server.id.in_({lim.server_id for lim in soon})
@@ -243,21 +268,24 @@ async def warn_expiring(
         } if soon else {}
     warned = 0
     for lim in soon:
+        server = servers.get(lim.server_id)
+        if server is None or not server.alerts_enabled:
+            continue
         key = (lim.id, lim.expires_at.isoformat())
         if key in _expiry_warned:
             continue
         _expiry_warned.add(key)
-        left = lim.expires_at - now
+        left = alerts._aware(lim.expires_at) - now
         left_days = max(1, round(left.total_seconds() / 86400))
-        srv = names.get(lim.server_id, str(lim.server_id))
         await alerts.maybe_alert(
             session_factory, settings,
             alerts.Card(
                 "warn", "⏳", alerts.t("Клиент истекает через {days} дн.", days=left_days),
                 alerts.t("{client}, {at} UTC. Не продлить - отключится сам",
                          client=lim.name or lim.client_id, at=f"{lim.expires_at:%d.%m %H:%M}"),
-                subject=srv,
+                subject=server.name,
             ),
+            server_id=server.id,
         )
         warned += 1
     return warned

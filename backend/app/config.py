@@ -10,7 +10,7 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="VPNPANEL_", env_file=".env")
 
     app_name: str = "Amnezia Control"
-    version: str = "0.81.0"
+    version: str = "0.82.0"
     debug: bool = False
 
     # Swagger/OpenAPI на /api/docs. Включено: интеграции нужен читаемый контракт
@@ -43,7 +43,11 @@ class Settings(BaseSettings):
     # Адреса своих обратных прокси, которым верим в X-Forwarded-For: loopback
     # и docker-сети (caddy, nginx фронтенда). Клиентские сети сюда не входят.
     # Пусто - тот же список по умолчанию (compose передает пустую строку).
+    # `!<адрес>` исключает адрес, `!gateway` - шлюз docker-сети (см. clientip).
     trusted_proxies: str = ""
+    # Адрес публикации панели (ACONTROL_BIND). Не loopback - шлюзу docker-сети
+    # не верим: через него идут IPv6-клиенты L4 docker-proxy с любым XFF.
+    panel_bind: str = ""
 
     # Авто-бэкап БД: интервал в часах (0 = выключить), сколько копий хранить
     backup_interval_hours: int = 24

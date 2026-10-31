@@ -141,6 +141,11 @@ async def test_xray_deploy_on_busy_port_is_refused_before_anything(
     monkeypatch.setattr(deploy, "snapshot_all", must_not_run)
     monkeypatch.setattr(deploy, "launch", must_not_run)
 
+    async def idle(conn, *, tag):
+        return None
+
+    monkeypatch.setattr(deploy, "ensure_idle", idle)
+
     r = await client.post(
         f"/api/servers/{sid}/xray/deploy", json={"port": 443}, headers=auth_headers
     )

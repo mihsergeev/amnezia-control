@@ -5,11 +5,39 @@ import pytest
 
 from app import alerts, config, settings_store
 from app.db import Base, create_engine_and_factory
+from app.models import ServerStatus
 
 # «сейчас» и момент заведомо позже порога недоступности — антидребезг теперь
 # ВРЕМЕННОЙ (server_down_minutes), состояние в БД, а не в памяти модуля
 NOW = datetime(2026, 7, 17, 12, 0, tzinfo=timezone.utc)
 LATER = NOW + timedelta(minutes=31)
+
+
+async def test_checkbox_resets_old_cascade_alert(client, auth_headers):
+    import json
+
+    from app.models import Cascade
+
+    created = await client.post(
+        "/api/servers", headers=auth_headers,
+        json={"name": "vpn-a", "host": "203.0.113.10"},
+    )
+    sid = created.json()["id"]
+    assert created.json()["alerts_enabled"] is False
+    async with client.session_factory() as s:
+        s.add(Cascade(
+            entry_server_id=sid, exit_server_id=999, transport="gre", status="ready",
+            result=json.dumps({"health": {"alerted": True}, "egress": "198.51.100.1"}),
+        ))
+        await s.commit()
+    response = await client.patch(
+        f"/api/servers/{sid}", headers=auth_headers, json={"alerts_enabled": True},
+    )
+    assert response.status_code == 200
+    async with client.session_factory() as s:
+        result = json.loads((await s.get(Cascade, 1)).result)
+    assert "health" not in result
+    assert result["egress"] == "198.51.100.1"
 
 
 @pytest.fixture
@@ -107,6 +135,42 @@ async def test_reconcile_no_alert_when_unconfigured(session, monkeypatch):
     assert sent == []
 
 
+async def test_disabled_server_stays_neutral_until_checkbox_enabled(session, monkeypatch):
+    settings = config.get_settings()
+    await settings_store.set_alert_config(session, "TOKEN", "123", "")
+    sent = []
+
+    async def fake_send(cfg, text, *, html_text=None):
+        sent.append(text)
+        return []
+
+    monkeypatch.setattr(alerts, "send_alert", fake_send)
+    names = {1: "vpn-a"}
+    assert await alerts.reconcile(
+        session, settings, {1: False}, names, now=NOW,
+        enabled_server_ids=set(),
+    ) == []
+    assert await alerts.reconcile(
+        session, settings, {1: False}, names, now=LATER,
+        enabled_server_ids=set(),
+    ) == []
+    row = await session.get(ServerStatus, 1)
+    assert row.online is True and row.down_since is None
+    assert sent == []
+
+    # После включения полный порог начинается заново.
+    start = LATER + timedelta(minutes=1)
+    assert await alerts.reconcile(
+        session, settings, {1: False}, names, now=start,
+        enabled_server_ids={1},
+    ) == []
+    assert await alerts.reconcile(
+        session, settings, {1: False}, names,
+        now=start + timedelta(minutes=31), enabled_server_ids={1},
+    ) == [(1, False)]
+    assert len(sent) == 1 and "недоступен" in sent[0]
+
+
 async def test_down_alert_carries_panel_link(session, monkeypatch):
     """В алерте должна быть ссылка на панель: в Telegram — кликабельным именем
     (HTML), вебхуку — отдельной строкой. Имя экранируется."""
@@ -145,7 +209,8 @@ async def test_alerts_api_roundtrip(
     r = await client.put(
         "/api/alerts",
         headers=auth_headers,
-        json={"telegram_token": "", "telegram_chat": "", "webhook": "https://ex/hook"},
+        json={"telegram_token": "", "telegram_chat": "", "webhook": "https://ex/hook",
+              "password": "testpass"},
     )
     assert r.status_code == 200
     body = r.json()
@@ -221,3 +286,27 @@ def test_card_in_english() -> None:
     # обычная строка с фигурными скобками идет как есть
     raw = alerts.Card("crit", "", alerts.t("Авто-бэкап не создан"), "OSError: {x}")
     assert raw.render("", "en")[0].splitlines()[1:] == ["Auto-backup failed", "OSError: {x}"]
+
+
+async def test_first_seen_offline_then_online_is_silent(session, monkeypatch):
+    """Сервер только добавили и он сначала офлайн: поднялся - "снова онлайн"
+    без падения не шлем; молчит дольше порога - обычный алерт о падении."""
+    settings = config.get_settings()
+    await settings_store.set_alert_config(session, "TOKEN", "123", "")
+    sent: list[str] = []
+
+    async def fake_send(cfg, text, *, html_text=None):
+        sent.append(text)
+        return []
+
+    monkeypatch.setattr(alerts, "send_alert", fake_send)
+    names = {1: "vpn-a", 2: "vpn-b"}
+    assert await alerts.reconcile(session, settings, {1: False, 2: False}, names, now=NOW) == []
+    assert await alerts.reconcile(
+        session, settings, {1: True, 2: False}, names, now=NOW + timedelta(minutes=5)
+    ) == []
+    assert sent == []
+    assert await alerts.reconcile(
+        session, settings, {1: True, 2: False}, names, now=LATER
+    ) == [(2, False)]
+    assert len(sent) == 1 and "недоступен" in sent[0]

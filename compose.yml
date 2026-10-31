@@ -81,6 +81,9 @@ services:
       # Адреса своих прокси, которым верим в X-Forwarded-For (пусто = loopback
       # и docker-сети). Свой внешний прокси в другой сети добавьте сюда.
       VPNPANEL_TRUSTED_PROXIES: ${ACONTROL_TRUSTED_PROXIES:-}
+      # Открытый наружу порт: IPv6-клиенты через docker-proxy приходят со
+      # шлюза сети. Бэкенд должен знать bind, чтобы не доверять их XFF.
+      VPNPANEL_PANEL_BIND: ${ACONTROL_BIND:-127.0.0.1:8080}
       VPNPANEL_DEFAULT_SSH_USER: ${ACONTROL_DEFAULT_SSH_USER:-acontrol}
       VPNPANEL_STATS_INTERVAL: ${ACONTROL_STATS_INTERVAL:-300}
       VPNPANEL_EXPIRY_INTERVAL: ${ACONTROL_EXPIRY_INTERVAL:-300}

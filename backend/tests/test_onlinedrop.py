@@ -212,3 +212,35 @@ async def test_disabled_and_throttled(factory, sent, monkeypatch):
     await onlinedrop.check(factory, settings, {1: True}, {1: "vpn-a"},
                            now=NOW + timedelta(minutes=30))
     assert len(sent) == 1
+
+
+async def test_drop_inside_cooldown_alerts_after_cooldown(factory, sent, monkeypatch):
+    """Повторная просадка внутри cooldown молчит, но если держится дальше -
+    алерт уходит после cooldown (раньше флаг ставился без отправки, и алерт
+    не приходил никогда)."""
+    settings = config.get_settings()
+    await _setup_alerts(factory)
+
+    async def cover(session, start, end):
+        return {1: 100}
+
+    monkeypatch.setattr(onlinedrop, "_coverage", cover)
+
+    async def run(at, cur):
+        async def counts(session, start, end):
+            return {1: cur} if end == at else {1: 50}
+
+        monkeypatch.setattr(onlinedrop, "_active_counts", counts)
+        onlinedrop._last_check = None
+        return await onlinedrop.check(factory, settings, {1: True}, {1: "vpn-a"}, now=at)
+
+    # первая просадка (2 проверки) -> алерт, потом отбой
+    await run(NOW, 0)
+    await run(NOW + timedelta(minutes=30), 0)
+    await run(NOW + timedelta(hours=2), 50)
+    await run(NOW + timedelta(hours=2, minutes=30), 50)
+    assert len(sent) == 1
+    # вторая просадка через 4 часа держится двое суток
+    for h in range(4, 52):
+        await run(NOW + timedelta(hours=h), 0)
+    assert len(sent) == 2

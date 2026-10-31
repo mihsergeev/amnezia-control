@@ -49,6 +49,12 @@ def _dns_pair() -> tuple[str, str]:
 
 
 def _xray_error(exc: Exception) -> HTTPException:
+    if isinstance(exc, HTTPException):
+        return exc
+    if isinstance(exc, deploy.DeployBusy):
+        return HTTPException(status.HTTP_409_CONFLICT, str(exc))
+    if isinstance(exc, xray.XrayNotDeployed):
+        return HTTPException(status.HTTP_409_CONFLICT, str(exc))
     if isinstance(exc, xray.XrayError):
         return HTTPException(status.HTTP_502_BAD_GATEWAY, str(exc))
     if isinstance(exc, (asyncssh.Error, OSError)):
@@ -300,6 +306,7 @@ async def deploy_xray(
     script = xray.build_deploy_script(body.port, body.site, xray.XRAY_RELEASE)
     try:
         async with _connect(server) as conn:
+            await deploy.ensure_idle(conn, tag="xray")
             # Порт проверяем до сборки образа и генерации ключей. Раньше установка
             # упиралась в него только на docker run: на ноде с панелью 443 держит
             # caddy, и XRay падал с "port is already allocated", оставляя мертвый
@@ -410,6 +417,7 @@ async def update_xray(
     release = xray.XRAY_RELEASE
     try:
         async with _connect(server) as conn:
+            await deploy.ensure_idle(conn, tag="xray")
             container = await xray.detect_container(conn)
             bits = await xray.read_server_bits(conn, container)
             script = xray.build_deploy_script(bits["port"], bits["site"], release)

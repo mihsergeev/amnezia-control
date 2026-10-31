@@ -1,10 +1,15 @@
 """Управление ключами интеграционного API. Только под пользовательским JWT:
-выпускать ключи может лишь вошедший админ, сам ключ такого права не даёт."""
+выпускать ключи может лишь вошедший админ, сам ключ такого права не даёт.
 
-from fastapi import APIRouter, HTTPException, status
+Выпуск и изменение ключа - со степ-апом (пароль, при 2FA и код): ключ живет
+дольше сессии, и по украденному токену иначе выпускался бы постоянный доступ."""
+
+from fastapi import APIRouter, HTTPException, Request, status
 from sqlalchemy import select
 
-from app import apikeys, audit
+from app import alerts, apikeys, audit, stepup
+from app.clientip import client_ip
+from app.config import get_settings
 from app.deps import CurrentUser, SessionDep
 from app.models import ApiKey
 from app.models import Server
@@ -26,15 +31,21 @@ async def list_keys(_: CurrentUser, session: SessionDep) -> list[ApiKey]:
 
 @router.post("", response_model=ApiKeyCreated, status_code=status.HTTP_201_CREATED)
 async def create_key(
-    body: ApiKeyCreateRequest, user: CurrentUser, session: SessionDep
+    body: ApiKeyCreateRequest, request: Request, user: CurrentUser, session: SessionDep
 ) -> ApiKeyCreated:
     """Выпускает ключ. Полный ключ возвращается ЕДИНСТВЕННЫЙ раз — в БД хэш."""
+    await stepup.verify(user, body.password, request, otp=body.otp)
     key, prefix, key_hash = apikeys.generate()
     row = ApiKey(name=body.name.strip(), prefix=prefix, key_hash=key_hash)
     session.add(row)
     await session.commit()
     await session.refresh(row)
     await audit.record(session, user.username, "apikey_create", row.name)
+    await alerts.security_alert(
+        session, get_settings(),
+        alerts.Card("warn", "🔑", alerts.t("Выпущен API-ключ «{name}»", name=row.name),
+                    alerts.t("{user} с {ip}", user=user.username, ip=client_ip(request))),
+    )
     # собираем из базовой схемы + секрет: так новые поля ApiKeyOut подхватятся
     # автоматически и не придётся дублировать их перечисление
     base = ApiKeyOut.model_validate(row, from_attributes=True)
@@ -43,13 +54,20 @@ async def create_key(
 
 @router.put("/{key_id}", response_model=ApiKeyOut)
 async def update_key(
-    key_id: int, body: ApiKeyUpdateRequest, user: CurrentUser, session: SessionDep
+    key_id: int, body: ApiKeyUpdateRequest, request: Request, user: CurrentUser,
+    session: SessionDep,
 ) -> ApiKey:
     """Срок действия и серверы ключа. Настраиваются после выпуска, в списке."""
+    await stepup.verify(user, body.password, request, otp=body.otp)
     row = await session.get(ApiKey, key_id)
     if row is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Ключ не найден")
-    ids = sorted(set(body.server_ids))
+    ids = [] if body.all_servers else sorted(set(body.server_ids))
+    if body.all_servers is False and not ids:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            "Выберите хотя бы один сервер или включите доступ ко всем",
+        )
     if ids:
         known = set(await session.scalars(select(Server.id).where(Server.id.in_(ids))))
         missing = [i for i in ids if i not in known]
@@ -65,6 +83,11 @@ async def update_key(
     await audit.record(
         session, user.username, "apikey_update", row.name,
         f"серверы: {row.servers or 'все'}, срок: {exp}",
+    )
+    await alerts.security_alert(
+        session, get_settings(),
+        alerts.Card("warn", "🔑", alerts.t("Изменен API-ключ «{name}»", name=row.name),
+                    alerts.t("{user} с {ip}", user=user.username, ip=client_ip(request))),
     )
     return row
 

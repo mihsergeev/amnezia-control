@@ -131,13 +131,16 @@ async def search_clients(
     for row in await session.scalars(select(AwgNote)):
         rows.append(((row.server_id, row.protocol, row.public_key), {"note": row.note},
                      row.note, False))
-    # выданные конфиги: имя хранится вместе с ними
-    for row in await session.scalars(select(AwgConfig)):
-        rows.append(((row.server_id, row.protocol or "awg", row.public_key),
-                     {"name": row.name, "has_config": True}, row.name, True))
-    for row in await session.scalars(select(OvpnConfig)):
-        rows.append(((row.server_id, "openvpn", row.client_id),
-                     {"name": row.name, "has_config": True}, row.name, True))
+    # выданные конфиги: имя хранится вместе с ними. Берем только нужные
+    # колонки - текст конфигов на каждый поиск из БД не тянем
+    awg_cfg = select(AwgConfig.server_id, AwgConfig.protocol, AwgConfig.public_key,
+                     AwgConfig.name)
+    for sid, proto, pk, name in (await session.execute(awg_cfg)).all():
+        rows.append(((sid, proto or "awg", pk), {"name": name, "has_config": True},
+                     name, True))
+    ovpn_cfg = select(OvpnConfig.server_id, OvpnConfig.client_id, OvpnConfig.name)
+    for sid, cid, name in (await session.execute(ovpn_cfg)).all():
+        rows.append(((sid, "openvpn", cid), {"name": name, "has_config": True}, name, True))
 
     for (sid, proto, cid), _fields, text, by_key in rows:
         if only is not None:

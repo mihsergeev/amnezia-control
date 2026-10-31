@@ -1,9 +1,10 @@
 import json
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 from typing import Annotated
 
 from fastapi import APIRouter, Query
-from sqlalchemy import select
+from sqlalchemy import Integer, and_, cast, extract, func, literal_column, select
 
 from app import protolabel, stats_calc
 from app.config import get_settings
@@ -219,6 +220,72 @@ async def overview(
     return OverviewOut(**stats_calc.build_overview(servers, latest_by_id))
 
 
+def _bucket_expr(dialect: str, step: int):
+    """Номер бакета floor(epoch / step) на стороне БД. SQLite хранит ts строкой
+    в UTC (strftime('%s') - секунды эпохи), Postgres - timestamptz."""
+    n = literal_column(str(int(step)))
+    if dialect == "sqlite":
+        # целые делятся нацело (FLOOR в SQLite есть не везде)
+        return cast(func.strftime("%s", TrafficSample.ts), Integer).op("/")(n)
+    return func.floor(extract("epoch", TrafficSample.ts) / n)
+
+
+async def _history_rows(session, start, end, server_id, step: int) -> list:
+    """По строке на (сервер, бакет): последний снимок в бакете и сумма прироста
+    по клиентам. Группирует БД: раньше все снимки за 90 дней грузились в Python
+    ORM-объектами (сотни тысяч строк, сотни МБ памяти)."""
+    try:
+        dialect = session.bind.dialect.name
+    except AttributeError:
+        dialect = ""
+    cond = [TrafficSample.ts >= start, TrafficSample.ts <= end]
+    if server_id:
+        cond.append(TrafficSample.server_id.in_(server_id))
+    bucket = _bucket_expr(dialect, step)
+    sums = (
+        func.sum(TrafficSample.rx_delta).label("rx_delta"),
+        func.sum(TrafficSample.tx_delta).label("tx_delta"),
+        # прирост есть не у всех снимков бакета (старая история, первый
+        # снимок после старта панели) - бакет считаем по-старому
+        (func.count(TrafficSample.rx_delta) == func.count()).label("complete"),
+    )
+    last = (TrafficSample.rx_total, TrafficSample.tx_total, TrafficSample.clients_online)
+    if dialect == "sqlite":
+        # SQLite отдает "голые" колонки из строки с max(ts) - один проход по
+        # индексу ts, без join (с join планировщик шел по индексу server_id)
+        query = (
+            select(TrafficSample.server_id, func.max(TrafficSample.ts).label("ts"),
+                   *last, *sums)
+            .where(*cond)
+            .group_by(TrafficSample.server_id, bucket)
+            .order_by("ts")
+        )
+    else:
+        grp = (
+            select(TrafficSample.server_id.label("sid"),
+                   func.max(TrafficSample.ts).label("last_ts"), *sums)
+            .where(*cond)
+            .group_by(TrafficSample.server_id, bucket)
+            .subquery()
+        )
+        query = (
+            select(TrafficSample.server_id, TrafficSample.ts, *last,
+                   grp.c.rx_delta, grp.c.tx_delta, grp.c.complete)
+            .join(grp, and_(TrafficSample.server_id == grp.c.sid,
+                            TrafficSample.ts == grp.c.last_ts))
+            .order_by(TrafficSample.ts)
+        )
+    return [
+        SimpleNamespace(
+            server_id=r.server_id, ts=r.ts, rx_total=r.rx_total, tx_total=r.tx_total,
+            clients_online=r.clients_online,
+            rx_delta=int(r.rx_delta) if r.complete and r.rx_delta is not None else None,
+            tx_delta=int(r.tx_delta) if r.complete and r.tx_delta is not None else None,
+        )
+        for r in (await session.execute(query)).all()
+    ]
+
+
 @router.get("/history", response_model=HistoryOut)
 async def history(
     _: CurrentUser,
@@ -240,14 +307,7 @@ async def history(
     range_seconds = max((end - start).total_seconds(), 1)
     # шаг бакета подбираем под ширину окна, чтобы точек было ~несколько сотен
     step = stats_calc.pick_bucket_seconds(range_seconds, settings.stats_interval)
-    query = (
-        select(TrafficSample)
-        .where(TrafficSample.ts >= start, TrafficSample.ts <= end)
-        .order_by(TrafficSample.ts)
-    )
-    if server_id:
-        query = query.where(TrafficSample.server_id.in_(server_id))
-    samples = list(await session.scalars(query))
+    samples = await _history_rows(session, start, end, server_id, step)
     points = stats_calc.aggregate_history(samples, step)
     servers = []
     if by_server:

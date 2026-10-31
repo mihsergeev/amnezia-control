@@ -7,6 +7,12 @@ from datetime import datetime, timezone
 # 6ч, 12ч, 1д, 2д, 3д, 7д. По ней выбираем укрупнение так, чтобы на любой
 # диапазон (от 3 часов до 90 дней) выходило ~несколько сотен точек — иначе
 # 90 дней при 5-минутном шаге дали бы ~26 000 точек в одном polyline.
+def _aware(dt: datetime) -> datetime:
+    """SQLite отдает наивные datetime (это UTC): без tzinfo .timestamp()
+    посчитал бы их местным временем и сдвинул бакеты на часовой пояс."""
+    return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+
+
 _NICE_STEPS = (
     300, 600, 900, 1800,
     3600, 7200, 10800, 21600, 43200,
@@ -70,7 +76,7 @@ def aggregate_client_history(samples: list, interval: int) -> list[dict]:
     step = max(interval, 1)
     by_bucket: dict[int, tuple[int, int]] = {}
     for s in samples:
-        bucket = int(s.ts.timestamp() // step) * step
+        bucket = int(_aware(s.ts).timestamp() // step) * step
         by_bucket[bucket] = (s.rx, s.tx)  # последний снимок в бакете побеждает
 
     points = []
@@ -91,22 +97,27 @@ def aggregate_client_history(samples: list, interval: int) -> list[dict]:
     return points
 
 
-def _bucketize(
-    samples: list, step: int
-) -> dict[int, dict[int, tuple[int, int, int, float]]]:
-    """bucket -> {server_id: (rx, tx, online, ts)}; последний снимок в бакете побеждает."""
-    buckets: dict[int, dict[int, tuple[int, int, int, float]]] = defaultdict(dict)
+def _bucketize(samples: list, step: int) -> dict[int, dict[int, tuple]]:
+    """bucket -> {server_id: (rx, tx, online, ts, rx_delta, tx_delta)};
+    последний снимок в бакете побеждает. rx_delta/tx_delta - прирост за бакет
+    по клиентам (строки из SQL-бакетизации), None - считать разностью rx_total."""
+    buckets: dict[int, dict[int, tuple]] = defaultdict(dict)
     for s in samples:
-        ts = s.ts.timestamp()
+        ts = _aware(s.ts).timestamp()
         bucket = int(ts // step) * step
-        buckets[bucket][s.server_id] = (s.rx_total, s.tx_total, s.clients_online, ts)
+        buckets[bucket][s.server_id] = (
+            s.rx_total, s.tx_total, s.clients_online, ts,
+            getattr(s, "rx_delta", None), getattr(s, "tx_delta", None),
+        )
     return buckets
 
 
 def aggregate_history(samples: list, interval: int) -> list[dict]:
     """Бинует снимки по интервалу, суммирует по серверам, считает трафик за бакет.
 
-    samples: объекты с .server_id, .ts (datetime), .rx_total, .tx_total, .clients_online.
+    samples: объекты с .server_id, .ts (datetime), .rx_total, .tx_total, .clients_online
+    и необязательными .rx_delta/.tx_delta (прирост за бакет, посчитанный по
+    клиентам: сброс счетчика одного клиента не обнуляет трафик остальных).
 
     Трафик считается по каждому серверу отдельно и только потом складывается.
     Разность общих сумм врала: сервер, пропустивший сбор, выпадал из суммы
@@ -126,15 +137,18 @@ def aggregate_history(samples: list, interval: int) -> list[dict]:
     for bucket in sorted(buckets):
         rx_sum = tx_sum = online = rx_delta = tx_delta = 0
         rx_rate = tx_rate = 0.0
-        for sid, (rx, tx, on, ts) in buckets[bucket].items():
+        for sid, (rx, tx, on, ts, brx, btx) in buckets[bucket].items():
             rx_sum += rx
             tx_sum += tx
             online += on
             if sid in prev:
                 pts, prx, ptx = prev[sid]
                 elapsed = max(1.0, ts - pts)
-                drx = max(0, rx - prx)
-                dtx = max(0, tx - ptx)
+                if brx is not None and btx is not None:
+                    drx, dtx = max(0, brx), max(0, btx)
+                else:
+                    drx = max(0, rx - prx)
+                    dtx = max(0, tx - ptx)
                 rx_delta += drx
                 tx_delta += dtx
                 rx_rate += drx / elapsed

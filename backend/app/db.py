@@ -22,7 +22,10 @@ def create_engine_and_factory(
     url = make_url(db_url)
     if url.get_backend_name() == "sqlite" and url.database and url.database != ":memory:":
         Path(url.database).parent.mkdir(parents=True, exist_ok=True)
-    engine = create_async_engine(db_url)
+    # Postgres: соединение из пула могло умереть (рестарт БД, обрыв сети) -
+    # проверяем перед выдачей, иначе первый запрос после сбоя падал с 500
+    kwargs = {"pool_pre_ping": True} if url.get_backend_name() == "postgresql" else {}
+    engine = create_async_engine(db_url, **kwargs)
     factory = async_sessionmaker(engine, expire_on_commit=False)
     return engine, factory
 

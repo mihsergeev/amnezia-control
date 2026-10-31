@@ -118,10 +118,12 @@ async def create_client(
 ) -> CreateClientResponse:
     server = await _get_or_404(server_id, session)
     dns = body.dns or get_settings().awg_client_dns
-    reserved = await pausestore.paused_ips(session, server_id, PROTO)
     try:
         async with _connect(server) as conn:
             state = await _legacy_state(conn, server.host)
+            # адреса клиентов на паузе читаем под блокировкой ноды: пауза пишет
+            # запись тоже под ней, иначе ее адрес успевал уйти новому клиенту
+            reserved = await pausestore.paused_ips(session, server_id, PROTO)
             client, config = await awg.create_client(
                 conn, state, body.name, dns, reserved=reserved
             )
@@ -251,11 +253,12 @@ async def pause_client(
                 raise HTTPException(status.HTTP_404_NOT_FOUND, "Клиент не найден")
             name = target.name
             data = await awg.pause_client(conn, state, body.public_key)
+            # запись о паузе (с адресом) - до снятия блокировки, см. create_client
+            await pausestore.add(session, server_id, PROTO, body.public_key, name, data)
     except HTTPException:
         raise
     except Exception as exc:  # noqa: BLE001
         raise _ssh_error(exc) from exc
-    await pausestore.add(session, server_id, PROTO, body.public_key, name, data)
     await audit.record(
         session, user.username, "awglegacy_pause", server.name, name or body.public_key
     )

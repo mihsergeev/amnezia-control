@@ -90,6 +90,7 @@ async def check(
     names: dict[int, str],
     *,
     now: datetime | None = None,
+    enabled_server_ids: set[int] | None = None,
 ) -> list[tuple[int, bool]]:
     """Раз в CHECK_EVERY сверяет онлайн нод со вчера и прошлой неделей и шлет
     алерты. Возвращает переходы (server_id, просел): True - алерт отправлен,
@@ -113,6 +114,10 @@ async def check(
     judged: dict[int, bool] = {}
     for sid, online in online_map.items():
         st = _state.setdefault(sid, {"hits": 0, "ok": 0})
+        if enabled_server_ids is not None and sid not in enabled_server_ids:
+            st["hits"] = 0
+            st["ok"] = 0
+            continue
         if not online or cover.get(sid, 0) < expected * MIN_COVERAGE:
             # нода лежит (про это свой алерт) или данных мало - не судим
             continue
@@ -130,6 +135,23 @@ async def check(
     for sid in list(_state):
         if sid not in online_map:
             del _state[sid]
+    # Выключенный сервер не должен помнить, что по нему уже был алерт. После
+    # включения новая просадка проходит подтверждение с нуля.
+    if enabled_server_ids is not None:
+        disabled = set(online_map) - enabled_server_ids
+        if disabled:
+            async with session_factory() as session:
+                rows = await session.scalars(
+                    select(ServerStatus).where(ServerStatus.server_id.in_(disabled))
+                )
+                changed = False
+                for row in rows:
+                    if row.drop_alerted or row.drop_alerted_at is not None:
+                        row.drop_alerted = False
+                        row.drop_alerted_at = None
+                        changed = True
+                if changed:
+                    await session.commit()
     if not judged:
         return []
 
@@ -148,11 +170,14 @@ async def check(
                 row = ServerStatus(server_id=sid, online=True, changed_at=now)
                 session.add(row)
             if dropped and not row.drop_alerted:
-                row.drop_alerted = True
                 last = row.drop_alerted_at
                 if last is not None and last.tzinfo is None:
                     last = last.replace(tzinfo=timezone.utc)
+                # флаг ставим только вместе с отправкой: раньше просадка в
+                # cooldown помечалась отправленной, и после cooldown алерт так
+                # и не уходил, сколько бы она ни держалась
                 if last is None or now - last >= COOLDOWN:
+                    row.drop_alerted = True
                     row.drop_alerted_at = now
                     to_send.append(sid)
                     transitions.append((sid, True))

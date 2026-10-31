@@ -46,6 +46,10 @@ class XrayError(Exception):
     pass
 
 
+class XrayNotDeployed(XrayError):
+    """Контейнера XRay на ноде нет (API отвечает 409, как AWG 3.1)."""
+
+
 @dataclass
 class XrayClient:
     client_id: str  # UUID
@@ -72,11 +76,11 @@ def _docker_exec_i(container: str, inner: str) -> str:
 async def _write_file(conn, container: str, path: str, payload: str) -> None:
     """Пишет файл в контейнер через временный и mv: при ошибке (например, диск
     полон) старый файл остается целым, а ошибка доходит до вызывающего. Если
-    файл смонтирован и mv на него нельзя, переписываем содержимым временного."""
+    файл смонтирован отдельно и mv на него нельзя, запись отменяется."""
     tmp = f"{path}.acontrol-tmp"
     inner = (
-        f"cat > {tmp} && {{ mv -f {tmp} {path} 2>/dev/null || "
-        f"{{ cat {tmp} > {path} && rm -f {tmp}; }}; }}"
+        f"umask 077; cat > {tmp} && {{ mv -f {tmp} {path} 2>/dev/null; }} "
+        f"|| {{ rm -f {tmp}; exit 1; }}"
     )
     result = await conn.run(_docker_exec_i(container, inner), input=payload, check=False)
     if result.exit_status != 0:
@@ -85,10 +89,11 @@ async def _write_file(conn, container: str, path: str, payload: str) -> None:
 
 
 async def detect_container(conn: asyncssh.SSHClientConnection) -> str:
-    cmd = _DOCKER + "$DOCKER ps --format '{{.Names}}' | grep -m1 amnezia-xray"
+    # || true: без контейнера grep отдает 1, и наружу уходило голое "код 1"
+    cmd = _DOCKER + "$DOCKER ps --format '{{.Names}}' | grep -m1 amnezia-xray || true"
     out = (await _run(conn, cmd)).strip()
     if not out:
-        raise XrayError("Контейнер amnezia-xray на сервере не найден")
+        raise XrayNotDeployed("XRay на сервере не развернут - сначала разверните его.")
     return out.splitlines()[0].strip()
 
 

@@ -710,6 +710,7 @@ export function ServersPage({ onUnauthorized }: Props) {
       group_name: server.group_name,
       torrent_block: server.torrent_block,
       torrent_autopause: server.torrent_autopause,
+      alerts_enabled: server.alerts_enabled,
     })
     setEditingId(server.id)
     setFormOpen(true)
@@ -1474,6 +1475,21 @@ export function ServersPage({ onUnauthorized }: Props) {
                 <label className="checkbox">
                   <input
                     type="checkbox"
+                    checked={!!form.alerts_enabled}
+                    onChange={(e) =>
+                      setForm({ ...form, alerts_enabled: e.target.checked })
+                    }
+                  />
+                  {t('Присылать алерты этого сервера')}
+                </label>
+                <p className="muted small">
+                  {t(
+                    'По умолчанию выключено. Включает алерты о доступности, каскаде, клиентах, диске и торрентах этого сервера.',
+                  )}
+                </p>
+                <label className="checkbox">
+                  <input
+                    type="checkbox"
                     checked={!!form.torrent_block}
                     onChange={(e) =>
                       setForm({
@@ -1497,7 +1513,7 @@ export function ServersPage({ onUnauthorized }: Props) {
                 )}
                 <p className="muted small">
                   {t(
-                    'AmneziaWG и OpenVPN: торрент-трафик режется на сервере, у клиента в списке видна отметка, приходит алерт. Шифрованные торренты могут пройти, XRay не охвачен.',
+                    'AmneziaWG и OpenVPN: торрент-трафик режется на сервере, у клиента в списке видна отметка. При включенных алертах приходит уведомление. Шифрованные торренты могут пройти, XRay не охвачен.',
                   )}
                 </p>
               </div>

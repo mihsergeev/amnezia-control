@@ -20,6 +20,9 @@ _last_backup_ok = True
 
 _NAME_RE = re.compile(r"^acontrol-backup-\d{8}-\d{6}\.tar\.gz$")
 
+# сверх дневных копий храним последнюю копию каждой из стольких недель
+WEEKLY_KEEP = 8
+
 
 def backups_dir(data_dir: str) -> str:
     return os.path.join(data_dir, "backups")
@@ -58,11 +61,39 @@ def list_backups(data_dir: str) -> list[dict]:
     return out
 
 
+def _stamp(name: str) -> datetime:
+    """Время копии из имени (acontrol-backup-YYYYmmdd-HHMMSS.tar.gz), UTC."""
+    return datetime.strptime(name[16:31], "%Y%m%d-%H%M%S").replace(tzinfo=timezone.utc)
+
+
 def _prune(d: str, keep: int) -> None:
+    """Ротация по дням, а не по штукам: последняя копия за каждый из keep
+    последних дней и последняя за каждую из WEEKLY_KEEP недель. Раньше держали
+    keep штук, и частые релизы (копия на каждый старт, "Сделать бэкап")
+    вытесняли все старые копии за пару дней."""
     files = sorted(
         (fn for fn in os.listdir(d) if _NAME_RE.match(fn)), reverse=True
     )
-    for fn in files[max(keep, 1):]:
+    if not files:
+        return
+    # отсчет от самой свежей копии: панель, выключенная на месяц, не должна
+    # после старта стереть все, кроме одной
+    newest = _stamp(files[0]).date()
+    keep_names = {files[0]}
+    days: set = set()
+    weeks: set = set()
+    for fn in files:  # от новых к старым: первая за период - последняя в нем
+        day = _stamp(fn).date()
+        if (newest - day).days < max(keep, 1) and day not in days:
+            days.add(day)
+            keep_names.add(fn)
+        week = day.isocalendar()[:2]
+        if week not in weeks and len(weeks) < WEEKLY_KEEP:
+            weeks.add(week)
+            keep_names.add(fn)
+    for fn in files:
+        if fn in keep_names:
+            continue
         try:
             os.remove(os.path.join(d, fn))
         except OSError:
@@ -112,6 +143,17 @@ def save_checked(d: str, name: str, archive: bytes) -> tuple[str, list[str]]:
     return path, problems
 
 
+def _until_due(data_dir: str, interval: float, now: datetime | None = None) -> float:
+    """Сколько секунд до следующего бэкапа по времени последней копии (0 - пора)."""
+    d = backups_dir(data_dir)
+    names = sorted(fn for fn in os.listdir(d) if _NAME_RE.match(fn)) if os.path.isdir(d) else []
+    if not names:
+        return 0
+    age = ((now or datetime.now(timezone.utc)) - _stamp(names[-1])).total_seconds()
+    # копия "из будущего" (часы сбились) - не ждем
+    return interval - age if 0 <= age < interval else 0
+
+
 async def backup_loop(
     session_factory: async_sessionmaker[AsyncSession], settings: Settings
 ) -> None:
@@ -119,6 +161,13 @@ async def backup_loop(
         log.info("авто-бэкап выключен (backup_interval_hours=0)")
         return
     await asyncio.sleep(30)  # не блокируем старт
+    interval = settings.backup_interval_hours * 3600
+    # свежая копия уже есть (рестарт, релиз) - ждем ее срока, а не пишем новую
+    # на каждый старт
+    wait = _until_due(settings.data_dir, interval)
+    if wait > 0:
+        log.info("авто-бэкап: последняя копия свежая, следующая через %d мин", wait // 60)
+        await asyncio.sleep(wait)
     global _last_backup_ok
     while True:
         problems: list[str] = []
@@ -153,4 +202,4 @@ async def backup_loop(
                 )
             log.error("проблема с бэкапом: %s", card.render()[0])
             await alerts.maybe_alert(session_factory, settings, card)
-        await asyncio.sleep(settings.backup_interval_hours * 3600)
+        await asyncio.sleep(interval)

@@ -323,6 +323,8 @@ async def record(session_factory, settings: Settings, samples: list[dict],
                 paused = ""
                 if server.torrent_autopause:
                     paused = await _autopause(session, settings, server, h)
+                if not server.alerts_enabled:
+                    continue
                 fresh = row.alerted_at is None or now - alerts._aware(row.alerted_at) >= ALERT_EVERY
                 if fresh or paused == "ok":
                     row.alerted_at = now

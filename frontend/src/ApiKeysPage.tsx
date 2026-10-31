@@ -11,6 +11,7 @@ import {
 } from './api'
 import { copyText } from './clipboard'
 import { useI18n } from './i18n'
+import { StepUpModal } from './StepUpModal'
 
 type Props = { onUnauthorized: () => void }
 
@@ -26,7 +27,14 @@ export function ApiKeysPage({ onUnauthorized }: Props) {
   const [copied, setCopied] = useState(false)
   const [servers, setServers] = useState<Server[]>([])
   // правка ограничений ключа: срок и серверы задаются после выпуска, в списке
-  const [editing, setEditing] = useState<{ id: number; date: string; ids: number[] } | null>(null)
+  const [editing, setEditing] = useState<{
+    id: number
+    date: string
+    ids: number[]
+    all: boolean
+  } | null>(null)
+  // выпуск и изменение ключа - после повторного ввода пароля
+  const [stepUp, setStepUp] = useState<'create' | 'edit' | null>(null)
 
   const load = useCallback(async () => {
     try {
@@ -53,21 +61,24 @@ export function ApiKeysPage({ onUnauthorized }: Props) {
       id: k.id,
       date: k.expires_at ? k.expires_at.slice(0, 10) : '',
       ids: k.server_ids,
+      all: k.server_ids.length === 0,
     })
   }
 
-  async function saveEdit() {
+  // ошибку степ-апа (неверный пароль, код) показывает окно подтверждения
+  async function saveEdit(password: string) {
     if (!editing) return
     try {
       // срок до конца выбранного дня по UTC
       const exp = editing.date ? `${editing.date}T23:59:59+00:00` : null
-      await updateApiKey(editing.id, exp, editing.ids)
-      setEditing(null)
-      await load()
+      await updateApiKey(editing.id, exp, editing.ids, editing.all, password)
     } catch (err) {
       if (err instanceof ApiError && err.status === 401) return onUnauthorized()
-      setError(err instanceof ApiError ? err.message : t('не удалось сохранить ключ'))
+      throw err instanceof ApiError ? err : new Error(t('не удалось сохранить ключ'))
     }
+    setStepUp(null)
+    setEditing(null)
+    await load()
   }
 
   function scope(k: ApiKey) {
@@ -80,18 +91,23 @@ export function ApiKeysPage({ onUnauthorized }: Props) {
     return !!k.expires_at && new Date(k.expires_at).getTime() <= Date.now()
   }
 
-  async function create() {
+  function create() {
     if (!name.trim() || creating) return
+    setStepUp('create')
+  }
+
+  async function doCreate(password: string) {
     setCreating(true)
     try {
-      const created = await createApiKey(name.trim())
+      const created = await createApiKey(name.trim(), password)
+      setStepUp(null)
       setFresh({ name: created.name, key: created.key })
       setCopied(false)
       setName('')
       await load()
     } catch (err) {
       if (err instanceof ApiError && err.status === 401) return onUnauthorized()
-      setError(t('не удалось создать ключ'))
+      throw err instanceof ApiError ? err : new Error(t('не удалось создать ключ'))
     } finally {
       setCreating(false)
     }
@@ -222,7 +238,15 @@ export function ApiKeysPage({ onUnauthorized }: Props) {
                   {editing?.id === k.id ? (
                     <>
                       <td className="small">
-                        {servers.map((s) => (
+                        <label className="apikey-server">
+                          <input
+                            type="checkbox"
+                            checked={editing.all}
+                            onChange={(e) => setEditing({ ...editing, all: e.target.checked })}
+                          />{' '}
+                          <b>{t('все серверы')}</b>
+                        </label>
+                        {!editing.all && servers.map((s) => (
                           <label key={s.id} className="apikey-server">
                             <input
                               type="checkbox"
@@ -239,7 +263,9 @@ export function ApiKeysPage({ onUnauthorized }: Props) {
                             {s.name}
                           </label>
                         ))}
-                        <span className="muted">{t('ничего не отмечено = все серверы')}</span>
+                        {!editing.all && !editing.ids.length && (
+                          <span className="form-error">{t('отметьте хотя бы один сервер')}</span>
+                        )}
                       </td>
                       <td className="small">
                         <input
@@ -250,7 +276,12 @@ export function ApiKeysPage({ onUnauthorized }: Props) {
                         <div className="muted">{t('пусто = бессрочно')}</div>
                       </td>
                       <td>
-                        <button onClick={() => void saveEdit()}>{t('Сохранить')}</button>{' '}
+                        <button
+                          disabled={!editing.all && !editing.ids.length}
+                          onClick={() => setStepUp('edit')}
+                        >
+                          {t('Сохранить')}
+                        </button>{' '}
                         <button className="ghost" onClick={() => setEditing(null)}>
                           {t('Отмена')}
                         </button>
@@ -287,6 +318,17 @@ export function ApiKeysPage({ onUnauthorized }: Props) {
             </tbody>
           </table>
         </div>
+      )}
+      {stepUp && (
+        <StepUpModal
+          text={
+            stepUp === 'create'
+              ? t('Ключ действует, пока его не отзовут, и видит приватные конфиги клиентов. Введите пароль от панели, чтобы выпустить его.')
+              : t('Изменение серверов и срока API-ключа. Введите пароль от панели.')
+          }
+          onSubmit={(pw) => (stepUp === 'create' ? doCreate(pw) : saveEdit(pw))}
+          onCancel={() => setStepUp(null)}
+        />
       )}
     </section>
   )

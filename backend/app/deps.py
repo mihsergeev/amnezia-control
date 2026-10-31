@@ -1,11 +1,12 @@
 from typing import Annotated
 
-from fastapi import Depends, HTTPException, Security, status
+from fastapi import Depends, HTTPException, Request, Security, status
 from fastapi.security import APIKeyHeader, HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app import apikeys
+from app import apikeys, ratelimit
+from app.clientip import client_ip
 from app.config import get_settings
 from app.db import get_session
 from app.models import ApiKey, User
@@ -17,6 +18,10 @@ bearer_scheme = HTTPBearer(auto_error=False)
 api_key_scheme = APIKeyHeader(name="X-API-Key", auto_error=False)
 
 SessionDep = Annotated[AsyncSession, Depends(get_session)]
+
+# неудачных X-API-Key с адреса до блокировки: выше, чем у входа, чтобы
+# интеграция со старым ключом не запирала соседнюю с того же адреса так быстро
+APIKEY_MAX_FAILURES = 30
 
 
 async def get_current_user(
@@ -48,6 +53,7 @@ CurrentUser = Annotated[User, Depends(get_current_user)]
 async def get_api_client(
     key: Annotated[str | None, Security(api_key_scheme)],
     session: SessionDep,
+    request: Request,
 ) -> ApiKey:
     """Аутентификация интеграции по ключу из X-API-Key.
 
@@ -59,8 +65,15 @@ async def get_api_client(
         raise HTTPException(
             status.HTTP_401_UNAUTHORIZED, "Требуется заголовок X-API-Key"
         )
+    limit_key = f"apikey:{ratelimit.ip_key(client_ip(request))}"
+    if ratelimit.is_locked(limit_key):
+        raise HTTPException(
+            status.HTTP_429_TOO_MANY_REQUESTS,
+            "Слишком много неверных API-ключей с этого адреса, подождите",
+        )
     row = await apikeys.authenticate(session, key)
     if row is None:
+        ratelimit.record_failure(limit_key, max_failures=APIKEY_MAX_FAILURES)
         raise HTTPException(
             status.HTTP_401_UNAUTHORIZED, "Недействительный или отозванный API-ключ"
         )
