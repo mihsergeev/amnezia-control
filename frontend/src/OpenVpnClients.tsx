@@ -12,7 +12,8 @@ import {
   type OvpnState,
 } from './api'
 import { ExpiryCell, ExpirySelect } from './Expiry'
-import { BulkRevokeBar, SelectAllCell, SelectCell, useSelection } from './BulkActions'
+import { BulkRevokeBar, SelectAllCell, SelectCell } from './BulkActions'
+import { useSelection } from './useSelection'
 import { ClientStatsModal } from './ClientStatsModal'
 import { Menu } from './Menu'
 import { NoteCell } from './NoteCell'
@@ -22,7 +23,7 @@ import { formatBytes } from './format'
 import { useShareLink } from './ShareLink'
 import { TorrentBadge } from './Torrent'
 import { useTorrentHits } from './useTorrentHits'
-import { useI18n } from './i18n'
+import { translate, useI18n } from './i18n'
 import { useModalLayer } from './useModalDismiss'
 
 type Props = {
@@ -74,7 +75,7 @@ export function OpenVpnClients({
         onUnauthorized()
         return
       }
-      setError(err instanceof Error ? err.message : t('Ошибка'))
+      setError(err instanceof Error ? err.message : translate('Ошибка'))
     },
     [onUnauthorized],
   )

@@ -37,7 +37,7 @@ import { CascadeWizard } from './CascadeWizard'
 import { CascadeCheckModal } from './CascadeCheck'
 import { EgressCheckModal } from './EgressCheck'
 import { TorrentLine } from './Torrent'
-import { useI18n } from './i18n'
+import { translate, useI18n } from './i18n'
 
 const FALLBACK_USER = 'acontrol'
 
@@ -651,7 +651,7 @@ export function ServersPage({ onUnauthorized }: Props) {
         onUnauthorized()
         return
       }
-      setError(err instanceof Error ? err.message : t('Неизвестная ошибка'))
+      setError(err instanceof Error ? err.message : translate('Неизвестная ошибка'))
     },
     [onUnauthorized],
   )
@@ -993,19 +993,19 @@ export function ServersPage({ onUnauthorized }: Props) {
   }
 
   // проблема сервера с учетом выхода его каскада: выход в списке не виден
-  function problem(s: Server): boolean {
+  const problem = useCallback((s: Server): boolean => {
     if (isProblem(s, metrics[s.id])) return true
     const c = cascades.find((x) => x.entry_server_id === s.id)
     if (c?.result.health?.ok === false) return true
     const exit = c && servers.find((x) => x.id === c.exit_server_id)
     return !!exit && isProblem(exit, metrics[exit.id])
-  }
+  }, [cascades, metrics, servers])
 
-  function cascadePeer(s: Server, c: Cascade | undefined): Server | undefined {
+  const cascadePeer = useCallback((s: Server, c: Cascade | undefined): Server | undefined => {
     if (!c) return undefined
     const id = c.entry_server_id === s.id ? c.exit_server_id : c.entry_server_id
     return servers.find((x) => x.id === id)
-  }
+  }, [servers])
 
   async function confirmUnbuild(force: boolean) {
     if (!unbuild) return
@@ -1138,7 +1138,7 @@ export function ServersPage({ onUnauthorized }: Props) {
           }),
         }))
         .filter((g) => g.servers.length > 0),
-    [groupList, metrics, onlyProblems, q, cascades, servers],
+    [groupList, onlyProblems, q, cascades, problem, cascadePeer],
   )
   const visibleFlat = visibleGroups.flatMap((g) => g.servers)
   const problemCount = listed.filter(problem).length

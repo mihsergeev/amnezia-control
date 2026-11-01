@@ -4,6 +4,18 @@ All notable changes to Amnezia Control are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.82.1] - 2026-11-01
+
+### Fixed
+- Keep VPN client NAT working when Docker changes interface numbering on a
+  container connected to multiple networks. Preserve VPN peer-to-peer traffic.
+- Remove frontend hook-dependency and component-export lint warnings without
+  restarting data polling when the interface language changes.
+
+### Upgrade notes
+- The NAT fix applies to newly installed or rebuilt protocols. Updating the panel
+  does not restart or rebuild existing VPN containers.
+
 ## [0.82.0] - 2026-10-31
 
 ### Changed

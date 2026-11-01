@@ -1,10 +1,6 @@
 import { useState } from 'react'
 import { useI18n } from './i18n'
-
-// ISO-строка через N дней от текущего момента.
-export function daysFromNowIso(days: number): string {
-  return new Date(Date.now() + days * 86_400_000).toISOString()
-}
+import { daysFromNowIso } from './expiryDate'
 
 // ISO → значение для <input type="datetime-local"> в локальной зоне.
 function isoToLocalInput(iso: string): string {

@@ -648,7 +648,8 @@ def build_deploy_script(port: int, site: str, server_ip: str = "") -> str:
         "iptables -A OUTPUT -o tun0 -j ACCEPT",
         "iptables -A FORWARD -i tun0 -o eth0 -s 10.8.0.0/24 -j ACCEPT",
         "iptables -A FORWARD -m state --state ESTABLISHED,RELATED -j ACCEPT",
-        "iptables -t nat -A POSTROUTING -s 10.8.0.0/24 -o eth0 -j MASQUERADE",
+        # Номер выходного интерфейса Docker меняется при нескольких сетях.
+        "iptables -t nat -A POSTROUTING -s 10.8.0.0/24 ! -o tun0 -j MASQUERADE",
         "killall -KILL openvpn 2>/dev/null",
         "killall -KILL ck-server 2>/dev/null",
         "killall -KILL ssserver 2>/dev/null",

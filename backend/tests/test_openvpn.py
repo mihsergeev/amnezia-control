@@ -59,6 +59,8 @@ def test_deploy_script_preserves_live_pki_before_guard() -> None:
     хост ДО guard `test -f ca.crt`, иначе guard сгенерил бы новый CA и все
     клиентские сертификаты стали бы невалидны (класс инцидента de-hz)."""
     s = openvpn.build_deploy_script(8443, "tile.openstreetmap.org", "203.0.113.9")
+    assert "-s 10.8.0.0/24 ! -o tun0 -j MASQUERADE" in s
+    assert "-s 10.8.0.0/24 -o eth0 -j MASQUERADE" not in s
     # источник — любой openvpn/cloak-контейнер (в т.ч. родной с иным именем)
     assert 'grep -iE "openvpn|cloak"' in s
     # перенос конфига из контейнера на хост
