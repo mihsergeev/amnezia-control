@@ -23,14 +23,14 @@ from urllib.parse import quote
 import asyncssh
 
 # Версия xray-core, которую ставит панель: установка, обновление и переустановка.
-# Закреплена, а не releases/latest. С 26.9.8 REALITY-сервер отвергает ClientHello
-# без ключа X25519MLKEM768, и клиенты, которые его не шлют, молча перестают
-# подключаться: все на sing-box (Hiddify, Karing, NekoBox) с любым отпечатком,
-# старые сборки на ядре Xray с отпечатком firefox, а его панель и выдает
-# (SagerNet/sing-box#4520). 22.10.2026 latest на GitHub стал 26.10.21 с этой
-# проверкой. Поднимать, когда клиенты догонят, проверив ссылки панели на новом
-# сервере.
-XRAY_RELEASE = "v26.3.27"
+# Закреплена, а не releases/latest. В 26.10.31 MPTCP выключен по умолчанию
+# (CVE-2026-98432); GODEBUG и sysctl ниже сохраняют защиту при пересоздании.
+# Полное исправление требует обновления ядра Linux на хосте. Старые ClientHello
+# без X25519MLKEM768 upstream REALITY больше не поддерживает. Выданный панелью
+# профиль firefox с клиентом 26.3.27 (FirefoxAuto148) проверен на 26.10.31
+# реальным трафиком; серверный конфиг, UUID и ключи при обновлении сохраняются.
+# Это не подтверждает совместимость более старых XRay и клиентов на sing-box.
+XRAY_RELEASE = "v26.10.31"
 XRAY_DIR = "/opt/amnezia/xray"
 SERVER_JSON = f"{XRAY_DIR}/server.json"
 CLIENTS_TABLE = f"{XRAY_DIR}/clientsTable"
@@ -636,7 +636,7 @@ async def revoke_client(
 
 _XRAY_DOCKERFILE = """FROM alpine:3.15
 LABEL maintainer="AmneziaVPN"
-ARG XRAY_RELEASE="v26.3.27"
+ARG XRAY_RELEASE="v26.10.31"
 RUN apk add --no-cache curl unzip bash openssl netcat-openbsd dumb-init rng-tools xz
 RUN apk --update upgrade --no-cache
 RUN mkdir -p /opt/amnezia/xray
@@ -644,6 +644,7 @@ RUN curl -L https://github.com/XTLS/Xray-core/releases/download/${XRAY_RELEASE}/
   unzip /root/xray.zip -d /usr/bin/; \\
   chmod a+x /usr/bin/xray;
 ENV TZ=Asia/Shanghai
+ENV GODEBUG=multipathtcp=0
 ENTRYPOINT ["dumb-init","tail","-f","/dev/null"]
 """
 
@@ -763,8 +764,13 @@ if command -v ufw >/dev/null 2>&1; then sudo ufw allow $XRAY_SERVER_PORT/tcp >/d
 if command -v firewall-cmd >/dev/null 2>&1; then sudo firewall-cmd --permanent --add-port=$XRAY_SERVER_PORT/tcp >/dev/null 2>&1 && sudo firewall-cmd --reload >/dev/null 2>&1 || true; fi
 
 log "[5/5] контейнер"
+# В bridge-сети свой netns: host sysctl не заменяет его настройку. На ядрах
+# без CONFIG_MPTCP этого sysctl нет, и Docker с ним отказался бы запускаться.
+MPTCP_OPT=""
+if [ -e /proc/sys/net/mptcp/enabled ]; then MPTCP_OPT="--sysctl net.mptcp.enabled=0"; fi
 sudo docker rm -f "$C" >/dev/null 2>&1 || true
-sudo docker run -d --name "$C" --restart always --privileged --cap-add=NET_ADMIN \\
+sudo docker run -d --name "$C" --restart always --privileged --cap-add=NET_ADMIN $MPTCP_OPT \\
+  -e GODEBUG=multipathtcp=0 \\
   -p ${{BIND:+$BIND:}}${{XRAY_SERVER_PORT}}:${{XRAY_SERVER_PORT}}/tcp \\
   -v "$D":/opt/amnezia/xray \\
   --entrypoint sh "$IMG" -c "xray -config /opt/amnezia/xray/server.json" >/dev/null \\

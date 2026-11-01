@@ -32,7 +32,9 @@ import asyncssh
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey
 
-XRAY_IMAGE = "ghcr.io/xtls/xray-core:26.3.27"
+# Оба конца каскада обновляются вместе; наш chrome-профиль поддерживает
+# X25519MLKEM768. UUID и ключи каскада при обновлении сохраняются.
+XRAY_IMAGE = "ghcr.io/xtls/xray-core:26.10.31"
 DIR = "/opt/acontrol/cascade"
 EXIT_DIR = "/opt/acontrol/cascade-exit"
 GATEWAY = "acontrol-cascade"
@@ -53,7 +55,7 @@ TAG = "cascade"  # каталог деплоя на нодах ($HOME/.acontrol/
 TRANSPORTS = ("vless", "gre")
 # ревизия скриптов входа: проверка видит старую и обновляет их на месте
 # (upgrade_entry), без переустановки каскада
-SCRIPTS_REV = "3"
+SCRIPTS_REV = "4"
 
 # проверка канала: сколько отправляем со входа на выход и сколько ждем
 PROBE_BYTES = 20 * 1024 * 1024
@@ -380,7 +382,7 @@ done
 [ "$changed" = 1 ] || exit 0
 mkdir -p "$TMP/geo" "$DIR"
 cp geoip.dat geosite.dat "$TMP/geo/"
-docker run --rm --user 0:0 -e XRAY_LOCATION_ASSET=/geo -v "$TMP/geo:/geo:ro" -v @DIR@/config:/cfg:ro \
+docker run --rm --user 0:0 -e GODEBUG=multipathtcp=0 -e XRAY_LOCATION_ASSET=/geo -v "$TMP/geo:/geo:ro" -v @DIR@/config:/cfg:ro \
   @IMAGE@ run -test -confdir /cfg >/dev/null
 install -m 644 geoip.dat geosite.dat "$DIR/"
 if docker ps --format "{{.Names}}" | grep -qx @GATEWAY@; then
@@ -513,6 +515,7 @@ def build_exit_script(transport: str, entry_ip: str, cascade_id: int, params: di
             f'log "[3/3] контейнер, порт {port}/tcp открыт только для {entry_ip}"',
             f"sudo docker rm -f {EXIT_CONTAINER} >/dev/null 2>&1",
             f"sudo docker run -d --name {EXIT_CONTAINER} --restart always --network host "
+            "-e GODEBUG=multipathtcp=0 "
             "--user 0:0 --read-only --cap-drop ALL --cap-add NET_BIND_SERVICE "
             "--security-opt no-new-privileges:true --log-opt max-size=10m --log-opt max-file=3 "
             f"-v {EXIT_DIR}:/usr/local/etc/xray:ro {XRAY_IMAGE} >/dev/null || fail 'docker run'",
@@ -683,6 +686,7 @@ def gateway_run(confdir: str) -> str:
     """Строка скрипта: запустить шлюз каскада с конфигом из confdir."""
     return (
         f"sudo docker run -d --name {GATEWAY} --restart always --network host "
+        "-e GODEBUG=multipathtcp=0 "
         "--user 0:0 --read-only --cap-drop ALL --cap-add NET_ADMIN --cap-add NET_BIND_SERVICE "
         "--security-opt no-new-privileges:true --log-opt max-size=10m --log-opt max-file=3 "
         "-e XRAY_LOCATION_ASSET=/usr/local/share/xray "
@@ -790,6 +794,7 @@ def build_entry_upgrade() -> str:
     """Новые скрипты входа поверх старых: шлюз, туннель и клиентов не трогает.
     Недостающие правила ставит служба heal на первом же круге."""
     lines = [_HEAD, _put(f"{DIR}/cascade-tproxy.sh", _fill(_TPROXY_SH), "755")]
+    lines.append(_put(f"{DIR}/geo-update.sh", _fill(_GEO_SH), "755"))
     # GRE-скрипт только там, где каскад на GRE: его параметры уже лежат рядом
     lines.append(f"if [ -f {GRE_DEFAULTS} ]; then")
     lines.append("  " + _put(f"{DIR}/gre-tun.sh", _fill(_GRE_TUN_SH), "755"))

@@ -37,6 +37,38 @@ def test_scripts_are_valid_shell(transport) -> None:
         _bash_ok(cascade._fill(text))
 
 
+def test_mptcp_optout_covers_gateway_exit_and_geo_check() -> None:
+    scripts = [
+        cascade.gateway_run(f"{cascade.DIR}/config"),
+        cascade.gateway_run(f"{cascade.DIR}/boot"),
+        cascade.build_exit_script("vless", "203.0.113.10", 3, VLESS),
+        cascade._fill(cascade._GEO_SH),
+    ]
+    for script in scripts:
+        runs = [line for line in script.splitlines() if "docker run " in line]
+        assert runs
+        assert all("-e GODEBUG=multipathtcp=0" in line for line in runs)
+        assert "--sysctl net.mptcp" not in script
+    # Обновление скриптов сохраняет защиту и у служебных запусков геобаз.
+    assert f"{cascade.DIR}/geo-update.sh" in cascade.build_entry_upgrade()
+
+
+def test_cascade_security_release_keeps_reality_identity() -> None:
+    assert cascade.XRAY_IMAGE == "ghcr.io/xtls/xray-core:26.10.31"
+    entry = json.loads(cascade.entry_gateway_config("vless", "198.51.100.20", VLESS))
+    exit_cfg = json.loads(cascade.exit_vless_config(VLESS))
+    out = entry["outbounds"][0]
+    reality = out["streamSettings"]["realitySettings"]
+    assert reality == {
+        "serverName": VLESS["sni"], "fingerprint": "chrome",
+        "publicKey": VLESS["public_key"], "shortId": VLESS["short_id"],
+    }
+    assert out["settings"]["vnext"][0]["users"][0]["id"] == VLESS["uuid"]
+    inbound = exit_cfg["inbounds"][0]
+    assert inbound["settings"]["clients"][0]["id"] == VLESS["uuid"]
+    assert inbound["streamSettings"]["realitySettings"]["privateKey"] == VLESS["private_key"]
+
+
 def test_entry_turns_clients_over_only_after_check() -> None:
     script = cascade.build_entry_script("gre", "198.51.100.20", 3, VLESS)
     # клиенты уходят в шлюз только после того, как через него открылся интернет

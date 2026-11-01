@@ -1,10 +1,12 @@
 """Панель ставит закрепленную версию xray-core, а не последний релиз GitHub.
 
-22.10.2026 latest на GitHub стал 26.10.21, а с 26.9.8 REALITY-сервер отвергает
-ClientHello без ключа X25519MLKEM768: клиенты на sing-box (Hiddify, Karing,
-NekoBox) и старые сборки Xray с отпечатком firefox молча перестают подключаться.
-Кнопки "Обновить ядро" и "Переустановить" брали latest и отрезали бы их.
+26.10.31 выключает MPTCP по умолчанию. Проверенный профиль FirefoxAuto148
+сохраняется; старые ClientHello без X25519MLKEM768 upstream не поддерживает.
+Кнопки "Обновить ядро" и "Переустановить" должны ставить проверенный pin.
 """
+
+import base64
+import re
 
 import pytest
 
@@ -67,6 +69,24 @@ def test_no_github_lookup_left() -> None:
     assert not hasattr(xray, "latest_release")
 
 
+def test_mptcp_security_release_preserves_issued_fingerprint() -> None:
+    assert xray.XRAY_RELEASE == "v26.10.31"
+    assert xray.FINGERPRINT == "firefox"
+    script = xray.build_deploy_script(8443, "www.example.com")
+    dockerfile = re.search(r"echo ([A-Za-z0-9+/=]+) \| base64 -d.*Dockerfile", script)
+    assert dockerfile is not None
+    dockerfile_text = base64.b64decode(dockerfile[1]).decode()
+    assert f'ARG XRAY_RELEASE="{xray.XRAY_RELEASE}"' in dockerfile_text
+    assert "ENV GODEBUG=multipathtcp=0" in dockerfile_text
+    run = re.search(r'sudo docker run -d.*?\n.*?\n.*?\n.*?\n.*?\n', script)
+    assert run is not None
+    assert "-e GODEBUG=multipathtcp=0" in run[0]
+    # Свой netns выключает и явно запрошенный tcpMptcp:true; на ядре без
+    # CONFIG_MPTCP sysctl пропускаем, иначе Docker отказался бы запускаться.
+    assert 'if [ -e /proc/sys/net/mptcp/enabled ]; then MPTCP_OPT="--sysctl net.mptcp.enabled=0"; fi' in script
+    assert "$MPTCP_OPT" in run[0]
+
+
 def test_version_tuple() -> None:
     assert xray.version_tuple("v26.3.27") == (26, 3, 27)
     assert xray.version_tuple("26.10.21") > xray.version_tuple("v26.3.27")
@@ -92,7 +112,8 @@ async def test_update_installs_pinned(client, auth_headers, node) -> None:
 @pytest.mark.parametrize("current,offer", [
     ("25.8.3", True),     # старее закрепленной - предлагаем обновить
     (PINNED, False),      # уже на ней
-    ("26.10.21", False),  # новее (поставили руками) - не зовем "обновлять"
+    ("26.10.21", True),   # предыдущее ядро - предлагаем security release
+    ("26.11.1", False),   # новее pin - не зовем "обновлять"
 ])
 async def test_update_offered_only_up_to_pinned(
     client, auth_headers, node, monkeypatch, current, offer
