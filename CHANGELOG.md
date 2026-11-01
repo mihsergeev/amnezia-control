@@ -4,6 +4,16 @@ All notable changes to Amnezia Control are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.82.4] - 2026-11-02
+
+### Fixed
+- Show each cascade once in the server list. Counts, search and problem filters
+  cover both its entry and exit nodes.
+- Open either node from the cascade path while keeping its list entry selected,
+  including access to direct clients and individual server actions.
+- Preserve node selection across refreshes and browser navigation. Removing a
+  cascade restores separate server entries.
+
 ## [0.82.3] - 2026-11-01
 
 ### Security

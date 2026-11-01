@@ -2116,6 +2116,17 @@ button.srv-side-gh:hover .drag-handle {
   overflow-wrap: anywhere;
 }
 
+.srv-item-name > span {
+  display: block;
+}
+
+.srv-item-kind {
+  color: var(--text-muted);
+  font-size: 0.73rem;
+  font-weight: 400;
+  margin-bottom: 0.15rem;
+}
+
 /* «→ 🇫🇮» в строке списка: нода - вход каскада, клиенты выходят в другой стране */
 .srv-item-route {
   display: inline-flex;
@@ -2249,6 +2260,24 @@ button.srv-side-gh:hover .drag-handle {
 .srv-hop-exit {
   border-color: #3b82f666;
   background: #3b82f60f;
+}
+
+button.srv-hop {
+  color: var(--text);
+  background: transparent;
+  box-shadow: none;
+  text-align: left;
+  font-weight: 400;
+  transform: none;
+}
+
+.srv-hop-text > span {
+  display: block;
+}
+
+button.srv-hop-selected {
+  border-color: #3563e9;
+  background: #3563e91f;
 }
 
 /* узел маршрута, который открывает соседний сервер каскада */

@@ -13,6 +13,13 @@ export type Lang = 'ru' | 'en'
 const EN: Record<string, string> = {
   // --- шапка / навигация ---
   'Серверы': 'Servers',
+  'Каскад': 'Cascade',
+  'Сервер входа недоступен': 'Entry server is unavailable',
+  'Сервер выхода недоступен': 'Exit server is unavailable',
+  'выход каскада, {name}': 'cascade exit, {name}',
+  'Клиенты входа и выхода: онлайн / всего': 'Entry and exit clients: online / total',
+  'Узлы каскада недоступны. Откройте ход установки или обновите список.':
+    'Cascade nodes are unavailable. Open the installation progress or refresh the list.',
   'Обзор': 'Overview',
   // --- фильтр "Обзора" по серверам ---
   'Все серверы': 'All servers',
