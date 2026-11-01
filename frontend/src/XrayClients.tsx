@@ -15,7 +15,8 @@ import {
   type XrayVersion,
 } from './api'
 import { ExpiryCell, ExpirySelect } from './Expiry'
-import { BulkRevokeBar, SelectAllCell, SelectCell, useSelection } from './BulkActions'
+import { BulkRevokeBar, SelectAllCell, SelectCell } from './BulkActions'
+import { useSelection } from './useSelection'
 import { Menu } from './Menu'
 import { NoteCell } from './NoteCell'
 import { ClientStatsModal } from './ClientStatsModal'
@@ -23,7 +24,7 @@ import { RollbackMenu } from './RollbackMenu'
 import { copyText } from './clipboard'
 import { formatBytes } from './format'
 import { useShareLink } from './ShareLink'
-import { useI18n } from './i18n'
+import { translate, useI18n } from './i18n'
 import { useModalLayer } from './useModalDismiss'
 
 type Props = {
@@ -102,7 +103,7 @@ export function XrayClients({
         onUnauthorized()
         return
       }
-      setError(err instanceof Error ? err.message : t('Ошибка'))
+      setError(err instanceof Error ? err.message : translate('Ошибка'))
     },
     [onUnauthorized],
   )

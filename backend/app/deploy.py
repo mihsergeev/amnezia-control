@@ -74,6 +74,22 @@ _PANEL_AWG_IMAGES = {IMAGE, IMAGE_V3}
 WORK_ROOT = "$HOME/.acontrol"
 HUB_TAGS_URL = "https://hub.docker.com/v2/repositories/amneziavpn/amneziawg-go/tags?page_size=50"
 
+
+def _client_nat(subnet: str) -> str:
+    """Выходной Docker-интерфейс меняется при подключении второй сети.
+
+    Маскируем только выход из VPN-подсети, сохраняя адреса при обмене между
+    клиентами на awg0. Заодно снимаем старое правило с привязкой к eth0.
+    """
+    return (
+        f"while iptables -t nat -D POSTROUTING -s {subnet} -o eth0 "
+        "-j MASQUERADE 2>/dev/null; do :; done; "
+        f"iptables -t nat -C POSTROUTING -s {subnet} ! -o awg0 "
+        "-j MASQUERADE 2>/dev/null "
+        f"|| iptables -t nat -A POSTROUTING -s {subnet} ! -o awg0 -j MASQUERADE"
+    )
+
+
 def _start_sh(subnet: str = SUBNET) -> str:
     """Точка входа контейнера. Параметр - подсеть клиентов: у 3.0 она своя, у 2.0
     прежняя."""
@@ -81,8 +97,7 @@ def _start_sh(subnet: str = SUBNET) -> str:
 # Amnezia Control: точка входа контейнера AmneziaWG
 awg-quick down /opt/amnezia/awg/awg0.conf >/dev/null 2>&1
 awg-quick up /opt/amnezia/awg/awg0.conf 2>/dev/null || true
-iptables -t nat -C POSTROUTING -s {subnet} -o eth0 -j MASQUERADE 2>/dev/null \\
-  || iptables -t nat -A POSTROUTING -s {subnet} -o eth0 -j MASQUERADE
+{_client_nat(subnet)}
 iptables -C FORWARD -i awg0 -j ACCEPT 2>/dev/null || iptables -A FORWARD -i awg0 -j ACCEPT
 iptables -C FORWARD -m state --state ESTABLISHED,RELATED -j ACCEPT 2>/dev/null \\
   || iptables -A FORWARD -m state --state ESTABLISHED,RELATED -j ACCEPT
@@ -243,8 +258,7 @@ def _bringup(subnet: str = SUBNET) -> str:
     return (
         "awg-quick down /opt/amnezia/awg/awg0.conf >/dev/null 2>&1; "
         "awg-quick up /opt/amnezia/awg/awg0.conf; "
-        f"iptables -t nat -C POSTROUTING -s {subnet} -o eth0 -j MASQUERADE 2>/dev/null "
-        f"|| iptables -t nat -A POSTROUTING -s {subnet} -o eth0 -j MASQUERADE; "
+        f"{_client_nat(subnet)}; "
         "iptables -C FORWARD -i awg0 -j ACCEPT 2>/dev/null "
         "|| iptables -A FORWARD -i awg0 -j ACCEPT; "
         "iptables -C FORWARD -m state --state ESTABLISHED,RELATED -j ACCEPT 2>/dev/null "

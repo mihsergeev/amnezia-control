@@ -167,6 +167,20 @@ def test_start_sh_and_systemd_present() -> None:
     assert "amnezia-awg2" in unit
 
 
+def test_client_nat_survives_docker_interface_renumbering() -> None:
+    # При второй Docker-сети default может быть eth1 после restart. Нельзя
+    # ограничивать NAT eth0, но обмен VPN-клиентов через awg0 не маскируем.
+    for subnet in (deploy.SUBNET, deploy.SUBNET_V3, "10.9.7.0/24"):
+        for script in (deploy._start_sh(subnet), deploy._bringup(subnet)):
+            add = next(
+                part.strip() for part in script.replace(";", "\n").splitlines()
+                if "-A POSTROUTING" in part
+            )
+            assert f"-s {subnet} ! -o awg0 -j MASQUERADE" in add
+            assert "-o eth0" not in add
+            assert f"-D POSTROUTING -s {subnet} -o eth0" in script
+
+
 class _FakeConn:
     """Мини-заглушка asyncssh-соединения: помнит команды, отдаёт содержимое
     файлов по `cat "<path>"`."""
