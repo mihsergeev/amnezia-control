@@ -38,15 +38,19 @@ export function ClientStatsModal({
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
+    let cancelled = false
     setLoading(true)
     setError(null)
+    setData(null)
     clientHistory(serverId, protocol, clientId, hours)
-      .then(setData)
+      .then((data) => { if (!cancelled) setData(data) })
       .catch((err) => {
+        if (cancelled) return
         if (err instanceof ApiError && err.status === 401) onUnauthorized()
         else setError(err instanceof Error ? err.message : t('Ошибка'))
       })
-      .finally(() => setLoading(false))
+      .finally(() => { if (!cancelled) setLoading(false) })
+    return () => { cancelled = true }
   }, [serverId, protocol, clientId, hours, onUnauthorized, t])
 
   const ts = useMemo(() => data?.points.map((p) => Date.parse(p.ts)) ?? [], [data])

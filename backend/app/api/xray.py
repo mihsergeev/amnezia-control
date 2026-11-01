@@ -114,6 +114,7 @@ async def set_note(
 
 
 @router.post("/clients", response_model=XrayCreateResponse, status_code=201)
+@nodelock.operation("xray")
 async def create_client(
     server_id: int, body: XrayCreateRequest, user: CurrentUser, session: SessionDep
 ) -> XrayCreateResponse:
@@ -169,6 +170,7 @@ async def get_client_config(
 
 
 @router.post("/pause", status_code=status.HTTP_204_NO_CONTENT)
+@nodelock.operation("xray")
 async def pause_client(
     server_id: int, body: XrayRevokeRequest, user: CurrentUser, session: SessionDep
 ) -> None:
@@ -200,6 +202,7 @@ async def pause_client(
 
 
 @router.post("/resume", status_code=status.HTTP_204_NO_CONTENT)
+@nodelock.operation("xray")
 async def resume_client(
     server_id: int, body: XrayRevokeRequest, user: CurrentUser, session: SessionDep
 ) -> None:
@@ -223,20 +226,19 @@ async def resume_client(
 
 
 @router.post("/revoke", status_code=status.HTTP_204_NO_CONTENT)
+@nodelock.operation("xray")
 async def revoke_client(
     server_id: int, body: XrayRevokeRequest, user: CurrentUser, session: SessionDep
 ) -> None:
     server = await _get_or_404(server_id, session)
-    is_paused = body.client_id in await pausestore.list_paused(
-        session, server_id, "xray"
-    )
-    if not is_paused:
-        try:
-            async with _connect(server) as conn:
-                container = await xray.detect_container(conn)
-                await xray.revoke_client(conn, container, body.client_id)
-        except Exception as exc:  # noqa: BLE001
-            raise _xray_error(exc) from exc
+    # Snapshot restore can put a paused UUID back into server.json. Revoke on
+    # the node even when the panel still has the pause record, as AWG does.
+    try:
+        async with _connect(server) as conn:
+            container = await xray.detect_container(conn)
+            await xray.revoke_client(conn, container, body.client_id)
+    except Exception as exc:  # noqa: BLE001
+        raise _xray_error(exc) from exc
     await pausestore.drop(session, server_id, "xray", body.client_id)
     await audit.record(
         session, user.username, "xray_revoke", server.name, body.client_id
@@ -253,6 +255,7 @@ async def revoke_client(
 
 
 @router.post("/reissue", response_model=XrayCreateResponse, status_code=201)
+@nodelock.operation("xray")
 async def reissue_client(
     server_id: int, body: XrayRevokeRequest, user: CurrentUser, session: SessionDep
 ) -> XrayCreateResponse:

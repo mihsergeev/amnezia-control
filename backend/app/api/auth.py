@@ -66,6 +66,17 @@ def _user_key(username: str) -> str:
     return f"user:{username}"
 
 
+async def _bump_token_version(session, user: User) -> int:
+    # Два уже авторизованных запроса могут держать одну старую ORM-версию.
+    # Инкремент в БД не дает второму logout/password затереть отзыв первого.
+    return await session.scalar(
+        update(User).where(User.id == user.id)
+        .values(token_version=User.token_version + 1)
+        .returning(User.token_version)
+        .execution_options(synchronize_session=False)
+    )
+
+
 async def _record_failure(session, settings, key: str, username: str, action: str) -> None:
     """Пишет неудачный вход в журнал; на переходе в блокировку — алерт (брутфорс)."""
     locked_now = ratelimit.record_failure(ratelimit.ip_key(key))
@@ -152,7 +163,7 @@ async def login(
 async def logout(request: Request, user: CurrentUser, session: SessionDep) -> None:
     """Выход с отзывом токена. Пользователь в панели один, поэтому отзываются
     все его сессии: иначе украденный токен жил бы до конца срока."""
-    user.token_version += 1
+    await _bump_token_version(session, user)
     await session.commit()
     await audit.record(session, user.username, "logout", _client_key(request))
 
@@ -171,7 +182,7 @@ async def change_password(
             ) from exc
         raise
     user.password_hash = hash_password(body.new_password)
-    user.token_version += 1  # все ранее выданные токены становятся недействительны
+    token_version = await _bump_token_version(session, user)
     # Смена пароля закрывает и постоянный доступ интеграций: ключ мог быть
     # выпущен до обнаружения чужой сессии. Отзываем в той же транзакции.
     await session.execute(update(ApiKey).where(ApiKey.revoked.is_(False)).values(revoked=True))
@@ -186,7 +197,7 @@ async def change_password(
     )
     token = create_access_token(
         user.username, settings.jwt_secret, settings.jwt_ttl_minutes,
-        user.token_version,
+        token_version,
     )
     return TokenResponse(access_token=token)
 
@@ -213,6 +224,7 @@ async def twofa_setup(
     await stepup.verify(user, body.password, request)
     secret = totp.random_secret()
     user.totp_secret = secret  # ожидающий подтверждения секрет (enabled ещё False)
+    user.totp_last_counter = 0  # счетчик повтора относится только к этому секрету
     await session.commit()
     return TwoFASetupOut(
         secret=secret,

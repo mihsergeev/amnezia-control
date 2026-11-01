@@ -11,9 +11,15 @@ from app.schemas import ShareLinkOut, ShareRequest, ShareServiceIn, ShareService
 router = APIRouter(prefix="/share", tags=["share"])
 
 
+def _public_services(services: list[dict]) -> list[dict]:
+    # Старые записи могут содержать Basic Auth: запросы сервиса продолжают
+    # работать, но credentials не попадают в ответы UI.
+    return [{**svc, "url": share.public_url(svc["url"])} for svc in services]
+
+
 @router.get("/services", response_model=list[ShareServiceOut])
 async def list_services(_: CurrentUser, session: SessionDep) -> list[dict]:
-    return await settings_store.get_share_services(session)
+    return _public_services(await settings_store.get_share_services(session))
 
 
 @router.post("/services", response_model=list[ShareServiceOut])
@@ -33,7 +39,7 @@ async def add_service(
     })
     await settings_store.set_share_services(session, services)
     await audit.record(session, user.username, "share_service_add", body.name, base)
-    return services
+    return _public_services(services)
 
 
 @router.delete("/services/{service_id}", response_model=list[ShareServiceOut])
@@ -47,9 +53,10 @@ async def delete_service(
     services = [s for s in services if s["id"] != service_id]
     await settings_store.set_share_services(session, services)
     await audit.record(
-        session, user.username, "share_service_delete", gone[0]["name"], gone[0]["url"]
+        session, user.username, "share_service_delete", gone[0]["name"],
+        share.public_url(gone[0]["url"]),
     )
-    return services
+    return _public_services(services)
 
 
 @router.post("", response_model=ShareLinkOut)

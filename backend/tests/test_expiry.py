@@ -87,6 +87,21 @@ async def test_future_client_is_kept(factory, monkeypatch):
         assert (await session.get(ClientLimit, 1)) is not None
 
 
+async def test_expiry_preserves_same_key_note_of_other_awg_protocol(factory):
+    from app.models import AwgNote
+
+    async with factory() as session:
+        session.add_all([
+            AwgNote(server_id=1, protocol="awg", public_key="SAME-KEY", note="expired"),
+            AwgNote(server_id=1, protocol="awg3", public_key="SAME-KEY", note="keep"),
+        ])
+        await session.commit()
+        await expiry.cleanup_client_db(session, 1, "awg", "SAME-KEY")
+        await session.commit()
+        left = list(await session.scalars(select(AwgNote)))
+    assert [(row.protocol, row.note) for row in left] == [("awg3", "keep")]
+
+
 async def test_unreachable_node_keeps_limit(factory, monkeypatch):
     settings = config.get_settings()
     past = datetime.now(timezone.utc) - timedelta(hours=1)
@@ -196,6 +211,64 @@ async def test_expired_grouped_per_node_and_dead_node_skipped(factory, monkeypat
     async with factory() as session:
         left = set(await session.scalars(select(ClientLimit.client_id)))
     assert left == {"A1=", "A2=", "AX"}
+
+
+async def test_expiry_rechecks_due_limits_after_waiting_on_other_node(factory, monkeypatch):
+    from app import limits
+
+    first_id = await _seed(factory, datetime.now(timezone.utc) - timedelta(hours=1))
+    second_id = await _seed(factory, datetime.now(timezone.utc) - timedelta(hours=1))
+    future = datetime.now(timezone.utc) + timedelta(days=10)
+    revoked = []
+
+    async def revoke_many(server, protocol, client_ids, key_path, timeout):
+        revoked.extend((server.id, cid) for cid in client_ids)
+        if server.id == first_id:
+            # Пользователь продлил второй сервер, пока первый ждал SSH.
+            async with factory() as session:
+                await limits.set_limit(session, second_id, "awg", "PUB=", "c1", future)
+        return {}
+
+    monkeypatch.setattr(expiry, "revoke_many_on_node", revoke_many)
+    assert await expiry.expiry_once(factory, config.get_settings()) == 1
+    assert revoked == [(first_id, "PUB=")]
+    async with factory() as session:
+        assert await session.scalar(select(AwgConfig).where(AwgConfig.server_id == second_id))
+        row = await session.scalar(select(ClientLimit).where(ClientLimit.server_id == second_id))
+        assert row is not None and row.expires_at.date() == future.date()
+
+
+async def test_limit_update_waits_until_expiry_cleanup_is_committed(factory, monkeypatch):
+    import asyncio
+    from app import limits
+
+    sid = await _seed(factory, datetime.now(timezone.utc) - timedelta(hours=1))
+    inside_ssh, finish_ssh = asyncio.Event(), asyncio.Event()
+
+    async def revoke_many(*args):
+        inside_ssh.set()
+        await finish_ssh.wait()
+        return {}
+
+    monkeypatch.setattr(expiry, "revoke_many_on_node", revoke_many)
+    expiration = asyncio.create_task(expiry.expiry_once(factory, config.get_settings()))
+    await asyncio.wait_for(inside_ssh.wait(), 3)
+    future = datetime.now(timezone.utc) + timedelta(days=10)
+
+    async def extend():
+        async with factory() as session:
+            await limits.set_limit(session, sid, "awg", "PUB=", "c1", future)
+
+    extension = asyncio.create_task(extend())
+    await asyncio.sleep(0.02)
+    was_waiting = not extension.done()
+    finish_ssh.set()
+    assert await asyncio.wait_for(expiration, 3) == 1
+    await asyncio.wait_for(extension, 3)
+    assert was_waiting
+    async with factory() as session:
+        row = await session.scalar(select(ClientLimit).where(ClientLimit.server_id == sid))
+        assert row is not None and row.expires_at.date() == future.date()
 
 
 async def test_warn_expiring_on_sqlite(factory, monkeypatch):

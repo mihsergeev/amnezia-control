@@ -62,6 +62,14 @@ async def auth_headers(client: httpx.AsyncClient) -> dict[str, str]:
     return {"Authorization": f"Bearer {response.json()['access_token']}"}
 
 
+@pytest.fixture(autouse=True)
+def _isolate_node_locks(monkeypatch):
+    """Contended asyncio.Lock instances belong to one test's event loop."""
+    from app import nodelock
+
+    monkeypatch.setattr(nodelock, "_locks", {})
+
+
 @pytest.fixture
 def session_factory(client):
     """Сессии к БД тестового приложения — чтобы наполнять таблицы напрямую."""

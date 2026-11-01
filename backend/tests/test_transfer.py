@@ -202,6 +202,20 @@ async def test_import_rejects_newer_format(
     assert "99" in r.json()["detail"]
 
 
+async def test_import_rejects_broken_expiry_instead_of_permanent_client(client, auth_headers):
+    payload = {
+        "format": "acontrol-server-export", "format_version": 1,
+        "server": SERVER,
+        "tables": {"client_limits": [{
+            "protocol": "awg", "client_id": "test-client", "expires_at": "not-a-date",
+        }]},
+    }
+    r = await client.post("/api/servers/import-file", headers=auth_headers,
+                          content=json.dumps(payload))
+    assert r.status_code == 400
+    assert (await client.get("/api/servers", headers=auth_headers)).json() == []
+
+
 async def test_import_names_tables_it_could_not_take(
     client: httpx.AsyncClient, auth_headers
 ) -> None:

@@ -1,6 +1,8 @@
 """Удаление протокола с ноды и массовый отзыв из карточки протокола."""
 
 import json
+import asyncio
+from contextlib import asynccontextmanager
 import os
 import shlex
 import shutil
@@ -10,7 +12,7 @@ import sys
 import pytest
 from sqlalchemy import select
 
-from app import awg, deploy, expiry, protoremove, sshops
+from app import awg, deploy, expiry, nodelock, pausestore, protoremove, sshops
 from app.models import AwgConfig, AwgNote, ClientLimit, ClientName, PausedClient, Server
 
 
@@ -183,6 +185,62 @@ async def test_bulk_revoke_groups_by_node_and_protocol(
     assert bad[0]["client_id"] == "B=" and "peer busy" in bad[0]["error"]
 
 
+async def test_bulk_cleanup_has_group_session_and_node_lock(
+    client, auth_headers, session_factory, monkeypatch
+):
+    ids = [await _server(client, auth_headers) for _ in range(2)]
+    async with session_factory() as s:
+        for sid in ids:
+            await pausestore.add(s, sid, "awg", "paused-key", "phone", {"ip": "10.8.1.2"})
+    sessions = []
+    real_cleanup = expiry.cleanup_client_db
+
+    async def revoke(*args, **kwargs):
+        await asyncio.sleep(0.02)
+        return {}
+
+    async def cleanup(session, sid, protocol, cid):
+        lk = nodelock._locks[(nodelock.family(protocol), sid)]
+        assert lk.owner is asyncio.current_task() and lk.lock.locked()
+        sessions.append(session)
+        await real_cleanup(session, sid, protocol, cid)
+
+    monkeypatch.setattr(expiry, "revoke_many_on_node", revoke)
+    monkeypatch.setattr(expiry, "cleanup_client_db", cleanup)
+    r = await client.post("/api/clients/revoke-bulk", headers=auth_headers,
+                          json={"items": [{"server_id": sid, "protocol": "awg", "client_id": "paused-key"} for sid in ids]})
+    assert r.status_code == 200 and r.json()["revoked"] == 2
+    assert len(sessions) == 2 and sessions[0] is not sessions[1]
+    async with session_factory() as s:
+        for sid in ids:
+            assert await pausestore.list_paused(s, sid, "awg") == {}
+
+
+async def test_bulk_lock_timeout_is_reported_per_group(client, auth_headers, monkeypatch):
+    from fastapi import HTTPException
+    busy, free = [await _server(client, auth_headers) for _ in range(2)]
+    real_hold = nodelock.hold
+
+    @asynccontextmanager
+    async def hold(protocol, sid, **kwargs):
+        if sid == busy:
+            raise HTTPException(409, "node busy")
+        async with real_hold(protocol, sid, **kwargs):
+            yield
+
+    async def revoke(*args, **kwargs):
+        return {}
+
+    monkeypatch.setattr(nodelock, "hold", hold)
+    monkeypatch.setattr(expiry, "revoke_many_on_node", revoke)
+    r = await client.post("/api/clients/revoke-bulk", headers=auth_headers,
+                          json={"items": [{"server_id": sid, "protocol": "awg", "client_id": "key"} for sid in (busy, free)]})
+    assert r.status_code == 200
+    data = r.json()
+    assert data["revoked"] == 1 and data["failed"] == 1
+    assert next(x for x in data["items"] if x["server_id"] == busy)["ok"] is False
+
+
 async def test_revoke_many_uses_one_connection(monkeypatch):
     opened = []
 
@@ -317,3 +375,46 @@ def test_remove_script_moves_openvpn_dirs_from_whole_amnezia_mount(tmp_path):
                    if ".removed-" in p.name)
     assert moved == ["cloak", "openvpn", "shadowsocks"]
     assert (tmp_path / "amnezia" / "awg").is_dir()  # чужой протокол не тронут
+
+
+@pytest.mark.skipif(shutil.which("bash") is None, reason="needs bash")
+def test_remove_refuses_before_destroying_container_when_config_move_fails(tmp_path):
+    root = tmp_path.as_posix()
+    (tmp_path / "amnezia" / "awg").mkdir(parents=True)
+    script = protoremove._REMOVE_SCRIPT.format(cont="amnezia-awg2", sub="''").replace("/opt/", f"{root}/")
+    fake = (
+        'sudo() { "$@"; }; systemctl() { :; }; mv() { return 1; }\n'
+        'docker() { case "$1 $2" in\n'
+        ' "inspect -f") case "$3" in *Mounts*) echo ' + root + '/amnezia/awg;; *) echo img;; esac;;\n'
+        ' "rm -f") echo DESTROYED;; *) :;; esac; }\n'
+    )
+    result = subprocess.run([shutil.which("bash"), "-c", fake + script], capture_output=True, text=True)
+    assert "DESTROYED" not in result.stdout
+    assert "REMOVED" not in result.stdout
+    assert result.returncode != 0
+
+
+@pytest.mark.skipif(shutil.which("bash") is None, reason="needs bash")
+@pytest.mark.parametrize("failure", ["second_move", "docker_remove"])
+def test_remove_restores_staged_directories_on_failure(tmp_path, failure):
+    root = tmp_path.as_posix()
+    for name in ("openvpn", "cloak", "shadowsocks"):
+        path = tmp_path / "amnezia" / name
+        path.mkdir(parents=True)
+        (path / "keep").write_text(name)
+    sub = deploy._SNAP_SPECS["openvpn"]["paths"].replace("/opt/", f"{root}/")
+    script = protoremove._REMOVE_SCRIPT.format(cont="amnezia-openvpn-cloak", sub=shlex.quote(sub)).replace("/opt/", f"{root}/")
+    fake = (
+        'sudo() { "$@"; }; systemctl() { :; }\n'
+        'docker() { case "$1 $2" in\n'
+        ' "inspect -f") case "$3" in *Mounts*) echo ' + root + '/amnezia;; *) echo img;; esac;;\n'
+        ' "rm -f") ' + ('return 1' if failure == "docker_remove" else ':') + ';; *) :;; esac; }\n'
+    )
+    if failure == "second_move":
+        fake += 'mv() { case "$1" in */cloak) return 1;; *) command mv "$@";; esac; }\n'
+    result = subprocess.run([shutil.which("bash"), "-c", fake + script], capture_output=True, text=True)
+    assert result.returncode != 0
+    assert "REMOVED" not in result.stdout
+    assert sorted(p.name for p in (tmp_path / "amnezia").iterdir()) == ["cloak", "openvpn", "shadowsocks"]
+    for name in ("openvpn", "cloak", "shadowsocks"):
+        assert (tmp_path / "amnezia" / name / "keep").read_text() == name

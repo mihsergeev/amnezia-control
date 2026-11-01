@@ -79,7 +79,8 @@ async def _store_config(
 ) -> None:
     await session.execute(
         delete(AwgConfig).where(
-            AwgConfig.server_id == server_id, AwgConfig.public_key == public_key
+            AwgConfig.server_id == server_id, AwgConfig.public_key == public_key,
+            AwgConfig.protocol == protocol,
         )
     )
     session.add(
@@ -133,7 +134,9 @@ async def build_client_list(session, server_id: int, state) -> list[dict]:
     stored = set(
         (
             await session.scalars(
-                select(AwgConfig.public_key).where(AwgConfig.server_id == server_id)
+                select(AwgConfig.public_key).where(
+                    AwgConfig.server_id == server_id, AwgConfig.protocol == "awg"
+                )
             )
         ).all()
     )
@@ -209,6 +212,7 @@ async def get_awg(server_id: int, _: CurrentUser, session: SessionDep) -> AwgSta
 
 
 @router.post("/clients", response_model=CreateClientResponse, status_code=201)
+@nodelock.operation("awg")
 async def create_client(
     server_id: int,
     body: CreateClientRequest,
@@ -267,6 +271,7 @@ async def get_stored_config(
         select(AwgConfig).where(
             AwgConfig.server_id == server_id,
             AwgConfig.public_key == body.public_key,
+            AwgConfig.protocol == "awg",
         )
     )
     if row is None:
@@ -282,6 +287,7 @@ async def get_stored_config(
 
 
 @router.post("/reissue", response_model=CreateClientResponse, status_code=201)
+@nodelock.operation("awg")
 async def reissue_client(
     server_id: int,
     body: PublicKeyRequest,
@@ -318,6 +324,7 @@ async def reissue_client(
         delete(AwgConfig).where(
             AwgConfig.server_id == server_id,
             AwgConfig.public_key == body.public_key,
+            AwgConfig.protocol == "awg",
         )
     )
     await _store_config(session, server_id, client.public_key, client.name, config)
@@ -628,6 +635,7 @@ async def awg_version(
 
 
 @router.post("/pause", status_code=status.HTTP_204_NO_CONTENT)
+@nodelock.operation("awg")
 async def pause_client(
     server_id: int, body: PublicKeyRequest, user: CurrentUser, session: SessionDep
 ) -> None:
@@ -656,6 +664,7 @@ async def pause_client(
 
 
 @router.post("/resume", status_code=status.HTTP_204_NO_CONTENT)
+@nodelock.operation("awg")
 async def resume_client(
     server_id: int, body: PublicKeyRequest, user: CurrentUser, session: SessionDep
 ) -> None:
@@ -681,6 +690,7 @@ async def resume_client(
 
 
 @router.post("/revoke", status_code=status.HTTP_204_NO_CONTENT)
+@nodelock.operation("awg")
 async def revoke_client(
     server_id: int,
     body: RevokeClientRequest,
@@ -688,10 +698,10 @@ async def revoke_client(
     session: SessionDep,
 ) -> None:
     server = await _get_or_404(server_id, session)
-    is_paused = body.public_key in await pausestore.list_paused(session, server_id, "awg")
     # клиент на паузе снят с сервера, но пира снимаем все равно (это
     # идемпотентно): после отката снимка он мог ожить, и отзыв по одной
-    # записи о паузе оставлял его работать. Для паузы ошибка ноды не мешает.
+    # записи о паузе оставлял его работать. Ошибка ноды не подтверждает отзыв:
+    # сохраняем метаданные и возвращаем ошибку, чтобы можно было повторить.
     try:
         async with _connect(server) as conn:
             state = await awg.read_state(conn, server.host)
@@ -699,8 +709,7 @@ async def revoke_client(
                 conn, state.container, state.interface, body.public_key
             )
     except Exception as exc:  # noqa: BLE001
-        if not is_paused:
-            raise _ssh_error(exc) from exc
+        raise _ssh_error(exc) from exc
     await audit.record(
         session, user.username, "awg_revoke", server.name, body.public_key
     )
@@ -709,6 +718,7 @@ async def revoke_client(
         delete(AwgConfig).where(
             AwgConfig.server_id == server_id,
             AwgConfig.public_key == body.public_key,
+            AwgConfig.protocol == "awg",
         )
     )
     await notes.clear_note(session, server_id, "awg", body.public_key)

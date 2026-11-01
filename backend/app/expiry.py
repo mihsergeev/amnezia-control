@@ -121,12 +121,14 @@ async def cleanup_client_db(session: AsyncSession, server_id, protocol, client_i
     if protocol in ("awg", "awg3", "awglegacy"):
         await session.execute(
             delete(AwgConfig).where(
-                AwgConfig.server_id == server_id, AwgConfig.public_key == client_id
+                AwgConfig.server_id == server_id, AwgConfig.public_key == client_id,
+                AwgConfig.protocol == protocol,
             )
         )
         await session.execute(
             delete(AwgNote).where(
-                AwgNote.server_id == server_id, AwgNote.public_key == client_id
+                AwgNote.server_id == server_id, AwgNote.public_key == client_id,
+                AwgNote.protocol == protocol,
             )
         )
     elif protocol == "openvpn":
@@ -170,71 +172,85 @@ async def expiry_once(
     revoked = 0
     unreachable: set[int] = set()  # ноды, к которым в этом проходе не подключились
     for (server_id, protocol), lims in groups.items():
-        async with session_factory() as session:
-            server = await session.get(Server, server_id)
-        if server is None:
-            async with session_factory() as session:
-                await session.execute(
-                    delete(ClientLimit).where(ClientLimit.id.in_([lim.id for lim in lims]))
+        try:
+            # Срок могли продлить, пока предыдущая нода ждала SSH или эта
+            # операция ждала блокировку. Держим ее до записи результата в БД,
+            # иначе cleanup удалил бы новый срок, сохраненный во время SSH.
+            async with nodelock.hold(protocol, server_id):
+                revoked += await _expire_group(
+                    session_factory, settings, server_id, protocol,
+                    [lim.id for lim in lims], key_path, unreachable,
                 )
-                await session.commit()
-            continue
-        gone = False
-        if server_id in unreachable:
-            errors: dict[str, Exception] = {
-                lim.client_id: NodeNotReady("нода недоступна") for lim in lims
-            }
-        else:
-            try:
-                errors = await revoke_many_on_node(
-                    server, protocol, [lim.client_id for lim in lims], key_path,
-                    settings.ssh_connect_timeout,
-                )
-            except ProtocolGone:
-                # протокол удалили с ноды: без этого алерт "не отозван" шел бы
-                # каждый день по каждому его клиенту, пока срок не снимут руками
-                log.info(
-                    "истекшие %s: протокола на %s нет, снимаю сроки", protocol, server.name,
-                )
-                errors, gone = {}, True
-            except Exception as exc:  # noqa: BLE001 — нода недоступна: оставим, повторим позже
-                errors = {lim.client_id: exc for lim in lims}
-                if isinstance(exc, (OSError, asyncssh.Error)):
-                    # не подключились или нода зависла (TimeoutError - тоже
-                    # OSError): остальные протоколы этой ноды в этот проход не ждем
-                    unreachable.add(server_id)
-        for lim in lims:
-            detail = lim.name or lim.client_id
-            if lim.client_id in errors:
-                log.warning(
-                    "истёкший %s/%s: нода %s недоступна, отложил",
-                    lim.protocol, lim.client_id, server.name,
-                )
-                # разово (раз в день) сигналим: клиент должен быть отключён, но не смогли
-                key = (lim.id, now.strftime("%Y-%m-%d"))
-                if server.alerts_enabled and key not in _deferred_alerted:
-                    _deferred_alerted.add(key)
-                    await alerts.maybe_alert(
-                        session_factory, settings,
-                        alerts.Card(
-                            "warn", "⏳", alerts.t("Клиент истек, но не отозван"),
-                            alerts.t("{client}: сервер недоступен, повторю позже",
-                                     client=lim.name or lim.client_id),
-                            subject=server.name,
-                        ),
-                        server_id=server.id,
-                    )
-                continue
-            if gone:
-                detail += " (протокола на ноде нет)"
-            async with session_factory() as session:
-                await cleanup_client_db(session, lim.server_id, lim.protocol, lim.client_id)
-                await audit.record(
-                    session, "система", f"{lim.protocol}_expired", server.name, detail,
-                )
-            revoked += 1
+        except Exception:  # noqa: BLE001 - занятая/плохая нода не задерживает остальные
+            log.exception("ошибка отзыва истекших %s на сервере %s", protocol, server_id)
     if revoked:
         log.info("авто-отзыв истёкших клиентов: %d", revoked)
+    return revoked
+
+
+async def _expire_group(session_factory, settings, server_id, protocol, limit_ids,
+                        key_path, unreachable: set[int]) -> int:
+    """Одна пачка под nodelock.hold, с актуальными сроками после захвата."""
+    now = datetime.now(timezone.utc)
+    async with session_factory() as session:
+        server = await session.get(Server, server_id)
+        lims = list(await session.scalars(select(ClientLimit).where(
+            ClientLimit.id.in_(limit_ids), ClientLimit.server_id == server_id,
+            ClientLimit.protocol == protocol, ClientLimit.expires_at.is_not(None),
+            ClientLimit.expires_at < now,
+        )))
+        if server is None:
+            await session.execute(delete(ClientLimit).where(
+                ClientLimit.id.in_(limit_ids), ClientLimit.server_id == server_id,
+            ))
+            await session.commit()
+            return 0
+    if not lims:
+        return 0
+    gone = False
+    if server_id in unreachable:
+        errors: dict[str, Exception] = {
+            lim.client_id: NodeNotReady("нода недоступна") for lim in lims
+        }
+    else:
+        try:
+            errors = await revoke_many_on_node(
+                server, protocol, [lim.client_id for lim in lims], key_path,
+                settings.ssh_connect_timeout,
+            )
+        except ProtocolGone:
+            log.info("истекшие %s: протокола на %s нет, снимаю сроки", protocol, server.name)
+            errors, gone = {}, True
+        except Exception as exc:  # noqa: BLE001 - оставим срок, повторим позже
+            errors = {lim.client_id: exc for lim in lims}
+            if isinstance(exc, (OSError, asyncssh.Error)):
+                unreachable.add(server_id)
+    revoked = 0
+    for lim in lims:
+        detail = lim.name or lim.client_id
+        if lim.client_id in errors:
+            log.warning("истёкший %s/%s: нода %s недоступна, отложил",
+                        lim.protocol, lim.client_id, server.name)
+            key = (lim.id, now.strftime("%Y-%m-%d"))
+            if server.alerts_enabled and key not in _deferred_alerted:
+                _deferred_alerted.add(key)
+                await alerts.maybe_alert(
+                    session_factory, settings,
+                    alerts.Card(
+                        "warn", "⏳", alerts.t("Клиент истек, но не отозван"),
+                        alerts.t("{client}: сервер недоступен, повторю позже",
+                                 client=lim.name or lim.client_id), subject=server.name,
+                    ), server_id=server.id,
+                )
+            continue
+        if gone:
+            detail += " (протокола на ноде нет)"
+        async with session_factory() as session:
+            await cleanup_client_db(session, lim.server_id, lim.protocol, lim.client_id)
+            await audit.record(
+                session, "система", f"{lim.protocol}_expired", server.name, detail,
+            )
+        revoked += 1
     return revoked
 
 

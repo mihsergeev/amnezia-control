@@ -9,7 +9,7 @@
   pwpush      - Password Pusher (POST /api/v2/pushes, ссылка /p/<token>/r)
 Движок определяется по самому сервису при добавлении (detect_engine)."""
 
-from urllib.parse import quote, urlsplit
+from urllib.parse import quote, urlsplit, urlunsplit
 
 import httpx
 
@@ -23,11 +23,27 @@ class ShareError(Exception):
     """Сервис не ответил или ответил не тем (текст - для пользователя)."""
 
 
+def public_url(url: str) -> str:
+    """URL без старых Basic Auth credentials, для ссылок, UI и журнала."""
+    try:
+        parts = urlsplit(url)
+    except ValueError as exc:
+        raise ShareError("неверный адрес сервиса") from exc
+    return urlunsplit(parts._replace(netloc=parts.netloc.rsplit("@", 1)[-1]))
+
+
 def normalize_url(url: str) -> str:
     """Адрес сервиса -> его origin (https://host[:port]): путь вроде /msg не нужен."""
-    parts = urlsplit(url.strip())
+    try:
+        parts = urlsplit(url.strip())
+    except ValueError as exc:
+        raise ShareError("нужен адрес вида https://secret.example.com") from exc
     if parts.scheme not in ("http", "https") or not parts.hostname:
         raise ShareError("нужен адрес вида https://secret.example.com")
+    if parts.username is not None or parts.password is not None:
+        # Origin хранится в настройках и журнале. Не принимаем URL, который
+        # превратит пароль Basic Auth в обычный текст журнала и списка сервисов.
+        raise ShareError("логин и пароль в адресе сервиса не поддерживаются")
     return f"{parts.scheme}://{parts.netloc}"
 
 
@@ -44,7 +60,7 @@ async def detect_engine(base: str, client: httpx.AsyncClient | None = None) -> s
             if r.status_code == 200 and "sup3rS3cretMes5age" in r.text:
                 return "sup3rs3cret"
         except httpx.HTTPError as exc:
-            raise ShareError(f"сервис не отвечает: {exc}") from exc
+            raise ShareError("сервис не отвечает") from exc
     raise ShareError("не похоже ни на sup3rS3cretMes5age, ни на Password Pusher")
 
 
@@ -63,7 +79,7 @@ async def create_link(
                 token = r.json().get("token")
                 if not token:
                     raise ShareError("сервис не вернул токен")
-                return f"{base}/getmsg?token={quote(token, safe='')}"
+                return f"{public_url(base)}/getmsg?token={quote(token, safe='')}"
             if engine == "pwpush":
                 r = await http.post(
                     f"{base}/api/v2/pushes",
@@ -76,14 +92,15 @@ async def create_link(
                 r.raise_for_status()
                 data = r.json()
                 if data.get("html_url"):
-                    return data["html_url"]
+                    return public_url(data["html_url"])
                 if data.get("url_token"):
-                    return f"{base}/p/{quote(data['url_token'], safe='')}/r"
+                    return f"{public_url(base)}/p/{quote(data['url_token'], safe='')}/r"
                 raise ShareError("сервис не вернул ссылку")
         except httpx.HTTPStatusError as exc:
             raise ShareError(f"сервис ответил {exc.response.status_code}") from exc
         except httpx.HTTPError as exc:
-            raise ShareError(f"сервис не отвечает: {exc}") from exc
+            # Исключение может содержать полный URL со старыми credentials.
+            raise ShareError("сервис не отвечает") from exc
         except ValueError as exc:
             raise ShareError("сервис ответил не JSON") from exc
     raise ShareError(f"неизвестный движок {engine}")

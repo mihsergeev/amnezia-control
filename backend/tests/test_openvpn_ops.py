@@ -5,7 +5,7 @@ import httpx
 import pytest
 from fastapi import HTTPException
 
-from app import openvpn, torrent, xray
+from app import openvpn, pausestore, torrent, xray
 from app.api import openvpn as ovpn_api
 from app.api import xray as xray_api
 from app.models import Server
@@ -82,6 +82,27 @@ def test_busy_node_http_error_is_preserved() -> None:
     exc = HTTPException(409, "Нода занята")
     assert ovpn_api._ovpn_error(exc) is exc
     assert xray_api._xray_error(exc) is exc
+
+
+async def test_revoke_paused_xray_removes_uuid_restored_from_snapshot(
+    client, auth_headers, session_factory, monkeypatch
+) -> None:
+    sid = await _server(client, auth_headers, session_factory)
+    async with session_factory() as s:
+        await pausestore.add(s, sid, "xray", "restored-client", "phone", {"entry": {"id": "restored-client"}})
+    # A snapshot taken before pause has restored this UUID on the node.
+    runtime = {"restored-client"}
+    monkeypatch.setattr(xray_api, "_connect", lambda server: _DummyConn())
+    monkeypatch.setattr(xray, "detect_container", lambda conn: _wrap("amnezia-xray"))
+
+    async def revoke(conn, container, cid):
+        runtime.discard(cid)
+
+    monkeypatch.setattr(xray, "revoke_client", revoke)
+    r = await client.post(f"/api/servers/{sid}/xray/revoke", headers=auth_headers,
+                          json={"client_id": "restored-client"})
+    assert r.status_code == 204
+    assert runtime == set()
 
 
 async def _server(client, auth_headers, session_factory, torrent_block=False) -> int:

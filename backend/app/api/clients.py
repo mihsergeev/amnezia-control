@@ -18,8 +18,9 @@ import logging
 
 from fastapi import APIRouter, HTTPException, Query, status
 from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from app import audit, expiry, pausestore, protolabel
+from app import audit, expiry, nodelock, pausestore, protolabel
 from app.config import get_settings
 from app.deps import CurrentUser, SessionDep
 from app.models import AwgConfig, AwgNote, ClientName, OvpnConfig, PausedClient, Server
@@ -203,11 +204,11 @@ async def revoke_bulk(
     def message(exc: Exception) -> str:
         return str(exc) or type(exc).__name__
 
-    async def one_group(sid: int, protocol: str, ids: list[str]) -> list[RevokeBulkResultItem]:
+    async def locked_group(sid: int, protocol: str, ids: list[str]) -> list[RevokeBulkResultItem]:
         server = servers.get(sid)
         if server is None:
             return [result(sid, protocol, c, "сервер не найден в панели") for c in ids]
-        async with sem:
+        async with sem, nodelock.hold(protocol, sid):
             try:
                 errors = await expiry.revoke_many_on_node(
                     server, protocol, ids, key_path, settings.ssh_connect_timeout,
@@ -217,10 +218,34 @@ async def revoke_bulk(
                 errors = {}
             except Exception as exc:  # noqa: BLE001 — нода недоступна и т.п.
                 return [result(sid, protocol, c, message(exc)) for c in ids]
-        return [
-            result(sid, protocol, c, message(errors[c]) if c in errors else "")
-            for c in ids
-        ]
+            # The node must remain locked through metadata cleanup. Otherwise
+            # a waiting resume can restore a revoked peer from its pause record.
+            # Each parallel group owns its session: sharing the request session
+            # among gather() tasks is not supported by SQLAlchemy.
+            async with AsyncSession(bind=session.bind, expire_on_commit=False) as group_session:
+                for cid in ids:
+                    if cid in errors:
+                        continue
+                    await expiry.cleanup_client_db(group_session, sid, protocol, cid)
+                    await pausestore.drop(group_session, sid, protocol, cid)
+                    await group_session.execute(
+                        ClientName.__table__.delete().where(
+                            ClientName.server_id == sid,
+                            ClientName.protocol == protocol,
+                            ClientName.client_id == cid,
+                        )
+                    )
+                await group_session.commit()
+            return [
+                result(sid, protocol, c, message(errors[c]) if c in errors else "")
+                for c in ids
+            ]
+
+    async def one_group(sid: int, protocol: str, ids: list[str]) -> list[RevokeBulkResultItem]:
+        try:
+            return await locked_group(sid, protocol, ids)
+        except Exception as exc:  # lock timeout or cleanup failure belongs to this group
+            return [result(sid, protocol, c, message(exc)) for c in ids]
 
     results = [
         r
@@ -230,23 +255,6 @@ async def revoke_bulk(
         for r in chunk
     ]
 
-    # чистим панельные данные только для успешно отозванных: если нода была
-    # недоступна, клиент на ней остался, и стирать его следы в панели нельзя —
-    # иначе он пропал бы из поиска и повторить отзыв стало бы нечем
-    for res in results:
-        if not res.ok:
-            continue
-        await expiry.cleanup_client_db(
-            session, res.server_id, res.protocol, res.client_id
-        )
-        await pausestore.drop(session, res.server_id, res.protocol, res.client_id)
-        await session.execute(
-            ClientName.__table__.delete().where(
-                ClientName.server_id == res.server_id,
-                ClientName.protocol == res.protocol,
-                ClientName.client_id == res.client_id,
-            )
-        )
     await session.commit()
 
     ok_count = sum(1 for r in results if r.ok)

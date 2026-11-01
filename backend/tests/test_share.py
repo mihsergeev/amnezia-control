@@ -4,7 +4,7 @@ import json
 import httpx
 import pytest
 
-from app import share
+from app import settings_store, share
 
 BASE = "https://secret.example.com"
 
@@ -116,3 +116,65 @@ async def test_api_add_share_and_audit(client: httpx.AsyncClient, auth_headers, 
 async def test_api_requires_login(client: httpx.AsyncClient) -> None:
     r = await client.post("/api/share", json={"service_id": "x", "text": "y"})
     assert r.status_code == 401
+
+
+async def test_share_service_rejects_credentials_before_network_or_audit(
+    client, auth_headers, monkeypatch
+):
+    detected = []
+
+    async def fake_detect(base, client=None):
+        detected.append(base)
+        return "pwpush"
+
+    monkeypatch.setattr(share, "detect_engine", fake_detect)
+    response = await client.post(
+        "/api/share/services", headers=auth_headers,
+        json={"name": "Example", "url": "https://test-user:test-password@secret.example.com"},
+    )
+    assert response.status_code == 400
+    assert detected == []
+    audit = (await client.get("/api/audit", headers=auth_headers)).text
+    assert "test-password" not in audit
+
+
+@pytest.mark.parametrize("engine,response", [
+    ("sup3rs3cret", {"token": "test-token"}),
+    ("pwpush", {"url_token": "test-token"}),
+    ("pwpush", {"html_url": "https://test-user:test-password@secret.example.com/p/test-token/r"}),
+])
+async def test_old_service_credentials_stay_out_of_links(engine, response):
+    base = "https://test-user:test-password@secret.example.com"
+
+    def handler(request):
+        assert request.headers.get("authorization", "").startswith("Basic ")
+        return httpx.Response(200, json=response)
+
+    url = await share.create_link(engine, base, "test-config", _client(handler))
+    assert "test-password" not in url and "test-user" not in url
+    assert url.startswith(BASE + "/")
+
+
+async def test_old_service_credentials_stay_out_of_errors():
+    base = "https://test-user:test-password@secret.example.com"
+
+    def handler(request):
+        raise httpx.ConnectError(f"connection failed: {base}", request=request)
+
+    with pytest.raises(share.ShareError) as caught:
+        await share.create_link("pwpush", base, "test-config", _client(handler))
+    assert "test-password" not in str(caught.value)
+
+
+async def test_delete_old_service_never_logs_credentials(client, auth_headers):
+    base = "https://test-user:test-password@secret.example.com"
+    async with client.session_factory() as session:
+        await settings_store.set_share_services(session, [
+            {"id": "test-service", "name": "Example", "engine": "pwpush", "url": base}
+        ])
+    listed = await client.get("/api/share/services", headers=auth_headers)
+    assert listed.json()[0]["url"] == BASE
+    deleted = await client.delete("/api/share/services/test-service", headers=auth_headers)
+    assert deleted.status_code == 200
+    audit = (await client.get("/api/audit", headers=auth_headers)).text
+    assert "share_service_delete" in audit and "test-password" not in audit

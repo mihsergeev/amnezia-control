@@ -16,7 +16,7 @@ API-ключ в заголовке `X-API-Key` (см. app/apikeys.py), НЕ по
 from fastapi import APIRouter, HTTPException, Query, status
 from sqlalchemy import delete, select
 
-from app import audit, awg, limits, pausestore
+from app import audit, awg, limits, nodelock, pausestore
 from app.api.awg import (
     _amnezia_link,
     _connect,
@@ -92,6 +92,7 @@ async def list_clients(
     status_code=status.HTTP_201_CREATED,
     summary="Выдать клиента (создать конфиг)",
 )
+@nodelock.operation("awg")
 async def issue_client(
     server_id: int,
     body: CreateClientRequest,
@@ -144,7 +145,8 @@ async def get_config(
     server = await _server(client, server_id, session)
     row = await session.scalar(
         select(AwgConfig).where(
-            AwgConfig.server_id == server_id, AwgConfig.public_key == public_key
+            AwgConfig.server_id == server_id, AwgConfig.public_key == public_key,
+            AwgConfig.protocol == "awg",
         )
     )
     if row is None:
@@ -164,6 +166,7 @@ async def get_config(
     status_code=status.HTTP_204_NO_CONTENT,
     summary="Отозвать клиента",
 )
+@nodelock.operation("awg")
 async def revoke_client(
     server_id: int,
     client: ApiClient,
@@ -173,11 +176,10 @@ async def revoke_client(
     """Снимает пира с ноды и чистит его данные в панели. Идемпотентно: повторный
     вызов на уже отозванном клиенте тоже вернёт 204."""
     server = await _server(client, server_id, session)
-    # клиент на паузе уже снят с ноды — SSH не нужен, чистим только БД
-    is_paused = public_key in await pausestore.list_paused(session, server_id, "awg")
     # клиент на паузе снят с сервера, но пира снимаем все равно (это
     # идемпотентно): после отката снимка он мог ожить, и отзыв по одной
-    # записи о паузе оставлял его работать. Для паузы ошибка ноды не мешает.
+    # записи о паузе оставлял его работать. При ошибке ноды сохраняем метаданные,
+    # чтобы отзыв не выглядел успешным и его можно было повторить.
     try:
         async with _connect(server) as conn:
             state = await awg.read_state(conn, server.host)
@@ -185,13 +187,13 @@ async def revoke_client(
                 conn, state.container, state.interface, public_key
             )
     except Exception as exc:  # noqa: BLE001
-        if not is_paused:
-            raise _ssh_error(exc) from exc
+        raise _ssh_error(exc) from exc
     await audit.record(session, _actor(client), "awg_revoke", server.name, public_key)
     await pausestore.drop(session, server_id, "awg", public_key)
     await session.execute(
         delete(AwgConfig).where(
-            AwgConfig.server_id == server_id, AwgConfig.public_key == public_key
+            AwgConfig.server_id == server_id, AwgConfig.public_key == public_key,
+            AwgConfig.protocol == "awg",
         )
     )
     await limits.drop_limit(session, server_id, "awg", public_key)
@@ -203,6 +205,7 @@ async def revoke_client(
     status_code=status.HTTP_204_NO_CONTENT,
     summary="Приостановить клиента",
 )
+@nodelock.operation("awg")
 async def pause_client(
     server_id: int,
     client: ApiClient,
@@ -237,6 +240,7 @@ async def pause_client(
     status_code=status.HTTP_204_NO_CONTENT,
     summary="Возобновить клиента",
 )
+@nodelock.operation("awg")
 async def resume_client(
     server_id: int,
     client: ApiClient,
