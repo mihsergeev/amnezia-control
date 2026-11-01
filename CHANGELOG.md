@@ -4,6 +4,16 @@ All notable changes to Amnezia Control are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.82.5] - 2026-11-02
+
+### Fixed
+- Restore country flags in cascade list entries and manually configured egress
+  routes on systems without native flag emoji support.
+- Show complete entry and exit names on separate lines, and keep the server
+  list and header within narrow viewports.
+- Fit cascade and egress check diagrams inside their dialogs, using vertical
+  routes on small screens instead of horizontal scrolling.
+
 ## [0.82.4] - 2026-11-02
 
 ### Fixed

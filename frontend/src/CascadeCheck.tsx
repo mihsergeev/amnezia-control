@@ -177,7 +177,7 @@ export function CascadeCheckModal({ cascade, entry, exit, onClose, onChecked, on
       <div className="card modal modal-wide cc" onClick={(e) => e.stopPropagation()}>
         <h3>{t('Проверка каскада')}</h3>
 
-        <div className="cc-route">
+        <div className="cc-route cc-route-cascade">
           <div className="cc-node cc-node-plain">{t('Клиенты')}</div>
           <div className={`cc-link cc-link-${toEntry}`} />
           {node(
