@@ -10,6 +10,8 @@
 """
 
 import base64
+import asyncio
+from contextlib import asynccontextmanager
 
 import httpx
 import pytest
@@ -228,3 +230,53 @@ async def test_reserved_ips_and_pause_record_under_node_lock(
     assert r.status_code == 201
     assert held["ips"] is True
     assert "10.8.1.2" in got_reserved["v"]
+
+
+async def test_resume_cannot_restore_client_revoked_while_waiting_for_node(
+    client, auth_headers, session_factory, monkeypatch
+):
+    r = await client.post("/api/servers", json={"name": "vpn-a", "host": "203.0.113.10"}, headers=auth_headers)
+    sid = r.json()["id"]
+    async with session_factory() as s:
+        await pausestore.add(s, sid, "awg", "paused-key", "phone", {"ip": "10.8.1.2"})
+    entered, proceed = asyncio.Event(), asyncio.Event()
+    runtime = set()
+
+    @asynccontextmanager
+    async def connect(server):
+        async with nodelock.hold("awg", server.id):
+            yield object()
+
+    async def state(*args, **kwargs):
+        return awg.AwgState(container="amnezia-awg2", interface="awg0", listen_port=47180,
+                            server_public_key=KEY, endpoint="203.0.113.10:47180", address="10.8.1.0/24", clients=[])
+
+    async def revoke(*args):
+        entered.set()
+        await proceed.wait()
+        runtime.clear()
+
+    async def resume(*args):
+        runtime.add("paused-key")
+
+    async def audit(*args, **kwargs):
+        # Deterministic scheduling window after the SSH lock used to release.
+        await asyncio.sleep(0.05)
+
+    monkeypatch.setattr(awg_api, "_connect", connect)
+    monkeypatch.setattr(awg, "read_state", state)
+    monkeypatch.setattr(awg, "revoke_client", revoke)
+    monkeypatch.setattr(awg, "resume_client", resume)
+    monkeypatch.setattr(awg_api.audit, "record", audit)
+    async def call(action):
+        return await client.post(f"/api/servers/{sid}/awg/{action}", headers=auth_headers,
+                                 json={"public_key": "paused-key"})
+    revoking = asyncio.create_task(call("revoke"))
+    await asyncio.wait_for(entered.wait(), 5)
+    resuming = asyncio.create_task(call("resume"))
+    await asyncio.sleep(0.05)
+    proceed.set()
+    revoked, resumed = await asyncio.gather(revoking, resuming)
+    assert revoked.status_code == 204
+    assert resumed.status_code == 404
+    assert runtime == set()

@@ -14,6 +14,7 @@ Enter, два админа, API и отзыв по сроку) читали од
 
 import asyncio
 from contextlib import asynccontextmanager
+from functools import wraps
 
 from fastapi import HTTPException, status
 
@@ -33,6 +34,24 @@ class _Lock:
 
 
 _locks: dict[tuple[str, int], _Lock] = {}
+
+
+def operation(kind: str | None = None):
+    """Hold the node through both SSH work and the final metadata commit.
+
+    Connection locks alone leave a race between a node change and DB cleanup.
+    The lock is reentrant, so existing connect() sections keep working. None
+    selects the protocol argument of generic protocol endpoints.
+    """
+    def decorate(handler):
+        @wraps(handler)
+        async def wrapped(*args, **kwargs):
+            server_id = kwargs.get("server_id", args[0] if args else None)
+            protocol = kind or kwargs.get("protocol", args[1] if len(args) > 1 else None)
+            async with hold(protocol, server_id):
+                return await handler(*args, **kwargs)
+        return wrapped
+    return decorate
 
 
 def family(protocol: str) -> str:

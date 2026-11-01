@@ -5,6 +5,7 @@ from datetime import datetime
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app import nodelock
 from app.models import ClientLimit
 
 
@@ -17,24 +18,25 @@ async def set_limit(
     expires_at: datetime | None,
 ) -> None:
     """Устанавливает срок (None → снимает ограничение)."""
-    await session.execute(
-        delete(ClientLimit).where(
-            ClientLimit.server_id == server_id,
-            ClientLimit.protocol == protocol,
-            ClientLimit.client_id == client_id,
-        )
-    )
-    if expires_at is not None:
-        session.add(
-            ClientLimit(
-                server_id=server_id,
-                protocol=protocol,
-                client_id=client_id,
-                name=name or "",
-                expires_at=expires_at,
+    async with nodelock.hold(protocol, server_id):
+        await session.execute(
+            delete(ClientLimit).where(
+                ClientLimit.server_id == server_id,
+                ClientLimit.protocol == protocol,
+                ClientLimit.client_id == client_id,
             )
         )
-    await session.commit()
+        if expires_at is not None:
+            session.add(
+                ClientLimit(
+                    server_id=server_id,
+                    protocol=protocol,
+                    client_id=client_id,
+                    name=name or "",
+                    expires_at=expires_at,
+                )
+            )
+        await session.commit()
 
 
 async def limits_map(
@@ -52,11 +54,12 @@ async def limits_map(
 async def drop_limit(
     session: AsyncSession, server_id: int, protocol: str, client_id: str
 ) -> None:
-    await session.execute(
-        delete(ClientLimit).where(
-            ClientLimit.server_id == server_id,
-            ClientLimit.protocol == protocol,
-            ClientLimit.client_id == client_id,
+    async with nodelock.hold(protocol, server_id):
+        await session.execute(
+            delete(ClientLimit).where(
+                ClientLimit.server_id == server_id,
+                ClientLimit.protocol == protocol,
+                ClientLimit.client_id == client_id,
+            )
         )
-    )
-    await session.commit()
+        await session.commit()

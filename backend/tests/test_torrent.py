@@ -1,13 +1,14 @@
 """Блокировка торрентов: правила в контейнерах, разбор попаданий, запись,
 алерт и автопауза (app/torrent.py)."""
 
+import asyncio
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import event, select
 
-from app import alerts, config, pausestore, settings_store, torrent
+from app import alerts, config, nodelock, pausestore, settings_store, torrent
 from app.db import Base, create_engine_and_factory
 from app.models import AuditLog, Server, TorrentHit
 
@@ -228,6 +229,41 @@ async def test_record_keeps_blocking_but_alert_is_opt_in(factory, sent, monkeypa
     assert calls == ["pk1"]
     assert row.hits == 5 and row.alerted_at is None
     assert sent == []
+
+
+async def test_record_takes_node_lock_before_autoflush_of_previous_hit(factory, sent, monkeypatch):
+    # Первый hit не вызывает autopause. При SELECT второго SQLAlchemy уже
+    # пишет первый INSERT. Этот DB write должен быть ПОСЛЕ захвата node-lock,
+    # иначе protocol-remove держит node-lock, ждет DB и блокирует autopause.
+    engine = factory.kw["bind"].sync_engine
+    writes = []
+
+    def check_order(conn, cursor, statement, parameters, context, executemany):
+        if statement.lstrip().upper().startswith(("INSERT INTO TORRENT_HITS", "UPDATE TORRENT_HITS")):
+            lock = nodelock._locks.get(("awg", 1))
+            assert lock is not None and lock.owner is asyncio.current_task()
+            writes.append(statement)
+
+    async def pause(server, settings, protocol, client_id):
+        assert nodelock._locks[("awg", server.id)].owner is asyncio.current_task()
+        return {"ip": "10.8.1.2"}
+
+    monkeypatch.setattr(torrent, "_pause", pause)
+    event.listen(engine, "before_cursor_execute", check_order)
+    try:
+        sample = {"server_id": 1, "torrent": [
+            {"protocol": "awg", "client_id": "low", "name": "low", "hits": 1},
+            {"protocol": "awg", "client_id": "high", "name": "high", "hits": 5},
+        ]}
+        await torrent.record(factory, config.get_settings(), [sample],
+                             {1: _server(torrent_autopause=True)})
+    finally:
+        event.remove(engine, "before_cursor_execute", check_order)
+    assert writes
+    async with factory() as session:
+        rows = list(await session.scalars(select(TorrentHit)))
+    assert sum(row.hits for row in rows) == 6
+    assert len(sent) == 1
 
 
 async def test_record_realerts_after_a_day(factory, sent):

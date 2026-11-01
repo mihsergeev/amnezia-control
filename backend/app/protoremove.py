@@ -43,12 +43,19 @@ _REMOVE_SCRIPT = (
     "IMG=$(sudo docker inspect -f '{{{{.Config.Image}}}}' \"$C\"); "
     "MNT=$(sudo docker inspect -f '{{{{range .Mounts}}}}{{{{if eq .Type \"bind\"}}}}"
     "{{{{println .Source}}}}{{{{end}}}}{{{{end}}}}' \"$C\"); "
-    'sudo docker rm -f "$C" >/dev/null || {{ echo RM_FAIL; exit 1; }}; '
-    'echo REMOVED; TS=$(date +%Y%m%d-%H%M%S); '
-    'for d in $MNT; do case "$d" in /opt/amnezia) for s in $SUB; do '
-    '[ -d "$s" ] && sudo mv "$s" "$s.removed-$TS" && echo "MOVED $s.removed-$TS"; done ;; '
-    '/opt/amnezia/*|/opt/acontrol/*) '
-    '[ -d "$d" ] && sudo mv "$d" "$d.removed-$TS" && echo "MOVED $d.removed-$TS" ;; esac; done; '
+    # Keep the running container until all config directories have moved.
+    # A failed mv used to leave the old config behind after reporting success;
+    # reinstall then brought revoked clients back. Bind mounts keep their inode
+    # while directories are staged, so the container can keep serving traffic.
+    'TS=$(date +%Y%m%d-%H%M%S)-$$; MOVED=""; '
+    'rollback() {{ for d in $MOVED; do sudo mv "$d.removed-$TS" "$d" || echo ROLLBACK_FAIL; done; }}; '
+    'stage() {{ [ -d "$1" ] || return 0; '
+    'sudo mv "$1" "$1.removed-$TS" || {{ rollback; echo MOVE_FAIL; exit 1; }}; '
+    'MOVED="$1 $MOVED"; }}; '
+    'for d in $MNT; do case "$d" in /opt/amnezia) for s in $SUB; do stage "$s"; done ;; '
+    '/opt/amnezia/*|/opt/acontrol/*) stage "$d" ;; esac; done; '
+    'sudo docker rm -f "$C" >/dev/null || {{ rollback; echo RM_FAIL; exit 1; }}; '
+    'echo REMOVED; for d in $MOVED; do echo "MOVED $d.removed-$TS"; done; '
     'for u in /etc/systemd/system/awg-up.service /etc/systemd/system/awg3-up.service; do '
     '[ -f "$u" ] && grep -qw -- "$C" "$u" && {{ sudo systemctl disable --now "${{u##*/}}" >/dev/null 2>&1; '
     'sudo rm -f "$u"; sudo systemctl daemon-reload; echo "UNIT ${{u##*/}}"; }}; done; '
@@ -170,7 +177,8 @@ async def rename_in_db(
     rows = []
     if protocols & {"awg", "awg3", "awglegacy"}:
         rows += list(await session.scalars(select(AwgConfig).where(
-            AwgConfig.server_id == server_id, AwgConfig.public_key == client_id)))
+            AwgConfig.server_id == server_id, AwgConfig.public_key == client_id,
+            AwgConfig.protocol.in_(protocols))))
     if "openvpn" in protocols:
         rows += list(await session.scalars(select(OvpnConfig).where(
             OvpnConfig.server_id == server_id, OvpnConfig.client_id == client_id)))

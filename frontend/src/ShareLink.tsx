@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from 'react'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { createShareLink, getShareServices, type ShareService } from './api'
 import { copyText } from './clipboard'
 import { useI18n } from './i18n'
@@ -35,6 +35,7 @@ export function useShareLink(
   const [link, setLink] = useState<{ url: string; days: number; via: string } | null>(null)
   const [copied, setCopied] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const request = useRef(0)
 
   useEffect(() => {
     let alive = true
@@ -48,20 +49,28 @@ export function useShareLink(
   useEffect(() => {
     setLink(null)
     setError(null)
-  }, [text])
+    setCopied(false)
+    setBusy(false)
+    // Поздний ответ старого конфига не должен показывать и копировать ссылку
+    // в новом окне. Инвалидируем и при закрытии окна.
+    return () => { request.current += 1 }
+  }, [text, target, groupName])
 
   async function share(svc: ShareService) {
+    const seq = ++request.current
     setBusy(true)
     setError(null)
     setLink(null)
     try {
       const r = await createShareLink(svc.id, text, target)
+      if (seq !== request.current) return
       setLink({ url: r.url, days: r.ttl_days, via: svc.name })
-      setCopied(await copyText(r.url))
+      const copied = await copyText(r.url)
+      if (seq === request.current) setCopied(copied)
     } catch (err) {
-      setError(err instanceof Error ? err.message : t('Ошибка'))
+      if (seq === request.current) setError(err instanceof Error ? err.message : t('Ошибка'))
     } finally {
-      setBusy(false)
+      if (seq === request.current) setBusy(false)
     }
   }
 

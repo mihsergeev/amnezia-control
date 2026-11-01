@@ -298,38 +298,47 @@ async def record(session_factory, settings: Settings, samples: list[dict],
     алерт о клиенте не чаще раза в сутки."""
     now = datetime.now(timezone.utc)
     to_alert: list[tuple[Server, dict, str]] = []
+    groups: dict[tuple[int, str], list[dict]] = {}
+    for sample in samples:
+        sid = sample["server_id"]
+        if sid not in servers:
+            continue
+        for hit in sample.get("torrent") or []:
+            groups.setdefault((sid, hit["protocol"]), []).append(hit)
+    # Порядок как в API/remove/expiry: сначала одна нода, затем ее транзакция.
+    # Иначе autoflush предыдущего hit держал DB-lock, пока autopause ожидала
+    # node-lock, а remove уже держал node-lock и ждал DELETE torrent_hits.
+    for (sid, protocol), hits in groups.items():
+        server = servers[sid]
+        async with nodelock.hold(protocol, sid):
+            async with session_factory() as session:
+                for h in hits:
+                    row = await session.scalar(select(TorrentHit).where(
+                        TorrentHit.server_id == server.id,
+                        TorrentHit.protocol == protocol,
+                        TorrentHit.client_id == h["client_id"],
+                    ))
+                    if row is None:
+                        row = TorrentHit(server_id=server.id, protocol=protocol,
+                                         client_id=h["client_id"], hits=0, first_seen=now)
+                        session.add(row)
+                    row.hits = (row.hits or 0) + h["hits"]
+                    row.last_seen = now
+                    if h.get("name"):
+                        row.name = h["name"][:128]
+                    if h["hits"] < MIN_HITS:
+                        continue
+                    paused = ""
+                    if server.torrent_autopause:
+                        paused = await _autopause(session, settings, server, h)
+                    if not server.alerts_enabled:
+                        continue
+                    fresh = row.alerted_at is None or now - alerts._aware(row.alerted_at) >= ALERT_EVERY
+                    if fresh or paused == "ok":
+                        row.alerted_at = now
+                        to_alert.append((server, h, paused))
+                await session.commit()
     async with session_factory() as session:
-        for s in samples:
-            server = servers.get(s["server_id"])
-            hits = s.get("torrent") or []
-            if server is None or not hits:
-                continue
-            for h in hits:
-                row = await session.scalar(select(TorrentHit).where(
-                    TorrentHit.server_id == server.id,
-                    TorrentHit.protocol == h["protocol"],
-                    TorrentHit.client_id == h["client_id"],
-                ))
-                if row is None:
-                    row = TorrentHit(server_id=server.id, protocol=h["protocol"],
-                                     client_id=h["client_id"], hits=0, first_seen=now)
-                    session.add(row)
-                row.hits = (row.hits or 0) + h["hits"]
-                row.last_seen = now
-                if h.get("name"):
-                    row.name = h["name"][:128]
-                if h["hits"] < MIN_HITS:
-                    continue
-                paused = ""
-                if server.torrent_autopause:
-                    paused = await _autopause(session, settings, server, h)
-                if not server.alerts_enabled:
-                    continue
-                fresh = row.alerted_at is None or now - alerts._aware(row.alerted_at) >= ALERT_EVERY
-                if fresh or paused == "ok":
-                    row.alerted_at = now
-                    to_alert.append((server, h, paused))
-        await session.commit()
         cfg = await settings_store.get_alert_config(session, settings) if to_alert else {}
     if not to_alert or not alerts.alerts_enabled(cfg):
         return

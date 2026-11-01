@@ -20,6 +20,7 @@ def _ssh_error(exc: Exception) -> HTTPException:
 
 
 @router.post("/{protocol}/rename", status_code=status.HTTP_204_NO_CONTENT)
+@nodelock.operation()
 async def rename_client(
     server_id: int,
     protocol: str,
@@ -66,6 +67,7 @@ async def rename_client(
 
 
 @router.post("/{protocol}/remove", response_model=ProtocolRemoveOut)
+@nodelock.operation()
 async def remove_protocol(
     server_id: int,
     protocol: str,

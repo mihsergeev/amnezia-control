@@ -4,6 +4,27 @@ All notable changes to Amnezia Control are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.82.2] - 2026-11-01
+
+### Fixed
+- Keep raw SQLite database files and sidecars out of backups and restores so
+  they cannot overwrite restored data or undo session revocation.
+- Reject malformed dates in backups and server imports instead of silently
+  removing client expiry limits.
+- Recheck expiry limits after waiting for a node and serialize client changes
+  through their metadata commit, including API integrations and bulk revocation.
+- Isolate stored configurations and notes by AWG protocol.
+- Revoke paused clients on the node even after snapshot restoration, and retain
+  their metadata when revocation cannot be confirmed.
+- Preserve running containers and restore staged configuration directories when
+  protocol removal fails.
+- Increment session versions atomically and reset the replay counter when
+  setting up a new two-factor authentication secret.
+- Prevent service URL credentials from appearing in new share links, responses
+  and audit entries.
+- Ignore outdated share-link and client-history responses after changing the
+  configuration, closing its window or selecting another time range.
+
 ## [0.82.1] - 2026-11-01
 
 ### Fixed

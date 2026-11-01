@@ -132,6 +132,19 @@ def _skip_data_dir(name: str) -> bool:
     )
 
 
+def _sqlite_runtime_paths(session) -> set[str]:
+    """SQLite восстанавливаем из db.json, никогда копированием открытой БД.
+
+    Сырые main/WAL/SHM/journal могут быть несогласованными; запись поверх
+    живого файла после JSON-restore откатывает в том числе версии токенов.
+    """
+    url = session.bind.url
+    if url.get_backend_name() != "sqlite" or not url.database or url.database == ":memory:":
+        return set()
+    path = os.path.normcase(os.path.realpath(url.database))
+    return {path + suffix for suffix in ("", "-wal", "-shm", "-journal")}
+
+
 def verify_archive(archive: bytes) -> list[str]:
     """Self-тест бэкапа: архив открывается, MANIFEST/db.json парсятся, число строк
     сходится с манифестом (ловит обрыв записи/битый файл), а критичные данные —
@@ -165,6 +178,7 @@ async def _build_archive(
     session, data_dir: str, version: str, include_traffic: bool = False
 ) -> bytes:
     dump: dict[str, list] = {}
+    sqlite_paths = _sqlite_runtime_paths(session)
     for model in _MODELS:
         # лёгкий бэкап: историю трафика (сотни МБ) не тащим — она некритична
         if model in _TRAFFIC_MODELS and not include_traffic:
@@ -199,6 +213,8 @@ async def _build_archive(
                     files = [f for f in files if not _skip_data_dir(f)]
                 for fn in files:
                     full = os.path.join(root, fn)
+                    if os.path.normcase(os.path.realpath(full)) in sqlite_paths:
+                        continue
                     rel = os.path.relpath(full, data_dir).replace(os.sep, "/")
                     try:
                         with open(full, "rb") as fh:
@@ -259,11 +275,14 @@ def _coerce_row(model, row: dict) -> dict:
         if col.name not in row:
             continue
         val = row[col.name]
-        if isinstance(val, str) and isinstance(col.type, DateTime):
-            try:
-                val = datetime.fromisoformat(val)
-            except ValueError:
-                val = None
+        if isinstance(col.type, DateTime) and val is not None:
+            if not isinstance(val, (str, datetime)):
+                raise ValueError(f"{model.__tablename__}.{col.name}: неверная дата")
+            if isinstance(val, str):
+                try:
+                    val = datetime.fromisoformat(val)
+                except ValueError as exc:
+                    raise ValueError(f"{model.__tablename__}.{col.name}: неверная дата") from exc
         out[col.name] = val
     return out
 
@@ -369,6 +388,24 @@ async def restore_backup(
             status.HTTP_400_BAD_REQUEST, "в архиве нет валидного db.json"
         ) from exc
 
+    if not isinstance(dump, dict):
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "db.json должен содержать объект таблиц")
+    # Проверяем структуру и даты до DELETE: поврежденный expires_at нельзя
+    # превращать в NULL, иначе ограниченный клиент становится бессрочным.
+    prepared: dict[str, list[dict]] = {}
+    try:
+        for model in _MODELS:
+            if model.__tablename__ not in dump:
+                continue
+            rows = dump[model.__tablename__]
+            if not isinstance(rows, list) or any(not isinstance(row, dict) for row in rows):
+                raise ValueError(f"{model.__tablename__}: ожидается список строк")
+            if model is User and not rows:
+                raise ValueError("users: нет учетной записи для входа")
+            prepared[model.__tablename__] = [_coerce_row(model, row) for row in rows]
+    except ValueError as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
+
     # восстанавливаем ТОЛЬКО таблицы, присутствующие в db.json. Отсутствующие
     # (напр. история трафика в лёгком бэкапе) не трогаем — иначе restore затёр бы
     # их существующие строки пустотой.
@@ -394,10 +431,9 @@ async def restore_backup(
     for model in reversed(present):  # чистим в обратном порядке (FK нет)
         await session.execute(delete(model))
     for model in present:
-        rows = dump.get(model.__tablename__, [])
+        rows = prepared[model.__tablename__]
         for row in rows:
-            if isinstance(row, dict):
-                await session.execute(insert(model).values(**_coerce_row(model, row)))
+            await session.execute(insert(model).values(**row))
         restored[model.__tablename__] = len(rows)
     if User in present:
         rows = (
@@ -439,6 +475,7 @@ async def restore_backup(
     # восстановление data/ (ssh-ключ и пр.), без postgres
     settings = get_settings()
     base = os.path.realpath(settings.data_dir)
+    sqlite_paths = _sqlite_runtime_paths(session)
     for m in tar.getmembers():
         if not (m.isfile() and m.name.startswith("data/")):
             continue
@@ -450,6 +487,8 @@ async def restore_backup(
         if os.path.isabs(rel):
             continue
         dest = os.path.realpath(os.path.join(base, rel))
+        if os.path.normcase(dest) in sqlite_paths:
+            continue
         if dest != base and not dest.startswith(base + os.sep):
             continue
         os.makedirs(os.path.dirname(dest), exist_ok=True)

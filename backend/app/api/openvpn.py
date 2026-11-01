@@ -141,6 +141,7 @@ async def set_note(
 
 
 @router.post("/clients", response_model=OvpnCreateResponse, status_code=201)
+@nodelock.operation("openvpn")
 async def create_client(
     server_id: int, body: OvpnCreateRequest, user: CurrentUser, session: SessionDep
 ) -> OvpnCreateResponse:
@@ -170,6 +171,7 @@ async def create_client(
 
 
 @router.post("/reissue", response_model=OvpnCreateResponse, status_code=201)
+@nodelock.operation("openvpn")
 async def reissue_client(
     server_id: int, body: OvpnReissueRequest, user: CurrentUser, session: SessionDep
 ) -> OvpnCreateResponse:
@@ -262,6 +264,7 @@ async def _torrent_after_restart(conn, container: str, server: Server) -> None:
 
 
 @router.post("/pause", status_code=status.HTTP_204_NO_CONTENT)
+@nodelock.operation("openvpn")
 async def pause_client(
     server_id: int, body: OvpnRevokeRequest, user: CurrentUser, session: SessionDep
 ) -> None:
@@ -295,6 +298,7 @@ async def pause_client(
 
 
 @router.post("/resume", status_code=status.HTTP_204_NO_CONTENT)
+@nodelock.operation("openvpn")
 async def resume_client(
     server_id: int, body: OvpnRevokeRequest, user: CurrentUser, session: SessionDep
 ) -> None:
@@ -318,6 +322,7 @@ async def resume_client(
 
 
 @router.post("/revoke", status_code=status.HTTP_204_NO_CONTENT)
+@nodelock.operation("openvpn")
 async def revoke_client(
     server_id: int, body: OvpnRevokeRequest, user: CurrentUser, session: SessionDep
 ) -> None:

@@ -89,11 +89,14 @@ def _coerce_row(model, row: dict) -> dict:
         if col.name not in row:
             continue
         val = row[col.name]
-        if isinstance(val, str) and isinstance(col.type, DateTime):
-            try:
-                val = datetime.fromisoformat(val)
-            except ValueError:
-                val = None
+        if isinstance(col.type, DateTime) and val is not None:
+            if not isinstance(val, (str, datetime)):
+                raise ValueError(f"{model.__tablename__}.{col.name}: неверная дата")
+            if isinstance(val, str):
+                try:
+                    val = datetime.fromisoformat(val)
+                except ValueError as exc:
+                    raise ValueError(f"{model.__tablename__}.{col.name}: неверная дата") from exc
         out[col.name] = val
     return out
 
@@ -255,10 +258,15 @@ async def import_server_file(
                 skipped.append(table)
             continue
         values = []
+        if not isinstance(rows, list):
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, f"{table}: ожидается список строк")
         for row in rows:
             if not isinstance(row, dict):
-                continue
-            clean = _coerce_row(model, row)
+                raise HTTPException(status.HTTP_400_BAD_REQUEST, f"{table}: неверная строка")
+            try:
+                clean = _coerce_row(model, row)
+            except ValueError as exc:
+                raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
             clean.pop("id", None)
             exp = clean.get("expires_at") if table == "client_limits" else None
             if isinstance(exp, datetime):
