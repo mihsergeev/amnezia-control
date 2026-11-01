@@ -45,6 +45,8 @@ jobs:
         run: npm ci
       - name: i18n check (все русские строки переведены на EN)
         run: npm run check-i18n
+      - name: Frontend tests
+        run: npm test
       - name: Dependency audit (npm audit)
         continue-on-error: true # информативно, не блокирует
         run: npm audit --audit-level=high

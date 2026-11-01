@@ -11,7 +11,6 @@ import {
   api,
   ApiError,
   deleteCascade,
-  hiddenExits,
   listCascades,
   parseCheckInfo,
   protocolsFromContainers,
@@ -38,8 +37,25 @@ import { CascadeCheckModal } from './CascadeCheck'
 import { EgressCheckModal } from './EgressCheck'
 import { TorrentLine } from './Torrent'
 import { translate, useI18n } from './i18n'
+import {
+  groupServerList, resolveServerSelection, serverListAnchors, serverListClients,
+  serverListItems, serverListMatches, serverListProblem, serverSelectionFromHistory,
+  serverSelectionParams, type ServerListItem, type ServerSelection,
+} from './serverList'
 
 const FALLBACK_USER = 'acontrol'
+
+function initialSelection(): ServerSelection {
+  const fromUrl = serverSelectionFromHistory(new URLSearchParams(window.location.search), window.history.state)
+  if (fromUrl.key || fromUrl.serverId) return fromUrl
+  try {
+    const serverId = Number(localStorage.getItem('acontrol_selected_server')) || null
+    const key = localStorage.getItem('acontrol_selected_row')
+    return { key: key && /^(server|cascade):\d+$/.test(key) ? key : null, serverId }
+  } catch {
+    return { key: null, serverId: null }
+  }
+}
 
 function emptyForm(defaultUser: string): ServerForm {
   return {
@@ -92,26 +108,19 @@ function GreBadge({ server, withRemote }: { server: Server; withRemote?: boolean
   )
 }
 
-// путь трафика клиентов, когда нода - вход каскада: выход в интернет с другого адреса.
-// cascade - каскад, собранный панелью: выход известен и до первой проверки адреса
+// Путь клиентов каскада, настроенного вручную: известен только адрес выхода.
 function EgressRoute({
   server,
-  cascade,
-  exitServer,
-  onOpen,
   onCheck,
 }: {
   server: Server
-  cascade?: Cascade
-  exitServer?: Server
-  onOpen: (s: Server) => void
   onCheck: () => void
 }) {
   const { t } = useI18n()
-  const viaGre = !cascade && greTunnels(server).length > 0
-  const exitIp = server.egress_ip || cascade?.result.egress || cascade?.exit_ip || ''
-  const exitCountry = server.egress_country || exitServer?.country || ''
-  const exitSub = [exitServer?.name, server.egress_org].filter(Boolean).join(', ')
+  const viaGre = greTunnels(server).length > 0
+  const exitIp = server.egress_ip
+  const exitCountry = server.egress_country
+  const exitSub = server.egress_org
   return (
     <div className="srv-route">
       <span className="srv-route-label">{t('Клиенты')}</span>
@@ -119,9 +128,6 @@ function EgressRoute({
       <Hop flag={countryFlag(server.country)} title={server.host} sub={t('этот сервер')} />
       <span className="srv-route-arrow">
         {viaGre && <GreBadge server={server} />}
-        {cascade && (
-          <span className="tun-badge">{cascade.transport === 'gre' ? 'GRE' : 'VLESS'}</span>
-        )}
         →
       </span>
       <Hop
@@ -129,8 +135,6 @@ function EgressRoute({
         flag={countryFlag(exitCountry)}
         title={exitIp}
         sub={exitSub ? t('выход в интернет, {org}', { org: exitSub }) : t('выход в интернет')}
-        onClick={exitServer ? () => onOpen(exitServer) : undefined}
-        hint={t('Открыть сервер выхода')}
       />
       <button className="ghost srv-route-check" onClick={onCheck}>
         {t('Проверить каскад')}
@@ -139,17 +143,19 @@ function EgressRoute({
   )
 }
 
-// маршрут на карточке выхода каскада: клиенты приходят со входа
-function ExitRoute({
-  server,
+// Одна схема сохраняет контекст каскада при открытии любого его узла.
+function CascadeRoute({
   cascade,
   entry,
+  exit,
+  selectedId,
   onOpen,
   onCheck,
 }: {
-  server: Server
   cascade: Cascade
   entry?: Server
+  exit?: Server
+  selectedId?: number
   onOpen: (s: Server) => void
   onCheck: () => void
 }) {
@@ -161,8 +167,9 @@ function ExitRoute({
       <Hop
         flag={countryFlag(entry?.country || '')}
         title={entry?.host || cascade.entry_ip}
-        sub={entry ? t('вход каскада, {name}', { name: entry.name }) : t('вход каскада')}
+        sub={entry ? t('вход каскада, {name}', { name: entry.name }) : t('Сервер входа недоступен')}
         onClick={entry ? () => onOpen(entry) : undefined}
+        selected={entry?.id === selectedId}
         hint={t('Открыть сервер входа')}
       />
       <span className="srv-route-arrow">
@@ -170,12 +177,15 @@ function ExitRoute({
       </span>
       <Hop
         className="srv-hop-exit"
-        flag={countryFlag(server.country)}
-        title={server.host}
-        sub={t('этот сервер, выход в интернет')}
+        flag={countryFlag(exit?.country || '')}
+        title={exit?.host || cascade.exit_ip}
+        sub={exit ? t('выход каскада, {name}', { name: exit.name }) : t('Сервер выхода недоступен')}
+        onClick={exit ? () => onOpen(exit) : undefined}
+        selected={exit?.id === selectedId}
+        hint={t('Открыть сервер выхода')}
       />
       <button className="ghost srv-route-check" onClick={onCheck}>
-        {t('Проверить каскад')}
+        {t(cascade.status === 'ready' && entry && exit ? 'Проверить каскад' : 'Подробнее')}
       </button>
     </div>
   )
@@ -189,6 +199,7 @@ function Hop({
   sub,
   onClick,
   hint,
+  selected = false,
 }: {
   className?: string
   flag: string
@@ -196,27 +207,22 @@ function Hop({
   sub: string
   onClick?: () => void
   hint?: string
+  selected?: boolean
 }) {
+  const content = <>
+    {flag && <span className="server-flag">{flag}</span>}
+    <span className="srv-hop-text">
+      <span className="mono">{title}</span>
+      <span className="muted small">{sub}</span>
+    </span>
+    {onClick && <span className="srv-hop-go" aria-hidden="true">↗</span>}
+  </>
+  const cls = `srv-hop ${className}${onClick ? ' srv-hop-link' : ''}${selected ? ' srv-hop-selected' : ''}`
+  if (onClick) {
+    return <button type="button" className={cls} title={hint} aria-pressed={selected} onClick={onClick}>{content}</button>
+  }
   return (
-    <div
-      className={`srv-hop ${className}${onClick ? ' srv-hop-link' : ''}`}
-      role={onClick ? 'button' : undefined}
-      tabIndex={onClick ? 0 : undefined}
-      title={onClick ? hint : undefined}
-      onClick={onClick}
-      onKeyDown={onClick ? (e) => e.key === 'Enter' && onClick() : undefined}
-    >
-      {flag && <span className="server-flag">{flag}</span>}
-      <div>
-        <div className="mono">{title}</div>
-        <div className="muted small">{sub}</div>
-      </div>
-      {onClick && (
-        <span className="srv-hop-go" aria-hidden="true">
-          ↗
-        </span>
-      )}
-    </div>
+    <div className={cls}>{content}</div>
   )
 }
 
@@ -237,6 +243,17 @@ function StatusDot({ server, exitDown = false }: { server: Server; exitDown?: bo
         : exitDown
           ? t('выход каскада не отвечает')
           : t('онлайн')
+  return <span className={`dot ${cls}`} title={title} />
+}
+
+function ListStatusDot({ item }: { item: ServerListItem }) {
+  const { t } = useI18n()
+  if (!item.cascade) return item.anchor ? <StatusDot server={item.anchor} /> : null
+  const failed = item.cascade.status === 'error' || !item.entry || !item.exit
+    || item.cascade.result.health?.ok === false || item.members.some((server) => server.last_check_ok === false)
+  const unknown = item.cascade.status === 'installing' || item.members.some((server) => server.last_check_ok === null)
+  const cls = failed ? 'dot-fail' : unknown ? 'dot-unknown' : 'dot-ok'
+  const title = failed ? t('ошибка (см. лог)') : unknown ? t('Каскад собирается…') : t('онлайн')
   return <span className={`dot ${cls}`} title={title} />
 }
 
@@ -376,30 +393,26 @@ function ServerDetail({
         )}
       </div>
 
-      {cascade && cascade.exit_server_id === server.id ? (
+      {cascade ? (
         <>
-          <ExitRoute
-            server={server}
+          <CascadeRoute
             cascade={cascade}
-            entry={peer}
+            entry={isEntry ? server : peer}
+            exit={isEntry ? peer : server}
+            selectedId={server.id}
             onOpen={onOpen}
-            onCheck={() => onCascadeCheck(cascade)}
+            onCheck={() => cascade.status === 'ready' && peer ? onCascadeCheck(cascade) : onCascade(cascade)}
           />
-          <div className="muted small">
+          {!isEntry && <div className="muted small">
             {protocols.length > 0
               ? t('Свои клиенты этого сервера выходят в интернет с него напрямую, без каскада.')
               : t('Чтобы завести здесь своих клиентов без каскада, разверните протокол в меню «Ещё».')}
-          </div>
+          </div>}
         </>
-      ) : server.egress_ip || cascade ? (
+      ) : server.egress_ip ? (
         <EgressRoute
           server={server}
-          cascade={cascade}
-          exitServer={peer}
-          onOpen={onOpen}
-          onCheck={() =>
-            cascade && cascade.status === 'ready' ? onCascadeCheck(cascade) : onEgressCheck()
-          }
+          onCheck={onEgressCheck}
         />
       ) : (
         greTunnels(server).length > 0 && (
@@ -563,13 +576,8 @@ export function ServersPage({ onUnauthorized }: Props) {
   const [stats, setStats] = useState<Record<number, ServerStat>>({})
   const [query, setQuery] = useState('')
   const [onlyProblems, setOnlyProblems] = useState(false)
-  const [selectedId, setSelectedId] = useState<number | null>(() => {
-    try {
-      return Number(localStorage.getItem('acontrol_selected_server')) || null
-    } catch {
-      return null
-    }
-  })
+  const [selection, setSelection] = useState<ServerSelection>(initialSelection)
+  const initialSelectionRef = useRef(selection)
   const detailRef = useRef<HTMLDivElement>(null)
   const [config, setConfig] = useState<PanelConfig | null>(null)
   const [loading, setLoading] = useState(true)
@@ -629,6 +637,14 @@ export function ServersPage({ onUnauthorized }: Props) {
   const [casCheck, setCasCheck] = useState<Cascade | null>(null)
   const [egressCheck, setEgressCheck] = useState<Server | null>(null)
 
+  useEffect(() => {
+    const state = window.history.state && typeof window.history.state === 'object' ? window.history.state : {}
+    window.history.replaceState({ ...state, acontrolServerSelection: initialSelectionRef.current }, '')
+    const navigate = (event: PopStateEvent) => setSelection(serverSelectionFromHistory(new URLSearchParams(window.location.search), event.state))
+    window.addEventListener('popstate', navigate)
+    return () => window.removeEventListener('popstate', navigate)
+  }, [])
+
   // Escape закрывает открытую инлайновую модалку страницы (компонентные —
   // ClientsModal/DeployModal и т.п. — обрабатывают Escape сами)
   useEffect(() => {
@@ -656,26 +672,31 @@ export function ServersPage({ onUnauthorized }: Props) {
     [onUnauthorized],
   )
 
+  const loadSequence = useRef(0)
+  const invalidateLoads = useCallback(() => { loadSequence.current++ }, [])
   const load = useCallback(async () => {
+    const sequence = ++loadSequence.current
     try {
-      setServers(await api<Server[]>('/api/servers'))
+      const loaded = await api<Server[]>('/api/servers')
+      if (sequence !== loadSequence.current) return
+      setServers(loaded)
       setError(null)
       // метрики нод — необязательны, грузим отдельно и молча
       api<NodeMetric[]>('/api/stats/nodes')
-        .then((rows) =>
-          setMetrics(Object.fromEntries(rows.map((r) => [r.server_id, r]))),
-        )
+        .then((rows) => {
+          if (sequence === loadSequence.current) setMetrics(Object.fromEntries(rows.map((r) => [r.server_id, r])))
+        })
         .catch(() => {})
       listCascades()
-        .then(setCascades)
+        .then((rows) => { if (sequence === loadSequence.current) setCascades(rows) })
         .catch(() => {})
       api<Overview>('/api/stats/overview')
-        .then((o) => setStats(Object.fromEntries(o.per_server.map((r) => [r.id, r]))))
+        .then((o) => { if (sequence === loadSequence.current) setStats(Object.fromEntries(o.per_server.map((r) => [r.id, r]))) })
         .catch(() => {})
     } catch (err) {
-      handleError(err)
+      if (sequence === loadSequence.current) handleError(err)
     } finally {
-      setLoading(false)
+      if (sequence === loadSequence.current) setLoading(false)
     }
   }, [handleError])
 
@@ -684,7 +705,8 @@ export function ServersPage({ onUnauthorized }: Props) {
     api<PanelConfig>('/api/config')
       .then(setConfig)
       .catch(() => setConfig(null))
-  }, [load])
+    return invalidateLoads
+  }, [load, invalidateLoads])
 
   function resetForm(defaultUser: string) {
     setForm(emptyForm(defaultUser))
@@ -863,24 +885,12 @@ export function ServersPage({ onUnauthorized }: Props) {
   // серверы, сгруппированные по group_name; порядок карточек и групп — ручной
   // (position, drag-and-drop). Группа выводится по первому появлению в
   // отсортированном списке (= по минимальной позиции участника), пустая — в конце.
-  // выходы каскадов без своих протоколов: в списке они часть сервера-входа
-  const exitIds = useMemo(() => hiddenExits(servers, cascades), [servers, cascades])
-  const listed = useMemo(() => servers.filter((s) => !exitIds.has(s.id)), [servers, exitIds])
-
-  const groupList = useMemo(() => {
-    const sorted = [...listed].sort(
-      (a, b) => a.position - b.position || a.id - b.id,
-    )
-    const map = new Map<string, Server[]>()
-    for (const s of sorted) {
-      const g = s.group_name || ''
-      const arr = map.get(g)
-      if (arr) arr.push(s)
-      else map.set(g, [s])
-    }
-    const names = [...map.keys()].filter((n) => n !== '')
-    if (map.has('')) names.push('')
-    return names.map((name) => ({ name, servers: map.get(name)! }))
+  const listed = useMemo(() => serverListItems(servers, cascades), [servers, cascades])
+  const groupList = useMemo(() => groupServerList(listed), [listed])
+  const sharedAnchors = useMemo(() => {
+    const counts = new Map<number, number>()
+    for (const item of listed) if (item.anchor) counts.set(item.anchor.id, (counts.get(item.anchor.id) ?? 0) + 1)
+    return new Set([...counts].filter(([, count]) => count > 1).map(([id]) => id))
   }, [listed])
 
   // --- drag-and-drop: перетаскивание карточек и групп ---
@@ -904,7 +914,7 @@ export function ServersPage({ onUnauthorized }: Props) {
   )
 
   const flatServers = useCallback(
-    () => groupList.flatMap((g) => g.servers),
+    () => serverListAnchors(groupList.flatMap((g) => g.items)),
     [groupList],
   )
 
@@ -965,8 +975,8 @@ export function ServersPage({ onUnauthorized }: Props) {
       if (from < 0 || order.indexOf(targetGroup) < 0) return
       order.splice(from, 1)
       order.splice(order.indexOf(targetGroup), 0, src)
-      const byGroup = new Map(groupList.map((g) => [g.name, g.servers]))
-      applyOrder(order.flatMap((name) => byGroup.get(name) || []))
+      const byGroup = new Map(groupList.map((g) => [g.name, g.items]))
+      applyOrder(serverListAnchors(order.flatMap((name) => byGroup.get(name) || [])))
     },
     [applyOrder, groupList],
   )
@@ -982,24 +992,13 @@ export function ServersPage({ onUnauthorized }: Props) {
   )
 
   function cascadeOf(s: Server): Cascade | undefined {
-    return cascades.find((c) => c.entry_server_id === s.id || c.exit_server_id === s.id)
+    return selectedItem?.members.some((member) => member.id === s.id)
+      ? selectedItem.cascade
+      : cascades.find((c) => c.entry_server_id === s.id || c.exit_server_id === s.id)
   }
 
-  function exitDown(s: Server): boolean {
-    const c = cascades.find((x) => x.entry_server_id === s.id)
-    if (!c) return false
-    if (c.result.health?.ok === false) return true
-    return servers.find((x) => x.id === c.exit_server_id)?.last_check_ok === false
-  }
-
-  // проблема сервера с учетом выхода его каскада: выход в списке не виден
-  const problem = useCallback((s: Server): boolean => {
-    if (isProblem(s, metrics[s.id])) return true
-    const c = cascades.find((x) => x.entry_server_id === s.id)
-    if (c?.result.health?.ok === false) return true
-    const exit = c && servers.find((x) => x.id === c.exit_server_id)
-    return !!exit && isProblem(exit, metrics[exit.id])
-  }, [cascades, metrics, servers])
+  const problem = useCallback((item: ServerListItem): boolean =>
+    serverListProblem(item, (server) => isProblem(server, metrics[server.id])), [metrics])
 
   const cascadePeer = useCallback((s: Server, c: Cascade | undefined): Server | undefined => {
     if (!c) return undefined
@@ -1121,43 +1120,39 @@ export function ServersPage({ onUnauthorized }: Props) {
       groupList
         .map((g) => ({
           ...g,
-          servers: g.servers.filter((s) => {
-            if (onlyProblems && !problem(s)) return false
+          items: g.items.filter((item) => {
+            if (onlyProblems && !problem(item)) return false
             if (!q) return true
-            const info = parseCheckInfo(s)
-            const labels = protocolsFromContainers(
-              info?.amnezia_containers ?? [],
-              info?.protocols ?? {},
-            ).map((p) => p.label)
-            // по имени и адресу выхода находится его вход
-            const exit = cascadePeer(s, cascades.find((c) => c.entry_server_id === s.id))
-            return [s.name, s.host, s.note, s.group_name, ...labels, exit?.name, exit?.host]
-              .join(' ')
-              .toLowerCase()
-              .includes(q)
+            return serverListMatches(item, q, (server) => {
+              const info = parseCheckInfo(server)
+              const labels = protocolsFromContainers(info?.amnezia_containers ?? [], info?.protocols ?? {}).map((p) => p.label)
+              return [server.name, server.host, server.note, server.group_name, ...labels].join(' ')
+            })
           }),
         }))
-        .filter((g) => g.servers.length > 0),
-    [groupList, onlyProblems, q, cascades, problem, cascadePeer],
+        .filter((g) => g.items.length > 0),
+    [groupList, onlyProblems, q, problem],
   )
-  const visibleFlat = visibleGroups.flatMap((g) => g.servers)
+  const visibleFlat = visibleGroups.flatMap((g) => g.items)
   const problemCount = listed.filter(problem).length
-  // спрятанный выход открывается из меню своего входа: его карточку показываем,
-  // хотя в списке его нет (так на нем разворачивают протокол для своих клиентов)
-  const selected =
-    visibleFlat.find((s) => s.id === selectedId) ??
-    (selectedId !== null && exitIds.has(selectedId)
-      ? servers.find((s) => s.id === selectedId)
-      : undefined) ??
-    visibleFlat[0] ??
-    null
+  const { item: selectedItem, server: selected } = resolveServerSelection(visibleFlat, selection)
 
-  function select(s: Server) {
-    setSelectedId(s.id)
+  function selectItem(item: ServerListItem, server?: Server) {
+    const node = server ?? item.members.find((member) => member.id === selection.serverId) ?? item.anchor
+    const nextSelection = { key: item.key, serverId: node?.id ?? null }
+    setSelection(nextSelection)
     try {
-      localStorage.setItem('acontrol_selected_server', String(s.id))
+      localStorage.setItem('acontrol_selected_row', item.key)
+      if (node) localStorage.setItem('acontrol_selected_server', String(node.id))
+      else localStorage.removeItem('acontrol_selected_server')
     } catch {
       // приватный режим: просто не запоминаем
+    }
+    const url = new URL(window.location.href)
+    url.search = serverSelectionParams(url.searchParams, item, node).toString()
+    if (url.href !== window.location.href) {
+      const state = window.history.state && typeof window.history.state === 'object' ? window.history.state : {}
+      window.history.pushState({ ...state, acontrolServerSelection: nextSelection }, '', url)
     }
     // на телефоне карточка под списком: прокручиваем к ней
     if (window.matchMedia('(max-width: 900px)').matches) {
@@ -1167,8 +1162,14 @@ export function ServersPage({ onUnauthorized }: Props) {
     }
   }
 
-  function groupSummary(list: Server[]) {
-    const online = list.reduce((a, s) => a + (stats[s.id]?.clients_online ?? 0), 0)
+  function select(server: Server) {
+    const item = selectedItem?.members.some((member) => member.id === server.id)
+      ? selectedItem : listed.find((row) => row.members.some((member) => member.id === server.id))
+    if (item) selectItem(item, server)
+  }
+
+  function groupSummary(list: ServerListItem[]) {
+    const online = serverListClients(list, stats).online
     const bad = list.filter(problem).length
     return (
       <span className="group-sum">
@@ -1200,7 +1201,7 @@ export function ServersPage({ onUnauthorized }: Props) {
       {error && <p className="form-error">{error}</p>}
       {loading && <p className="muted">{t('загрузка…')}</p>}
 
-      {!loading && servers.length === 0 && (
+      {!loading && listed.length === 0 && (
         <div className="card">
           <p className="muted">
             {t('Серверов пока нет — добавьте первый: имя, хост и SSH-доступ.')}
@@ -1208,7 +1209,7 @@ export function ServersPage({ onUnauthorized }: Props) {
         </div>
       )}
 
-      {servers.length > 0 && (
+      {listed.length > 0 && (
         <div className="srv-split">
           <div className="srv-side">
             <div className="srv-side-tools">
@@ -1283,34 +1284,38 @@ export function ServersPage({ onUnauthorized }: Props) {
                         )}
                         <span className="group-caret">{open ? '▾' : '▸'}</span>
                         <span className="group-name">{g.name || t('Без группы')}</span>
-                        <span className="group-count">{g.servers.length}</span>
-                        {groupSummary(g.servers)}
+                        <span className="group-count">{g.items.length}</span>
+                        {groupSummary(g.items)}
                       </button>
                     )}
                     {open &&
-                      g.servers.map((s) => {
-                        const st = stats[s.id]
+                      g.items.map((item) => {
+                        const s = item.anchor
+                        const cas = item.cascade
+                        const st = serverListClients([item], stats)
+                        const draggable = !!s && !sharedAnchors.has(s.id)
                         return (
                           <button
                             type="button"
-                            key={s.id}
-                            className={`srv-item${selected?.id === s.id ? ' selected' : ''}${
-                              s.last_check_ok === false ? ' server-down' : ''
-                            }${dropHint === `srv-${s.id}` ? ' drag-over' : ''}`}
-                            onClick={() => select(s)}
-                            title={s.host}
+                            key={item.key}
+                            className={`srv-item${selectedItem?.key === item.key ? ' selected' : ''}${
+                              problem(item) ? ' server-down' : ''
+                            }${s && dropHint === `srv-${s.id}` ? ' drag-over' : ''}`}
+                            aria-pressed={selectedItem?.key === item.key}
+                            onClick={() => selectItem(item)}
+                            title={item.members.map((server) => `${server.name}: ${server.host}`).join(' → ') || `${cas?.entry_ip} → ${cas?.exit_ip}`}
                             onDragOver={(e) => {
-                              if (dragServer.current != null) {
+                              if (s && draggable && dragServer.current != null) {
                                 e.preventDefault()
                                 if (dropHint !== `srv-${s.id}`) setDropHint(`srv-${s.id}`)
                               }
                             }}
                             onDragLeave={() => {
-                              if (dropHint === `srv-${s.id}`) setDropHint(null)
+                              if (s && dropHint === `srv-${s.id}`) setDropHint(null)
                             }}
-                            onDrop={() => dropOnServer(s.id)}
+                            onDrop={() => { if (s && draggable) dropOnServer(s.id) }}
                           >
-                            {!filtering && (
+                            {!filtering && s && draggable && (
                               <span
                                 className="drag-handle"
                                 draggable
@@ -1330,36 +1335,21 @@ export function ServersPage({ onUnauthorized }: Props) {
                                 ⠿
                               </span>
                             )}
-                            <StatusDot server={s} exitDown={exitDown(s)} />
-                            {countryFlag(s.country) && (
-                              <span className="server-flag" title={s.country}>
-                                {countryFlag(s.country)}
+                            <ListStatusDot item={item} />
+                            {cas ? (
+                              <span className="srv-item-name">
+                                <span className="srv-item-kind">{t('Каскад')} · {cas.transport === 'gre' ? 'GRE' : 'VLESS'}</span>
+                                <span>{countryFlag(item.entry?.country || '')} {item.entry?.name || cas.entry_ip} → {countryFlag(item.exit?.country || '')} {item.exit?.name || cas.exit_ip}</span>
                               </span>
-                            )}
-                            {(() => {
-                              // вход каскада: стрелка и флаг страны выхода
-                              const cas = cascadeOf(s)
-                              const isEntry = cas?.entry_server_id === s.id
-                              if (!s.egress_ip && !isEntry) return null
-                              const peer = isEntry ? cascadePeer(s, cas) : undefined
-                              const ip = s.egress_ip || cas?.exit_ip || ''
-                              return (
-                                <span
-                                  className="srv-item-route"
-                                  title={t('выход в интернет: {ip}', { ip })}
-                                >
-                                  →
-                                  <span className="server-flag">
-                                    {countryFlag(s.egress_country || peer?.country || '') || '?'}
-                                  </span>
-                                </span>
-                              )
-                            })()}
-                            <span className="srv-item-name">{s.name}</span>
-                            <GreBadge server={s} />
-                            {st?.online && (
-                              <span className="srv-item-cl" title={t('онлайн / всего клиентов')}>
-                                <b>{st.clients_online}</b>/{st.clients_total}
+                            ) : s && <>
+                              {countryFlag(s.country) && <span className="server-flag" title={s.country}>{countryFlag(s.country)}</span>}
+                              {s.egress_ip && <span className="srv-item-route" title={t('выход в интернет: {ip}', { ip: s.egress_ip })}>→ {countryFlag(s.egress_country) || '?'}</span>}
+                              <span className="srv-item-name">{s.name}</span>
+                              <GreBadge server={s} />
+                            </>}
+                            {st.available && (
+                              <span className="srv-item-cl" title={cas ? t('Клиенты входа и выхода: онлайн / всего') : t('онлайн / всего клиентов')}>
+                                <b>{st.online}</b>/{st.total}
                               </span>
                             )}
                           </button>
@@ -1391,6 +1381,12 @@ export function ServersPage({ onUnauthorized }: Props) {
                 onCascadeCheck={setCasCheck}
                 onEgressCheck={() => setEgressCheck(selected)}
               />
+            ) : selectedItem?.cascade ? (
+              <div className="card srv-detail">
+                <CascadeRoute cascade={selectedItem.cascade} entry={selectedItem.entry} exit={selectedItem.exit}
+                  onOpen={select} onCheck={() => setWizard({ resume: selectedItem.cascade })} />
+                <p className="muted">{t('Узлы каскада недоступны. Откройте ход установки или обновите список.')}</p>
+              </div>
             ) : (
               <div className="card srv-detail muted">{t('Ничего не найдено')}</div>
             )}
