@@ -4,6 +4,21 @@ All notable changes to Amnezia Control are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.82.3] - 2026-11-01
+
+### Security
+- Pin XRay and cascade images to 26.10.31, whose default listener disables
+  MPTCP to reduce exposure to Linux kernel CVE-2026-98432. Also disable MPTCP
+  through GODEBUG and, where supported, the standalone container namespace.
+- Refresh cascade geo-validation startup scripts with the same opt-out.
+
+### Upgrade notes
+- Older REALITY clients without the X25519MLKEM768 key share may need a client
+  application update. Existing UUIDs, keys and configuration files can be kept.
+- The host kernel vulnerability still requires a patched kernel. MPTCP opt-out
+  is a mitigation, not a kernel fix. Updating the panel alone does not replace
+  existing VPN containers or restart their listeners.
+
 ## [0.82.2] - 2026-11-01
 
 ### Fixed
