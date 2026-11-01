@@ -14,6 +14,10 @@ All notable changes to Amnezia Control are documented here. The format is based 
 - Preserve node selection across refreshes and browser navigation. Removing a
   cascade restores separate server entries.
 
+### Security
+- Remove the build-only Python installer and its vendored libraries from the
+  backend runtime image. Block CI on fixable high or critical image findings.
+
 ## [0.82.3] - 2026-11-01
 
 ### Security

@@ -10,6 +10,12 @@ RUN pip install --no-cache-dir --require-hashes -r requirements.lock
 COPY app ./app
 RUN pip install --no-cache-dir --no-deps .
 
+# The running panel needs only its installed dependencies, not the installer or
+# its vendored libraries or bootstrap wheel. Keep build-only packages out of the
+# runtime image.
+RUN python -m pip uninstall --yes pip \
+    && python -c "import pathlib, shutil, sysconfig; shutil.rmtree(pathlib.Path(sysconfig.get_path('stdlib')) / 'ensurepip')"
+
 COPY alembic.ini ./
 COPY alembic ./alembic
 

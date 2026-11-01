@@ -60,10 +60,9 @@ jobs:
       - name: Build backend image
         run: docker build -t acontrol-backend ./backend
       - name: Trivy scan (backend image)
-        continue-on-error: true # отчёт по CVE в образе, не блокирует
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           image-ref: acontrol-backend
           severity: HIGH,CRITICAL
           ignore-unfixed: true
-          exit-code: "0"
+          exit-code: "1"
