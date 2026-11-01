@@ -1339,11 +1339,18 @@ export function ServersPage({ onUnauthorized }: Props) {
                             {cas ? (
                               <span className="srv-item-name">
                                 <span className="srv-item-kind">{t('Каскад')} · {cas.transport === 'gre' ? 'GRE' : 'VLESS'}</span>
-                                <span>{countryFlag(item.entry?.country || '')} {item.entry?.name || cas.entry_ip} → {countryFlag(item.exit?.country || '')} {item.exit?.name || cas.exit_ip}</span>
+                                <span className="srv-cascade-node">
+                                  <span className="server-flag" title={item.entry?.country}>{countryFlag(item.entry?.country || '')}</span>
+                                  <span>{item.entry?.name || cas.entry_ip}</span>
+                                </span>
+                                <span className="srv-cascade-node">
+                                  <span className="server-flag" title={item.exit?.country}>{countryFlag(item.exit?.country || '')}</span>
+                                  <span>{item.exit?.name || cas.exit_ip}</span>
+                                </span>
                               </span>
                             ) : s && <>
                               {countryFlag(s.country) && <span className="server-flag" title={s.country}>{countryFlag(s.country)}</span>}
-                              {s.egress_ip && <span className="srv-item-route" title={t('выход в интернет: {ip}', { ip: s.egress_ip })}>→ {countryFlag(s.egress_country) || '?'}</span>}
+                              {s.egress_ip && <span className="srv-item-route" title={t('выход в интернет: {ip}', { ip: s.egress_ip })}>→ <span className="server-flag">{countryFlag(s.egress_country) || '?'}</span></span>}
                               <span className="srv-item-name">{s.name}</span>
                               <GreBadge server={s} />
                             </>}

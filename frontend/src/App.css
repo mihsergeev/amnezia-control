@@ -713,6 +713,7 @@ input:focus {
   font-size: 1.45rem;
   line-height: 1;
   margin-right: 0.1rem;
+  flex-shrink: 0;
 }
 
 .chip {
@@ -887,6 +888,25 @@ input:focus {
   color: #ff9b8f;
 }
 
+/* Навигация получает свою строку раньше, чем включается компактный логотип. */
+@media (max-width: 1000px) {
+  .header {
+    flex-wrap: wrap;
+  }
+
+  .topnav {
+    order: 3;
+    width: 100%;
+    min-width: 0;
+    margin-left: 0;
+    overflow-x: auto;
+  }
+
+  .topnav .navlink {
+    flex-shrink: 0;
+  }
+}
+
 /* мобильная шапка: логотип меньше, навигация переносится на свою строку */
 @media (max-width: 680px) {
   .page {
@@ -911,11 +931,7 @@ input:focus {
     display: none;
   }
   .topnav {
-    order: 3;
-    width: 100%;
-    margin-left: 0;
-    justify-content: center;
-    overflow-x: auto;
+    justify-content: safe center;
   }
   .header-right {
     gap: 0.4rem;
@@ -1943,6 +1959,7 @@ button.linklike.srv-filter-only:hover {
 /* ---------- страница серверов: список слева, выбранный сервер справа ---------- */
 .srv-split {
   display: grid;
+  min-width: 0;
   /* список по ширине самых длинных имен (до 460px), дальше имя переносится */
   grid-template-columns: fit-content(460px) minmax(0, 1fr);
   gap: 0.9rem;
@@ -1950,7 +1967,8 @@ button.linklike.srv-filter-only:hover {
 }
 
 .srv-side {
-  min-width: 280px;
+  min-width: 0;
+  max-width: 100%;
   background: var(--bg-card);
   border: 1px solid var(--border);
   border-radius: 14px;
@@ -1969,10 +1987,12 @@ button.linklike.srv-filter-only:hover {
   gap: 0.5rem;
   padding: 0.7rem;
   border-bottom: 1px solid var(--border);
+  min-width: 0;
 }
 
 .srv-search {
   width: 100%;
+  min-width: 0;
 }
 
 .srv-side-chips {
@@ -2019,6 +2039,11 @@ button.srv-fchip.on.bad {
 .srv-side-list {
   overflow-y: auto;
   padding: 0.3rem 0 0.5rem;
+  min-width: 0;
+}
+
+.srv-side-group {
+  min-width: 0;
 }
 
 .srv-side-empty {
@@ -2032,6 +2057,7 @@ button.srv-item {
   align-items: center;
   gap: 0.5rem;
   width: 100%;
+  min-width: 0;
   background: transparent;
   box-shadow: none;
   border: none;
@@ -2114,6 +2140,7 @@ button.srv-side-gh:hover .drag-handle {
   font-weight: 600;
   line-height: 1.25;
   overflow-wrap: anywhere;
+  white-space: normal;
 }
 
 .srv-item-name > span {
@@ -2125,6 +2152,20 @@ button.srv-side-gh:hover .drag-handle {
   font-size: 0.73rem;
   font-weight: 400;
   margin-bottom: 0.15rem;
+}
+
+.srv-item-name > .srv-cascade-node {
+  display: grid;
+  grid-template-columns: 1.1rem minmax(0, 1fr);
+  align-items: start;
+  gap: 0.3rem;
+  margin-top: 0.15rem;
+  min-width: 0;
+}
+
+.srv-cascade-node > span:last-child {
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 /* «→ 🇫🇮» в строке списка: нода - вход каскада, клиенты выходят в другой стране */
@@ -2255,6 +2296,13 @@ button.srv-side-gh:hover .drag-handle {
   border: 1px solid var(--border);
   border-radius: 10px;
   line-height: 1.3;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.srv-hop-text {
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .srv-hop-exit {
@@ -2430,7 +2478,7 @@ button.srv-hop-selected {
 
 @media (max-width: 900px) {
   .srv-split {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
   }
 
   .srv-side {
@@ -2832,25 +2880,39 @@ tr.row-link:hover td {
 }
 
 /* ---------- проверка канала каскада: путь трафика, прогресс, шаги ---------- */
+.cc {
+  container-type: inline-size;
+}
+
 .cc-route {
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 1.5rem minmax(0, 2fr) 1.5rem minmax(0, 2fr);
   align-items: center;
   gap: 0;
-  overflow-x: auto;
   padding: 0.4rem 0 0.2rem;
+}
+
+.cc-route-cascade {
+  grid-template-columns: minmax(0, 1fr) 1.5rem minmax(0, 2fr) 2.75rem minmax(0, 2fr) 1.5rem minmax(0, 1fr);
 }
 
 .cc-node {
   display: flex;
   align-items: center;
   gap: 0.5rem;
-  flex: none;
+  min-width: 0;
+  overflow-wrap: anywhere;
   padding: 0.45rem 0.7rem;
   border: 1px solid var(--border);
   border-radius: 10px;
   line-height: 1.3;
   font-size: 0.85rem;
   transition: border-color 0.25s, background 0.25s;
+}
+
+.cc-node > div {
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .cc-node-plain {
@@ -2876,6 +2938,10 @@ tr.row-link:hover td {
   border-radius: 2px;
   background: var(--hover);
   transition: background 0.25s;
+}
+
+.cc-route > .cc-link {
+  min-width: 0;
 }
 
 .cc-link .tun-badge {
@@ -2949,6 +3015,51 @@ tr.row-link:hover td {
   align-items: center;
   gap: 0.6rem;
   font-size: 0.9rem;
+  flex-wrap: wrap;
+}
+
+.cc-step > span:not(.cc-icon) {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.cc-step > span:nth-child(2) {
+  flex: 1;
+}
+
+@container (max-width: 560px) {
+  .cc-route {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .cc-node {
+    justify-content: center;
+  }
+
+  .cc-link {
+    justify-self: center;
+    width: 4px;
+    height: 1.5rem;
+    margin: 0.2rem 0;
+  }
+
+  .cc-link .tun-badge {
+    left: 12px;
+    top: 50%;
+    bottom: auto;
+    transform: translateY(-50%);
+  }
+
+  .cc-link-run {
+    background-image: repeating-linear-gradient(180deg, #3563e9 0 10px, #3563e933 10px 20px);
+    background-size: 4px 40px;
+    animation-name: cc-flow-down;
+  }
+}
+
+@keyframes cc-flow-down {
+  from { background-position: 0 0; }
+  to { background-position: 0 40px; }
 }
 
 .cc-step-wait {
