@@ -115,11 +115,20 @@ function GreBadge({ server, withRemote }: { server: Server; withRemote?: boolean
 function CascadeNodeName({ node }: { node: ServerRouteNode }) {
   const name = cascadeNameParts(node.name)
   return <span className="srv-cascade-node" title={`${node.name}: ${node.host}`}>
-    <span className="server-flag" title={node.country}>{countryFlag(node.country)}</span>
-    <span className="srv-cascade-label">
-      <span className="srv-cascade-primary">{name.primary}</span>
-      {name.suffix && <span className="srv-cascade-suffix">{name.suffix}</span>}
-    </span>
+    {countryFlag(node.country) && <span className="server-flag" title={node.country}>{countryFlag(node.country)}</span>}
+    <span className="srv-cascade-primary">{name.primary}</span>
+  </span>
+}
+
+function CascadeListName({ route }: { route: NonNullable<ReturnType<typeof serverListRoute>> }) {
+  const { lang } = useI18n()
+  const country = /^[A-Z]{2}$/.test(route.exit.country)
+    ? new Intl.DisplayNames([lang], { type: 'region' }).of(route.exit.country) : ''
+  return <span className="srv-item-name srv-cascade-name">
+    <CascadeNodeName node={route.entry} />
+    <span className="srv-cascade-arrow" aria-hidden="true">→</span>
+    <CascadeNodeName node={route.exit} />
+    {country && <span className="srv-cascade-country" title={country}>{country}</span>}
   </span>
 }
 
@@ -1365,11 +1374,7 @@ export function ServersPage({ onUnauthorized }: Props) {
                             )}
                             <ListStatusDot item={item} />
                             {route ? (
-                              <span className="srv-item-name srv-cascade-name">
-                                <CascadeNodeName node={route.entry} />
-                                <span className="srv-cascade-arrow" aria-hidden="true">→</span>
-                                <CascadeNodeName node={route.exit} />
-                              </span>
+                              <CascadeListName route={route} />
                             ) : s && <>
                               {countryFlag(s.country) && <span className="server-flag" title={s.country}>{countryFlag(s.country)}</span>}
                               {s.egress_ip && <span className="srv-item-route" title={t('выход в интернет: {ip}', { ip: s.egress_ip })}>→ <span className="server-flag">{countryFlag(s.egress_country) || '?'}</span></span>}

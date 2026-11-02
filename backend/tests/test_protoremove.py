@@ -12,7 +12,7 @@ import sys
 import pytest
 from sqlalchemy import select
 
-from app import awg, deploy, expiry, nodelock, pausestore, protoremove, sshops
+from app import awg, cascade_alias, deploy, expiry, nodelock, pausestore, protoremove, sshops
 from app.models import AwgConfig, AwgNote, ClientLimit, ClientName, PausedClient, Server
 
 
@@ -117,7 +117,12 @@ async def test_api_remove_cleans_only_that_protocol(
     client, auth_headers, session_factory, monkeypatch
 ):
     sid = await _server(client, auth_headers)
+    route = {"transport": "vless", "security": "reality", "network": "tcp",
+             "exit_host": "203.0.113.20", "exit_port": 443}
     async with session_factory() as s:
+        server = await s.get(Server, sid)
+        server.last_check_info = json.dumps({"manual_cascade": route | {"exit_country": "KZ"}})
+        await cascade_alias.set_name(s, server, "vpn-exit (transit)")
         for proto in ("awglegacy", "awg"):
             s.add(AwgConfig(server_id=sid, public_key=f"K-{proto}", name="x",
                             config="[Interface]", protocol=proto))
@@ -137,7 +142,8 @@ async def test_api_remove_cleans_only_that_protocol(
     async def probe(conn):
         return sshops.CheckResult(ok=True, docker=True, containers=["amnezia-awg2"],
                                   amnezia_containers=["amnezia-awg2"],
-                                  protocols={"amnezia-awg2": "awg2"})
+                                  protocols={"amnezia-awg2": "awg2"},
+                                  manual_cascade=dict(route))
 
     monkeypatch.setattr(protoremove, "remove", remove)
     monkeypatch.setattr(sshops, "probe_containers", probe)
@@ -152,7 +158,10 @@ async def test_api_remove_cleans_only_that_protocol(
             rows = list(await s.scalars(select(model).where(model.server_id == sid)))
             assert [r.protocol for r in rows] == ["awg"], model.__name__
         srv = await s.get(Server, sid)
-        assert json.loads(srv.last_check_info)["amnezia_containers"] == ["amnezia-awg2"]
+        info = json.loads(srv.last_check_info)
+        assert info["amnezia_containers"] == ["amnezia-awg2"]
+        assert info["manual_cascade"]["exit_name"] == "vpn-exit (transit)"
+        assert info["manual_cascade"]["exit_country"] == "KZ"
 
 
 async def test_bulk_revoke_groups_by_node_and_protocol(

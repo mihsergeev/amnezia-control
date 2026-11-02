@@ -1960,7 +1960,7 @@ button.linklike.srv-filter-only:hover {
 .srv-split {
   display: grid;
   min-width: 0;
-  /* список по ширине самых длинных имен (до 460px), дальше имя переносится */
+  /* Fit the list to its labels and keep room for the selected server. */
   grid-template-columns: fit-content(460px) minmax(0, 1fr);
   gap: 0.9rem;
   align-items: start;
@@ -2042,6 +2042,7 @@ button.srv-fchip.on.bad {
 
 .srv-side-list {
   overflow-y: auto;
+  overflow-x: hidden;
   padding: 0.3rem 0 0.5rem;
   min-width: 0;
 }
@@ -2143,35 +2144,28 @@ button.srv-side-gh:hover .drag-handle {
   min-width: 0;
   font-weight: 600;
   line-height: 1.25;
-  overflow-wrap: anywhere;
-  white-space: normal;
-}
-
-.srv-item-name > span {
-  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .srv-cascade-name {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  display: flex;
   align-items: center;
   gap: 0.22rem;
-  white-space: nowrap;
-  overflow-wrap: normal;
 }
 
-.srv-item-name > .srv-cascade-node {
+.srv-cascade-node {
   display: flex;
+  flex: 0 1 auto;
   align-items: center;
   gap: 0.22rem;
   min-width: 0;
 }
 
-.srv-cascade-node > .srv-cascade-label {
-  display: flex;
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
+.srv-cascade-node > .server-flag,
+.srv-cascade-arrow {
+  flex: 0 0 auto;
 }
 
 .srv-cascade-primary {
@@ -2182,21 +2176,15 @@ button.srv-side-gh:hover .drag-handle {
   white-space: nowrap;
 }
 
-.srv-cascade-suffix {
+.srv-cascade-country {
   flex: 0 100000 auto;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
-  white-space: pre;
+  white-space: nowrap;
   color: var(--text-muted);
   font-weight: 400;
-}
-
-.srv-cascade-node > span:last-child {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  font-size: 0.78rem;
 }
 
 .srv-cascade-arrow {
@@ -2215,6 +2203,7 @@ button.srv-side-gh:hover .drag-handle {
 
 .srv-item-cl {
   flex-shrink: 0;
+  margin-left: auto;
   color: var(--text-muted);
   font-size: 0.78rem;
   font-variant-numeric: tabular-nums;

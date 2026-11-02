@@ -1,9 +1,7 @@
-import json
-
 import asyncssh
 from fastapi import APIRouter, HTTPException, Request, status
 
-from app import audit, nodelock, protoremove, sshops, stepup
+from app import audit, nodelock, protoremove, server_ops, sshops, stepup
 from app.config import get_settings
 from app.deps import CurrentUser, SessionDep
 from app.models import Server
@@ -115,7 +113,7 @@ async def remove_protocol(
     # клиенты в панели записаны под обоими ключами
     await protoremove.cleanup_db(session, server.id, {protocol, res.kind})
     if check is not None and check.docker:
-        server.last_check_info = json.dumps(check.as_dict(), ensure_ascii=False)
+        await server_ops.store_check_info(session, server, check.as_dict())
     await session.commit()
     await audit.record(
         session, user.username, "protocol_remove", server.name,

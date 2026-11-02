@@ -60,6 +60,31 @@ def apply_egress(server: Server, desc: dict[str, str] | None, now: datetime) -> 
             setattr(server, k, v)
 
 
+async def store_check_info(session: AsyncSession, server: Server, info: dict) -> None:
+    """Persist runtime metadata with the endpoint's user label and geography.
+
+    Every check writer uses this path. The runtime probe deliberately omits
+    labels/geography; writing its raw output would erase those display fields.
+    The caller owns the transaction.
+    """
+    info = dict(info)
+    peer = info.get("manual_cascade")
+    if isinstance(peer, dict):
+        peer = dict(peer)
+        info["manual_cascade"] = peer
+        peer.pop("exit_country", None)
+        if cascade_alias._endpoint(server, info) is not None:
+            previous = cascade_alias.check_info(server).get("manual_cascade", {})
+            code = ""
+            if isinstance(previous, dict) and previous.get("exit_host") == peer["exit_host"]:
+                code = previous.get("exit_country", "")
+            if not isinstance(code, str) or len(code) != 2 or not code.isascii() or not code.isalpha():
+                code = await geo.country_code(peer["exit_host"])
+            if isinstance(code, str) and len(code) == 2 and code.isascii() and code.isalpha():
+                peer["exit_country"] = code.upper()
+    server.last_check_info = json.dumps(await cascade_alias.merge(session, server, info), ensure_ascii=False)
+
+
 async def run_check(session: AsyncSession, server: Server, settings: Settings) -> None:
     ensure_panel_key(settings.data_dir)
     key_path, _pub = key_paths(settings.data_dir)
@@ -73,19 +98,7 @@ async def run_check(session: AsyncSession, server: Server, settings: Settings) -
     now = datetime.now(timezone.utc)
     server.last_check_ok = result.ok
     server.last_check_at = now
-    info = result.as_dict()
-    peer = info.get("manual_cascade")
-    if peer:
-        previous = cascade_alias.check_info(server).get("manual_cascade", {})
-        code = ""
-        if isinstance(previous, dict) and previous.get("exit_host") == peer["exit_host"]:
-            code = previous.get("exit_country", "")
-        if not isinstance(code, str) or len(code) != 2 or not code.isascii() or not code.isalpha():
-            code = await geo.country_code(peer["exit_host"])
-        if isinstance(code, str) and len(code) == 2 and code.isascii() and code.isalpha():
-            peer["exit_country"] = code.upper()
-    info = await cascade_alias.merge(session, server, info)
-    server.last_check_info = json.dumps(info, ensure_ascii=False)
+    await store_check_info(session, server, result.as_dict())
     if result.ok and result.amnezia_containers:
         egress = None
         try:
