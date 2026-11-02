@@ -5,7 +5,7 @@ from fastapi import APIRouter, HTTPException, status
 from sqlalchemy import delete as sa_delete
 from sqlalchemy import func, select, update as sa_update
 
-from app import audit, cascade_alias, cascadejob, egresscheck, geo, limits, nodelock, server_ops, sshops, torrent
+from app import audit, cascade_alias, cascadejob, egresscheck, geo, limits, native_snapshots, nodelock, server_ops, sshops, torrent
 from app.config import get_settings
 from app.db import Base
 from app.deps import CurrentUser, SessionDep
@@ -238,6 +238,7 @@ async def delete_server(
             (Cascade.entry_server_id == server_id) | (Cascade.exit_server_id == server_id)
         )
     )
+    await native_snapshots.delete_server(session, server_id)
     await session.delete(server)
     await session.commit()
     await audit.record(

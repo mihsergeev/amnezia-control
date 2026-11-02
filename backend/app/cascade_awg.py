@@ -69,25 +69,32 @@ RUNTIME = r'''#!/bin/bash
 set -eu
 BASE=@BASE@
 CONT=@CONT@
-IF=acawg
+IF=@IF@
+SCOPED_EXIT=@SCOPED_EXIT@
+EXPECTED_OWNER=@OWNER@
 LABEL=@LABEL@
 die() { echo 'AWG operation refused or failed' >&2; exit 1; }
 DOCKER_BIN=$(command -v docker)
 docker() { timeout 15s "$DOCKER_BIN" "$@"; }
-exec 9>/run/acontrol-cascade-awg.lock
+exec 9>@LOCK@
 flock -x -w 5 9 || die
 [ -f "$BASE/node.env" ] || die
 . "$BASE/node.env"
+[ "$SCOPED_EXIT" != yes ] || [ "$ROLE" = exit ] || die
 owner() {
-  [ ! -e /lib65/scripts/acontrol-awg-link/node.json ] || return 1
-  [ ! -e /etc/systemd/system/acontrol-awg-link.service ] || return 1
-  L=$(docker inspect -f '{{ index .Config.Labels "@LABEL@" }}' "$CONT" 2>/dev/null || true)
-  if docker inspect "$CONT" >/dev/null 2>&1; then
+  if [ "$SCOPED_EXIT" != yes ]; then
+    [ ! -e /lib65/scripts/acontrol-awg-link/node.json ] || return 1
+    [ ! -e /etc/systemd/system/acontrol-awg-link.service ] || return 1
+  fi
+  L=$(docker container inspect -f '{{ index .Config.Labels "@LABEL@" }}' "$CONT" 2>/dev/null || true)
+  if docker container inspect "$CONT" >/dev/null 2>&1; then
     [ "$L" = "$CID" ] || return 1
+    [ -z "$EXPECTED_OWNER" ] || [ "$(docker container inspect -f '{{ index .Config.Labels "org.amnezia.control.owner" }}' "$CONT")" = "$EXPECTED_OWNER" ] || return 1
   fi
   if ip link show "$IF" >/dev/null 2>&1; then
     [ "$L" = "$CID" ] || return 1
-    if [ "$(docker inspect -f '{{.State.Running}}' "$CONT")" = true ]; then
+    [ "$(docker container inspect -f '{{.State.Running}}' "$CONT")" = true ] || return 1
+    if [ "$(docker container inspect -f '{{.State.Running}}' "$CONT")" = true ]; then
       PUB=$(docker exec "$CONT" awg show "$IF" public-key 2>/dev/null || true)
       if [ "$PUB" != "$PUBLIC" ]; then
         # A restarted own userspace device is initially unconfigured.
@@ -99,6 +106,10 @@ owner() {
 }
 rule() { table=$1; chain=$2; shift 2; iptables -w -t "$table" -C "$chain" "$@" 2>/dev/null || iptables -w -t "$table" -I "$chain" 1 "$@"; }
 unrule() { table=$1; chain=$2; shift 2; while iptables -w -t "$table" -C "$chain" "$@" 2>/dev/null; do iptables -w -t "$table" -D "$chain" "$@"; done; }
+remove_container() {
+  RESULT=$(docker rm -f "$CONT" 2>&1) && return 0
+  case "$RESULT" in *'No such container:'*|*'No such object:'*) return 0;; *) die;; esac
+}
 guard() {
   if [ "$ROLE" = entry ]; then
     # Install the kill switch before touching routes or the device.
@@ -116,17 +127,17 @@ NFT
 up() {
   guard
   owner || die
-  if ! docker inspect "$CONT" >/dev/null 2>&1; then
+  if ! docker container inspect "$CONT" >/dev/null 2>&1; then
     # A host listener cannot be a Docker port publisher with host networking.
     [ -z "$(ss -lnuH "sport = :$PORT")" ] || die
-    docker run -d --name "$CONT" --label "$LABEL=$CID" --restart always --network host \
+    docker run -d --name "$CONT" --label "$LABEL=$CID" @OWNER_LABEL@ --restart always --network host \
       --cap-drop ALL --cap-add NET_ADMIN --device /dev/net/tun \
       --read-only --tmpfs /run --tmpfs /tmp --security-opt no-new-privileges:true \
       --log-opt max-size=10m --log-opt max-file=2 -e GODEBUG=multipathtcp=0 \
       -v "$BASE:/etc/acontrol-awg:ro" --entrypoint /usr/bin/amneziawg-go \
       @IMAGE@ -f "$IF" >/dev/null 2>&1 || die
   else
-    if [ "$(docker inspect -f '{{.State.Running}}' "$CONT")" != true ]; then
+    if [ "$(docker container inspect -f '{{.State.Running}}' "$CONT")" != true ]; then
       ip link delete "$IF" 2>/dev/null || true
     fi
     docker start "$CONT" >/dev/null 2>&1 || die
@@ -188,7 +199,7 @@ status() {
 down() {
   owner || die
   # Caller stops interception first. Never remove another owner's interface.
-  docker rm -f "$CONT" >/dev/null 2>&1 || true
+  remove_container
   ip link delete "$IF" 2>/dev/null || true
   ip route del "$PEER_INNER/32" dev "$IF" 2>/dev/null || true
   unrule filter INPUT -p udp -s "$PEER" --dport "$PORT" -j ACCEPT
@@ -209,9 +220,17 @@ down() {
   fi
   if command -v ufw >/dev/null; then ufw --force delete allow from "$PEER" to any port "$PORT" proto udp >/dev/null 2>&1 || true; fi
 }
+recreate() {
+  guard
+  owner || die
+  remove_container
+  ip link delete "$IF" 2>/dev/null || true
+  up
+}
 case "${1:-}" in
   guard) guard; owner || die ;;
   up|heal) up ;;
+  recreate) recreate ;;
   status) status ;;
   down) down ;;
   *) die ;;
@@ -219,9 +238,31 @@ esac
 '''
 
 
-def runtime_script() -> str:
+def resources(cascade_id: int | None = None) -> dict[str, str]:
+    if cascade_id is None:
+        return dict(base=BASE, script=SCRIPT, container=CONTAINER, interface=INTERFACE,
+                    unit=UNIT, timer=TIMER, heal="acontrol-cascade-awg-heal.service",
+                    lock="/run/acontrol-cascade-awg.lock")
+    if not 0 < cascade_id <= 2147483647:
+        raise ValueError("Invalid cascade id")
+    stem = f"acontrol-cascade-exit-{cascade_id}"
+    base = f"/lib65/scripts/acontrol-cascade-exits/{cascade_id}"
+    return dict(base=base, script=base + "/awg.sh", container=stem + "-awg",
+                interface=f"acax{cascade_id:x}", unit=stem + ".service",
+                timer=stem + "-heal.timer", heal=stem + "-heal.service",
+                lock=f"/run/{stem}.lock")
+
+
+def runtime_script(cascade_id: int | None = None, owner: str = "") -> str:
+    if owner and (len(owner) != 32 or any(c not in "0123456789abcdef" for c in owner)):
+        raise ValueError("Invalid cascade owner")
+    paths = resources(cascade_id)
     text = RUNTIME
-    for key, value in {"BASE": BASE, "CONT": CONTAINER, "LABEL": LABEL, "IMAGE": IMAGE}.items():
+    for key, value in {"BASE": paths["base"], "CONT": paths["container"], "LABEL": LABEL,
+                       "IMAGE": IMAGE, "IF": paths["interface"], "LOCK": paths["lock"],
+                       "SCOPED_EXIT": "yes" if cascade_id is not None else "no",
+                       "OWNER": shlex.quote(owner), "OWNER_LABEL":
+                       f"--label org.amnezia.control.owner={owner}" if owner else ""}.items():
         text = text.replace(f"@{key}@", value)
     return text
 
@@ -231,23 +272,35 @@ def foreign_guard() -> str:
     return (
         "if sudo test -e /etc/systemd/system/acontrol-awg-link.service "
         "|| sudo test -e /lib65/scripts/acontrol-awg-link/node.json "
-        "|| sudo docker inspect acontrol-awg-link >/dev/null 2>&1 "
+        "|| sudo docker container inspect acontrol-awg-link >/dev/null 2>&1 "
         "|| ip -d tunnel show acgre 2>/dev/null | grep -q 'dev acawg'; then "
         "echo 'CASCADE_EXTERNAL_UNDERLAY'; exit 73; fi\n"
     )
 
 
-def preflight_command(cascade_id: int | None = None) -> str:
+def preflight_command(cascade_id: int | None = None, *, scoped_exit: bool = False) -> str:
+    if scoped_exit:
+        paths = resources(cascade_id)
+        base, cont, iface = paths["base"], paths["container"], paths["interface"]
+        return f'''if sudo test -L {base} || sudo test -L {base}/node.env; then exit 73; fi
+L=$(sudo docker container inspect -f '{{{{ index .Config.Labels "{LABEL}" }}}}' {cont} 2>/dev/null || true)
+if sudo test -f {base}/node.env && ! {{ sudo grep -qx 'CID={cascade_id}' {base}/node.env && sudo grep -qx 'ROLE=exit' {base}/node.env; }}; then exit 73; fi
+if ! sudo test -f {base}/node.env && {{ sudo docker container inspect {cont} >/dev/null 2>&1 || ip link show {iface} >/dev/null 2>&1; }}; then exit 73; fi
+if sudo docker container inspect {cont} >/dev/null 2>&1 && [ "$L" != "{cascade_id}" ]; then exit 73; fi
+if ip link show {iface} >/dev/null 2>&1 && [ "$L" != "{cascade_id}" ]; then exit 73; fi
+echo CASCADE_AVAILABLE
+'''
     cid = str(cascade_id or "")
-    return foreign_guard() + f'''L=$(sudo docker inspect -f '{{{{ index .Config.Labels "{LABEL}" }}}}' {CONTAINER} 2>/dev/null || true)
+    return foreign_guard() + f'''L=$(sudo docker container inspect -f '{{{{ index .Config.Labels "{LABEL}" }}}}' {CONTAINER} 2>/dev/null || true)
 if sudo test -f {BASE}/node.env && ! sudo grep -qx 'CID={cid}' {BASE}/node.env; then echo CASCADE_CONFLICT; exit 73; fi
+if ! sudo test -f {BASE}/node.env && {{ sudo docker container inspect {CONTAINER} >/dev/null 2>&1 || ip link show {INTERFACE} >/dev/null 2>&1; }}; then echo CASCADE_CONFLICT; exit 73; fi
 OWNED=no
 if [ -n "{cid}" ] && sudo test -f {BASE}/node.env && sudo grep -qx 'CID={cid}' {BASE}/node.env; then OWNED=yes; fi
-if sudo docker inspect {CONTAINER} >/dev/null 2>&1 && {{ [ -z "{cid}" ] || [ "$L" != "{cid}" ]; }}; then echo CASCADE_CONFLICT; exit 73; fi
+if sudo docker container inspect {CONTAINER} >/dev/null 2>&1 && {{ [ -z "{cid}" ] || [ "$L" != "{cid}" ]; }}; then echo CASCADE_CONFLICT; exit 73; fi
 if ip link show {INTERFACE} >/dev/null 2>&1 && {{ [ -z "{cid}" ] || [ "$L" != "{cid}" ]; }}; then echo CASCADE_CONFLICT; exit 73; fi
 if ip link show acgre >/dev/null 2>&1; then echo CASCADE_CONFLICT; exit 73; fi
-if sudo docker inspect xray-cascade >/dev/null 2>&1; then echo CASCADE_CONFLICT; exit 73; fi
-if [ "$OWNED" != yes ] && {{ sudo docker inspect acontrol-cascade >/dev/null 2>&1 || sudo docker inspect acontrol-cascade-exit >/dev/null 2>&1 || sudo test -e /etc/default/acontrol-gre; }}; then echo CASCADE_CONFLICT; exit 73; fi
+if sudo docker container inspect xray-cascade >/dev/null 2>&1; then echo CASCADE_CONFLICT; exit 73; fi
+if [ "$OWNED" != yes ] && {{ sudo docker container inspect acontrol-cascade >/dev/null 2>&1 || sudo docker container inspect acontrol-cascade-exit >/dev/null 2>&1 || sudo test -e /etc/default/acontrol-gre; }}; then echo CASCADE_CONFLICT; exit 73; fi
 if [ "$OWNED" != yes ] && {{ ip route show table 242 2>/dev/null | grep -q . || ip rule show | grep -Eq '^(1009|1010|1011):'; }}; then echo CASCADE_CONFLICT; exit 73; fi
 if [ "$OWNED" != yes ] && sudo nft list table inet ac_cascade_awg >/dev/null 2>&1; then echo CASCADE_CONFLICT; exit 73; fi
 echo CASCADE_AVAILABLE
@@ -255,7 +308,12 @@ echo CASCADE_AVAILABLE
 
 
 def install(role: str, peer_ip: str, cascade_id: int, params: dict,
-            entry_inner: str, exit_inner: str) -> list[str]:
+            entry_inner: str, exit_inner: str, *, scoped_exit: bool = False) -> list[str]:
+    if scoped_exit and role != "exit":
+        raise ValueError("Only exit resources may be shared")
+    paths = resources(cascade_id if scoped_exit else None)
+    BASE, SCRIPT, CONTAINER, INTERFACE, UNIT, TIMER = (paths[k] for k in
+        ("base", "script", "container", "interface", "unit", "timer"))
     peer_ip = str(ipaddress.IPv4Address(peer_ip))
     params = params | {"entry_inner": entry_inner, "exit_inner": exit_inner}
     peer_role = "exit" if role == "entry" else "entry"
@@ -290,11 +348,12 @@ Description=Check encrypted cascade link
 [Timer]
 OnBootSec=20
 OnUnitActiveSec=20
-Unit=acontrol-cascade-awg-heal.service
+Unit=@HEAL@
 [Install]
 WantedBy=timers.target
 '''
-    lines = [preflight_command(cascade_id).replace("exit 73", "fail 'foreign cascade underlay'"),
+    timer = timer.replace("@HEAL@", paths["heal"])
+    lines = [preflight_command(cascade_id, scoped_exit=scoped_exit).replace("exit 73", "fail 'foreign cascade underlay'"),
              "if ! command -v nft >/dev/null 2>&1; then "
              "sudo apt-get update -qq && sudo apt-get install -y -qq nftables >/dev/null 2>&1 "
              "|| fail 'nftables is required for AWG'; fi",
@@ -302,24 +361,24 @@ WantedBy=timers.target
              "sudo install -d -m 755 /lib65/scripts",
              "EGRESS=$(ip -4 route show default | awk '/^default/ {print $5; exit}')",
              '[ -n "$EGRESS" ] || fail "AWG egress interface"',
-             _put(f"{BASE}/node.env", env),
-             f"printf 'EGRESS=%q\\n' \"$EGRESS\" | sudo tee -a {BASE}/node.env >/dev/null",
+             _put(f"{BASE}/node.env.next", env),
+             f"printf 'EGRESS=%q\\n' \"$EGRESS\" | sudo tee -a {BASE}/node.env.next >/dev/null",
+             f"sudo mv -f {BASE}/node.env.next {BASE}/node.env || fail 'AWG environment'",
              _put(f"{BASE}/link.conf", config(role, params)),
-             _put(SCRIPT, runtime_script(), "700"),
+             _put(SCRIPT, runtime_script(cascade_id if scoped_exit else None, params.get("runtime_owner", "")), "700"),
              _put(f"{BASE}/build/Dockerfile", deploy._dockerfile_v3()),
              _put(f"{BASE}/build/start.sh", "#!/bin/sh\nexit 1\n", "700"),
              f"BUILD={BASE}/build; IMG={IMAGE}; CONT={CONTAINER}",
              f"if ! sudo docker image inspect {IMAGE} >/dev/null 2>&1; then"]
     lines += ["  " + line for line in deploy._v3_build_lines(8)]
     lines += ["fi", _put(f"/etc/systemd/system/{UNIT}", unit, "644"),
-              _put("/etc/systemd/system/acontrol-cascade-awg-heal.service", heal, "644"),
+              _put(f"/etc/systemd/system/{paths['heal']}", heal, "644"),
               _put(f"/etc/systemd/system/{TIMER}", timer, "644"),
               "sudo systemctl daemon-reload",
               f"sudo systemctl enable {UNIT} {TIMER} >/dev/null 2>&1 || fail 'AWG enable'",
               f"sudo {SCRIPT} guard || fail 'AWG guard'",
               # Recreate only the owned userspace device, preserving its keys.
-              f"sudo docker rm -f {CONTAINER} >/dev/null 2>&1 || true",
-              f"sudo ip link delete {INTERFACE} 2>/dev/null || true",
+              f"sudo {SCRIPT} recreate || fail 'AWG recreate'",
               f"sudo systemctl restart {UNIT} || fail 'AWG start'",
               f"sudo systemctl start {TIMER} || fail 'AWG timer'",
               "if command -v ufw >/dev/null 2>&1; then "
@@ -332,15 +391,17 @@ WantedBy=timers.target
     return lines
 
 
-def remove(cascade_id: int) -> str:
+def remove(cascade_id: int, *, scoped_exit: bool = False) -> str:
+    paths = resources(cascade_id if scoped_exit else None)
+    BASE, SCRIPT, UNIT, TIMER = (paths[k] for k in ("base", "script", "unit", "timer"))
     # A failed first install may have no device yet. Ownership remains mandatory.
-    return (foreign_guard() + f'''
+    return ((preflight_command(cascade_id, scoped_exit=True) if scoped_exit else foreign_guard()) + f'''
 if sudo test -f {BASE}/node.env; then
   sudo grep -qx 'CID={int(cascade_id)}' {BASE}/node.env || exit 73
-  sudo systemctl disable --now {TIMER} acontrol-cascade-awg-heal.service {UNIT} >/dev/null 2>&1 || true
+  sudo systemctl disable --now {TIMER} {paths['heal']} {UNIT} >/dev/null 2>&1 || true
   sudo {SCRIPT} down || exit 73
   sudo rm -rf {BASE} || exit 73
-  sudo rm -f {SCRIPT} /etc/systemd/system/{UNIT} /etc/systemd/system/{TIMER} /etc/systemd/system/acontrol-cascade-awg-heal.service || exit 73
+  sudo rm -f {SCRIPT} /etc/systemd/system/{UNIT} /etc/systemd/system/{TIMER} /etc/systemd/system/{paths['heal']} || exit 73
   sudo systemctl daemon-reload
 fi
 ''')

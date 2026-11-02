@@ -4,8 +4,8 @@ import {
   ApiError,
   createCascade,
   getCascade,
-  inCascade,
   parseCheckInfo,
+  protocolsFromContainers,
   probeCascadeTransport,
   reinstallCascade,
   type Cascade,
@@ -21,6 +21,7 @@ import {
   type TransportProbeRow, type TransportProbeRows,
 } from './cascadeUi'
 import { CascadeSecurity } from './CascadeSecurity'
+import { cascadeServerEligible } from './serverList'
 import { useI18n } from './i18n'
 import { useModalDismiss } from './useModalDismiss'
 
@@ -173,8 +174,8 @@ export function CascadeWizard({
     return () => window.clearTimeout(timer.current)
   }, [cascade, pollTick, handleError, onChanged])
 
-  const candidates = (exclude: number | null) =>
-    all.filter((s) => s.id !== exclude && s.last_check_ok === true && !inCascade(s, cascades))
+  const candidates = (exclude: number | null, role: 'entry' | 'exit') =>
+    all.filter((s) => s.id !== exclude && s.last_check_ok === true && cascadeServerEligible(s, cascades, role))
 
   async function addServer(groupName: string): Promise<Server | null> {
     setBusy(true)
@@ -418,7 +419,7 @@ export function CascadeWizard({
   }
 
   function picker(kind: 'entry' | 'exit') {
-    const list = candidates(kind === 'exit' ? entryId : exitId)
+    const list = candidates(kind === 'exit' ? entryId : exitId, kind)
     const value = kind === 'entry' ? entryId : exitId
     const set = kind === 'entry' ? setEntryId : setExitId
     return (
@@ -461,7 +462,7 @@ export function CascadeWizard({
               </div>
             )}
             <p className="muted small">
-              {t('Серверы, которые уже входят в каскад или не на связи, в списке не показаны.')}
+              {kind === 'entry' ? t('Для входа показаны доступные серверы без других каскадов.') : t('Общий выход можно выбрать повторно. Серверы, уже используемые как вход, не показаны.')}
             </p>
           </>
         ) : script ? (
@@ -589,7 +590,7 @@ export function CascadeWizard({
             {steps}
             <p className="cas-lead">
               {t(
-                'Выход - сервер в другой стране, с его адреса клиенты будут выходить в интернет. Клиентов на нем не будет, можно взять пустой.',
+                'Выход - сервер, через который клиенты будут выходить в интернет. У него могут быть свои клиенты и другие входы каскадов.',
               )}
             </p>
             {picker('exit')}
@@ -703,10 +704,10 @@ export function CascadeWizard({
                 {t('Туннель и шлюз установлены как службы systemd')}
               </div>
             </div>
-            {entry && (parseCheckInfo(entry)?.amnezia_containers ?? []).length === 0 && (
+            {entry && protocolsFromContainers(parseCheckInfo(entry)?.amnezia_containers ?? [], parseCheckInfo(entry)?.protocols ?? {}).length === 0 && (
               <p className="muted small">
                 {t(
-                  'Протоколов для клиентов на входе пока нет. Развернуть AmneziaWG или XRay можно в карточке сервера, меню «Ещё».',
+                  'Протоколов для клиентов на входе пока нет. Развернуть клиентский VPN можно в карточке сервера, меню «Ещё».',
                 )}
               </p>
             )}

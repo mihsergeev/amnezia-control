@@ -16,6 +16,7 @@ import {
   protocolsFromContainers,
   reorderServers,
   type Cascade,
+  type DeployProtocol,
   type NodeMetric,
   type Overview,
   type PanelConfig,
@@ -628,7 +629,7 @@ export function ServersPage({ onUnauthorized }: Props) {
   const [deployFor, setDeployFor] = useState<{
     server: Server
     mode: 'deploy' | 'update' | 'adopt' | 'upgrade31'
-    protocol: 'awg' | 'awg3' | 'xray' | 'openvpn'
+    protocol: DeployProtocol
   } | null>(null)
   const [fullAccess, setFullAccess] = useState<{
     server: Server
@@ -1079,10 +1080,16 @@ export function ServersPage({ onUnauthorized }: Props) {
     }
     if (online && !protocols.some((p) => p.key === 'openvpn')) {
       items.push({
-        label: t('Развернуть OpenVPN / Cloak'),
+        label: t('Развернуть OpenVPN + Cloak'),
         onClick: () => setDeployFor({ server: s, mode: 'deploy', protocol: 'openvpn' }),
       })
     }
+    if (online && !protocols.some(p => p.key === 'wireguard')) items.push({
+      label: t('Развернуть WireGuard'), onClick: () => setDeployFor({ server: s, mode: 'deploy', protocol: 'wireguard' }),
+    })
+    if (online && !protocols.some(p => p.key === 'openvpn-native')) items.push({
+      label: t('Развернуть OpenVPN'), onClick: () => setDeployFor({ server: s, mode: 'deploy', protocol: 'openvpn-native' }),
+    })
     if (online && fullAccessSupported(info?.amnezia_containers ?? [])) {
       items.push({
         label: faBusyId === s.id ? t('Генерация…') : t('Полный доступ'),
@@ -1375,10 +1382,14 @@ export function ServersPage({ onUnauthorized }: Props) {
                               {countryFlag(s.country) && <span className="server-flag" title={s.country}>{countryFlag(s.country)}</span>}
                               {s.egress_ip && <span className="srv-item-route" title={t('выход в интернет: {ip}', { ip: s.egress_ip })}>→ <span className="server-flag">{countryFlag(s.egress_country) || '?'}</span></span>}
                               <span className="srv-item-name">{s.name}</span>
+                              {item.sharedExitCount > 1 && <span className="srv-shared-exit-tag" title={t('Общий выход для {n} каскадов', { n: item.sharedExitCount })}>{t('Выход')} · {item.sharedExitCount}</span>}
                               <GreBadge server={s} />
                             </>}
                             {st.available && (
-                              <span className="srv-item-cl" title={cas ? t('Клиенты входа и выхода: онлайн / всего') : t('онлайн / всего клиентов')}>
+                              <span className="srv-item-cl" title={cas
+                                ? item.exit && !item.countedMembers.some(s => s.id === item.exit!.id)
+                                  ? t('Клиенты входа: онлайн / всего') : t('Клиенты входа и выхода: онлайн / всего')
+                                : t('онлайн / всего клиентов')}>
                                 <b>{st.online}</b>/{st.total}
                               </span>
                             )}
@@ -1393,6 +1404,20 @@ export function ServersPage({ onUnauthorized }: Props) {
 
           <div className="srv-detail-wrap" ref={detailRef}>
             {selected ? (
+              <>
+              {selectedItem?.sharedExitCount > 1 && <div className="card srv-shared-exit-card">
+                <strong>{t('Общий выход для {n} каскадов', { n: selectedItem.sharedExitCount })}</strong>
+                <p className="muted small">{t('Клиенты этого сервера учитываются один раз. Выберите вход, чтобы открыть конкретный каскад.')}</p>
+                <div className="srv-shared-exit-links">
+                  {cascades.filter(c => c.exit_server_id === selected.id).map(c => {
+                    const entry = servers.find(s => s.id === c.entry_server_id)
+                    const item = listed.find(row => row.cascade?.id === c.id)
+                    return <button className="ghost" key={c.id} disabled={!item} onClick={() => item && selectItem(item, selected)}>
+                      {entry?.name || c.entry_ip} → {selected.name}
+                    </button>
+                  })}
+                </div>
+              </div>}
               <ServerDetail
                 server={selected}
                 metric={metrics[selected.id]}
@@ -1411,6 +1436,7 @@ export function ServersPage({ onUnauthorized }: Props) {
                 onCascadeCheck={setCasCheck}
                 onEgressCheck={() => setEgressCheck(selected)}
               />
+              </>
             ) : selectedItem?.cascade ? (
               <div className="card srv-detail">
                 <CascadeRoute cascade={selectedItem.cascade} entry={selectedItem.entry} exit={selectedItem.exit}
@@ -1870,6 +1896,9 @@ export function ServersPage({ onUnauthorized }: Props) {
                 'Панель уберет шлюз и туннель с обоих серверов. Клиенты входа останутся подключенными, но в интернет пойдут с адреса самого входа.',
               )}
             </p>
+            {cascades.some(c => c.id !== unbuild.c.id && c.exit_server_id === unbuild.c.exit_server_id) && <p className="muted small">
+              {t('Будет удален только выбранный каскад. Другие входы и собственные клиенты общего выхода сохраняются.')}
+            </p>}
             {unbuild.error && <p className="small err-text">{unbuild.error}</p>}
             <div className="modal-actions">
               <button className="ghost" onClick={() => setUnbuild(null)}>

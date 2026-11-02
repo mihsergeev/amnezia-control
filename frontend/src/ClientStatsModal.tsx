@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { ApiError, clientHistory, type ClientHistory } from './api'
+import { ApiError, clientHistory, type ClientHistory, type ClientProtocol } from './api'
 import { StackedAreaChart, type Series } from './charts/StackedAreaChart'
 import { deltasFromTotals, DOWN_COLOR, formatRate, toRate, UP_COLOR } from './charts/series'
 import { formatBytes } from './format'
@@ -8,7 +8,7 @@ import { useModalDismiss } from './useModalDismiss'
 
 type Props = {
   serverId: number
-  protocol: 'awg' | 'awg3' | 'awglegacy' | 'openvpn' | 'xray'
+  protocol: ClientProtocol
   clientId: string
   name: string
   onClose: () => void

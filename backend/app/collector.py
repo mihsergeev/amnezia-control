@@ -9,7 +9,7 @@ from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app import (
-    alerts, audit, awg, deploy, geo, nodestat, onlinedrop, openvpn, server_ops,
+    alerts, audit, awg, deploy, geo, native_vpn, nodestat, onlinedrop, openvpn, server_ops,
     settings_store, sshops, torrent, xray,
 )
 from app.config import Settings
@@ -185,6 +185,48 @@ async def _xray_part(conn, host) -> tuple[dict, list[dict]]:
             "parts": ["xray"], "known": [("xray", c.client_id) for c in clients]}, rows
 
 
+async def _native_part(conn, host) -> tuple[dict, list[dict]]:
+    totals = dict(_ZERO)
+    rows, parts, known, nets = [], [], [], []
+    now = datetime.now(timezone.utc).timestamp()
+    for protocol in native_vpn.PROTOCOLS:
+        try:
+            state = await native_vpn.state(conn, protocol, host)
+        except native_vpn.NativeNotDeployed:
+            continue
+        except Exception:
+            continue
+        parts.append(protocol)
+        ipmap = {}
+        for client in state["clients"]:
+            cid = client.get("public_key") or client["client_id"]
+            known.append((protocol, cid))
+            totals["total"] += 1
+            rx, tx = client.get("rx_bytes", 0), client.get("tx_bytes", 0)
+            totals["rx"] += rx
+            totals["tx"] += tx
+            connected = client.get("connected", False)
+            handshake = client.get("latest_handshake")
+            if handshake and 0 <= now - handshake < ONLINE_WINDOW:
+                connected = True
+            totals["online"] += int(connected)
+            rows.append({"protocol": protocol, "client_id": cid, "name": client["name"],
+                         "rx": rx, "tx": tx})
+            if client.get("address"):
+                ipmap[client["address"].split("/")[0]] = (cid, client["name"])
+        if protocol == "openvpn-native":
+            try:
+                raw = await openvpn.read_status_text(conn, state["container"])
+                names = {client["client_id"]: client["name"] for client in state["clients"]}
+                ipmap = {ip: (cid, names.get(cid, "")) for ip, cid in torrent.parse_ovpn_routes(raw).items()}
+            except Exception:
+                pass
+        nets.append({"container": state["container"], "protocol": protocol, "ips": ipmap})
+    if not parts:
+        raise native_vpn.NativeNotDeployed("Нативные протоколы не установлены")
+    return totals | {"parts": parts, "known": known, "nets": nets}, rows
+
+
 async def _sample_server(
     server: Server, key_path, timeout: int, hostkey_changed: set[int]
 ) -> dict | None:
@@ -202,7 +244,7 @@ async def _sample_server(
                 parts: set[str] = set()
                 known: list[tuple[str, str]] = []
                 nets: list[dict] = []
-                for part in (_awg_part, _openvpn_part, _xray_part):
+                for part in (_awg_part, _openvpn_part, _xray_part, _native_part):
                     try:
                         totals, cl = await part(conn, server.host)
                     except Exception:  # noqa: BLE001 — протокола нет / ошибка чтения

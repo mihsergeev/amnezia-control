@@ -10,6 +10,8 @@ import {
   type OvpnConfig,
   type OvpnCreated,
   type OvpnState,
+  type NativeClientConfig,
+  type NativeCreatedClient,
 } from './api'
 import { ExpiryCell, ExpirySelect } from './Expiry'
 import { BulkRevokeBar, SelectAllCell, SelectCell } from './BulkActions'
@@ -25,10 +27,12 @@ import { TorrentBadge } from './Torrent'
 import { useTorrentHits } from './useTorrentHits'
 import { translate, useI18n } from './i18n'
 import { useModalLayer } from './useModalDismiss'
+import { configFilename } from './clientExports'
 
 type Props = {
   serverId: number
   serverName: string
+  protocol?: 'openvpn' | 'openvpn-native'
   groupName?: string
   onUnauthorized: () => void
   onRequestUpdate?: () => void
@@ -36,17 +40,20 @@ type Props = {
   focusClient?: string | null
 }
 
-type ConfigView = { name: string; amnezia: string }
+type ConfigView = { name: string; text: string; native: boolean; filename?: string }
 
 export function OpenVpnClients({
   serverId,
   serverName,
+  protocol = 'openvpn',
   groupName = '',
   onUnauthorized,
   onRequestUpdate,
   focusClient,
 }: Props) {
   const { t } = useI18n()
+  const native = protocol === 'openvpn-native'
+  const protocolLabel = native ? 'OpenVPN' : 'OpenVPN + Cloak'
   const [state, setState] = useState<OvpnState | null>(null)
   const torrentHits = useTorrentHits(serverId)
   const [loading, setLoading] = useState(true)
@@ -63,7 +70,7 @@ export function OpenVpnClients({
   const [view, setView] = useState<ConfigView | null>(null)
   // Escape в окне конфига закрывает его, а не все окно клиентов
   useModalLayer(view !== null, () => setView(null))
-  const shareLink = useShareLink(view?.amnezia ?? '', view?.name ?? '', groupName)
+  const shareLink = useShareLink(view?.text ?? '', view?.name ?? '', groupName)
   const [statsFor, setStatsFor] = useState<{ id: string; name: string } | null>(
     null,
   )
@@ -83,21 +90,21 @@ export function OpenVpnClients({
   const load = useCallback(async () => {
     setLoading(true)
     try {
-      setState(await api<OvpnState>(`/api/servers/${serverId}/openvpn`))
+      setState(await api<OvpnState>(`/api/servers/${serverId}/${protocol}`))
       setError(null)
     } catch (err) {
       handleError(err)
     } finally {
       setLoading(false)
     }
-  }, [serverId, handleError])
+  }, [serverId, protocol, handleError])
 
   useEffect(() => {
     void load()
   }, [load])
 
-  function showConfig(name: string, amnezia: string) {
-    setView({ name, amnezia })
+  function showConfig(name: string, text: string, filename?: string) {
+    setView({ name, text, native, filename })
     setCopied(false)
   }
 
@@ -107,8 +114,8 @@ export function OpenVpnClients({
     setCreating(true)
     setError(null)
     try {
-      const result = await api<OvpnCreated>(
-        `/api/servers/${serverId}/openvpn/clients`,
+      const result = await api<OvpnCreated | NativeCreatedClient<OvpnClient>>(
+        `/api/servers/${serverId}/${protocol}/clients`,
         {
           method: 'POST',
           body: JSON.stringify({ name: newName.trim(), expires_at: newExpiry }),
@@ -117,7 +124,7 @@ export function OpenVpnClients({
       setAddOpen(false)
       setNewName('')
       setNewExpiry(null)
-      showConfig(result.client.name, result.config_amnezia)
+      showConfig(result.client.name, 'config' in result ? result.config : result.config_amnezia, 'filename' in result ? result.filename : undefined)
       await load()
     } catch (err) {
       handleError(err)
@@ -131,11 +138,11 @@ export function OpenVpnClients({
     setBusy(clientId)
     setError(null)
     try {
-      const result = await api<OvpnConfig>(
-        `/api/servers/${serverId}/openvpn/config`,
+      const result = await api<OvpnConfig | NativeClientConfig>(
+        `/api/servers/${serverId}/${protocol}/config`,
         { method: 'POST', body: JSON.stringify({ client_id: clientId }) },
       )
-      showConfig(result.name, result.config_amnezia)
+      showConfig(result.name, 'config' in result ? result.config : result.config_amnezia, 'filename' in result ? result.filename : undefined)
     } catch (err) {
       handleError(err)
     } finally {
@@ -156,11 +163,11 @@ export function OpenVpnClients({
     setBusy(clientId)
     setError(null)
     try {
-      const result = await api<OvpnCreated>(
-        `/api/servers/${serverId}/openvpn/reissue`,
+      const result = await api<OvpnCreated | NativeCreatedClient<OvpnClient>>(
+        `/api/servers/${serverId}/${protocol}/reissue`,
         { method: 'POST', body: JSON.stringify({ client_id: clientId }) },
       )
-      showConfig(result.client.name, result.config_amnezia)
+      showConfig(result.client.name, 'config' in result ? result.config : result.config_amnezia, 'filename' in result ? result.filename : undefined)
       await load()
     } catch (err) {
       handleError(err)
@@ -174,7 +181,7 @@ export function OpenVpnClients({
     if (!next || next === name) return
     setBusy(clientId)
     try {
-      await renameClient(serverId, 'openvpn', clientId, next)
+      await renameClient(serverId, protocol, clientId, next)
       await load()
     } catch (err) {
       handleError(err)
@@ -192,7 +199,7 @@ export function OpenVpnClients({
       return
     setBusy(clientId)
     try {
-      await api<void>(`/api/servers/${serverId}/openvpn/revoke`, {
+      await api<void>(`/api/servers/${serverId}/${protocol}/revoke`, {
         method: 'POST',
         body: JSON.stringify({ client_id: clientId }),
       })
@@ -206,7 +213,7 @@ export function OpenVpnClients({
 
   async function changeLimit(clientId: string, name: string, iso: string | null) {
     try {
-      await setClientLimit(serverId, 'openvpn', clientId, name, iso)
+      await setClientLimit(serverId, protocol, clientId, name, iso)
       await load()
     } catch (err) {
       handleError(err)
@@ -226,7 +233,7 @@ export function OpenVpnClients({
       return
     setBusy(c.client_id)
     try {
-      await pauseClient(serverId, 'openvpn', c.client_id, resume)
+      await pauseClient(serverId, protocol, c.client_id, resume)
       await load()
     } catch (err) {
       handleError(err)
@@ -237,7 +244,7 @@ export function OpenVpnClients({
 
   async function saveNote(clientId: string, note: string) {
     try {
-      await api<void>(`/api/servers/${serverId}/openvpn/note`, {
+      await api<void>(`/api/servers/${serverId}/${protocol}/note`, {
         method: 'POST',
         body: JSON.stringify({ client_id: clientId, note }),
       })
@@ -249,17 +256,16 @@ export function OpenVpnClients({
 
   async function copyConfig() {
     if (!view) return
-    setCopied(await copyText(view.amnezia))
+    setCopied(await copyText(view.text))
   }
 
   function downloadConfig() {
     if (!view) return
-    const safe = view.name.replace(/[^a-zA-Z0-9_-]+/g, '_')
-    const blob = new Blob([view.amnezia], { type: 'text/plain' })
+    const blob = new Blob([view.text], { type: 'text/plain' })
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
     a.href = url
-    a.download = `${safe || 'client'}.txt`
+    a.download = configFilename(view.name, view.native ? 'ovpn' : 'txt', view.filename)
     a.click()
     URL.revokeObjectURL(url)
   }
@@ -271,7 +277,7 @@ export function OpenVpnClients({
   return (
     <>
       <p className="muted small">
-        {t(
+        {native ? t('Обычный OpenVPN. Файл .ovpn содержит сертификаты и ключ клиента; Cloak не требуется.') : t(
           'OpenVPN поверх Cloak (маскировка под HTTPS). Конфиг выдаётся ссылкой vpn:// «Для приложения AmneziaVPN».',
         )}
       </p>
@@ -281,6 +287,10 @@ export function OpenVpnClients({
 
       {state && !loading && (
         <>
+          {native && <div className="info-chips">
+            {state.port != null && <span className="info-chip mono">{state.port}{state.transport ? '/' + state.transport.toUpperCase() : ''}</span>}
+            {state.version && <span className="info-chip mono">{state.version}</span>}
+          </div>}
           {addOpen ? (
             <div className="add-form">
               <input
@@ -314,18 +324,18 @@ export function OpenVpnClients({
                 {t('+ Выдать конфиг')}
               </button>
               <span style={{ marginLeft: 'auto', display: 'inline-flex', gap: 8 }}>
-                <RollbackMenu
+                {(!native || state.capabilities?.config_restore === true) && <RollbackMenu
                   serverId={serverId}
                   serverName={serverName}
-                  proto="openvpn"
+                  proto={protocol}
                   onRestored={load}
                   onUnauthorized={onUnauthorized}
-                />
-                {onRequestUpdate && (
+                />}
+                {onRequestUpdate && (!native || state.capabilities?.update === true) && (
                   <button
                     className="ghost"
                     onClick={onRequestUpdate}
-                    title={t('Пересобрать образ (свежий alpine + cloak); клиенты и PKI сохраняются)')}
+                    title={native ? t('Обновить контейнер OpenVPN с сохранением порта, сертификатов и клиентов') : t('Пересобрать образ (свежий alpine + cloak); клиенты и PKI сохраняются)')}
                   >
                     {t('Переустановить')}
                   </button>
@@ -337,8 +347,8 @@ export function OpenVpnClients({
           <BulkRevokeBar
             serverId={serverId}
             serverName={serverName}
-            protocol="openvpn"
-            protocolLabel="OpenVPN/Cloak"
+            protocol={protocol}
+            protocolLabel={protocolLabel}
             sel={sel}
             onDone={load}
             onUnauthorized={onUnauthorized}
@@ -370,7 +380,7 @@ export function OpenVpnClients({
                           name={c.paused ? `${c.name} ⏸` : c.name}
                           note={c.note || ''}
                           online={c.paused ? false : !!c.connected}
-                          badge={<TorrentBadge hit={torrentHits.get(`openvpn:${c.client_id}`)} />}
+                          badge={<TorrentBadge hit={torrentHits.get(`${protocol}:${c.client_id}`)} />}
                           onSave={(note) => saveNote(c.client_id, note)}
                         />
                       </td>
@@ -476,31 +486,33 @@ export function OpenVpnClients({
 
       {view && (
         <div className="modal-backdrop">
-          <div className="card modal" onClick={(e) => e.stopPropagation()}>
+          <div className="card modal modal-config" onClick={(e) => e.stopPropagation()}>
             <h3>{t('Конфиг клиента «{name}»', { name: view.name })}</h3>
+            <div className="modal-config-body">
             <p className="muted small">
-              {t(
+              {view.native ? t('Импортируйте файл .ovpn в совместимый клиент OpenVPN.') : t(
                 'Ссылка vpn:// — вставьте её в приложение AmneziaVPN («+» → вставить из буфера) или отсканируйте QR.',
               )}
             </p>
 
-            <div className="qr-wrap">
-              <AmneziaQr text={view.amnezia} format="vpn" />
+            {!view.native && <div className="qr-wrap">
+              <AmneziaQr text={view.text} format="vpn" />
+            </div>}
+            <pre className="script-box">{view.text}</pre>
+            {shareLink.result}
             </div>
-            <pre className="script-box">{view.amnezia}</pre>
             <div className="modal-actions">
               <button className="ghost" onClick={() => setView(null)}>
                 {t('Готово')}
               </button>
               <button className="ghost" onClick={downloadConfig}>
-                {t('Скачать .txt')}
+                {view.native ? t('Скачать .ovpn') : t('Скачать .txt')}
               </button>
               {shareLink.control}
               <button onClick={copyConfig}>
                 {copied ? t('Скопировано ✓') : t('Скопировать')}
               </button>
             </div>
-            {shareLink.result}
           </div>
         </div>
       )}
@@ -508,7 +520,7 @@ export function OpenVpnClients({
       {statsFor && (
         <ClientStatsModal
           serverId={serverId}
-          protocol="openvpn"
+          protocol={protocol}
           clientId={statsFor.id}
           name={statsFor.name}
           onClose={() => setStatsFor(null)}

@@ -23,12 +23,14 @@ function hitKey(h: ClientHit): string {
 }
 
 // протокол клиента -> путь API возобновления
-const RESUME_PATH: Record<string, 'awg' | 'awg-legacy' | 'awg3' | 'xray' | 'openvpn'> = {
+const RESUME_PATH: Record<string, Exclude<Protocol['key'], 'awglegacy'> | 'awg-legacy'> = {
   awg: 'awg',
   awg3: 'awg3',
   awglegacy: 'awg-legacy',
   xray: 'xray',
   openvpn: 'openvpn',
+  wireguard: 'wireguard',
+  'openvpn-native': 'openvpn-native',
 }
 
 export function ClientSearchPage({ onUnauthorized }: Props) {

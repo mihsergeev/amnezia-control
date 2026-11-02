@@ -12,23 +12,25 @@ from dataclasses import dataclass, field
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app import awg, deploy, openvpn, xray
+from app import awg, deploy, native_vpn, openvpn, xray
 from app.models import (
     AwgConfig,
     AwgNote,
     ClientLimit,
     ClientName,
     OvpnConfig,
+    NativeVpnConfig,
     PausedClient,
     TorrentHit,
 )
 
-PROTOCOLS = ("awg", "awglegacy", "awg3", "openvpn", "xray")
+PROTOCOLS = ("awg", "awglegacy", "awg3", "openvpn", "xray", *native_vpn.PROTOCOLS)
 
 # под каким тегом снимков хранится конфиг протокола (см. deploy._SNAP_SPECS)
 _SNAP_TAG = {
     "awg": "awg", "awglegacy": "awg", "awg3": "awg3",
     "openvpn": "openvpn", "xray": "xray",
+    "wireguard": "wireguard", "openvpn-native": "openvpn-native",
 }
 
 # каталоги хоста, которые можно переименовать: только конфиги Amnezia и панели,
@@ -78,6 +80,11 @@ class RemoveResult:
 
 async def find_container(conn, protocol: str) -> tuple[str, str] | None:
     """(контейнер, протокол его клиентов в панели) или None, если его нет."""
+    if protocol in native_vpn.PROTOCOLS:
+        try:
+            return await native_vpn.detect(conn, protocol, running=False), protocol
+        except native_vpn.NativeNotDeployed:
+            return None
     if protocol in ("awg", "awglegacy"):
         found = await awg.detect_awg_containers(conn)
         if protocol == "awglegacy":
@@ -132,6 +139,9 @@ async def remove(conn, protocol: str) -> RemoveResult:
 async def cleanup_db(session: AsyncSession, server_id: int, protocols: set[str]) -> None:
     """Стирает в панели все следы клиентов этих протоколов на сервере."""
     for proto in protocols:
+        if proto in native_vpn.PROTOCOLS:
+            await session.execute(delete(NativeVpnConfig).where(
+                NativeVpnConfig.server_id == server_id, NativeVpnConfig.protocol == proto))
         if proto in ("awg", "awg3", "awglegacy"):
             await session.execute(delete(AwgConfig).where(
                 AwgConfig.server_id == server_id, AwgConfig.protocol == proto))
@@ -148,6 +158,8 @@ async def rename_on_node(
     """Меняет имя клиента в clientsTable контейнера протокола. Возвращает
     (нашелся ли клиент в таблице, протокол его клиентов в панели). Клиента на
     паузе в таблице нет: он снят с ноды."""
+    if protocol in native_vpn.PROTOCOLS:
+        return await native_vpn.rename(conn, protocol, client_id, name), protocol
     found = await find_container(conn, protocol)
     if found is None:
         raise LookupError("Протокол на сервере не найден")
@@ -182,6 +194,10 @@ async def rename_in_db(
     if "openvpn" in protocols:
         rows += list(await session.scalars(select(OvpnConfig).where(
             OvpnConfig.server_id == server_id, OvpnConfig.client_id == client_id)))
+    if protocols & set(native_vpn.PROTOCOLS):
+        rows += list(await session.scalars(select(NativeVpnConfig).where(
+            NativeVpnConfig.server_id == server_id, NativeVpnConfig.client_id == client_id,
+            NativeVpnConfig.protocol.in_(protocols))))
     for model in (ClientName, ClientLimit, PausedClient):
         rows += list(await session.scalars(select(model).where(
             model.server_id == server_id, model.protocol.in_(protocols),

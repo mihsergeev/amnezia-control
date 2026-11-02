@@ -24,6 +24,8 @@ KIND_LABEL = {
 _FIXED = {
     "openvpn": "OpenVPN/Cloak",
     "xray": "XRay/REALITY",
+    "wireguard": "WireGuard",
+    "openvpn-native": "OpenVPN",
 }
 
 

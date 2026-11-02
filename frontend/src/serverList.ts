@@ -30,6 +30,7 @@ export function serverListRoute(item: ServerListItem, servers: Server[]): Server
   const c = item.cascade
   const node = (server: Server | undefined, host: string): ServerRouteNode => ({ name: server?.name || host, host: server?.host || host, country: server?.country || '' })
   if (c) return { entry: node(item.entry, c.entry_ip), exit: node(item.exit, c.exit_ip), manual: false }
+  if (item.sharedExitCount > 1) return null
   const entry = item.anchor
   if (!entry) return null
   const info = checkedInfo(entry)
@@ -59,6 +60,8 @@ export type ServerListItem = {
   entry?: Server
   exit?: Server
   members: Server[]
+  countedMembers: Server[]
+  sharedExitCount: number
   group_name: string
   position: number
 }
@@ -68,6 +71,10 @@ export type ServerSelection = { key: string | null; serverId: number | null }
 export function serverListItems(servers: Server[], cascades: Cascade[]): ServerListItem[] {
   const byId = new Map(servers.map((server) => [server.id, server]))
   const participants = new Set(cascades.flatMap((cascade) => [cascade.entry_server_id, cascade.exit_server_id]))
+  const entryIds = new Set(cascades.map(c => c.entry_server_id))
+  const exitUses = new Map<number, number>()
+  for (const c of cascades) exitUses.set(c.exit_server_id, (exitUses.get(c.exit_server_id) ?? 0) + 1)
+  const sharedExits = new Set([...exitUses].filter(([id, count]) => count > 1 && !entryIds.has(id)).map(([id]) => id))
   const items: ServerListItem[] = cascades.map((cascade) => {
     const entry = byId.get(cascade.entry_server_id)
     const exit = byId.get(cascade.exit_server_id)
@@ -75,13 +82,16 @@ export function serverListItems(servers: Server[], cascades: Cascade[]): ServerL
     return {
       key: `cascade:${cascade.id}`, cascade, entry, exit, anchor,
       members: [...new Set([entry, exit].filter((server): server is Server => !!server))],
+      countedMembers: [entry, ...(sharedExits.has(cascade.exit_server_id) ? [] : [exit])].filter((server): server is Server => !!server),
+      sharedExitCount: 0,
       group_name: anchor?.group_name ?? '',
       position: anchor?.position ?? Number.MAX_SAFE_INTEGER,
     }
   })
   for (const server of servers) {
-    if (!participants.has(server.id)) {
+    if (!participants.has(server.id) || sharedExits.has(server.id)) {
       items.push({ key: `server:${server.id}`, anchor: server, members: [server],
+        countedMembers: [server], sharedExitCount: sharedExits.has(server.id) ? exitUses.get(server.id)! : 0,
         group_name: server.group_name, position: server.position })
     }
   }
@@ -119,9 +129,21 @@ export function serverListMatches(item: ServerListItem, query: string, text: (se
 }
 
 export function serverListClients(items: ServerListItem[], stats: Record<number, ServerStat>) {
-  const rows = serverListMembers(items).flatMap((server) => stats[server.id] ? [stats[server.id]] : [])
+  const counted = [...new Map(items.flatMap(item => item.countedMembers.map(server => [server.id, server] as const))).values()]
+  const rows = counted.flatMap((server) => stats[server.id] ? [stats[server.id]] : [])
   return { available: rows.length > 0, online: rows.reduce((sum, row) => sum + row.clients_online, 0),
     total: rows.reduce((sum, row) => sum + row.clients_total, 0) }
+}
+
+export function cascadeServerEligible(server: Server, cascades: Cascade[], role: 'entry' | 'exit'): boolean {
+  if (cascades.some(c => c.entry_server_id === server.id)) return false
+  if (role === 'exit') return true
+  if (cascades.some(c => c.exit_server_id === server.id)) return false
+  const info = checkedInfo(server)
+  const manual = typeof info?.manual_cascade?.exit_host === 'string' && !!info.manual_cascade.exit_host.trim()
+  const gre = Array.isArray(info?.tunnels) && info.tunnels.some(t => t.kind === 'gre')
+  const abroad = !!server.egress_ip && !!server.egress_country && !!server.country && server.egress_country !== server.country
+  return !manual && !gre && !abroad
 }
 
 export function resolveServerSelection(items: ServerListItem[], selection: ServerSelection) {

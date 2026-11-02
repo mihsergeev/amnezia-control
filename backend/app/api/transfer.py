@@ -26,7 +26,7 @@ from fastapi import APIRouter, HTTPException, Request, status
 from fastapi.responses import Response
 from sqlalchemy import DateTime, func, insert, select
 
-from app import alerts, audit, sshops, stepup
+from app import alerts, audit, native_snapshots, sshops, stepup
 from app.clientip import client_ip
 from app.config import get_settings
 from app.db import Base
@@ -146,6 +146,7 @@ async def export_server(
         "with_history": history,
         "server": {f: getattr(server, f) for f in _SERVER_FIELDS},
         "tables": tables,
+        "native_snapshots": await native_snapshots.export_server(session, server_id),
     }
     body = json.dumps(payload, ensure_ascii=False, indent=2).encode()
 
@@ -289,6 +290,11 @@ async def import_server_file(
                 ) from exc
             imported[table] = len(values)
 
+    try:
+        await native_snapshots.import_server(session, server, payload.get("native_snapshots", []))
+    except ValueError as exc:
+        await session.rollback()
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from None
     await session.commit()
     await session.refresh(server)
     await audit.record(

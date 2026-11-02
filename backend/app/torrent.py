@@ -23,7 +23,7 @@ from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import delete, select
 
-from app import alerts, audit, awg, deploy, nodelock, openvpn, pausestore, settings_store, sshops
+from app import alerts, audit, awg, deploy, native_vpn, nodelock, openvpn, pausestore, settings_store, sshops
 from app.config import Settings
 from app.models import Server, TorrentHit
 from app.sshkeys import ensure_panel_key, key_paths
@@ -237,6 +237,18 @@ async def node_nets(conn, host: str) -> list[dict]:
         container = None
     if container:
         nets.append({"container": container, "protocol": "openvpn", "ips": {}})
+    for protocol in native_vpn.PROTOCOLS:
+        try:
+            state = await native_vpn.state(conn, protocol, host)
+        except native_vpn.NativeError:
+            continue
+        ips = {client["address"].split("/")[0]: (client["public_key"], client["name"])
+               for client in state["clients"] if client.get("address") and client.get("public_key")}
+        if protocol == "openvpn-native":
+            raw = await openvpn.read_status_text(conn, state["container"])
+            names = {client["client_id"]: client["name"] for client in state["clients"]}
+            ips = {ip: (cid, names.get(cid, "")) for ip, cid in parse_ovpn_routes(raw).items()}
+        nets.append({"container": state["container"], "protocol": protocol, "ips": ips})
     return nets
 
 
@@ -276,6 +288,8 @@ async def _pause(server: Server, settings: Settings, protocol: str, client_id: s
         async with nodelock.connect(protocol, server.id, sshops.connect(
             server.host, server.ssh_port, server.ssh_user, key_path, timeout
         )) as conn:
+            if protocol in native_vpn.PROTOCOLS:
+                return await native_vpn.pause(conn, protocol, client_id, server.host)
             if protocol == "openvpn":
                 container = await openvpn.detect_container(conn)
                 await openvpn.pause_client(conn, container, client_id)

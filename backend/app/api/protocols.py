@@ -1,7 +1,7 @@
 import asyncssh
 from fastapi import APIRouter, HTTPException, Request, status
 
-from app import audit, nodelock, protoremove, server_ops, sshops, stepup
+from app import audit, native_snapshots, native_vpn, nodelock, protoremove, server_ops, sshops, stepup
 from app.config import get_settings
 from app.deps import CurrentUser, SessionDep
 from app.models import Server
@@ -49,6 +49,12 @@ async def rename_client(
             )
     except LookupError as exc:
         raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from exc
+    except native_vpn.NativeNotDeployed as exc:
+        raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from None
+    except native_vpn.NativeError as exc:
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(exc)) from None
+    except ValueError as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from None
     except (asyncssh.Error, OSError) as exc:
         raise _ssh_error(exc) from exc
     # вкладка AmneziaWG могла показывать одиночный Legacy: метаданные под обоими ключами
@@ -99,13 +105,18 @@ async def remove_protocol(
             server.host, server.ssh_port, server.ssh_user, key_path,
             settings.ssh_connect_timeout,
         )) as conn:
+            native_listener = await native_vpn.metadata(conn, protocol) if protocol in native_vpn.PROTOCOLS else None
             res = await protoremove.remove(conn, protocol)
+            if native_listener is not None:
+                await native_snapshots.save(session, server, protocol, res.snapshot, native_listener)
             # список протоколов на карточке обновляем сразу, не дожидаясь сбора
             check = await sshops.probe_containers(conn)
     except LookupError as exc:
         raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from exc
     except protoremove.RemoveError as exc:
         raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(exc)) from exc
+    except native_vpn.NativeError as exc:
+        raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from None
     except (asyncssh.Error, OSError) as exc:
         raise _ssh_error(exc) from exc
 

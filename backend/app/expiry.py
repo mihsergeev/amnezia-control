@@ -8,9 +8,9 @@ import asyncssh
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app import alerts, audit, awg, deploy, nodelock, openvpn, pausestore, sshops, xray
+from app import alerts, audit, awg, deploy, native_vpn, nodelock, openvpn, pausestore, sshops, xray
 from app.config import Settings
-from app.models import AwgConfig, AwgNote, ClientLimit, OvpnConfig, Server
+from app.models import AwgConfig, AwgNote, ClientLimit, NativeVpnConfig, OvpnConfig, Server
 from app.sshkeys import ensure_panel_key, key_paths
 
 log = logging.getLogger("acontrol.expiry")
@@ -82,6 +82,15 @@ async def _revoker(conn, server: Server, protocol: str):
     # отзыв: раньше ветка тихо ничего не делала, срок и конфиг удалялись из
     # БД, а поднявшийся контейнер оставлял истекшего клиента бессрочным.
     # Исключение откладывает отзыв до следующего прохода.
+    if protocol in native_vpn.PROTOCOLS:
+        await deploy.ensure_idle(conn, tag=protocol)
+        try:
+            await native_vpn.detect(conn, protocol)
+        except native_vpn.NativeNotDeployed:
+            # Absence is proven by an exact-name/ownership inspect. A stopped
+            # existing container raises NativeError and is never treated as gone.
+            raise ProtocolGone("Нативный протокол удален с сервера") from None
+        return lambda cid: native_vpn.revoke(conn, protocol, cid)
     if protocol in ("awg", "awg3", "awglegacy"):
         if protocol == "awg":
             # на ноде только со старым AmneziaWG клиенты "awg" живут в legacy-
@@ -118,6 +127,13 @@ async def _revoker(conn, server: Server, protocol: str):
 
 
 async def cleanup_client_db(session: AsyncSession, server_id, protocol, client_id) -> None:
+    if protocol in native_vpn.PROTOCOLS:
+        await session.execute(delete(NativeVpnConfig).where(
+            NativeVpnConfig.server_id == server_id, NativeVpnConfig.protocol == protocol,
+            NativeVpnConfig.client_id == client_id))
+        await session.execute(delete(AwgNote).where(
+            AwgNote.server_id == server_id, AwgNote.protocol == protocol,
+            AwgNote.public_key == client_id))
     if protocol in ("awg", "awg3", "awglegacy"):
         await session.execute(
             delete(AwgConfig).where(

@@ -416,7 +416,7 @@ async def test_create_binds_new_awg_measurement_to_effective_endpoints_and_ports
     entry, exit_ = await add_servers(session_factory)
     mock_pair(monkeypatch)
     async def preflight(*args): pass
-    async def port(conn, requested): return requested
+    async def port(conn, requested, reserved=None): return requested
     monkeypatch.setattr(api, "_awg_preflight", preflight)
     monkeypatch.setattr(api, "_awg_port", port)
     monkeypatch.setattr(api.cascade_awg, "new_params", lambda: {})

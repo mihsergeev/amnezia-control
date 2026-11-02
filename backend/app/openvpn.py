@@ -613,7 +613,7 @@ def build_deploy_script(port: int, site: str, server_ip: str = "") -> str:
         # У родного Amnezia-openvpn конфиг лежит ВНУТРИ контейнера (не на хост-
         # маунте) — иначе guard ниже сгенерил бы НОВЫЙ CA и все клиентские
         # сертификаты стали бы невалидны (тот же класс, что инцидент de-hz).
-        'SRC=$(sudo docker ps --format "{{.Names}}" | grep -iE "openvpn|cloak" | head -1 || true)',
+        'SRC=$(sudo docker ps --format "{{.Names}}" | grep -v -Fx acontrol-openvpn-native | grep -iE "openvpn|cloak" | head -1 || true)',
         'if [ -n "$SRC" ]; then',
         '  if ! sudo test -f "$D/openvpn/ca.crt"; then',
         '    sudo docker exec "$SRC" tar -czf - -C / opt/amnezia/openvpn '
