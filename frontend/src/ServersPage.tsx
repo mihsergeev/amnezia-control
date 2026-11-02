@@ -121,14 +121,10 @@ function CascadeNodeName({ node }: { node: ServerRouteNode }) {
 }
 
 function CascadeListName({ route }: { route: NonNullable<ReturnType<typeof serverListRoute>> }) {
-  const { lang } = useI18n()
-  const country = /^[A-Z]{2}$/.test(route.exit.country)
-    ? new Intl.DisplayNames([lang], { type: 'region' }).of(route.exit.country) : ''
   return <span className="srv-item-name srv-cascade-name">
     <CascadeNodeName node={route.entry} />
     <span className="srv-cascade-arrow" aria-hidden="true">→</span>
     <CascadeNodeName node={route.exit} />
-    {country && <span className="srv-cascade-country" title={country}>{country}</span>}
   </span>
 }
 

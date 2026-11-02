@@ -4,6 +4,11 @@ All notable changes to Amnezia Control are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.83.2] - 2026-11-02
+
+### Changed
+- Remove country-name text from cascade sidebar rows to leave more room for server names, while keeping both country flags and the country details inside the server view.
+
 ## [0.83.1] - 2026-11-02
 
 ### Fixed

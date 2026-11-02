@@ -2176,17 +2176,6 @@ button.srv-side-gh:hover .drag-handle {
   white-space: nowrap;
 }
 
-.srv-cascade-country {
-  flex: 0 100000 auto;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  color: var(--text-muted);
-  font-weight: 400;
-  font-size: 0.78rem;
-}
-
 .srv-cascade-arrow {
   color: var(--text-muted);
 }
