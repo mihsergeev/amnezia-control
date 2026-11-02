@@ -1294,6 +1294,9 @@ export function ServersPage({ onUnauthorized }: Props) {
                         const cas = item.cascade
                         const st = serverListClients([item], stats)
                         const draggable = !!s && !sharedAnchors.has(s.id)
+                        const routeTitle = cas
+                          ? `${item.entry?.name || cas.entry_ip}: ${item.entry?.host || cas.entry_ip} → ${item.exit?.name || cas.exit_ip}: ${item.exit?.host || cas.exit_ip}`
+                          : item.members.map((server) => `${server.name}: ${server.host}`).join(' → ')
                         return (
                           <button
                             type="button"
@@ -1303,7 +1306,8 @@ export function ServersPage({ onUnauthorized }: Props) {
                             }${s && dropHint === `srv-${s.id}` ? ' drag-over' : ''}`}
                             aria-pressed={selectedItem?.key === item.key}
                             onClick={() => selectItem(item)}
-                            title={item.members.map((server) => `${server.name}: ${server.host}`).join(' → ') || `${cas?.entry_ip} → ${cas?.exit_ip}`}
+                            title={routeTitle}
+                            aria-label={cas ? `${t('Каскад')} ${cas.transport === 'gre' ? 'GRE' : 'VLESS'}: ${routeTitle}${st.available ? `, ${st.online}/${st.total}` : ''}` : undefined}
                             onDragOver={(e) => {
                               if (s && draggable && dragServer.current != null) {
                                 e.preventDefault()
@@ -1337,12 +1341,12 @@ export function ServersPage({ onUnauthorized }: Props) {
                             )}
                             <ListStatusDot item={item} />
                             {cas ? (
-                              <span className="srv-item-name">
-                                <span className="srv-item-kind">{t('Каскад')} · {cas.transport === 'gre' ? 'GRE' : 'VLESS'}</span>
+                              <span className="srv-item-name srv-cascade-name">
                                 <span className="srv-cascade-node">
                                   <span className="server-flag" title={item.entry?.country}>{countryFlag(item.entry?.country || '')}</span>
                                   <span>{item.entry?.name || cas.entry_ip}</span>
                                 </span>
+                                <span className="srv-cascade-arrow" aria-hidden="true">→</span>
                                 <span className="srv-cascade-node">
                                   <span className="server-flag" title={item.exit?.country}>{countryFlag(item.exit?.country || '')}</span>
                                   <span>{item.exit?.name || cas.exit_ip}</span>
