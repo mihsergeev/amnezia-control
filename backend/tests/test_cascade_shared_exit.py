@@ -2,6 +2,7 @@ import asyncio
 import base64
 import importlib.util
 import json
+import os
 import pathlib
 import re
 import shutil
@@ -148,6 +149,21 @@ def test_operation_wrapper_is_valid_shell_and_keeps_config_out_of_python_argv():
     assert 'os.set_inheritable(fd,True)' in script
     assert "<<'AC_CASCADE_OPERATION_PAYLOAD'" in script
     assert 'CASCADE_OPERATION_BUSY' in script
+
+
+@pytest.mark.skipif(shutil.which('bash') is None,reason='Bash is required')
+def test_first_gre_exit_start_brings_device_up_before_peer_route(tmp_path,monkeypatch):
+    bin_=tmp_path/'bin';bin_.mkdir();created=tmp_path/'created';up=tmp_path/'up'
+    (tmp_path/'exit.env').write_text('TRANSPORT=gre\nOWNER='+('a'*32)+'\nIF=acgx7\nLOCAL=192.0.2.10\nPEER=198.51.100.20\nKEY=123456\nINNER=10.99.30.2\nPEER_INNER=10.99.30.1\nEGRESS=eth0\n',encoding='utf-8',newline='\n')
+    ip='#!/bin/sh\ncase "$*" in\n"link show acgx7") test -f '+shlex.quote(created.as_posix())+';;\n"link add acgx7 "*) touch '+shlex.quote(created.as_posix())+';;\n"link set acgx7 mtu 1476 up") touch '+shlex.quote(up.as_posix())+';;\n"route replace "*) test -f '+shlex.quote(up.as_posix())+' || { echo "Device for nexthop is not up" >&2; exit 2; };;\n*) exit 0;;\nesac\n'
+    for name,text in {'ip':ip,'flock':'#!/bin/sh\nexit 0\n','docker':'#!/bin/sh\nexit 1\n','sysctl':'#!/bin/sh\nexit 0\n','iptables':'#!/bin/sh\nexit 0\n'}.items():
+        path=bin_/name;path.write_text(text,encoding='utf-8',newline='\n');path.chmod(0o755)
+    monkeypatch.setenv('PATH',str(bin_)+os.pathsep+os.environ['PATH'])
+    script=cascade_exit.RUNTIME.replace('@BASE@',tmp_path.as_posix()).replace('@LOCK@',(tmp_path/'lock').as_posix()).replace('@XRAY@','fixture-image')
+    prefix=f'export PATH="$(cygpath -u "{bin_.as_posix()}"):$PATH"\n' if os.name=='nt' else ''
+    result=subprocess.run([shutil.which('bash'),'-s','--','up'],input=prefix+script,capture_output=True,text=True,timeout=10)
+    assert result.returncode==0,result.stderr
+    assert up.is_file()
 
 
 @pytest.mark.skipif(sys.platform=='win32',reason='real fcntl/exec integration requires Linux')
