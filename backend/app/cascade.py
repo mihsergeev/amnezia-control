@@ -26,11 +26,15 @@ import json
 import os
 import random
 import re
+import shlex
 import uuid
 
 import asyncssh
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey
+
+from app import cascade_awg
+from app.cascade_underlay import CASCADE_PROBE_COMMAND
 
 # Оба конца каскада обновляются вместе; наш chrome-профиль поддерживает
 # X25519MLKEM768. UUID и ключи каскада при обновлении сохраняются.
@@ -52,7 +56,7 @@ REALITY_SITE = "www.googletagmanager.com"
 # порты VLESS на выходе по порядку предпочтения: 443 похож на обычный HTTPS
 VLESS_PORTS = (443, 8443, 2083, 2096)
 TAG = "cascade"  # каталог деплоя на нодах ($HOME/.acontrol/cascade)
-TRANSPORTS = ("vless", "gre")
+TRANSPORTS = ("vless", "gre", "awg")
 # ревизия скриптов входа: проверка видит старую и обновляет их на месте
 # (upgrade_entry), без переустановки каскада
 SCRIPTS_REV = "4"
@@ -439,8 +443,10 @@ def _fill(text: str) -> str:
 def _put(path: str, text: str, mode: str = "644") -> str:
     """Строка скрипта: записать файл через sudo (redirect до sudo шел бы не от root)."""
     return (
-        f"echo {_b64(text)} | base64 -d | sudo tee {path} >/dev/null "
-        f"&& sudo chmod {mode} {path} || fail 'write {path}'"
+        f"echo {_b64(text)} | base64 -d | sudo sh -c "
+        "'umask 077; cat > \"$1.tmp\" && chmod \"$2\" \"$1.tmp\" "
+        "&& mv -f \"$1.tmp\" \"$1\"' sh "
+        f"{path} {mode} || fail 'write {path}'"
     )
 
 
@@ -494,7 +500,12 @@ def _gre_install(role: str, remote: str, inner: str, net: str) -> list[str]:
 def build_exit_script(transport: str, entry_ip: str, cascade_id: int, params: dict) -> str:
     net, _ein, xin = inner_net(cascade_id)
     lines = [_HEAD]
-    if transport == "gre":
+    if transport == "awg":
+        lines += [_DOCKER]
+        lines += cascade_awg.install("exit", entry_ip, cascade_id, params,
+                                     inner_net(cascade_id)[1].split('/')[0], xin.split('/')[0])
+    elif transport == "gre":
+        lines += [cascade_awg.foreign_guard().replace("exit 73", "fail 'external encrypted underlay'")]
         lines += ['log "[1/2] GRE-туннель до входа"']
         lines += _gre_install("exit", entry_ip, xin, net)
         lines += [
@@ -599,7 +610,7 @@ def entry_gateway_config(transport: str, exit_ip: str, params: dict, bootstrap: 
                          country: str = "") -> str:
     """Конфиг шлюза на входе. Первый outbound (exit) - путь по умолчанию.
     bootstrap: без правил по геобазам, чтобы скачать их через выход, пока их еще нет."""
-    if transport == "gre":
+    if transport in ("gre", "awg"):
         out = {
             "tag": "exit", "protocol": "freedom",
             "settings": {"domainStrategy": "UseIPv4"},
@@ -699,7 +710,12 @@ def build_entry_script(transport: str, exit_ip: str, cascade_id: int, params: di
                        country: str = "") -> str:
     net, ein, _xin = inner_net(cascade_id)
     lines = [_HEAD, 'log "[1/5] docker"', _DOCKER]
-    if transport == "gre":
+    if transport == "awg":
+        lines += ['log "[2/5] зашифрованный канал AWG 3.1"']
+        lines += cascade_awg.install("entry", exit_ip, cascade_id, params,
+                                     ein.split('/')[0], inner_net(cascade_id)[2].split('/')[0])
+    elif transport == "gre":
+        lines += [cascade_awg.foreign_guard().replace("exit 73", "fail 'external encrypted underlay'")]
         lines += ['log "[2/5] GRE-туннель до выхода"']
         lines += _gre_install("entry", exit_ip, ein, net)
         xpeer = inner_net(cascade_id)[2].split("/")[0]
@@ -723,6 +739,11 @@ def build_entry_script(transport: str, exit_ip: str, cascade_id: int, params: di
     for name in ("acontrol-cascade-tproxy.service", "acontrol-cascade-geo.service",
                  "acontrol-cascade-geo.timer", "acontrol-cascade-heal.service"):
         lines.append(_put(f"/etc/systemd/system/{name}", _fill(_UNITS[name])))
+    if transport == "awg":
+        # The interception unit cannot start at boot before the kill switch.
+        lines += ["sudo mkdir -p /etc/systemd/system/acontrol-cascade-tproxy.service.d",
+                  _put("/etc/systemd/system/acontrol-cascade-tproxy.service.d/awg.conf",
+                       "[Unit]\nWants=acontrol-cascade-awg.service\nAfter=acontrol-cascade-awg.service\n")]
     lines += [
         "sudo systemctl daemon-reload",
         f"sudo docker pull -q {XRAY_IMAGE} >/dev/null || fail 'docker pull'",
@@ -744,6 +765,9 @@ def build_entry_script(transport: str, exit_ip: str, cascade_id: int, params: di
         'log "[5/5] проверка через шлюз"',
         *_check_lines(country),
         '[ -n "$EG" ] || fail "через выход интернет не открывается"',
+        (f"sudo {cascade_awg.SCRIPT} status | grep -q '^CASCADE_AWG=yes$' "
+         "|| fail 'AWG handshake or routing'" if transport == "awg" else ""),
+        cascade_awg.check_command() if transport == "awg" else _reality_encryption_command(),
         'log "выход в интернет: $EG"',
         # только теперь заворачиваем клиентов: до этого они ходили напрямую
         "sudo systemctl enable --now acontrol-cascade-tproxy.service >/dev/null 2>&1 "
@@ -762,6 +786,9 @@ def build_check_command(country: str = "") -> str:
     CASCADE_CLIENT - адрес изнутри VPN-контейнера, путем трафика клиентов: socks
     шлюза его не показывает, он идет в шлюз мимо tproxy и ip rule."""
     return "\n".join([
+        cascade_awg.check_command(),
+        CASCADE_PROBE_COMMAND,
+        _reality_encryption_command(),
         f"GW=$(sudo docker ps --format '{{{{.Names}}}}' | grep -qx {GATEWAY} && echo yes || echo no)",
         "TP=$(systemctl is-active acontrol-cascade-tproxy.service 2>/dev/null)",
         f"TUN=$(ip -br link show {GRE_IF} 2>/dev/null | awk '{{print $2}}')",
@@ -790,6 +817,32 @@ def build_check_command(country: str = "") -> str:
     ]) + "\n"
 
 
+def _reality_encryption_command() -> str:
+    """Inspect only the active gateway's mounted config; never print its keys."""
+    script = r'''
+import json,os,stat,subprocess
+try:
+    item=json.loads(subprocess.check_output(['docker','inspect','acontrol-cascade'],timeout=3))[0]
+    if item.get('State',{}).get('Running') is not True: raise ValueError()
+    mounts=[m for m in item.get('Mounts',[]) if m.get('Destination')=='/usr/local/etc/xray']
+    if len(mounts)!=1: raise ValueError()
+    path=os.path.realpath(mounts[0]['Source'])
+    if path not in ('/opt/acontrol/cascade/config','/opt/acontrol/cascade/boot'): raise ValueError()
+    fd=os.open(os.path.join(path,'config.json'),os.O_RDONLY|os.O_NONBLOCK|os.O_NOFOLLOW)
+    with os.fdopen(fd) as f:
+        meta=os.fstat(f.fileno())
+        if not stat.S_ISREG(meta.st_mode) or meta.st_size>1048576: raise ValueError()
+        cfg=json.loads(f.read(1048577))
+    out=[o for o in cfg.get('outbounds',[]) if o.get('tag')=='exit']
+    if len(out)==1 and out[0].get('protocol')=='vless' and out[0].get('streamSettings',{}).get('security')=='reality':
+        print('CASCADE_ENCRYPTION=reality')
+        print('CASCADE_ENCRYPTED=yes')
+except Exception:
+    pass
+'''
+    return "timeout 5s sudo -n python3 -c " + shlex.quote(script) + " 2>/dev/null;"
+
+
 def build_entry_upgrade() -> str:
     """Новые скрипты входа поверх старых: шлюз, туннель и клиентов не трогает.
     Недостающие правила ставит служба heal на первом же круге."""
@@ -797,7 +850,14 @@ def build_entry_upgrade() -> str:
     lines.append(_put(f"{DIR}/geo-update.sh", _fill(_GEO_SH), "755"))
     # GRE-скрипт только там, где каскад на GRE: его параметры уже лежат рядом
     lines.append(f"if [ -f {GRE_DEFAULTS} ]; then")
-    lines.append("  " + _put(f"{DIR}/gre-tun.sh", _fill(_GRE_TUN_SH), "755"))
+    # Externally managed GRE-over-AWG can relocate this path to a symlink and
+    # bind GRE to acawg. A generic script replacement would expose public GRE.
+    lines.append(f"  if ! sudo test -L {DIR}/gre-tun.sh && "
+                 "! sudo test -e /etc/systemd/system/acontrol-awg-link.service && "
+                 "! sudo test -e /lib65/scripts/acontrol-awg-link/node.json && "
+                 "! ip -d tunnel show acgre 2>/dev/null | grep -q 'dev acawg'; then")
+    lines.append("    " + _put(f"{DIR}/gre-tun.sh", _fill(_GRE_TUN_SH), "755"))
+    lines.append("  fi")
     lines.append("fi")
     lines += [
         _put("/etc/systemd/system/acontrol-cascade-heal.service", _fill(_HEAL_UNIT)),
@@ -842,12 +902,27 @@ def _ip_or_empty(value: str) -> str:
         return ""
 
 
-def check_result(kv: dict[str, str]) -> dict[str, str]:
+def encryption_result(kv: dict[str, str]) -> dict:
+    kind = kv.get("encryption", "unknown")
+    if kind not in ("awg", "reality", "none"):
+        kind = "unknown"
+    encrypted = {"yes": True, "no": False}.get(kv.get("encrypted", ""))
+    out = {"encryption": kind, "encrypted": encrypted, "handshake_age": None}
+    try:
+        age = int(kv["handshake"])
+        out["handshake_age"] = age if age >= 0 else None
+    except (KeyError, TypeError, ValueError):
+        pass
+    return out
+
+
+def check_result(kv: dict[str, str]) -> dict:
     """Адреса из вывода проверки: мусор вместо адреса (страница ошибки) - пусто."""
     return {
         "egress": _ip_or_empty(kv.get("egress", "")), "ru": _ip_or_empty(kv.get("ru", "")),
         "client": _ip_or_empty(kv.get("client", "")),
         "direct": _ip_or_empty(kv.get("direct", "")),
+        **encryption_result(kv),
     }
 
 
@@ -855,6 +930,10 @@ def health(transport: str, kv: dict[str, str], res: dict[str, str]) -> tuple[boo
     """Работает ли каскад по выводу проверки; при отказе - причина для человека."""
     if kv.get("gw") != "yes":
         return False, "шлюз на входе не запущен"
+    if transport == "awg" and kv.get("awg") != "yes":
+        return False, "канал AWG не подтвержден: проверьте рукопожатие и защиту маршрута"
+    if transport == "gre" and kv.get("linkhealth") == "no":
+        return False, "нет свежего рукопожатия защищенного канала AWG"
     if transport == "gre" and not kv.get("tun"):
         return False, "нет GRE-туннеля"
     # рабочий GRE-интерфейс Linux показывает как UNKNOWN (у него нет несущей),
@@ -885,21 +964,33 @@ def leaks(res: dict[str, str]) -> bool:
     return client == res["direct"] if res.get("direct") else True
 
 
-def build_remove_entry() -> str:
+def build_remove_entry(transport: str = "gre", cascade_id: int = 0) -> str:
     units = ("acontrol-cascade-heal.service acontrol-cascade-tproxy.service "
-             "acontrol-cascade-geo.timer acontrol-gre.service")
+             "acontrol-cascade-geo.timer")
+    if transport != "awg":
+        units += " acontrol-gre.service"
     return "\n".join([
+        cascade_awg.foreign_guard(),
+        cascade_awg.preflight_command(cascade_id) if transport == "awg" else "",
         f"sudo systemctl disable --now {units} >/dev/null 2>&1",
         f"sudo docker rm -f {GATEWAY} >/dev/null 2>&1",
+        cascade_awg.remove(cascade_id) if transport == "awg" else "",
+        "sudo rm -rf /etc/systemd/system/acontrol-cascade-tproxy.service.d/awg.conf",
         _remove_common(),
     ]) + "\n"
 
 
-def build_remove_exit() -> str:
+def build_remove_exit(transport: str = "gre", cascade_id: int = 0) -> str:
+    if transport == "awg":
+        return "\n".join([cascade_awg.preflight_command(cascade_id),
+                          cascade_awg.remove(cascade_id), _remove_common()]) + "\n"
     return "\n".join([
+        cascade_awg.foreign_guard(),
+        cascade_awg.preflight_command(cascade_id) if transport == "awg" else "",
         "sudo systemctl disable --now acontrol-gre.service >/dev/null 2>&1",
         f"sudo docker rm -f {EXIT_CONTAINER} >/dev/null 2>&1",
         f"sudo rm -rf {EXIT_DIR}",
+        cascade_awg.remove(cascade_id) if transport == "awg" else "",
         _remove_common(),
     ]) + "\n"
 

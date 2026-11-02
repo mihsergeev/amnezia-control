@@ -34,6 +34,7 @@ import { copyText } from './clipboard'
 import { countryFlag, formatBytes, formatUptime } from './format'
 import { CascadeWizard } from './CascadeWizard'
 import { CascadeCheckModal } from './CascadeCheck'
+import { cascadeTransportLabel } from './cascadeUi'
 import { EgressCheckModal } from './EgressCheck'
 import { TorrentLine } from './Torrent'
 import { translate, useI18n } from './i18n'
@@ -41,6 +42,7 @@ import {
   groupServerList, resolveServerSelection, serverListAnchors, serverListClients,
   serverListItems, serverListMatches, serverListProblem, serverSelectionFromHistory,
   serverSelectionParams, type ServerListItem, type ServerSelection,
+  cascadeNameParts, greLinkLabel, manualExitNameChange, serverListRoute, type ServerRouteNode,
 } from './serverList'
 
 const FALLBACK_USER = 'acontrol'
@@ -101,11 +103,24 @@ function GreBadge({ server, withRemote }: { server: Server; withRemote?: boolean
   const gre = greTunnels(server)
   if (gre.length === 0) return null
   const remotes = gre.map((x) => x.remote).join(', ')
+  const link = parseCheckInfo(server)?.cascade_link
+  const degraded = link?.encrypted === true && link.healthy === false
   return (
-    <span className="tun-badge" title={t('GRE-туннель до {ip}', { ip: remotes })}>
-      {withRemote ? `GRE → ${remotes}` : 'GRE'}
+    <span className={`tun-badge${degraded ? ' tun-badge-warn' : ''}`} title={degraded ? t('Связь требует проверки; шифрование сохраняется') : t('GRE-туннель до {ip}', { ip: remotes })}>
+      {withRemote ? `${greLinkLabel(server)} → ${remotes}` : greLinkLabel(server)}
     </span>
   )
+}
+
+function CascadeNodeName({ node }: { node: ServerRouteNode }) {
+  const name = cascadeNameParts(node.name)
+  return <span className="srv-cascade-node" title={`${node.name}: ${node.host}`}>
+    <span className="server-flag" title={node.country}>{countryFlag(node.country)}</span>
+    <span className="srv-cascade-label">
+      <span className="srv-cascade-primary">{name.primary}</span>
+      {name.suffix && <span className="srv-cascade-suffix">{name.suffix}</span>}
+    </span>
+  </span>
 }
 
 // Путь клиентов каскада, настроенного вручную: известен только адрес выхода.
@@ -173,7 +188,7 @@ function CascadeRoute({
         hint={t('Открыть сервер входа')}
       />
       <span className="srv-route-arrow">
-        <span className="tun-badge">{cascade.transport === 'gre' ? 'GRE' : 'VLESS'}</span>→
+        <span className="tun-badge">{cascade.transport === 'gre' ? greLinkLabel(entry) : cascadeTransportLabel(cascade.transport)}</span>→
       </span>
       <Hop
         className="srv-hop-exit"
@@ -733,6 +748,7 @@ export function ServersPage({ onUnauthorized }: Props) {
       torrent_block: server.torrent_block,
       torrent_autopause: server.torrent_autopause,
       alerts_enabled: server.alerts_enabled,
+      ...(parseCheckInfo(server)?.manual_cascade ? { manual_exit_name: parseCheckInfo(server)?.manual_cascade?.exit_name || '' } : {}),
     })
     setEditingId(server.id)
     setFormOpen(true)
@@ -796,9 +812,16 @@ export function ServersPage({ onUnauthorized }: Props) {
     try {
       if (editingId !== null) {
         setBusyLabel('Сохранение…')
+        const payload = { ...form }
+        if (payload.manual_exit_name !== undefined) {
+          const original = servers.find(server => server.id === editingId)
+          const oldName = original ? parseCheckInfo(original)?.manual_cascade?.exit_name || '' : ''
+          payload.manual_exit_name = manualExitNameChange(payload.manual_exit_name, oldName)
+          if (payload.manual_exit_name === undefined) delete payload.manual_exit_name
+        }
         await api<Server>(`/api/servers/${editingId}`, {
           method: 'PATCH',
-          body: JSON.stringify(form),
+          body: JSON.stringify(payload),
         })
         setFormOpen(false)
         await load()
@@ -1127,11 +1150,11 @@ export function ServersPage({ onUnauthorized }: Props) {
               const info = parseCheckInfo(server)
               const labels = protocolsFromContainers(info?.amnezia_containers ?? [], info?.protocols ?? {}).map((p) => p.label)
               return [server.name, server.host, server.note, server.group_name, ...labels].join(' ')
-            })
+            }, servers)
           }),
         }))
         .filter((g) => g.items.length > 0),
-    [groupList, onlyProblems, q, problem],
+    [groupList, onlyProblems, q, problem, servers],
   )
   const visibleFlat = visibleGroups.flatMap((g) => g.items)
   const problemCount = listed.filter(problem).length
@@ -1292,10 +1315,11 @@ export function ServersPage({ onUnauthorized }: Props) {
                       g.items.map((item) => {
                         const s = item.anchor
                         const cas = item.cascade
+                        const route = serverListRoute(item, servers)
                         const st = serverListClients([item], stats)
                         const draggable = !!s && !sharedAnchors.has(s.id)
-                        const routeTitle = cas
-                          ? `${item.entry?.name || cas.entry_ip}: ${item.entry?.host || cas.entry_ip} → ${item.exit?.name || cas.exit_ip}: ${item.exit?.host || cas.exit_ip}`
+                        const routeTitle = route
+                          ? `${route.entry.name}: ${route.entry.host} → ${route.exit.name}: ${route.exit.host}`
                           : item.members.map((server) => `${server.name}: ${server.host}`).join(' → ')
                         return (
                           <button
@@ -1307,7 +1331,7 @@ export function ServersPage({ onUnauthorized }: Props) {
                             aria-pressed={selectedItem?.key === item.key}
                             onClick={() => selectItem(item)}
                             title={routeTitle}
-                            aria-label={cas ? `${t('Каскад')} ${cas.transport === 'gre' ? 'GRE' : 'VLESS'}: ${routeTitle}${st.available ? `, ${st.online}/${st.total}` : ''}` : undefined}
+                            aria-label={route ? `${t('Каскад')}: ${routeTitle}${st.available ? `, ${st.online}/${st.total}` : ''}` : undefined}
                             onDragOver={(e) => {
                               if (s && draggable && dragServer.current != null) {
                                 e.preventDefault()
@@ -1340,17 +1364,11 @@ export function ServersPage({ onUnauthorized }: Props) {
                               </span>
                             )}
                             <ListStatusDot item={item} />
-                            {cas ? (
+                            {route ? (
                               <span className="srv-item-name srv-cascade-name">
-                                <span className="srv-cascade-node">
-                                  <span className="server-flag" title={item.entry?.country}>{countryFlag(item.entry?.country || '')}</span>
-                                  <span>{item.entry?.name || cas.entry_ip}</span>
-                                </span>
+                                <CascadeNodeName node={route.entry} />
                                 <span className="srv-cascade-arrow" aria-hidden="true">→</span>
-                                <span className="srv-cascade-node">
-                                  <span className="server-flag" title={item.exit?.country}>{countryFlag(item.exit?.country || '')}</span>
-                                  <span>{item.exit?.name || cas.exit_ip}</span>
-                                </span>
+                                <CascadeNodeName node={route.exit} />
                               </span>
                             ) : s && <>
                               {countryFlag(s.country) && <span className="server-flag" title={s.country}>{countryFlag(s.country)}</span>}
@@ -1476,6 +1494,15 @@ export function ServersPage({ onUnauthorized }: Props) {
                 ))}
               </datalist>
             </label>
+
+            {editingId !== null && form.manual_exit_name !== undefined && <>
+              <label>{t('Название выхода')}
+                <input value={form.manual_exit_name || ''} maxLength={128}
+                  onChange={e => setForm({ ...form, manual_exit_name: e.target.value })}
+                  placeholder={t('необязательно')} />
+              </label>
+              <p className="muted small">{t('В списке используется имя известного сервера, иначе это название или адрес выхода.')}</p>
+            </>}
 
             {editingId !== null && (
               <div className="torrent-opts">

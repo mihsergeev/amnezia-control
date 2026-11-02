@@ -157,6 +157,18 @@ async def test_not_ready_cascade_is_not_checked(factory, sent) -> None:
     assert calls == []
 
 
+async def test_missing_crypto_proof_is_cleared_even_when_egress_fails(factory, sent) -> None:
+    async with factory() as session:
+        c = await session.get(Cascade, 1)
+        c.result = json.dumps({"encryption": "awg", "encrypted": True, "handshake_age": 10})
+        await session.commit()
+    await cascadewatch.watch_once(factory, config.get_settings(), now=NOW, check=_check(NO_EXIT))
+    async with factory() as session:
+        result = json.loads((await session.get(Cascade, 1)).result)
+    assert result["encryption"] == "unknown"
+    assert result["encrypted"] is None and result["handshake_age"] is None
+
+
 async def test_cascade_changed_during_check(factory, sent) -> None:
     """Пока шла SSH-проверка, второй каскад удалили, а у третьего прошла ручная
     проверка: удаленный пропускаем, свежий result не затираем."""

@@ -1966,6 +1966,10 @@ button.linklike.srv-filter-only:hover {
   align-items: start;
 }
 
+.srv-split:has(.srv-cascade-name) {
+  grid-template-columns: fit-content(min(42vw, 560px)) minmax(0, 1fr);
+}
+
 .srv-side {
   min-width: 0;
   max-width: 100%;
@@ -2151,7 +2155,7 @@ button.srv-side-gh:hover .drag-handle {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
   align-items: center;
-  gap: 0.3rem;
+  gap: 0.22rem;
   white-space: nowrap;
   overflow-wrap: normal;
 }
@@ -2159,8 +2163,33 @@ button.srv-side-gh:hover .drag-handle {
 .srv-item-name > .srv-cascade-node {
   display: flex;
   align-items: center;
-  gap: 0.3rem;
+  gap: 0.22rem;
   min-width: 0;
+}
+
+.srv-cascade-node > .srv-cascade-label {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.srv-cascade-primary {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.srv-cascade-suffix {
+  flex: 0 100000 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: pre;
+  color: var(--text-muted);
+  font-weight: 400;
 }
 
 .srv-cascade-node > span:last-child {
@@ -2484,7 +2513,8 @@ button.srv-hop-selected {
 }
 
 @media (max-width: 900px) {
-  .srv-split {
+  .srv-split,
+  .srv-split:has(.srv-cascade-name) {
     grid-template-columns: minmax(0, 1fr);
   }
 
@@ -2785,6 +2815,31 @@ tr.row-link:hover td {
   margin: 0.2rem 0 0;
   line-height: 1.4;
 }
+
+.cas-port-options {
+  margin-top: 0.7rem;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 0.65rem 0.85rem;
+}
+
+.cas-port-options summary {
+  cursor: pointer;
+  font-size: 0.86rem;
+}
+
+.cas-security {
+  display: block;
+  margin: 0.35rem 0 0.7rem;
+  font-size: 0.82rem;
+  color: var(--text-muted);
+}
+
+.cas-security-confirmed { color: #6bd19b; }
+.cas-security-plain, .tun-badge-warn { color: #e9bd68; }
+[data-theme='light'] .cas-security-confirmed { color: #167447; }
+[data-theme='light'] .cas-security-plain,
+[data-theme='light'] .tun-badge-warn { color: #8a5d0e; }
 
 .cas-rec {
   margin-left: 0.5rem;

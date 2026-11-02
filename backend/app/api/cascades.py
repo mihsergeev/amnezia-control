@@ -3,13 +3,13 @@
 
 import json
 from contextlib import asynccontextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import asyncssh
 from fastapi import APIRouter, HTTPException, Request, status
 from sqlalchemy import select
 
-from app import audit, cascade, cascadejob, deploy, geo, nodelock, server_ops
+from app import audit, cascade, cascade_awg, cascadejob, deploy, geo, nodelock, server_ops
 from app.config import get_settings
 from app.deps import CurrentUser, SessionDep
 from app.models import Cascade, Server
@@ -58,12 +58,27 @@ async def _ipv4(host: str) -> str:
     return ""
 
 
-def _out(c: Cascade) -> CascadeOut:
+def _out(c: Cascade, entry: Server | None = None) -> CascadeOut:
     params = json.loads(c.params or "{}")
     result = json.loads(c.result or "{}")
     prog = cascadejob.progress(c.id)
     # на какой стороне упала установка - и после рестарта панели, когда хода в памяти нет
     phase = prog.get("phase", "") or (result.get("failed_phase", "") if c.status == "error" else "")
+    encryption = cascade.encryption_result({
+        "encryption": result.get("encryption", "unknown"),
+        "encrypted": {True: "yes", False: "no"}.get(result.get("encrypted"), ""),
+    })
+    if c.transport == "gre" and entry is not None and entry.last_check_at:
+        checked = entry.last_check_at.replace(tzinfo=timezone.utc) if entry.last_check_at.tzinfo is None else entry.last_check_at
+        age = datetime.now(timezone.utc) - checked
+        if timedelta(0) <= age <= timedelta(minutes=5):
+            try:
+                info = json.loads(entry.last_check_info or "{}")
+                link = info.get("cascade_link", {}) if isinstance(info, dict) else {}
+            except (ValueError, TypeError):
+                link = {}
+            if isinstance(link, dict) and link.get("transport") == "awg" and isinstance(link.get("encrypted"), bool):
+                encryption = {"encryption": "awg", "encrypted": link["encrypted"]}
     return CascadeOut(
         id=c.id,
         entry_server_id=c.entry_server_id,
@@ -75,6 +90,9 @@ def _out(c: Cascade) -> CascadeOut:
         log=prog.get("log", ""),
         entry_ip=params.get("entry_ip", ""),
         exit_ip=params.get("exit_ip", ""),
+        entry_port=params.get("entry_port"),
+        exit_port=params.get("exit_port"),
+        **encryption,
         probe=json.loads(c.probe or "{}"),
         result=result,
         created_at=c.created_at,
@@ -138,7 +156,10 @@ async def list_cascades(_: CurrentUser, session: SessionDep) -> list[CascadeOut]
     rows = (await session.execute(select(Cascade).order_by(Cascade.id))).scalars().all()
     for c in rows:
         await _settle(session, c)
-    return [_out(c) for c in rows]
+    entries = {s.id: s for s in await session.scalars(select(Server).where(
+        Server.id.in_({c.entry_server_id for c in rows})
+    ))} if rows else {}
+    return [_out(c, entries.get(c.entry_server_id)) for c in rows]
 
 
 @router.post("/probe", response_model=CascadeProbeOut)
@@ -171,6 +192,31 @@ async def _vless_port(conn) -> int:
     )
 
 
+async def _awg_preflight(conn, cascade_id: int | None = None) -> None:
+    res = await conn.run(cascade_awg.preflight_command(cascade_id), check=False, timeout=20)
+    if "CASCADE_AVAILABLE" not in (res.stdout or ""):
+        raise HTTPException(status.HTTP_409_CONFLICT,
+                            "На сервере уже есть внешний туннель или заняты ресурсы AWG каскада")
+
+
+async def _awg_port(conn, requested: int | None) -> int:
+    for port in (requested,) if requested is not None else cascade_awg.PORTS:
+        if await deploy.port_owner(conn, port, "udp") is None:
+            return port
+    raise HTTPException(status.HTTP_409_CONFLICT,
+                        "UDP-порт для канала AWG занят. Укажите другой порт")
+
+
+async def _external_preflight(conn) -> None:
+    result = await conn.run(cascade_awg.foreign_guard() + "echo CASCADE_AVAILABLE\n",
+                            check=False, timeout=20)
+    if "CASCADE_EXTERNAL_UNDERLAY" in (result.stdout or ""):
+        raise HTTPException(status.HTTP_409_CONFLICT,
+                            "Канал защищен внешним AWG helper. Сначала отключите его штатным способом")
+    if "CASCADE_AVAILABLE" not in (result.stdout or ""):
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, "Не удалось проверить существующий канал")
+
+
 @router.post("", response_model=CascadeOut, status_code=status.HTTP_202_ACCEPTED)
 async def create(
     body: CascadeCreate, request: Request, user: CurrentUser, session: SessionDep
@@ -186,6 +232,15 @@ async def create(
             if body.transport == "vless":
                 params |= cascade.new_vless_params()
                 params["port"] = await _vless_port(xc)
+            elif body.transport == "awg":
+                # The endpoint/firewall peer is the server's reachable address,
+                # not a cloud VM's private source address behind provider NAT.
+                params["entry_ip"] = await _ipv4(entry.host) or entry_ip
+                await _awg_preflight(ec)
+                await _awg_preflight(xc)
+                params |= cascade_awg.new_params()
+                params["entry_port"] = await _awg_port(ec, body.entry_port)
+                params["exit_port"] = await _awg_port(xc, body.exit_port)
             c = Cascade(
                 entry_server_id=entry.id,
                 exit_server_id=exit_.id,
@@ -211,7 +266,7 @@ async def create(
 async def get_cascade(cascade_id: int, _: CurrentUser, session: SessionDep) -> CascadeOut:
     c = await _get_or_404(cascade_id, session)
     await _settle(session, c)
-    return _out(c)
+    return _out(c, await session.get(Server, c.entry_server_id))
 
 
 @router.post("/{cascade_id}/install", response_model=CascadeOut,
@@ -222,11 +277,26 @@ async def reinstall(
     c = await _get_or_404(cascade_id, session)
     if cascadejob.running(c.id):
         raise HTTPException(status.HTTP_409_CONFLICT, "Установка уже идет")
-    c.status = "installing"
-    c.error = ""
-    await session.commit()
-    cascadejob.spawn(request.app, c.id)
     entry = await session.get(Server, c.entry_server_id)
+    exit_ = await session.get(Server, c.exit_server_id)
+    if entry is None or exit_ is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Сервер не найден")
+    try:
+        async with _locked_pair(entry, exit_) as (ec, xc):
+            if cascadejob.running(c.id):
+                raise HTTPException(status.HTTP_409_CONFLICT, "Установка уже идет")
+            if c.transport == "awg":
+                await _awg_preflight(ec, c.id)
+                await _awg_preflight(xc, c.id)
+            else:
+                await _external_preflight(ec)
+                await _external_preflight(xc)
+            c.status = "installing"
+            c.error = ""
+            await session.commit()
+            cascadejob.spawn(request.app, c.id)
+    except Exception as exc:  # noqa: BLE001
+        raise _ssh_error(exc) from exc
     await audit.record(
         session, user.username, "cascade_install", entry.name if entry else str(c.id), "",
     )
@@ -255,15 +325,20 @@ async def check(cascade_id: int, _: CurrentUser, session: SessionDep) -> Cascade
             entry, await server_ops.describe_egress(entry.host, res["client"] or res["egress"]), now
         )
     await session.commit()
-    tunnel = kv.get("tun", "") if c.transport == "gre" else ""
+    tunnel = kv.get("tun", "") if c.transport == "gre" else (
+        "UP" if kv.get("awg") == "yes" else "DOWN"
+    ) if c.transport == "awg" else ""
     gateway = kv.get("gw") == "yes"
     tproxy = kv.get("tproxy") == "active"
     rule = kv.get("rule") != "no" and (c.transport != "gre" or kv.get("grerule") != "no")
+    if c.transport == "awg":
+        rule = rule and kv.get("awg") == "yes"
     ok, _reason = cascade.health(c.transport, kv, res)
     return CascadeCheckOut(
         ok=ok, gateway=gateway, tproxy=tproxy, rule=rule, tunnel=tunnel,
         egress=res["egress"], ru=res["ru"], client=res["client"], direct=res["direct"],
         leak=cascade.leaks(res), checked_at=now,
+        **cascade.encryption_result(kv),
     )
 
 
@@ -274,6 +349,9 @@ async def _dismantle(server: Server, script: str) -> str:
             r = await conn.run(script, check=False, timeout=120)
     except Exception as exc:  # noqa: BLE001
         return f"«{server.name}»: {_ssh_error(exc).detail}"
+    if "CASCADE_EXTERNAL_UNDERLAY" in (r.stdout or ""):
+        raise HTTPException(status.HTTP_409_CONFLICT,
+                            "Канал защищен внешним AWG helper. Сначала отключите его штатным способом")
     if "CASCADE_REMOVED=yes" not in (r.stdout or ""):
         return f"«{server.name}»: {(r.stderr or r.stdout or '').strip()[-300:]}"
     return ""
@@ -292,15 +370,15 @@ async def delete(
     errors: list[str] = []
     # сначала вход: клиенты сразу пойдут напрямую, а не в разобранный выход
     if entry is not None:
-        script = cascade.build_remove_entry() + cascade.ufw_cleanup(
-            params.get("exit_ip", ""), None
-        )
+        script = cascade.build_remove_entry(c.transport, c.id)
+        if c.transport != "awg":
+            script += cascade.ufw_cleanup(params.get("exit_ip", ""), None)
         if err := await _dismantle(entry, script):
             errors.append(err)
     if exit_ is not None:
-        script = cascade.build_remove_exit() + cascade.ufw_cleanup(
-            params.get("entry_ip", ""), params.get("port")
-        )
+        script = cascade.build_remove_exit(c.transport, c.id)
+        if c.transport != "awg":
+            script += cascade.ufw_cleanup(params.get("entry_ip", ""), params.get("port"))
         if err := await _dismantle(exit_, script):
             errors.append(err)
     if errors and not force:

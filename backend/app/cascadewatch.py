@@ -125,6 +125,9 @@ async def watch_once(session_factory, settings: Settings, *, now: datetime | Non
                     health["since"] = stamp.isoformat()
                     health["alerted"] = False
             result["health"] = health
+            # A missing/timed-out runtime proof invalidates the old crypto
+            # observation even when the egress probe also failed.
+            result.update(cascade.encryption_result(kv))
             if res["egress"]:
                 result.update(res, checked_at=stamp.isoformat())
             fresh.result = json.dumps(result)

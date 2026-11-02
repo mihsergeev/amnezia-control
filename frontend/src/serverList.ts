@@ -1,4 +1,56 @@
-import type { Cascade, Server, ServerStat } from './api'
+import type { Cascade, CheckInfo, Server, ServerStat } from './api'
+
+export type ServerRouteNode = { name: string; host: string; country: string }
+export type ServerListRoute = { entry: ServerRouteNode; exit: ServerRouteNode; manual: boolean }
+
+function checkedInfo(server?: Server): CheckInfo | null {
+  try {
+    const value: unknown = JSON.parse(server?.last_check_info || 'null')
+    return value && typeof value === 'object' && !Array.isArray(value) ? value as CheckInfo : null
+  } catch { return null }
+}
+
+// Descriptive suffixes give up space before the actual hostname. Keep the full
+// original name for tooltips, search and accessibility, without editing data.
+export function cascadeNameParts(name: string): { primary: string; suffix: string } {
+  const match = /^([a-z\d][a-z\d._-]*)(\s+(?:[-–—]\s+|\().*)$/i.exec(name)
+  return match && /[.-]/.test(match[1])
+    ? { primary: match[1], suffix: match[2] }
+    : { primary: name, suffix: '' }
+}
+
+// An unchanged alias must not accompany an unrelated address edit: aliases are
+// bound to the configured endpoint and the backend invalidates them on host change.
+export function manualExitNameChange(value: string | null | undefined, original: string): string | undefined {
+  const name = value?.trim() || ''
+  return name === original.trim() ? undefined : name
+}
+
+export function serverListRoute(item: ServerListItem, servers: Server[]): ServerListRoute | null {
+  const c = item.cascade
+  const node = (server: Server | undefined, host: string): ServerRouteNode => ({ name: server?.name || host, host: server?.host || host, country: server?.country || '' })
+  if (c) return { entry: node(item.entry, c.entry_ip), exit: node(item.exit, c.exit_ip), manual: false }
+  const entry = item.anchor
+  if (!entry) return null
+  const info = checkedInfo(entry)
+  const manual = info?.manual_cascade
+  const peer = typeof manual?.exit_host === 'string' ? manual.exit_host.trim() : ''
+  const gre = Array.isArray(info?.tunnels) && info.tunnels.some(t => t && t.kind === 'gre')
+  const abroad = !!entry.egress_ip && !!entry.egress_country && !!entry.country && entry.egress_country !== entry.country
+  if (!peer && !gre && !abroad) return null
+  const host = peer || entry.egress_ip
+  if (!host) return null
+  const exit = servers.find(s => s.id !== entry.id && s.host.toLowerCase() === host.toLowerCase())
+  return { entry: node(entry, entry.host), exit: {
+    name: exit?.name || (typeof manual?.exit_name === 'string' && manual.exit_name.trim()) || host,
+    host, country: exit?.country || (typeof manual?.exit_country === 'string' ? manual.exit_country : '') || (!peer || host === entry.egress_ip ? entry.egress_country : ''),
+  }, manual: true }
+}
+
+export function greLinkLabel(server?: Server): string {
+  const link = checkedInfo(server)?.cascade_link
+  return link?.transport === 'awg' && link.encrypted === true ? 'GRE + AWG' : 'GRE'
+}
 
 export type ServerListItem = {
   key: string
@@ -59,9 +111,10 @@ export function serverListProblem(item: ServerListItem, problem: (server: Server
   return item.members.some(problem)
 }
 
-export function serverListMatches(item: ServerListItem, query: string, text: (server: Server) => string): boolean {
+export function serverListMatches(item: ServerListItem, query: string, text: (server: Server) => string, servers: Server[] = []): boolean {
   const cascade = item.cascade
-  return [cascade?.entry_ip, cascade?.exit_ip, cascade?.transport, ...item.members.map(text)]
+  const route = serverListRoute(item, servers)
+  return [cascade?.entry_ip, cascade?.exit_ip, cascade?.transport, route?.exit.name, route?.exit.host, ...item.members.map(text)]
     .join(' ').toLowerCase().includes(query.trim().toLowerCase())
 }
 
