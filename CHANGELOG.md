@@ -4,6 +4,13 @@ All notable changes to Amnezia Control are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.83.3] - 2026-11-02
+
+### Fixed
+- Check AmneziaWG 3.1, VLESS Reality and GRE independently through temporary isolated tunnels, with measured results or an explicit unavailable status for each transport.
+- Show each completed channel check immediately, with actual running and queued states instead of estimated progress. Keep results tied to their transport and tested UDP ports.
+- Measure received data and transfer time separately for each tunnel, distinguish incomplete transfers from successful checks, and clean up temporary resources without changing existing VPN clients or configurations.
+
 ## [0.83.2] - 2026-11-02
 
 ### Changed

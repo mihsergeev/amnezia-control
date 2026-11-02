@@ -1,6 +1,7 @@
 """Каскады из двух серверов: проверка канала, установка, проверка и разборка
 (см. app/cascade.py и app/cascadejob.py)."""
 
+import asyncio
 import json
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
@@ -9,7 +10,7 @@ import asyncssh
 from fastapi import APIRouter, HTTPException, Request, status
 from sqlalchemy import select
 
-from app import audit, cascade, cascade_awg, cascadejob, deploy, geo, nodelock, server_ops
+from app import audit, cascade, cascade_awg, cascade_probe, cascadejob, deploy, geo, nodelock, server_ops
 from app.config import get_settings
 from app.deps import CurrentUser, SessionDep
 from app.models import Cascade, Server
@@ -19,6 +20,8 @@ from app.schemas import (
     CascadeOut,
     CascadePair,
     CascadeProbeOut,
+    CascadeTransportProbe,
+    CascadeTransportProbeOut,
 )
 
 router = APIRouter(prefix="/cascades", tags=["cascades"])
@@ -167,6 +170,7 @@ async def probe(body: CascadePair, _: CurrentUser, session: SessionDep) -> Casca
     entry, exit_ = await _pair(body, session)
     try:
         async with _locked_pair(entry, exit_) as (ec, xc):
+            await _ensure_free(session, entry, exit_)
             entry_ip, exit_ip = await _addresses(ec, entry, exit_)
             res = await cascade.probe(xc, ec, entry_ip, exit_ip)
     except Exception as exc:  # noqa: BLE001
@@ -179,6 +183,72 @@ async def probe(body: CascadePair, _: CurrentUser, session: SessionDep) -> Casca
         tcp=res["tcp"], gre=res["gre"], recommend=res["recommend"],
         entry_nat=res.get("entry_nat", False), exit_nat=res.get("exit_nat", False),
     )
+
+
+@router.post("/probe-transport", response_model=CascadeTransportProbeOut)
+async def probe_transport(
+    body: CascadeTransportProbe, request: Request, _: CurrentUser, session: SessionDep,
+) -> CascadeTransportProbeOut:
+    entry, exit_ = await _pair(body, session)
+    first, second = sorted((entry.id, exit_.id))
+    try:
+        # A repeated click must not queue another expensive remote measurement.
+        async with nodelock.hold("cascade", first, wait=0.1), nodelock.hold("cascade", second, wait=0.1):
+            async with _locked_pair(entry, exit_) as (ec, xc):
+                await _ensure_free(session, entry, exit_)
+                entry_source, exit_ip = await _addresses(ec, entry, exit_)
+                entry_ip = await _ipv4(entry.host) or entry_source
+                if cascade._is_public(entry_ip) and not cascade._is_public(entry_source):
+                    entry_source = entry_ip
+                entry_addresses = await server_ops._host_addrs(entry.host)
+                exit_addresses = await server_ops._host_addrs(exit_.host)
+                if entry_ip == exit_ip or entry_addresses & exit_addresses:
+                    raise HTTPException(status.HTTP_400_BAD_REQUEST,
+                                        "Вход и выход указывают на один сервер")
+                nat = {
+                    "entry_nat": cascade.behind_nat(await cascade._route_src(ec, exit_ip), entry_ip),
+                    "exit_nat": cascade.behind_nat(await cascade._route_src(xc, entry_ip), exit_ip),
+                }
+                task = asyncio.create_task(cascade_probe.run(
+                    xc, ec, entry_ip, exit_ip, body.transport, body.entry_port, body.exit_port,
+                    entry_source_ip=entry_source,
+                ))
+                try:
+                    while not task.done():
+                        await asyncio.wait({task}, timeout=0.25)
+                        if not task.done() and await request.is_disconnected():
+                            task.cancel()
+                            try:
+                                await task
+                            except asyncio.CancelledError:
+                                pass
+                            raise HTTPException(499, "Проверка отменена")
+                    res = await task
+                    res["checked_at"] = datetime.now(timezone.utc).isoformat()
+                finally:
+                    if not task.done():
+                        task.cancel()
+                        try:
+                            await task
+                        except asyncio.CancelledError:
+                            pass
+    except Exception as exc:  # noqa: BLE001
+        raise _ssh_error(exc) from exc
+    country, org = exit_.country or "", ""
+    try:
+        found_country, org = await geo.ip_info(exit_ip)
+        country = found_country or country
+    except Exception:  # noqa: BLE001 — enrichment cannot invalidate measurement
+        pass
+    res |= {"entry_ip": entry_ip, "exit_ip": exit_ip, "exit_country": country,
+            "exit_org": org, **nat}
+    # Explicit transport/run markers distinguish these measurements from the
+    # legacy plain-TCP prerequisite. No keys/configuration enter this cache.
+    cached = _last_probe.setdefault((entry.id, exit_.id), {})
+    previous = cached.get(body.transport, {})
+    if not isinstance(previous, dict) or str(previous.get("checked_at", "")) <= res["checked_at"]:
+        cached[body.transport] = res.copy()
+    return CascadeTransportProbeOut(**res)
 
 
 async def _vless_port(conn) -> int:
@@ -217,6 +287,31 @@ async def _external_preflight(conn) -> None:
         raise HTTPException(status.HTTP_502_BAD_GATEWAY, "Не удалось проверить существующий канал")
 
 
+def _bound_probe(raw: dict, transport: str, params: dict) -> dict:
+    """Keep new measurements only for the endpoints/ports actually installed.
+
+    The legacy TCP prerequisite has no transport marker and remains compatible.
+    Filtering this snapshot must never modify another wizard's in-memory cache.
+    """
+    bound = {}
+    for name, result in raw.items():
+        if not isinstance(result, dict) or "measurement" not in result:
+            bound[name] = result
+            continue
+        if result.get("measurement") != name or name not in cascade.TRANSPORTS:
+            continue
+        if any(result.get(key) != params.get(key) for key in ("entry_ip", "exit_ip")):
+            continue
+        if name == transport == "awg" and any(
+            result.get(key) != params.get(key) for key in ("entry_port", "exit_port")
+        ):
+            continue
+        if name == transport == "vless" and result.get("exit_port") != params.get("port"):
+            continue
+        bound[name] = result.copy()
+    return bound
+
+
 @router.post("", response_model=CascadeOut, status_code=status.HTTP_202_ACCEPTED)
 async def create(
     body: CascadeCreate, request: Request, user: CurrentUser, session: SessionDep
@@ -247,7 +342,8 @@ async def create(
                 transport=body.transport,
                 status="installing",
                 params=json.dumps(params),
-                probe=json.dumps(_last_probe.get((entry.id, exit_.id), {})),
+                probe=json.dumps(_bound_probe(_last_probe.get((entry.id, exit_.id), {}),
+                                             body.transport, params)),
             )
             session.add(c)
             await session.commit()
