@@ -1129,32 +1129,15 @@ async def probe_tcp(exit_conn, entry_conn, entry_ip: str, exit_ip: str) -> dict:
         await exit_conn.run(f"sudo iptables -D {allow}", check=False)
 
 
-async def _tmp_gre(conn, peer: str, inner: str) -> list[str]:
-    """Временный туннель для проверки; возвращает команды уборки."""
-    rules = [f"INPUT -p gre -s {peer} -j ACCEPT", f"INPUT -i {PROBE_GRE_IF} -j ACCEPT"]
-    script = "\n".join([
-        f"LOCAL=$(ip -4 route get {peer} | {_SRC_OF} | head -1)",
-        "sudo modprobe ip_gre 2>/dev/null",
-        f"sudo ip link del {PROBE_GRE_IF} 2>/dev/null",
-        f'sudo ip tunnel add {PROBE_GRE_IF} mode gre local "$LOCAL" remote {peer} ttl 64',
-        f"sudo ip addr add {inner} dev {PROBE_GRE_IF}",
-        f"sudo ip link set {PROBE_GRE_IF} mtu 1476 up",
-        f"sudo sysctl -qw net.ipv4.conf.{PROBE_GRE_IF}.rp_filter=2",
-        *[f"sudo iptables -I {r}" for r in rules],
-    ])
-    await conn.run(script, check=False)
-    return [f"sudo iptables -D {r}" for r in rules] + [f"sudo ip link del {PROBE_GRE_IF}"]
-
-
 async def probe_gre(exit_conn, entry_conn, entry_ip: str, exit_ip: str) -> dict:
-    port = random.randint(40000, 49999)
-    undo_exit = await _tmp_gre(exit_conn, entry_ip, "10.98.255.2/30")
-    undo_entry = await _tmp_gre(entry_conn, exit_ip, "10.98.255.1/30")
-    try:
-        return await _pair(exit_conn, entry_conn, "10.98.255.2", "10.98.255.2", port)
-    finally:
-        await exit_conn.run("; ".join(undo_exit) + "; true", check=False)
-        await entry_conn.run("; ".join(undo_entry) + "; true", check=False)
+    # Keep the legacy response, but share the owned/leased GRE implementation.
+    # A fixed interface must never delete an unrelated preexisting tunnel.
+    from app import cascade_probe
+
+    result = await cascade_probe.run(exit_conn, entry_conn, entry_ip, exit_ip, "gre")
+    return {"ok": result["ok"] is True, "bytes": result["bytes"],
+            "secs": result["secs"] or 0, "mbps": round(result["mbps"] or 0),
+            "error": result["error"]}
 
 
 def recommend(tcp: dict, gre: dict) -> str:

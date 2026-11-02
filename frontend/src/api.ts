@@ -949,6 +949,29 @@ export type CascadeProbe = {
   exit_nat: boolean
 }
 
+export type CascadeTransportProbe = {
+  transport: CascadeTransport
+  measurement: CascadeTransport
+  run_id: string
+  requested_bytes: number
+  status: 'ok' | 'failed' | 'unavailable'
+  ok: boolean | null
+  bytes: number
+  secs: number | null
+  mbps: number | null
+  error: string
+  checked_at: string
+  entry_ip: string
+  exit_ip: string
+  exit_country: string
+  exit_org: string
+  entry_nat: boolean
+  exit_nat: boolean
+  entry_port?: number | null
+  exit_port?: number | null
+  prerequisite_tcp?: { ok: boolean; error: string }
+}
+
 export type Cascade = {
   id: number
   entry_server_id: number
@@ -964,7 +987,12 @@ export type Cascade = {
   log: string
   entry_ip: string
   exit_ip: string
-  probe: Partial<CascadeProbe> & { checked_at?: string }
+  probe: Partial<Omit<CascadeProbe, 'gre'>> & {
+    checked_at?: string
+    gre?: ProbeSide | CascadeTransportProbe
+    awg?: CascadeTransportProbe
+    vless?: CascadeTransportProbe
+  }
   result: {
     egress?: string
     ru?: string
@@ -1040,6 +1068,17 @@ export function probeCascade(entryId: number, exitId: number): Promise<CascadePr
   return api<CascadeProbe>('/api/cascades/probe', {
     method: 'POST',
     body: JSON.stringify({ entry_id: entryId, exit_id: exitId }),
+  })
+}
+
+export function probeCascadeTransport(
+  entryId: number, exitId: number, transport: CascadeTransport,
+  ports?: { entry_port: number | null; exit_port: number | null },
+  signal?: AbortSignal,
+): Promise<CascadeTransportProbe> {
+  return api('/api/cascades/probe-transport', {
+    method: 'POST', signal,
+    body: JSON.stringify({ entry_id: entryId, exit_id: exitId, transport, ...(transport === 'awg' ? ports : {}) }),
   })
 }
 

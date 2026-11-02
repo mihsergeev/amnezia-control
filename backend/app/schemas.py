@@ -752,6 +752,33 @@ class CascadeProbeOut(BaseModel):
     exit_nat: bool = False
 
 
+class CascadeTransportProbe(CascadeCreate):
+    """One independent temporary transport measurement."""
+
+
+class CascadeTransportProbeOut(BaseModel):
+    transport: Literal["awg", "vless", "gre"]
+    measurement: Literal["awg", "vless", "gre"]
+    run_id: str
+    requested_bytes: int
+    status: Literal["ok", "failed", "unavailable"]
+    ok: bool | None
+    bytes: int = 0
+    secs: float | None = None
+    mbps: float | None = None
+    error: str = ""
+    entry_ip: str
+    exit_ip: str
+    exit_country: str = ""
+    exit_org: str = ""
+    entry_nat: bool = False
+    exit_nat: bool = False
+    checked_at: datetime
+    entry_port: int | None = None
+    exit_port: int | None = None
+    prerequisite_tcp: dict | None = None
+
+
 class CascadeOut(BaseModel):
     id: int
     entry_server_id: int

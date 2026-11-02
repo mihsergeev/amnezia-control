@@ -6,17 +6,20 @@ import {
   getCascade,
   inCascade,
   parseCheckInfo,
-  probeCascade,
+  probeCascadeTransport,
   reinstallCascade,
   type Cascade,
-  type CascadeProbe,
+  type CascadeTransportProbe,
   type CascadeTransport,
-  type ProbeSide,
   type Server,
 } from './api'
 import { copyText } from './clipboard'
 import { countryFlag, formatBytes } from './format'
-import { cascadePort, cascadeTransportLabel, DEFAULT_CASCADE_TRANSPORT } from './cascadeUi'
+import {
+  cascadeMeasurement, cascadePort, cascadeTransportLabel, DEFAULT_CASCADE_TRANSPORT, formatProbeMetric,
+  probeRowTone, queuedProbeRows, runTransportProbes, testedAwgPorts,
+  type TransportProbeRow, type TransportProbeRows,
+} from './cascadeUi'
 import { CascadeSecurity } from './CascadeSecurity'
 import { useI18n } from './i18n'
 import { useModalDismiss } from './useModalDismiss'
@@ -41,74 +44,30 @@ const STEPS: { key: Step; label: string }[] = [
   { key: 'install', label: '4. Установка' },
 ]
 
-function probeText(t: ReturnType<typeof useI18n>['t'], p: ProbeSide): string {
-  if (p.ok) {
-    return t('{size} за {secs} с, ~{mbps} Мбит/с', {
-      size: formatBytes(p.bytes),
-      secs: p.secs,
-      mbps: p.mbps,
-    })
-  }
-  if (p.error) return p.error
-  return p.bytes > 0
-    ? t('замерзает на {size}', { size: formatBytes(p.bytes) })
-    : t('не проходит')
-}
-
-// проверка канала на сервере: подготовка, потом TCP и GRE по очереди, по 15 с
-// передачи (cascade.PROBE_SECONDS) плюс подключение и подъем туннеля. Ответ
-// один на все, поэтому ход показываем по времени, а результат - когда пришел
-const PROBE_BYTES = 20 * 1024 * 1024
-const PROBE_PHASES = { tcp: [2, 19], gre: [19, 38] } as const
-
-function phasePct(elapsed: number, [from, to]: readonly [number, number]): number {
-  return Math.max(0, Math.min(100, ((elapsed - from) / (to - from)) * 100))
-}
-
-// полоса одного способа связи: идет - бегущие штрихи до расчетной доли, готово -
-// сколько из 20 мб дошло до выхода (замерзший канал - красный огрызок)
-function ProbeBar({
-  label,
-  pct,
-  result,
-  allDone,
-}: {
-  label: string
-  pct: number
-  result: ProbeSide | null
-  // расчетное время всей проверки вышло, ждем только ответа
-  allDone: boolean
-}) {
-  const { t } = useI18n()
-  const state = result
-    ? result.ok
-      ? 'ok'
-      : 'bad'
-    : pct <= 0
-      ? 'wait'
-      : pct >= 100
-        ? 'held'
-        : 'run'
-  const width = result ? Math.max(3, Math.min(100, (result.bytes / PROBE_BYTES) * 100)) : pct
+function TransportProbeStatus({ row }: { row: TransportProbeRow }) {
+  const { t, lang } = useI18n()
+  const tone = probeRowTone(row)
+  const result = row.result
+  const text = row.state === 'queued' ? t('В очереди')
+    : row.state === 'running' ? t('Проверяется…')
+    : row.state === 'error' ? t(row.error)
+    : row.state === 'unavailable' ? t(result?.error || row.error || 'Проверка недоступна')
+    : result?.ok ? t('Данные прошли') : t(result?.error || 'Данные не прошли')
   return (
-    <div className={`cas-pbar cas-pbar-${state}`}>
-      <div className="cas-probe-row">
-        <span>{label}</span>
-        <span className={result ? (result.ok ? 'ok-text' : 'err-text') : 'muted'}>
-          {result
-            ? probeText(t, result)
-            : state === 'wait'
-              ? t('в очереди')
-              : state === 'held'
-                ? allDone
-                  ? t('жду ответ сервера…')
-                  : t('передано, итог в конце')
-                : t('гоню данные со входа на выход…')}
-        </span>
+    <div className={`cas-transport-probe cas-probe-${tone}`} data-probe-state={row.state} aria-live="polite" aria-busy={row.state === 'running'}>
+      <div className="cas-transport-status">
+        <span aria-hidden="true">{tone === 'ok' ? '✓' : tone === 'bad' ? '✕' : row.state === 'running' ? '●' : '○'}</span>
+        <span>{text}</span>
       </div>
-      <div className="cas-pbar-track">
-        <div className="cas-pbar-fill" style={{ width: `${width}%` }} />
-      </div>
+      {result && result.bytes > 0 && <div className="muted small">
+        {result.ok && result.secs != null && result.mbps != null
+          ? t('{size} за {secs} с, ~{mbps} Мбит/с', { size: formatBytes(result.bytes), secs: formatProbeMetric(result.secs, lang, 'secs'), mbps: formatProbeMetric(result.mbps, lang, 'mbps') })
+          : t('Получено: {size}', { size: formatBytes(result.bytes) })}
+      </div>}
+      {result?.prerequisite_tcp && result.ok !== true && <div className="muted small">
+        {result.prerequisite_tcp.ok ? t('Предварительное TCP-соединение доступно; это не замер VLESS.') : t('Предварительное TCP-соединение недоступно.')}
+      </div>}
+      {row.state === 'running' && <div className="cas-probe-indeterminate" aria-hidden="true" />}
     </div>
   )
 }
@@ -151,7 +110,7 @@ export function CascadeWizard({
   onChanged,
   onUnauthorized,
 }: Props) {
-  const { t } = useI18n()
+  const { t, lang } = useI18n()
   const dismiss = useModalDismiss(onClose)
   const [step, setStep] = useState<Step>(
     resume ? (resume.status === 'ready' ? 'done' : 'install') : 'entry',
@@ -166,10 +125,10 @@ export function CascadeWizard({
   const [nfMode, setNfMode] = useState<'password' | 'script'>('password')
   const [script, setScript] = useState<{ server: Server; text: string } | null>(null)
   const [copied, setCopied] = useState(false)
-  const [probe, setProbe] = useState<CascadeProbe | null>(null)
-  // когда началась проверка канала (null - не идет) и сколько прошло, с
-  const [probeAt, setProbeAt] = useState<number | null>(null)
-  const [probeSecs, setProbeSecs] = useState(0)
+  const [probe, setProbe] = useState<CascadeTransportProbe | null>(null)
+  const [probeRows, setProbeRows] = useState<TransportProbeRows>(queuedProbeRows)
+  const probeController = useRef<AbortController | null>(null)
+  const probeGeneration = useRef(0)
   const [transport, setTransport] = useState<CascadeTransport>(DEFAULT_CASCADE_TRANSPORT)
   const [entryPort, setEntryPort] = useState('')
   const [exitPort, setExitPort] = useState('')
@@ -282,29 +241,54 @@ export function CascadeWizard({
   }
 
   useEffect(() => {
-    if (probeAt == null) return
-    const id = window.setInterval(() => setProbeSecs((Date.now() - probeAt) / 1000), 150)
-    return () => window.clearInterval(id)
-  }, [probeAt])
+    return () => {
+      probeGeneration.current += 1
+      probeController.current?.abort()
+    }
+  }, [])
 
   async function runProbe(eId = entryId, xId = exitId) {
     if (eId == null || xId == null) return
+    const ports = { entry_port: cascadePort(entryPort), exit_port: cascadePort(exitPort) }
+    if (ports.entry_port === undefined || ports.exit_port === undefined) {
+      setError(t('UDP-порт должен быть целым числом от 1 до 65535 или пустым для автовыбора.'))
+      return
+    }
+    const generation = ++probeGeneration.current
+    probeController.current?.abort()
+    const controller = new AbortController()
+    probeController.current = controller
     setBusy(true)
     setError(null)
     setProbe(null)
-    setProbeSecs(0)
-    setProbeAt(Date.now())
+    setProbeRows(queuedProbeRows())
     try {
-      const p = await probeCascade(eId, xId)
-      setProbe(p)
-      // This probe measures TCP/GRE, not the AWG UDP path. Never downgrade the
-      // encrypted default or overwrite an explicit selection from its results.
-    } catch (err) {
-      handleError(err)
+      await runTransportProbes(async (kind, signal) => {
+        try {
+          return await probeCascadeTransport(eId, xId, kind,
+            { entry_port: ports.entry_port ?? null, exit_port: ports.exit_port ?? null }, signal)
+        } catch (err) {
+          if (err instanceof ApiError && err.status === 401) {
+            controller.abort()
+            onUnauthorized()
+          }
+          throw err
+        }
+      }, (kind, row) => {
+        if (generation !== probeGeneration.current || controller.signal.aborted) return
+        setProbeRows(current => ({ ...current, [kind]: row }))
+        if (row.result) setProbe(row.result)
+      }, controller.signal, err => err instanceof Error ? err.message : t('Ответ проверки не соответствует транспорту.'))
     } finally {
-      setBusy(false)
-      setProbeAt(null)
+      if (generation === probeGeneration.current && !controller.signal.aborted) setBusy(false)
     }
+  }
+
+  function changeProbePort(set: (value: string) => void, value: string) {
+    set(value)
+    setProbeRows(current => ({ ...current, awg: {
+      state: 'unavailable', result: null, error: t('UDP-порты изменены. Повторите проверку AWG.'),
+    } }))
   }
 
   async function next() {
@@ -339,7 +323,7 @@ export function CascadeWizard({
     setError(null)
     try {
       const c = await createCascade(entryId, exitId, transport, transport === 'awg'
-        ? { entry_port: ports.entry_port ?? null, exit_port: ports.exit_port ?? null } : undefined)
+        ? testedAwgPorts({ entry_port: ports.entry_port ?? null, exit_port: ports.exit_port ?? null }, probeRows.awg.result) : undefined)
       setCascade(c)
       setStep('install')
       onChanged()
@@ -364,6 +348,7 @@ export function CascadeWizard({
   }
 
   const stepIdx = STEPS.findIndex((s) => s.key === step)
+  const measurement = cascade ? cascadeMeasurement(cascade) : null
   const steps = (
     <div className="cas-steps">
       {STEPS.map((s, i) => (
@@ -396,6 +381,7 @@ export function CascadeWizard({
 
   function route(withClients: boolean) {
     const selectedTransport = cascade?.transport ?? transport
+    const selectedProbeTone = probeRowTone(probeRows[selectedTransport])
     const exitIp = cascade?.result.egress || probe?.exit_ip || cascade?.exit_ip || exit?.host || ''
     return (
       <div className="srv-route">
@@ -409,7 +395,7 @@ export function CascadeWizard({
         {step === 'link' ? (
           <div
             className={`cc-link cas-link ${
-              probeAt != null ? 'cc-link-run' : selectedTransport === 'awg' ? '' : probe ? (probe.recommend ? 'cc-link-ok' : 'cc-link-bad') : ''
+              selectedProbeTone === 'run' ? 'cc-link-run' : selectedProbeTone === 'ok' ? 'cc-link-ok' : selectedProbeTone === 'bad' ? 'cc-link-bad' : ''
             }`}
           />
         ) : (
@@ -615,61 +601,7 @@ export function CascadeWizard({
             {head(t('Новый каскад'))}
             {steps}
             {route(false)}
-            <div className="cas-probe">
-              <div className="muted small">
-                {t('Проверка канала: панель отправляет 20 мб со входа на выход')}
-              </div>
-              {(probeAt != null || probe) && (
-                <>
-                  <ProbeBar
-                    label={t('Обычный TCP')}
-                    pct={phasePct(probeSecs, PROBE_PHASES.tcp)}
-                    result={probe?.tcp ?? null}
-                    allDone={probeSecs >= PROBE_PHASES.gre[1]}
-                  />
-                  <ProbeBar
-                    label="GRE"
-                    pct={phasePct(probeSecs, PROBE_PHASES.gre)}
-                    result={probe?.gre ?? null}
-                    allDone={probeSecs >= PROBE_PHASES.gre[1]}
-                  />
-                </>
-              )}
-              {probe && (
-                  <>
-                    {!probe.gre.ok && (probe.entry_nat || probe.exit_nat) && (
-                      <div className="muted small">
-                        {probe.entry_nat && probe.exit_nat
-                          ? t(
-                              'Вход и выход за NAT хостера: на интерфейсах внутренние адреса. GRE через такой NAT обычно не проходит, это настройки сети хостера, а не панели.',
-                            )
-                          : probe.exit_nat
-                            ? t(
-                                'Выход за NAT хостера: на его интерфейсе внутренний адрес. GRE через такой NAT обычно не проходит, это настройки сети хостера, а не панели.',
-                              )
-                            : t(
-                                'Вход за NAT хостера: на его интерфейсе внутренний адрес. GRE через такой NAT обычно не проходит, это настройки сети хостера, а не панели.',
-                              )}
-                      </div>
-                    )}
-                    {!probe.tcp.ok && probe.tcp.bytes > 0 && (
-                      <div className="muted small">
-                        {t(
-                          'Так режут фильтры у провайдера входа: в сеть выхода по TCP уходит только несколько десятков килобайт.',
-                        )}
-                      </div>
-                    )}
-                    {!probe.recommend && (
-                      <div className="small err-text">
-                        {t(
-                          'TCP и GRE не прошли. AWG использует UDP и проверяется отдельно при установке.',
-                        )}
-                      </div>
-                    )}
-                  </>
-              )}
-            </div>
-            {transport === 'awg' && <p className="muted small">{t('Здесь проверяются TCP и GRE. Связь AWG проверяется при установке.')}</p>}
+            <p className="muted small">{t('Короткие проверки каждого транспорта. Скорость ориентировочная.')}</p>
             <div className="cas-opts">
               {(['awg', 'vless', 'gre'] as const).map((k) => (
                 <label key={k} className={transport === k ? 'on' : ''}>
@@ -695,16 +627,17 @@ export function CascadeWizard({
                             'Туннель без шифрования межсерверного участка. Выбирайте только при осознанной необходимости открытого GRE.',
                           )}
                     </p>
+                    <TransportProbeStatus row={probeRows[k]} />
                   </div>
                 </label>
               ))}
             </div>
             {transport === 'awg' && <details className="cas-port-options">
               <summary>{t('UDP-порты межсерверного канала')}</summary>
-              <p className="muted small">{t('Пустые поля — автоматический выбор. Порты входа и выхода могут отличаться; проверка TCP/GRE не подтверждает канал AWG.')}</p>
+              <p className="muted small">{t('Пустые поля — автоматический выбор. Проверенные UDP-порты сохраняются при установке.')}</p>
               <div className="cas-row2">
-                <label>{t('UDP-порт входа')}<input inputMode="numeric" value={entryPort} onChange={e => setEntryPort(e.target.value)} placeholder={t('Автоматически')} /></label>
-                <label>{t('UDP-порт выхода')}<input inputMode="numeric" value={exitPort} onChange={e => setExitPort(e.target.value)} placeholder={t('Автоматически')} /></label>
+                <label>{t('UDP-порт входа')}<input inputMode="numeric" disabled={busy} value={entryPort} onChange={e => changeProbePort(setEntryPort, e.target.value)} placeholder={t('Автоматически')} /></label>
+                <label>{t('UDP-порт выхода')}<input inputMode="numeric" disabled={busy} value={exitPort} onChange={e => changeProbePort(setExitPort, e.target.value)} placeholder={t('Автоматически')} /></label>
               </div>
             </details>}
           </>
@@ -757,12 +690,12 @@ export function CascadeWizard({
                   {t('Сайты страны входа идут напрямую с {ip}', { ip: cascade.result.ru })}
                 </div>
               )}
-              {cascade.transport !== 'awg' && (cascade.transport === 'gre' ? cascade.probe.gre : cascade.probe.tcp)?.ok && (
+              {measurement && (
                 <div>
                   <span className="ok-text">✓</span>{' '}
-                  {t('Канал вход -> выход: ~{mbps} Мбит/с', {
-                    mbps: (cascade.transport === 'gre' ? cascade.probe.gre : cascade.probe.tcp)!.mbps,
-                  })}
+                  {measurement.label === 'TCP'
+                    ? t('Обычный TCP: ~{mbps} Мбит/с; это не замер VLESS.', { mbps: formatProbeMetric(measurement.mbps, lang, 'mbps') })
+                    : t('{transport}: ~{mbps} Мбит/с по короткой проверке', { transport: measurement.label, mbps: formatProbeMetric(measurement.mbps, lang, 'mbps') })}
                 </div>
               )}
               <div>
