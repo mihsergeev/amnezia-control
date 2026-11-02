@@ -1,6 +1,9 @@
 import { useEffect, useRef, useState } from 'react'
 import { ApiError, checkCascade, type Cascade, type CascadeCheck, type Server } from './api'
 import { countryFlag } from './format'
+import { cascadeTransportLabel } from './cascadeUi'
+import { CascadeSecurity } from './CascadeSecurity'
+import { greLinkLabel } from './serverList'
 import { useI18n } from './i18n'
 import { useModalDismiss } from './useModalDismiss'
 
@@ -34,6 +37,8 @@ export function CascadeCheckModal({ cascade, entry, exit, onClose, onChecked, on
   notify.current = onChecked
 
   const gre = cascade.transport === 'gre'
+  const awg = cascade.transport === 'awg'
+  const tunnelled = gre || awg
   const ru = (entry?.country || '').toUpperCase() === 'RU'
 
   useEffect(() => {
@@ -87,13 +92,14 @@ export function CascadeCheckModal({ cascade, entry, exit, onClose, onChecked, on
       : t('клиенты идут мимо шлюза'),
     state: st(result ? result.tproxy && result.rule !== false : undefined),
   })
-  if (gre) {
+  if (tunnelled) {
     // рабочий GRE-интерфейс Linux показывает как UNKNOWN, DOWN - выключен
     const down = result?.tunnel === 'DOWN'
     steps.push({
-      label: t('GRE-туннель до выхода поднят'),
-      fail: down ? t('GRE-туннель выключен') : t('GRE-туннеля нет'),
-      state: st(result ? !!result.tunnel && !down : undefined),
+      label: awg ? t('Туннель AWG до выхода отвечает') : t('GRE-туннель до выхода поднят'),
+      fail: awg ? t('Канал AWG до выхода не отвечает') : down ? t('GRE-туннель выключен') : t('GRE-туннеля нет'),
+      detail: awg && result?.handshake_age != null ? t('Последний handshake: {n} с назад', { n: result.handshake_age }) : undefined,
+      state: st(result ? awg ? result.tunnel === 'UP' : !!result.tunnel && !down : undefined),
     })
   }
   const egressIdx = steps.length
@@ -153,7 +159,7 @@ export function CascadeCheckModal({ cascade, entry, exit, onClose, onChecked, on
     return running ? 'run' : 'idle'
   }
   const toEntry = link([view(0), view(1)])
-  const toExit = link(gre ? [view(2)] : [view(egressIdx)])
+  const toExit = link(tunnelled ? [view(2)] : [view(egressIdx)])
   const toNet = link([view(egressIdx), view(clientIdx)])
   const done = !running && !!result && shown >= steps.length
 
@@ -187,7 +193,7 @@ export function CascadeCheckModal({ cascade, entry, exit, onClose, onChecked, on
             toEntry === 'bad' ? 'bad' : toEntry === 'ok' ? 'ok' : 'idle',
           )}
           <div className={`cc-link cc-link-${toExit}`}>
-            <span className="tun-badge">{gre ? 'GRE' : 'VLESS'}</span>
+            <span className="tun-badge">{gre ? greLinkLabel(entry) : cascadeTransportLabel(cascade.transport)}</span>
           </div>
           {node(
             countryFlag(exit?.country || ''),
@@ -200,6 +206,8 @@ export function CascadeCheckModal({ cascade, entry, exit, onClose, onChecked, on
             {t('Интернет')}
           </div>
         </div>
+
+        <CascadeSecurity encrypted={(result ?? cascade).encrypted} encryption={(result ?? cascade).encryption} />
 
         <div
           className={`cc-progress ${done ? (result?.ok ? 'cc-progress-ok' : 'cc-progress-bad') : error ? 'cc-progress-bad' : ''}`}

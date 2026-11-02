@@ -16,6 +16,8 @@ import {
 } from './api'
 import { copyText } from './clipboard'
 import { countryFlag, formatBytes } from './format'
+import { cascadePort, cascadeTransportLabel, DEFAULT_CASCADE_TRANSPORT } from './cascadeUi'
+import { CascadeSecurity } from './CascadeSecurity'
 import { useI18n } from './i18n'
 import { useModalDismiss } from './useModalDismiss'
 
@@ -114,6 +116,7 @@ function ProbeBar({
 // шаги установки по фазе: выход ставится первым, потом вход и проверка
 function installTasks(c: Cascade) {
   const gre = c.transport === 'gre'
+  const awg = c.transport === 'awg'
   const order = ['exit', 'entry']
   // ошибка без стороны (установку прервал рестарт панели) - крестик ставить некуда
   const at =
@@ -123,8 +126,8 @@ function installTasks(c: Cascade) {
     i < at ? 'ok' : i === at ? (failed ? 'bad' : c.status === 'ready' ? 'ok' : 'run') : 'wait'
   return [
     {
-      title: gre ? 'Выход: GRE-туннель и выпуск в интернет' : 'Выход: сервер VLESS Reality',
-      sub: gre
+      title: awg ? 'Выход: туннель AWG 3.1 и выпуск в интернет' : gre ? 'Выход: GRE-туннель и выпуск в интернет' : 'Выход: сервер VLESS Reality',
+      sub: awg ? 'отдельный межсерверный туннель, UDP-порт доступен только для {ip}' : gre
         ? 'маскарад, подрезка MSS, туннель принимается только от {ip}'
         : 'порт открыт только для {ip}',
       ip: c.entry_ip,
@@ -167,7 +170,9 @@ export function CascadeWizard({
   // когда началась проверка канала (null - не идет) и сколько прошло, с
   const [probeAt, setProbeAt] = useState<number | null>(null)
   const [probeSecs, setProbeSecs] = useState(0)
-  const [transport, setTransport] = useState<CascadeTransport>('vless')
+  const [transport, setTransport] = useState<CascadeTransport>(DEFAULT_CASCADE_TRANSPORT)
+  const [entryPort, setEntryPort] = useState('')
+  const [exitPort, setExitPort] = useState('')
   const [cascade, setCascade] = useState<Cascade | null>(resume ?? null)
   const [extra, setExtra] = useState<Server[]>([])
   const timer = useRef<number | undefined>(undefined)
@@ -292,7 +297,8 @@ export function CascadeWizard({
     try {
       const p = await probeCascade(eId, xId)
       setProbe(p)
-      setTransport(p.recommend || (p.gre.ok ? 'gre' : 'vless'))
+      // This probe measures TCP/GRE, not the AWG UDP path. Never downgrade the
+      // encrypted default or overwrite an explicit selection from its results.
     } catch (err) {
       handleError(err)
     } finally {
@@ -324,10 +330,16 @@ export function CascadeWizard({
 
   async function build() {
     if (entryId == null || exitId == null) return
+    const ports = { entry_port: cascadePort(entryPort), exit_port: cascadePort(exitPort) }
+    if (transport === 'awg' && (ports.entry_port === undefined || ports.exit_port === undefined)) {
+      setError(t('UDP-порт должен быть целым числом от 1 до 65535 или пустым для автовыбора.'))
+      return
+    }
     setBusy(true)
     setError(null)
     try {
-      const c = await createCascade(entryId, exitId, transport)
+      const c = await createCascade(entryId, exitId, transport, transport === 'awg'
+        ? { entry_port: ports.entry_port ?? null, exit_port: ports.exit_port ?? null } : undefined)
       setCascade(c)
       setStep('install')
       onChanged()
@@ -383,7 +395,7 @@ export function CascadeWizard({
     s && s.name !== s.host ? s.name : t(role)
 
   function route(withClients: boolean) {
-    const gre = (cascade?.transport ?? transport) === 'gre'
+    const selectedTransport = cascade?.transport ?? transport
     const exitIp = cascade?.result.egress || probe?.exit_ip || cascade?.exit_ip || exit?.host || ''
     return (
       <div className="srv-route">
@@ -397,13 +409,13 @@ export function CascadeWizard({
         {step === 'link' ? (
           <div
             className={`cc-link cas-link ${
-              probeAt != null ? 'cc-link-run' : probe ? (probe.recommend ? 'cc-link-ok' : 'cc-link-bad') : ''
+              probeAt != null ? 'cc-link-run' : selectedTransport === 'awg' ? '' : probe ? (probe.recommend ? 'cc-link-ok' : 'cc-link-bad') : ''
             }`}
           />
         ) : (
           <span className="srv-route-arrow">
             {(step === 'done' || step === 'install') && (
-              <span className="tun-badge">{gre ? 'GRE' : 'VLESS'}</span>
+              <span className="tun-badge">{cascadeTransportLabel(selectedTransport)}</span>
             )}
             →
           </span>
@@ -650,15 +662,16 @@ export function CascadeWizard({
                     {!probe.recommend && (
                       <div className="small err-text">
                         {t(
-                          'Ни один способ не прошел. Проверьте фаервол у провайдера выхода, собрать можно и так, но работать скорее всего не будет.',
+                          'TCP и GRE не прошли. AWG использует UDP и проверяется отдельно при установке.',
                         )}
                       </div>
                     )}
                   </>
               )}
             </div>
+            {transport === 'awg' && <p className="muted small">{t('Здесь проверяются TCP и GRE. Связь AWG проверяется при установке.')}</p>}
             <div className="cas-opts">
-              {(['vless', 'gre'] as const).map((k) => (
+              {(['awg', 'vless', 'gre'] as const).map((k) => (
                 <label key={k} className={transport === k ? 'on' : ''}>
                   <input
                     type="radio"
@@ -668,24 +681,32 @@ export function CascadeWizard({
                   />
                   <div>
                     <b>
-                      {k === 'vless' ? 'VLESS Reality' : 'GRE'}
-                      {probe?.recommend === k && (
-                        <span className="cas-rec">{t('рекомендуется')}</span>
+                      {k === 'awg' ? 'AmneziaWG 3.1' : k === 'vless' ? 'VLESS Reality' : 'GRE'}
+                      {k === 'awg' && (
+                        <span className="cas-rec">{t('по умолчанию')}</span>
                       )}
                     </b>
                     <p className="muted small">
-                      {k === 'vless'
+                      {k === 'awg' ? t('Шифрованный межсерверный туннель по UDP с отдельными ключами. Клиентские VPN-конфигурации не меняются.') : k === 'vless'
                         ? t(
                             'Шифрованный туннель, снаружи похож на обычный HTTPS. Подходит, когда TCP от входа к выходу проходит.',
                           )
                         : t(
-                            'Голый туннель, такие фильтры его не трогают. Без шифрования: по дороге видны имена сайтов и незашифрованный трафик клиентов.',
+                            'Туннель без шифрования межсерверного участка. Выбирайте только при осознанной необходимости открытого GRE.',
                           )}
                     </p>
                   </div>
                 </label>
               ))}
             </div>
+            {transport === 'awg' && <details className="cas-port-options">
+              <summary>{t('UDP-порты межсерверного канала')}</summary>
+              <p className="muted small">{t('Пустые поля — автоматический выбор. Порты входа и выхода могут отличаться; проверка TCP/GRE не подтверждает канал AWG.')}</p>
+              <div className="cas-row2">
+                <label>{t('UDP-порт входа')}<input inputMode="numeric" value={entryPort} onChange={e => setEntryPort(e.target.value)} placeholder={t('Автоматически')} /></label>
+                <label>{t('UDP-порт выхода')}<input inputMode="numeric" value={exitPort} onChange={e => setExitPort(e.target.value)} placeholder={t('Автоматически')} /></label>
+              </div>
+            </details>}
           </>
         )}
 
@@ -722,6 +743,7 @@ export function CascadeWizard({
             {head(t('Каскад собран'))}
             {steps}
             {route(true)}
+            <CascadeSecurity encrypted={cascade.encrypted} encryption={cascade.encryption} />
             <div className="cas-checks">
               {cascade.result.egress && (
                 <div>
@@ -735,7 +757,7 @@ export function CascadeWizard({
                   {t('Сайты страны входа идут напрямую с {ip}', { ip: cascade.result.ru })}
                 </div>
               )}
-              {(cascade.transport === 'gre' ? cascade.probe.gre : cascade.probe.tcp)?.ok && (
+              {cascade.transport !== 'awg' && (cascade.transport === 'gre' ? cascade.probe.gre : cascade.probe.tcp)?.ok && (
                 <div>
                   <span className="ok-text">✓</span>{' '}
                   {t('Канал вход -> выход: ~{mbps} Мбит/с', {
@@ -745,7 +767,7 @@ export function CascadeWizard({
               )}
               <div>
                 <span className="ok-text">✓</span>{' '}
-                {t('Перезагрузку обоих серверов переживает: туннель и шлюз - службы systemd')}
+                {t('Туннель и шлюз установлены как службы systemd')}
               </div>
             </div>
             {entry && (parseCheckInfo(entry)?.amnezia_containers ?? []).length === 0 && (

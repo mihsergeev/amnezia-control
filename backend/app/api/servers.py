@@ -5,7 +5,7 @@ from fastapi import APIRouter, HTTPException, status
 from sqlalchemy import delete as sa_delete
 from sqlalchemy import func, select, update as sa_update
 
-from app import audit, cascadejob, egresscheck, geo, limits, nodelock, server_ops, sshops, torrent
+from app import audit, cascade_alias, cascadejob, egresscheck, geo, limits, nodelock, server_ops, sshops, torrent
 from app.config import get_settings
 from app.db import Base
 from app.deps import CurrentUser, SessionDep
@@ -99,6 +99,16 @@ async def update_server(
 ) -> Server:
     server = await _get_or_404(server_id, session)
     changes = body.model_dump(exclude_unset=True)
+    host_changed = "host" in changes and changes["host"] != server.host
+    manual_exit_name = changes.pop("manual_exit_name", None)
+    if manual_exit_name is not None:
+        # Bind to the current SSH target, not an endpoint cached for an old host.
+        if host_changed:
+            raise HTTPException(status.HTTP_409_CONFLICT, "После смены адреса сначала проверьте сервер")
+        try:
+            await cascade_alias.set_name(session, server, manual_exit_name)
+        except ValueError as exc:
+            raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
     # None в булевых настройках - "не менять", колонка без NULL
     for field in ("torrent_block", "torrent_autopause", "alerts_enabled"):
         if field in changes and changes[field] is None:
@@ -116,6 +126,12 @@ async def update_server(
     )
     for field, value in changes.items():
         setattr(server, field, value)
+    if host_changed:
+        await cascade_alias.remove(session, server_id)
+        info = cascade_alias.check_info(server)
+        info.pop("manual_cascade", None)
+        info.pop("cascade_link", None)
+        server.last_check_info = json.dumps(info, ensure_ascii=False)
     if alerts_changed:
         cascades = await session.scalars(
             select(Cascade).where(
@@ -145,6 +161,8 @@ async def update_server(
         )
     await session.commit()
     await session.refresh(server)
+    if manual_exit_name is not None:
+        await audit.record(session, user.username, "cascade_peer_name", server.name, manual_exit_name.strip())
     if torrent_changed:
         await audit.record(
             session, user.username, "server_torrent", server.name,
@@ -214,6 +232,7 @@ async def delete_server(
             sa_delete(model).where(model.server_id == server_id)
         )
     # каскад с этим сервером теряет смысл; на нодах остается как есть
+    await cascade_alias.remove(session, server_id)
     await session.execute(
         sa_delete(Cascade).where(
             (Cascade.entry_server_id == server_id) | (Cascade.exit_server_id == server_id)

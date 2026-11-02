@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, computed_field
+from pydantic import BaseModel, ConfigDict, Field, computed_field, model_validator
 
 
 class LoginRequest(BaseModel):
@@ -78,6 +78,7 @@ class ServerUpdate(BaseModel):
     torrent_block: bool | None = None
     torrent_autopause: bool | None = None
     alerts_enabled: bool | None = None
+    manual_exit_name: str | None = Field(default=None, max_length=128)
 
 
 class OrderItem(BaseModel):
@@ -719,7 +720,15 @@ class CascadePair(BaseModel):
 
 
 class CascadeCreate(CascadePair):
-    transport: Literal["vless", "gre"]
+    transport: Literal["vless", "gre", "awg"]
+    entry_port: int | None = Field(default=None, ge=1, le=65535)
+    exit_port: int | None = Field(default=None, ge=1, le=65535)
+
+    @model_validator(mode="after")
+    def awg_ports_only(self):
+        if self.transport != "awg" and (self.entry_port is not None or self.exit_port is not None):
+            raise ValueError("UDP ports are only supported for AWG cascades")
+        return self
 
 
 class ProbeSide(BaseModel):
@@ -754,6 +763,10 @@ class CascadeOut(BaseModel):
     log: str = ""
     entry_ip: str = ""
     exit_ip: str = ""
+    entry_port: int | None = None
+    exit_port: int | None = None
+    encryption: Literal["awg", "reality", "none", "unknown"] = "unknown"
+    encrypted: bool | None = None
     probe: dict = {}
     result: dict = {}
     created_at: datetime
@@ -788,4 +801,7 @@ class CascadeCheckOut(BaseModel):
     client: str = ""  # адрес изнутри VPN-контейнера, "" - спросить не вышло
     direct: str = ""  # свой адрес входа: если клиенты выходят с него, каскад они обходят
     leak: bool = False
+    encryption: Literal["awg", "reality", "none", "unknown"] = "unknown"
+    encrypted: bool | None = None
+    handshake_age: int | None = None
     checked_at: datetime

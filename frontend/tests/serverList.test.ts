@@ -5,6 +5,7 @@ import {
   groupServerList, resolveServerSelection, serverListAnchors, serverListClients,
   serverListItems, serverListMatches, serverListMembers, serverListProblem,
   serverSelectionFromHistory, serverSelectionFromParams, serverSelectionParams,
+  cascadeNameParts, greLinkLabel, manualExitNameChange, serverListRoute,
 } from '../src/serverList.ts'
 
 function node(id: number, extra: Partial<Server> = {}): Server {
@@ -92,6 +93,65 @@ test('deleting a cascade restores both standalone rows and preserves selected ex
 
 test('a standalone node with a manually configured egress is never auto-grouped', () => {
   assert.equal(serverListItems([node(1, { egress_ip: '198.51.100.10' }), node(2)], []).length, 2)
+})
+
+test('manual cascade names use the configured peer rather than a NAT egress address', () => {
+  const entry = node(1, { name: 'entry-one', country: 'RU', egress_ip: '203.0.113.10', egress_country: 'FI',
+    last_check_info: JSON.stringify({ manual_cascade: { transport: 'vless', exit_host: '198.51.100.2', exit_name: 'checked-exit', exit_country: 'FI' } }) })
+  const exit = node(2, { host: '198.51.100.2', name: 'exit-two', country: 'FI' })
+  const rows = serverListItems([entry, exit], [])
+  const route = serverListRoute(rows[0], [entry, exit])!
+  assert.equal(route.entry.name, 'entry-one')
+  assert.equal(route.exit.name, 'exit-two')
+  assert.equal(route.exit.host, '198.51.100.2')
+  assert.equal(serverListMatches(rows[0], 'exit-two', text, [entry, exit]), true)
+  assert.equal(rows.length, 2) // Display metadata does not regroup or merge clients.
+})
+
+test('manual external peer uses a checked name or the actual endpoint, never its country/org', () => {
+  const entry = node(1, { country: 'RU', egress_ip: '203.0.113.10', egress_country: 'FI', egress_org: 'Example operator',
+    last_check_info: JSON.stringify({ manual_cascade: { transport: 'vless', exit_host: '198.51.100.10' } }) })
+  let row = serverListItems([entry], [])[0]
+  assert.deepEqual(serverListRoute(row, [entry])!.exit, { name: '198.51.100.10', host: '198.51.100.10', country: '' })
+  entry.last_check_info = JSON.stringify({ manual_cascade: { transport: 'vless', exit_host: '198.51.100.10', exit_name: 'exit-external', exit_country: 'FI' } })
+  row = serverListItems([entry], [])[0]
+  assert.equal(serverListRoute(row, [entry])!.exit.name, 'exit-external')
+})
+
+test('standalone labels remain standalone; ambiguous same-country NAT is not promoted to a route', () => {
+  const server = node(1, { country: 'RU', egress_ip: '198.51.100.1', egress_country: 'RU' })
+  const row = serverListItems([server], [])[0]
+  assert.equal(serverListRoute(row, [server]), null)
+  server.last_check_info = '<invalid JSON>'
+  assert.equal(serverListRoute(row, [server]), null)
+})
+
+test('descriptive suffixes yield space while simple and multiword labels stay complete', () => {
+  assert.deepEqual(cascadeNameParts('entry-one - Country description'), { primary: 'entry-one', suffix: ' - Country description' })
+  assert.deepEqual(cascadeNameParts('exit-two (clients)'), { primary: 'exit-two', suffix: ' (clients)' })
+  assert.deepEqual(cascadeNameParts('Office West - Main'), { primary: 'Office West - Main', suffix: '' })
+  assert.deepEqual(cascadeNameParts('entry-one'), { primary: 'entry-one', suffix: '' })
+})
+
+test('GRE plus AWG requires explicit runtime proof, not a configured label or a truthy value', () => {
+  const server = node(1)
+  assert.equal(greLinkLabel(server), 'GRE')
+  for (const encrypted of [false, 'true', null]) {
+    server.last_check_info = JSON.stringify({ cascade_link: { transport: 'awg', encrypted } })
+    assert.equal(greLinkLabel(server), 'GRE')
+  }
+  server.last_check_info = JSON.stringify({ cascade_link: { transport: 'awg', encrypted: true } })
+  assert.equal(greLinkLabel(server), 'GRE + AWG')
+  server.last_check_info = JSON.stringify({ cascade_link: { transport: 'awg', encrypted: true, healthy: false, handshake_age: 900 } })
+  assert.equal(greLinkLabel(server), 'GRE + AWG') // Availability does not relabel a bound crypto path as plaintext.
+})
+
+test('host-only edits omit unchanged nonempty exit aliases; changes and explicit clear still persist', () => {
+  assert.equal(manualExitNameChange('exit-saved', 'exit-saved'), undefined)
+  assert.equal(manualExitNameChange('  exit-saved  ', 'exit-saved'), undefined)
+  assert.equal(manualExitNameChange('', ''), undefined)
+  assert.equal(manualExitNameChange('exit-new', 'exit-saved'), 'exit-new')
+  assert.equal(manualExitNameChange('', 'exit-saved'), '')
 })
 
 test('direct links retain exact node and cascade; unrelated query parameters survive', () => {

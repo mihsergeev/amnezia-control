@@ -909,16 +909,17 @@ async def launch(
     """Кладёт скрипт в $HOME/.acontrol/<tag> (свой каталог протокола) и запускает
     детачед. Отдельный каталог на протокол не даёт логам деплоя перемешиваться."""
     d, run, log = _paths(tag)
-    await conn.run(f'mkdir -p "{d}"', check=True)
+    await conn.run(f'umask 077; mkdir -p "{d}" && chmod 700 "{d}"', check=True)
     # Пишем во временный файл и подменяем через mv (новый inode): bash читает
     # скрипт по ходу выполнения, и `cat >` поверх живого run.sh подсунул бы ему
     # новый текст со старого смещения.
     await conn.run(
-        f'cat > "{run}.tmp" && mv -f "{run}.tmp" "{run}" && rm -f "{log}"',
+        f'umask 077; cat > "{run}.tmp" && chmod 600 "{run}.tmp" '
+        f'&& mv -f "{run}.tmp" "{run}" && rm -f "{log}"',
         input=script, check=True,
     )
     await conn.run(
-        f'nohup setsid bash "{run}" > "{log}" 2>&1 </dev/null & disown',
+        f'umask 077; nohup setsid bash "{run}" > "{log}" 2>&1 </dev/null & disown',
         check=False,
     )
 

@@ -8,6 +8,8 @@ from pathlib import Path
 
 import asyncssh
 
+from app import cascade_manual, cascade_underlay
+
 # hostname + список docker-контейнеров (с фолбэком на sudo без пароля)
 # Определение РЕАЛЬНОГО протокола в каждом amnezia-контейнере — по содержимому
 # его конфига, а не по имени. Имена у Amnezia версию не отражают: контейнер
@@ -47,7 +49,7 @@ _TUNNEL_PROBE = (
 
 CHECK_COMMAND = (
     'echo "HOST=$(hostname)"; '
-    + _TUNNEL_PROBE +
+    + _TUNNEL_PROBE + cascade_underlay.PROBE_COMMAND + cascade_manual.PROBE_COMMAND +
     "if docker ps --format '{{.Names}}' 2>/dev/null; then D=docker; "
     "elif sudo -n docker ps --format '{{.Names}}' 2>/dev/null; then D='sudo -n docker'; "
     "else echo DOCKER_UNAVAILABLE; D=''; fi; "
@@ -116,6 +118,9 @@ class CheckResult:
     protocols: dict[str, str] = field(default_factory=dict)
     # поднятые GRE-туннели: [{"kind": "gre", "name": "gre-fi", "remote": "203.0.113.9"}]
     tunnels: list[dict] = field(default_factory=list)
+    # Public live evidence for a previously configured GRE-over-AWG underlay.
+    cascade_link: dict = field(default_factory=dict)
+    manual_cascade: dict = field(default_factory=dict)
 
     def as_dict(self) -> dict:
         return {
@@ -126,6 +131,8 @@ class CheckResult:
             "amnezia_containers": self.amnezia_containers,
             "protocols": self.protocols,
             "tunnels": self.tunnels,
+            "cascade_link": self.cascade_link,
+            "manual_cascade": self.manual_cascade,
         }
 
 
@@ -164,6 +171,10 @@ def _parse_check_output(output: str) -> CheckResult:
             tun = _parse_tunnel(line.removeprefix("GRELINK="))
             if tun:
                 result.tunnels.append(tun)
+        elif line.startswith("AWGUNDERLAY="):
+            result.cascade_link = cascade_underlay.parse_probe(line.removeprefix("AWGUNDERLAY="))
+        elif line.startswith("MANUAL_CASCADE="):
+            result.manual_cascade = cascade_manual.parse_probe(line.removeprefix("MANUAL_CASCADE="))
         elif line.startswith("PROTO="):
             name, _, kind = line.removeprefix("PROTO=").partition("|")
             if name and kind:

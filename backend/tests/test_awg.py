@@ -34,7 +34,7 @@ SAMPLE_TABLE = """[
     {"clientId": "5Ai5cnecffo3Le2OesbVH26DrKBd1zJSDZLOadGmGwo=",
      "userData": {"clientName": "Admin", "allowedIps": "10.8.1.1/32"}},
     {"clientId": "RXEZrMcQn5mGHzIGggBDO6VGfwiUxCAEbgGVXV2DHUc=",
-     "userData": {"clientName": "codex", "allowedIps": "10.8.1.2/32"}}
+     "userData": {"clientName": "Client", "allowedIps": "10.8.1.2/32"}}
 ]"""
 
 SAMPLE_DUMP = (
@@ -124,7 +124,7 @@ def test_build_client_config_mirrors_awg_params() -> None:
 def test_names_from_table() -> None:
     names = awg._names_from_table(SAMPLE_TABLE)
     assert names["5Ai5cnecffo3Le2OesbVH26DrKBd1zJSDZLOadGmGwo="] == "Admin"
-    assert names["RXEZrMcQn5mGHzIGggBDO6VGfwiUxCAEbgGVXV2DHUc="] == "codex"
+    assert names["RXEZrMcQn5mGHzIGggBDO6VGfwiUxCAEbgGVXV2DHUc="] == "Client"
 
 
 def test_dns_pair() -> None:

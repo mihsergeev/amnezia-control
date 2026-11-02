@@ -146,7 +146,8 @@ def test_probe_helpers_move_bytes_locally() -> None:
 def test_check_result_ignores_garbage() -> None:
     kv = cascade.parse_kv("CASCADE_EGRESS=198.51.100.20\nCASCADE_RU=<html>\nCASCADE_GW=yes\n")
     assert kv["gw"] == "yes"
-    assert cascade.check_result(kv) == {"egress": "198.51.100.20", "ru": "", "client": "", "direct": ""}
+    assert cascade.check_result(kv) == {"egress": "198.51.100.20", "ru": "", "client": "", "direct": "",
+                                        "encryption": "unknown", "encrypted": None, "handshake_age": None}
 
 
 async def _servers(session_factory, n=3, ok=True) -> list[int]:
@@ -456,7 +457,7 @@ def test_behind_nat() -> None:
     # публичный адрес прямо на интерфейсе
     assert not cascade.behind_nat("198.51.100.20", "198.51.100.20")
     # оба в одной локальной сети - не NAT
-    assert not cascade.behind_nat("192.168.50.121", "192.168.50.122")
+    assert not cascade.behind_nat("192.168.42.11", "192.168.42.12")
     assert not cascade.behind_nat("", "198.51.100.20")
 
 

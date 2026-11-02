@@ -7,7 +7,7 @@ from datetime import datetime, timedelta, timezone
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app import geo, sshops
+from app import cascade_alias, geo, sshops
 from app.config import Settings
 from app.models import Server
 from app.sshkeys import ensure_panel_key, key_paths
@@ -73,7 +73,19 @@ async def run_check(session: AsyncSession, server: Server, settings: Settings) -
     now = datetime.now(timezone.utc)
     server.last_check_ok = result.ok
     server.last_check_at = now
-    server.last_check_info = json.dumps(result.as_dict(), ensure_ascii=False)
+    info = result.as_dict()
+    peer = info.get("manual_cascade")
+    if peer:
+        previous = cascade_alias.check_info(server).get("manual_cascade", {})
+        code = ""
+        if isinstance(previous, dict) and previous.get("exit_host") == peer["exit_host"]:
+            code = previous.get("exit_country", "")
+        if not isinstance(code, str) or len(code) != 2 or not code.isascii() or not code.isalpha():
+            code = await geo.country_code(peer["exit_host"])
+        if isinstance(code, str) and len(code) == 2 and code.isascii() and code.isalpha():
+            peer["exit_country"] = code.upper()
+    info = await cascade_alias.merge(session, server, info)
+    server.last_check_info = json.dumps(info, ensure_ascii=False)
     if result.ok and result.amnezia_containers:
         egress = None
         try:

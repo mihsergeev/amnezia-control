@@ -77,7 +77,9 @@ async def test_launch_replaces_script_via_mv() -> None:
     conn = _Conn()
     await deploy.launch(conn, "echo hi\n", tag="awg")
     write = next(c for c in conn.commands if "cat >" in c)
-    assert 'cat > "$HOME/.acontrol/awg/run.sh.tmp" && mv -f' in write
+    assert 'cat > "$HOME/.acontrol/awg/run.sh.tmp"' in write
+    assert 'chmod 600 "$HOME/.acontrol/awg/run.sh.tmp"' in write
+    assert write.index('chmod 600') < write.index('mv -f')
 
 
 async def test_launch_does_not_run_previous_script_after_write_failure() -> None:

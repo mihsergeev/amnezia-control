@@ -269,6 +269,9 @@ export type CheckInfo = {
   protocols?: Record<string, string>
   // поднятые GRE-туннели ноды (каскад через GRE)
   tunnels?: { kind: string; name: string; remote: string }[]
+  // Optional runtime proof from the latest SSH check, never inferred from a DB label.
+  cascade_link?: { transport: 'awg'; encrypted: boolean; healthy?: boolean; tunnel: string; public_remote: string; handshake_age: number | null }
+  manual_cascade?: { transport: 'vless'; security?: string; network?: string; exit_host: string; exit_port?: number; exit_name?: string; exit_country?: string }
 }
 
 export function parseCheckInfo(server: Server): CheckInfo | null {
@@ -302,6 +305,7 @@ export type ServerForm = {
   torrent_block?: boolean
   torrent_autopause?: boolean
   alerts_enabled?: boolean
+  manual_exit_name?: string | null
 }
 
 export type TorrentClient = {
@@ -928,7 +932,8 @@ export function createShareLink(
 
 // --- каскады: вход и выход ---------------------------------------------------
 
-export type CascadeTransport = 'vless' | 'gre'
+export type CascadeTransport = 'awg' | 'vless' | 'gre'
+export type CascadeEncryption = 'awg' | 'reality' | 'none' | 'unknown'
 
 export type ProbeSide = { ok: boolean; bytes: number; secs: number; mbps: number; error: string }
 
@@ -949,6 +954,10 @@ export type Cascade = {
   entry_server_id: number
   exit_server_id: number
   transport: CascadeTransport
+  entry_port?: number | null
+  exit_port?: number | null
+  encryption?: CascadeEncryption
+  encrypted?: boolean | null
   status: 'installing' | 'ready' | 'error'
   error: string
   phase: '' | 'exit' | 'entry'
@@ -972,6 +981,9 @@ export type CascadeCheck = {
   tproxy: boolean
   rule: boolean
   tunnel: string
+  encryption?: CascadeEncryption
+  encrypted?: boolean | null
+  handshake_age?: number | null
   egress: string
   ru: string
   client: string
@@ -1035,10 +1047,11 @@ export function createCascade(
   entryId: number,
   exitId: number,
   transport: CascadeTransport,
+  ports?: { entry_port: number | null; exit_port: number | null },
 ): Promise<Cascade> {
   return api<Cascade>('/api/cascades', {
     method: 'POST',
-    body: JSON.stringify({ entry_id: entryId, exit_id: exitId, transport }),
+    body: JSON.stringify({ entry_id: entryId, exit_id: exitId, transport, ...(transport === 'awg' ? ports : {}) }),
   })
 }
 

@@ -4,6 +4,23 @@ All notable changes to Amnezia Control are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.83.0] - 2026-11-02
+
+### Added
+- Create encrypted AmneziaWG 3.1 cascades from the panel, with dedicated tunnel keys, automatic or separate UDP ports, and a fail-closed gateway.
+- Show runtime encryption separately from tunnel availability, including previously configured GRE-over-AWG links.
+- Detect the configured peer of manually installed VLESS cascades and allow a custom peer name in server settings.
+
+### Fixed
+- Show both cascade server names and country flags on one list line. Shorten descriptive suffixes first, keep client counts aligned, and use available screen width.
+- Preserve externally configured GRE-over-AWG links during checks and refuse destructive reinstallation or removal through the panel.
+
+### Security
+- Restrict remote installation job directories and files to their owner, including scripts containing tunnel credentials.
+
+### Upgrade notes
+- Existing VPN client configurations and cascade transports are retained. Updating the panel does not automatically convert existing links to AWG.
+
 ## [0.82.6] - 2026-11-02
 
 ### Fixed
