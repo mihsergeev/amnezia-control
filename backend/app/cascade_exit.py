@@ -160,8 +160,8 @@ up() {
     ip link show "$IF" >/dev/null 2>&1 || ip link add "$IF" type gre local "$LOCAL" remote "$PEER" key "$KEY" ttl 64
     ip link set dev "$IF" alias "$OWNER"
     ip addr replace "$INNER/32" dev "$IF"
-    ip route replace "$PEER_INNER/32" dev "$IF" src "$INNER"
     ip link set "$IF" mtu 1476 up
+    ip route replace "$PEER_INNER/32" dev "$IF" src "$INNER"
     sysctl -qw "net.ipv4.conf.$IF.rp_filter=2" net.ipv4.ip_forward=1
   else
     if docker container inspect "$CONT" >/dev/null 2>&1; then docker start "$CONT" >/dev/null
