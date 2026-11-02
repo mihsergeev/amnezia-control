@@ -116,6 +116,23 @@ class OvpnConfig(Base):
     )
 
 
+class NativeVpnConfig(Base):
+    """Native client profiles, isolated from AmneziaWG and OpenVPN/Cloak."""
+
+    __tablename__ = "native_vpn_configs"
+    __table_args__ = (UniqueConstraint("server_id", "protocol", "client_id"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    server_id: Mapped[int] = mapped_column(Integer, index=True)
+    protocol: Mapped[str] = mapped_column(String(16))
+    client_id: Mapped[str] = mapped_column(String(64))
+    name: Mapped[str] = mapped_column(String(128))
+    config: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+
 class TrafficSample(Base):
     """Снимок статистики сервера (снимается фоновым сборщиком) для графиков."""
 
@@ -368,13 +385,13 @@ class ApiKey(Base):
 
 class Cascade(Base):
     """Каскад: клиенты подключаются ко входу, в интернет выходят с адреса выхода
-    (см. app/cascade.py). Сервер бывает только в одном каскаде."""
+    (см. app/cascade.py). Вход один, выход может обслуживать несколько входов."""
 
     __tablename__ = "cascades"
 
     id: Mapped[int] = mapped_column(primary_key=True)
     entry_server_id: Mapped[int] = mapped_column(Integer, unique=True)
-    exit_server_id: Mapped[int] = mapped_column(Integer, unique=True)
+    exit_server_id: Mapped[int] = mapped_column(Integer)
     # vless | gre
     transport: Mapped[str] = mapped_column(String(16))
     # installing | ready | error

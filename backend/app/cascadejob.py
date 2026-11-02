@@ -9,9 +9,12 @@
 import asyncio
 import json
 import logging
+import secrets
 from datetime import datetime, timezone
 
-from app import alerts, cascade, deploy, server_ops, sshops
+from fastapi import HTTPException
+
+from app import alerts, cascade, cascade_exit, cascade_lock, deploy, nodelock, server_ops, sshops
 from app.config import get_settings
 from app.models import Cascade, Server
 from app.sshkeys import ensure_panel_key, key_paths
@@ -58,7 +61,8 @@ def _joined(logs: dict[str, tuple[str, str]]) -> str:
 
 
 async def _side(
-    cid: int, phase: str, server: Server, script: str, logs: dict, settings
+    cid: int, phase: str, server: Server, script: str, logs: dict, settings, *, tag: str | None = None,
+    owner: str = "",
 ) -> tuple[str, str]:
     """Запускает скрипт на стороне и ждет итог. (state, хвост лога)."""
     logs[phase] = (server.name, "")
@@ -66,7 +70,13 @@ async def _side(
     # шаг SSH без своего срока: зависшая нода иначе держала бы установку вечно
     step = max(settings.ssh_connect_timeout * 4, 30)
     async with asyncio.timeout(step), connect(server, settings) as conn:
-        await deploy.launch(conn, script, tag=cascade.TAG)
+        if owner:
+            generation = secrets.token_hex(16)
+            armed = await conn.run(cascade_lock.arm_command(cid, owner, generation), check=False, timeout=20)
+            if armed.exit_status != 0 or "CASCADE_OPERATION_ARMED" not in (armed.stdout or ""):
+                return "error", "DEPLOY_ERROR: previous cascade operation is still active or ownership is unknown"
+            script = cascade_lock.wrap(cid, script, owner, generation=generation)
+        await deploy.launch(conn, script, tag=tag or cascade.TAG)
     waited = 0
     st: dict = {"state": "unknown", "log": ""}
     while waited < _MAX_SECONDS:
@@ -74,7 +84,7 @@ async def _side(
         waited += _POLL_SECONDS
         try:
             async with asyncio.timeout(step), connect(server, settings) as conn:
-                st = await deploy.read_status(conn, tag=cascade.TAG)
+                st = await deploy.read_status(conn, tag=tag or cascade.TAG)
         except Exception:  # noqa: BLE001 — нода моргнула, спросим еще раз
             continue
         logs[phase] = (server.name, st.get("log", ""))
@@ -96,6 +106,25 @@ async def _run(cid: int, factory, settings) -> None:
         c = await session.get(Cascade, cid)
         if c is None:
             return
+        first, second = sorted((c.entry_server_id, c.exit_server_id))
+    # Retain both node locks through both phases. Another entry may share the
+    # exit, but install/delete must not interleave with a half-finished job.
+    try:
+        async with nodelock.hold("cascade", first), nodelock.hold("cascade", second):
+            await _run_locked(cid, factory, settings)
+    except HTTPException as exc:
+        message = "Не удалось дождаться освобождения узлов каскада" if exc.status_code == 409 else "Установка каскада прервана"
+        await _finish(factory, cid, "error", message, "", {"failed_phase": "exit"})
+    except Exception:
+        log.exception("unexpected cascade job failure for %s", cid)
+        await _finish(factory, cid, "error", "Установка каскада прервана", "", {"failed_phase": "exit"})
+
+
+async def _run_locked(cid: int, factory, settings) -> None:
+    async with factory() as session:
+        c = await session.get(Cascade, cid)
+        if c is None:
+            return
         entry = await session.get(Server, c.entry_server_id)
         exit_ = await session.get(Server, c.exit_server_id)
         transport = c.transport
@@ -111,7 +140,9 @@ async def _run(cid: int, factory, settings) -> None:
     entry_log = ""
     for phase, server, script in steps:
         try:
-            state, tail = await _side(cid, phase, server, script, logs, settings)
+            state, tail = await _side(cid, phase, server, script, logs, settings,
+                                      tag=f"{cascade.TAG}-{cid}" if cascade_exit.scoped(params) else None,
+                                      owner=params["runtime_owner"] if cascade_exit.scoped(params) else "")
         except Exception as exc:  # noqa: BLE001 — SSH при запуске
             state, tail = "error", f"DEPLOY_ERROR: SSH: {exc or type(exc).__name__}"
         if state != "done":

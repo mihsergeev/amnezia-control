@@ -815,6 +815,14 @@ _SNAP_SPECS: dict[str, dict] = {
         "table": "/opt/amnezia/openvpn/clientsTable",
         "reload": "sudo docker restart %C",
     },
+    "wireguard": {
+        "container": "acontrol-wireguard", "paths": "/opt/amnezia/awg",
+        "table": "/opt/amnezia/awg/clientsTable", "reload": "sudo docker restart %C",
+    },
+    "openvpn-native": {
+        "container": "acontrol-openvpn-native", "paths": "/opt/amnezia/openvpn",
+        "table": "/opt/amnezia/openvpn/clientsTable", "reload": "sudo docker restart %C",
+    },
 }
 
 
@@ -832,11 +840,11 @@ async def snapshot_config(
     spec = _SNAP_SPECS[tag]
     cont = container or spec["container"]
     cmd = (
-        f'C={cont}; R={SNAP_ROOT}/{tag}; '
+        f'umask 077; C={cont}; R={SNAP_ROOT}/{tag}; '
         f'sudo docker ps --format "{{{{.Names}}}}" | grep -qx "$C" || {{ echo NO_CONT; exit 0; }}; '
         # TS уникален посекундно; при снимке нескольких контейнеров подряд
         # (пре-оп бэкап) ждём смены секунды, иначе второй снимок затёр бы первый.
-        f'mkdir -p "$R"; TS=$(date +%Y%m%d-%H%M%S); '
+        f'mkdir -p "$R" && chmod 700 "$R" || exit 1; TS=$(date +%Y%m%d-%H%M%S); '
         f'while [ -e "$R/$TS.tar.gz" ]; do sleep 1; TS=$(date +%Y%m%d-%H%M%S); done; '
         f'F="$R/$TS.tar.gz"; '
         f'if sudo docker exec "$C" tar -czf - {spec["paths"]} 2>/dev/null > "$F" && [ -s "$F" ]; then '
@@ -1175,7 +1183,8 @@ async def detect_openvpn_container(
     перед перезаписью PKI."""
     cmd = (
         'D=$({ [ -w /var/run/docker.sock ] || [ -w /run/docker.sock ]; } && echo docker || echo "sudo -n docker"); '
-        '$D ps --format "{{.Names}}" | grep -iE "openvpn|cloak" | head -1 || true'
+        '$D ps --format "{{.Names}}" | grep -iE "openvpn|cloak" '
+        '| grep -vx "acontrol-openvpn-native" | head -1 || true'
     )
     result = await conn.run(cmd, check=False)
     name = (result.stdout or "").strip()

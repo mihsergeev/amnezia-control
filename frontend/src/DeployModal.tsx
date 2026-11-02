@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { api, ApiError, type DeployStatus } from './api'
+import { api, ApiError, type DeployStatus, type DeployProtocol } from './api'
 import { useI18n } from './i18n'
 import { useModalDismiss } from './useModalDismiss'
 
@@ -10,7 +10,7 @@ type Props = {
   serverId: number
   serverName: string
   mode: 'deploy' | 'update' | 'adopt' | 'upgrade31'
-  protocol?: 'awg' | 'awg3' | 'xray' | 'openvpn'
+  protocol?: DeployProtocol
   onClose: () => void
   onDone: () => void
   onUnauthorized: () => void
@@ -27,11 +27,14 @@ export function DeployModal({
 }: Props) {
   const { t } = useI18n()
   const dismiss = useModalDismiss(onClose)
+  const nativeProtocol = protocol === 'wireguard' || protocol === 'openvpn-native'
   const label =
     protocol === 'xray'
       ? 'XRay'
+      : protocol === 'wireguard' ? 'WireGuard'
+      : protocol === 'openvpn-native' ? 'OpenVPN'
       : protocol === 'openvpn'
-        ? 'OpenVPN/Cloak'
+        ? 'OpenVPN + Cloak'
         : protocol === 'awg3'
           ? 'AmneziaWG 3.1'
           : 'AmneziaWG'
@@ -41,8 +44,10 @@ export function DeployModal({
   // 2.0, иначе установка целилась бы в порт работающего сервера и упиралась в
   // защиту (а раньше — снесла бы его контейнер вместе с клиентами).
   const defaultPort =
-    protocol === 'xray' ? 443 : protocol === 'openvpn' ? 8443 : protocol === 'awg3' ? 47300 : 47180
+    protocol === 'wireguard' ? 51820 : protocol === 'openvpn-native' ? 1194 : protocol === 'xray' ? 443 : protocol === 'openvpn' ? 8443 : protocol === 'awg3' ? 47300 : 47180
   const [port, setPort] = useState(defaultPort)
+  const [transport, setTransport] = useState<'udp' | 'tcp'>('udp')
+  const [configured, setConfigured] = useState(!(nativeProtocol && mode === 'deploy'))
   // порт занят другим контейнером — предлагаем выбрать свободный и повторить
   const [portBusy, setPortBusy] = useState(false)
   const startedRef = useRef(false)
@@ -150,7 +155,7 @@ export function DeployModal({
                 : `/api/servers/${serverId}/${protocol}/deploy`
         await api(path, {
           method: 'POST',
-          body: mode === 'deploy' ? JSON.stringify({ port: p }) : undefined,
+          body: mode === 'deploy' ? JSON.stringify({ port: p, ...(nativeProtocol ? { transport: protocol === 'wireguard' ? 'udp' : transport } : {}) }) : undefined,
         })
       } catch (err) {
         handleError(err)
@@ -159,7 +164,7 @@ export function DeployModal({
       schedule(2500)
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [serverId, mode, protocol, handleError],
+    [serverId, mode, protocol, nativeProtocol, transport, handleError],
   )
 
   // установка запускается один раз за жизнь окна; остановка опроса - только
@@ -169,10 +174,10 @@ export function DeployModal({
   startRef.current = start
   useEffect(() => {
     aliveRef.current = true
-    if (!startedRef.current) {
+    if (!startedRef.current && !(nativeProtocol && mode === 'deploy')) {
       startedRef.current = true
       void startRef.current(defaultPort)
-    } else if (timerRef.current === undefined) {
+    } else if (startedRef.current && timerRef.current === undefined) {
       // StrictMode: первый cleanup снял таймер - продолжаем опрос
       schedule(1000)
     }
@@ -184,7 +189,7 @@ export function DeployModal({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  const running = !error && (!status || status.state === 'running' || status.state === 'unknown')
+  const running = configured && !error && (!status || status.state === 'running' || status.state === 'unknown')
   const done = status?.state === 'done'
   const failed = status?.state === 'error'
 
@@ -216,6 +221,10 @@ export function DeployModal({
             ? t('Панель перечитывает конфиг из текущего контейнера, сохраняет его порт и ключи и заменяет его своим образом. Клиенты остаются — туннель кратко перезапустится. Перед этим снят снимок для отката.')
             : mode === 'update'
             ? t('Сервер тянет свежий базовый образ и пересобирает контейнер. Клиенты и ключи сохраняются.')
+            : protocol === 'wireguard'
+              ? t('Отдельный обычный WireGuard по UDP. Клиентам выдаются стандартные .conf, без параметров AmneziaWG.')
+            : protocol === 'openvpn-native'
+              ? t('Отдельный обычный OpenVPN с сертификатами клиентов. Для подключения нужен только файл .ovpn, без Cloak.')
             : protocol === 'xray'
               ? t('Сервер собирает образ Xray-core (alpine) и запускает VLESS+REALITY на 443. Это займёт 1–3 минуты.')
               : protocol === 'openvpn'
@@ -225,20 +234,20 @@ export function DeployModal({
                   : t('Сервер собирает образ из amneziavpn/amneziawg-go:latest и запускает AmneziaWG. Это займёт 1–3 минуты.')}
         </p>
 
-        <div className="deploy-state">
+        {configured && <div className="deploy-state">
           {running && <span className="deploy-spinner">{t('● выполняется…')}</span>}
           {done && <span className="status-ok">{t('✓ готово')}</span>}
           {failed && <span className="status-fail">{t('✗ ошибка (см. лог)')}</span>}
-        </div>
+        </div>}
 
         {error && <p className="form-error">{error}</p>}
         {!error && pollWarn && (
           <p className="muted small">{t('Не удалось получить статус, повторяем запрос...')}</p>
         )}
 
-        {portBusy && (
+        {(!configured || portBusy) && (
           <div className="row port-retry">
-            <label className="muted small">{t('Порт для установки')}</label>
+            <label className="muted small">{t('Порт для установки')}
             <input
               type="number"
               min={1}
@@ -247,21 +256,26 @@ export function DeployModal({
               onChange={(e) => setPort(Number(e.target.value))}
               style={{ maxWidth: 140 }}
             />
+            </label>
+            {protocol === 'openvpn-native' && <label className="muted small">{t('Транспорт')}
+              <select aria-label={t('Транспорт')} value={transport} onChange={e => setTransport(e.target.value as 'udp' | 'tcp')}><option value="udp">UDP</option><option value="tcp">TCP</option></select>
+            </label>}
             <button
               onClick={() => {
                 startedRef.current = true
+                setConfigured(true)
                 void start(port)
               }}
-              disabled={!port || port < 1 || port > 65535}
+              disabled={!Number.isInteger(port) || port < 1 || port > 65535}
             >
               {t('Развернуть на этом порту')}
             </button>
           </div>
         )}
 
-        <pre className="script-box deploy-log">
+        {configured && <pre className="script-box deploy-log">
           {status?.log || t('запуск…')}
-        </pre>
+        </pre>}
 
         <div className="modal-actions">
           <button onClick={onClose}>{done ? t('Готово') : t('Закрыть')}</button>

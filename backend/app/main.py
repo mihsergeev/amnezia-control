@@ -21,6 +21,7 @@ from app.api import (
     fullaccess,
     health,
     importer,
+    native_vpn,
     openvpn,
     protocols,
     servers,
@@ -128,6 +129,8 @@ def create_app() -> FastAPI:
     app.include_router(awg3.router, prefix="/api")
     app.include_router(clients.router, prefix="/api")
     app.include_router(openvpn.router, prefix="/api")
+    app.include_router(native_vpn.wireguard_router, prefix="/api")
+    app.include_router(native_vpn.openvpn_router, prefix="/api")
     app.include_router(xray.router, prefix="/api")
     app.include_router(protocols.router, prefix="/api")
     app.include_router(importer.router, prefix="/api")

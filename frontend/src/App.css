@@ -2199,6 +2199,21 @@ button.srv-side-gh:hover .drag-handle {
   white-space: nowrap;
 }
 
+.srv-shared-exit-tag {
+  flex: 0 0 auto;
+  color: var(--text-muted);
+  font-size: 0.7rem;
+  white-space: nowrap;
+}
+
+.srv-shared-exit-card p { margin: 0.5rem 0; }
+.srv-shared-exit-links { display: flex; flex-wrap: wrap; gap: 0.5rem; }
+.srv-shared-exit-links button { min-width: 0; max-width: 100%; overflow-wrap: anywhere; }
+
+.port-retry { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 0.75rem; margin: 1rem 0; }
+.port-retry label { display: flex; flex-direction: column; gap: 0.25rem; min-width: 0; }
+.port-retry select { min-width: 110px; max-width: 100%; padding: 0.45rem 0.6rem; border: 1px solid var(--border); border-radius: 8px; background: var(--bg-card); color: var(--text); font: inherit; }
+
 .srv-item-cl b {
   color: var(--text);
   font-weight: 600;
@@ -3205,3 +3220,13 @@ tr.row-link:hover td {
 :root[data-theme='light'] .cc-verdict-bad {
   color: #c0392b;
 }
+
+/* Configurations can contain long inline certificates; keep their controls visible. */
+.modal-config { max-height: calc(92dvh - 2rem); overflow: hidden; }
+.modal-config > h3, .modal-config > .modal-actions { flex: 0 0 auto; }
+.modal-config > h3 { overflow-wrap: anywhere; }
+.modal-config-body { flex: 1 1 auto; min-height: 0; overflow: auto; display: flex; flex-direction: column; gap: 0.9rem; }
+.modal-config-body > p { margin: 0; }
+.modal-config-body > .script-box { flex: 0 0 auto; max-height: min(30dvh, 320px); overflow: auto; }
+.modal-config-body > .qr-wrap { flex: 0 0 auto; }
+.modal-config > .modal-actions { flex-wrap: wrap; }

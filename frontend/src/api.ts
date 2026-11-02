@@ -360,6 +360,9 @@ export type AwgState = {
   address: string
   clients: AwgClient[]
   legacy_container?: string | null
+  version?: string
+  transport?: 'udp' | 'tcp'
+  capabilities?: ClientCapabilities
 }
 
 export type CreatedClient = {
@@ -367,6 +370,20 @@ export type CreatedClient = {
   config: string
   config_amnezia: string
 }
+
+export type NativeClientConfig = {
+  config: string
+  name: string
+  filename: string
+  format: 'wireguard' | 'openvpn'
+}
+
+export type NativeCreatedClient<T> = Omit<NativeClientConfig, 'name'> & { client: T }
+
+export type ClientCapabilities = Partial<Record<'native_config' | 'pause' | 'reissue' | 'notes' | 'limits' | 'history' | 'rename' | 'bulk' | 'update' | 'config_backups' | 'config_restore' | 'remove' | 'amnezia_export', boolean>>
+
+export type ClientProtocol = 'awg' | 'awg3' | 'awglegacy' | 'openvpn' | 'xray' | 'wireguard' | 'openvpn-native'
+export type DeployProtocol = 'awg' | 'awg3' | 'xray' | 'openvpn' | 'wireguard' | 'openvpn-native'
 
 export type ImportPreview = {
   name: string
@@ -403,7 +420,7 @@ export type VersionInfo = {
 }
 
 // снимки конфига на ноде (для отката пересборки), для любого протокола
-export type SnapProto = 'awg' | 'awg3' | 'xray' | 'openvpn'
+export type SnapProto = DeployProtocol
 export type Snapshot = { id: string; clients: number }
 
 export function listConfigBackups(
@@ -515,6 +532,10 @@ export type OvpnClient = {
 export type OvpnState = {
   container: string
   clients: OvpnClient[]
+  port?: number
+  transport?: 'udp' | 'tcp'
+  version?: string
+  capabilities?: ClientCapabilities
 }
 
 export type OvpnCreated = {
@@ -541,11 +562,11 @@ export type XrayClient = {
 // Пауза/возобновление клиента (протокол-независимо).
 export async function pauseClient(
   serverId: number,
-  protocol: 'awg' | 'awg-legacy' | 'awg3' | 'xray' | 'openvpn',
+  protocol: Exclude<ClientProtocol, 'awglegacy'> | 'awg-legacy',
   clientId: string,
   resume: boolean,
 ): Promise<void> {
-  const idKey = protocol.startsWith('awg') ? 'public_key' : 'client_id'
+  const idKey = protocol.startsWith('awg') || protocol === 'wireguard' ? 'public_key' : 'client_id'
   await api<void>(
     `/api/servers/${serverId}/${protocol}/${resume ? 'resume' : 'pause'}`,
     { method: 'POST', body: JSON.stringify({ [idKey]: clientId }) },
@@ -555,7 +576,7 @@ export async function pauseClient(
 // Установить/снять срок действия клиента (протокол-независимо).
 export async function setClientLimit(
   serverId: number,
-  protocol: 'awg' | 'awg3' | 'awglegacy' | 'openvpn' | 'xray',
+  protocol: ClientProtocol,
   clientId: string,
   name: string,
   expiresAt: string | null,
@@ -699,7 +720,7 @@ export function disable2FA(otp: string, password: string): Promise<TwoFAStatus> 
 }
 
 export type Protocol = {
-  key: 'awg' | 'awglegacy' | 'awg3' | 'openvpn' | 'xray'
+  key: ClientProtocol
   label: string
 }
 
@@ -752,7 +773,9 @@ export function protocolsFromContainers(
     found.push({ key: 'awglegacy', label: 'AmneziaWG Legacy' })
   }
   if (has(/^amnezia-openvpn/))
-    found.push({ key: 'openvpn', label: 'OpenVPN/Cloak' })
+    found.push({ key: 'openvpn', label: 'OpenVPN + Cloak' })
+  if (Object.values(kinds).includes('wireguard')) found.push({ key: 'wireguard', label: 'WireGuard' })
+  if (Object.values(kinds).includes('openvpn-native')) found.push({ key: 'openvpn-native', label: 'OpenVPN' })
   if (has(/^amnezia-xray/)) found.push({ key: 'xray', label: 'XRay/REALITY' })
   return found
 }
@@ -897,7 +920,9 @@ export const PROTOCOL_LABEL: Record<string, string> = {
   awg2: 'AmneziaWG 2.0',
   awg3: 'AmneziaWG 3.1',
   awglegacy: 'AmneziaWG Legacy',
-  openvpn: 'OpenVPN/Cloak',
+  openvpn: 'OpenVPN + Cloak',
+  wireguard: 'WireGuard',
+  'openvpn-native': 'OpenVPN',
   xray: 'XRay/REALITY',
 }
 
@@ -1044,10 +1069,12 @@ export function listCascades(): Promise<Cascade[]> {
 export function hiddenExits(servers: Server[], cascades: Cascade[]): Set<number> {
   const own = new Set(
     servers
-      .filter((s) => (parseCheckInfo(s)?.amnezia_containers ?? []).length > 0)
+      .filter((s) => protocolsFromContainers(parseCheckInfo(s)?.amnezia_containers ?? [], parseCheckInfo(s)?.protocols ?? {}).length > 0)
       .map((s) => s.id),
   )
-  return new Set(cascades.map((c) => c.exit_server_id).filter((id) => !own.has(id)))
+  const uses = new Map<number, number>()
+  for (const c of cascades) uses.set(c.exit_server_id, (uses.get(c.exit_server_id) ?? 0) + 1)
+  return new Set(cascades.map((c) => c.exit_server_id).filter((id) => !own.has(id) && uses.get(id) === 1))
 }
 
 // серверы без спрятанных выходов каскадов (см. hiddenExits)

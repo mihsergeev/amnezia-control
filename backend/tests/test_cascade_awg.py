@@ -55,7 +55,7 @@ def test_native_scripts_are_valid_shell_and_never_install_gre():
     assert "AWG handshake or routing" in entry
     assert entry.index("AWG handshake or routing") < entry.index("[3/5]")
     assert entry.index(f"sudo {cascade_awg.SCRIPT} guard") < entry.index(
-        f"sudo docker rm -f {cascade_awg.CONTAINER}")
+        f"sudo {cascade_awg.SCRIPT} recreate")
     assert "AWG operation refused" not in entry  # runtime is encoded, not printed
     gateway = json.loads(cascade.entry_gateway_config("awg", p["exit_ip"], p))
     outbound = next(x for x in gateway["outbounds"] if x["tag"] == "exit")
@@ -75,7 +75,7 @@ def test_failclosed_guards_and_cleanup_are_scoped():
     assert "--cap-drop ALL --cap-add NET_ADMIN" in script
     assert 'setconf "$IF" /etc/acontrol-awg/link.conf >/dev/null 2>&1' in script
     assert "acontrol-awg-link.service" in cascade_awg.preflight_command()
-    assert "docker inspect xray-cascade" in cascade_awg.preflight_command()
+    assert "docker container inspect xray-cascade" in cascade_awg.preflight_command()
     assert "org.amnezia.control.cascade" in cascade_awg.preflight_command(3)
     assert "CID=3" in cascade_awg.remove(3)
     # An external symlink/helper must survive automatic old-script upgrades.
@@ -126,8 +126,8 @@ def _status(tmp_path, monkeypatch, *, age=20, guard=True, allowed="0.0.0.0/0", f
     if os.name == "nt":
         prefix = f'export PATH="$(cygpath -u "{bin_.as_posix()}"):$PATH"\n'
     monkeypatch.setenv("PATH", str(bin_) + os.pathsep + os.environ["PATH"])
-    r = subprocess.run([shutil.which("bash"), "-c", prefix + script, "check", "up" if fail_config else "status"],
-                       capture_output=True, text=True, timeout=10)
+    r = subprocess.run([shutil.which("bash"), "-s", "--", "up" if fail_config else "status"],
+                       input=prefix + script, capture_output=True, text=True, timeout=10)
     if fail_config:
         assert r.returncode != 0
         return (tmp_path / "calls").read_text()
@@ -172,7 +172,7 @@ def test_preflight_rejects_manual_or_unlabelled_carrier(tmp_path, monkeypatch, c
     scripts = {
         "sudo": '#!/bin/sh\nexec "$@"\n',
         "docker": ('#!/bin/sh\n' +
-                   (f'[ "$*" = "inspect {collision}" ] && exit 0\n' if collision else '') +
+                   (f'[ "$*" = "container inspect {collision}" ] && exit 0\n' if collision else '') +
                    'exit 1\n'),
         "ip": '#!/bin/sh\nexit 1\n',
         "nft": '#!/bin/sh\nexit 1\n',
@@ -206,12 +206,13 @@ async def test_create_awg_preserves_secrets_in_storage_only(client, auth_headers
     async def available(*args):
         return None
 
-    async def port(conn, requested):
+    async def port(conn, requested, reserved=None):
         return requested or 51830
 
     monkeypatch.setattr(api, "_locked", locked)
     monkeypatch.setattr(api, "_addresses", addresses)
     monkeypatch.setattr(api, "_awg_preflight", available)
+    monkeypatch.setattr(api, "_operation_available", available)
     monkeypatch.setattr(api, "_awg_port", port)
     monkeypatch.setattr(cascadejob, "spawn", lambda *args: None)
     r = await client.post("/api/cascades", headers=auth_headers, json={

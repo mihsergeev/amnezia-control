@@ -6,6 +6,7 @@ import {
   serverListItems, serverListMatches, serverListMembers, serverListProblem,
   serverSelectionFromHistory, serverSelectionFromParams, serverSelectionParams,
   cascadeNameParts, greLinkLabel, manualExitNameChange, serverListRoute,
+  cascadeServerEligible,
 } from '../src/serverList.ts'
 
 function node(id: number, extra: Partial<Server> = {}): Server {
@@ -48,20 +49,48 @@ test('search finds either node, its note, group and address without changing exi
   assert.equal(resolveServerSelection([], { key: 'cascade:1', serverId: 2 }).server, undefined)
 })
 
-test('shared nodes keep distinct cascade contexts, including reverse and shared entries', () => {
-  const rows = serverListItems([node(1), node(2), node(3)], [cascade(1, 1, 2), cascade(2, 2, 3), cascade(3, 1, 3)])
+test('two entries sharing one exit retain exact cascade contexts and one explicit exit row', () => {
+  const rows = serverListItems([node(1), node(2), node(3)], [cascade(1, 1, 3), cascade(2, 2, 3)])
   assert.equal(rows.length, 3)
-  assert.equal(resolveServerSelection(rows, { key: 'cascade:2', serverId: 2 }).item?.cascade?.id, 2)
-  assert.equal(resolveServerSelection(rows, { key: 'cascade:1', serverId: 2 }).item?.cascade?.id, 1)
-  assert.deepEqual(serverListAnchors(rows).map((server) => server.id), [1, 2])
+  assert.equal(resolveServerSelection(rows, { key: 'cascade:2', serverId: 3 }).item?.cascade?.id, 2)
+  assert.equal(resolveServerSelection(rows, { key: 'cascade:1', serverId: 3 }).item?.cascade?.id, 1)
+  assert.equal(resolveServerSelection(rows, { key: 'server:3', serverId: 3 }).item?.cascade, undefined)
+  assert.equal(rows.find(r => r.key === 'server:3')?.sharedExitCount, 2)
+  assert.deepEqual(serverListAnchors(rows).map((server) => server.id), [1, 2, 3])
 })
 
 test('counts are logical rows, clients are deduplicated by node within a group', () => {
   const rows = serverListItems([node(1), node(2), node(3)], [cascade(1, 1, 2), cascade(2, 3, 2)])
   const stats = { 1: { clients_online: 0, clients_total: 0 }, 2: { clients_online: 4, clients_total: 45 }, 3: { clients_online: 0, clients_total: 0 } } as Record<number, ServerStat>
-  assert.equal(groupServerList(rows)[0].items.length, 2)
+  assert.equal(groupServerList(rows)[0].items.length, 3)
   assert.deepEqual(serverListClients(rows, stats), { available: true, online: 4, total: 45 })
-  assert.equal(serverListClients([rows[0]], stats).total, 45)
+  assert.equal(serverListClients([rows.find(r => r.key === 'cascade:1')!], stats).total, 0)
+  assert.equal(serverListClients([rows.find(r => r.key === 'server:2')!], stats).total, 45)
+})
+
+test('shared exit counters belong only to its own group, including direct clients', () => {
+  const servers = [node(1, { group_name: 'Entry A' }), node(2, { group_name: 'Exit group' }), node(3, { group_name: 'Entry B' })]
+  const rows = serverListItems(servers, [cascade(1, 1, 2), cascade(2, 3, 2)])
+  const stats = { 1: { clients_online: 1, clients_total: 3 }, 2: { clients_online: 4, clients_total: 45 }, 3: { clients_online: 2, clients_total: 5 } } as Record<number, ServerStat>
+  assert.deepEqual(Object.fromEntries(groupServerList(rows).map(g => [g.name, serverListClients(g.items, stats).total])), { 'Entry A': 3, 'Exit group': 45, 'Entry B': 5 })
+  assert.deepEqual(serverListClients(rows, stats), { available: true, online: 7, total: 53 })
+})
+
+test('incoming GRE interfaces do not turn the shared exit node into a fake manual cascade', () => {
+  const servers = [node(1), node(2, { egress_ip: '192.0.2.2', country: 'FI', egress_country: 'FI', last_check_info: '{"tunnels":[{"kind":"gre","name":"incoming"}]}' }), node(3)]
+  const rows = serverListItems(servers, [cascade(1, 1, 2), cascade(2, 3, 2)])
+  assert.equal(serverListRoute(rows.find(r => r.key === 'server:2')!, servers), null)
+})
+
+test('cascade roles permit repeated exits, but exclude entries and manual entry carriers', () => {
+  const cs = [cascade(1, 1, 2)]
+  assert.equal(cascadeServerEligible(node(1), cs, 'entry'), false)
+  assert.equal(cascadeServerEligible(node(1), cs, 'exit'), false)
+  assert.equal(cascadeServerEligible(node(2), cs, 'entry'), false)
+  assert.equal(cascadeServerEligible(node(2), cs, 'exit'), true)
+  const manual = node(4, { last_check_info: '{"manual_cascade":{"transport":"vless","exit_host":"198.51.100.4"}}' })
+  assert.equal(cascadeServerEligible(manual, cs, 'entry'), false)
+  assert.equal(cascadeServerEligible(manual, cs, 'exit'), true)
 })
 
 test('problems include either node, cascade errors, installing and health failures', () => {

@@ -4,6 +4,23 @@ All notable changes to Amnezia Control are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.84.0] - 2026-11-02
+
+### Added
+- Issue standard OpenVPN profiles over UDP or TCP and standard WireGuard profiles with QR codes, separately from existing Amnezia protocols.
+- Manage native clients with pause, resume, expiry, notes, search, bulk revocation and key reissue. Retain their profiles and metadata in panel backups and server transfers.
+- Connect multiple cascade entries to one shared exit, with separate transport resources, keys, ports and health checks for each route.
+
+### Fixed
+- Preserve native clients and listener settings when updating their protocol. Pair WireGuard configuration snapshots with the matching panel metadata.
+- Keep long client configurations scrollable while leaving dialog titles and download buttons visible on narrow screens.
+- Adjust native WireGuard MTU and TCP MSS to prevent stalled transfers, and block IPv6 bypass in IPv4-only native VPN profiles.
+- Guard detached cascade operations across panel restarts so delayed installation tasks cannot recreate a removed route or interfere with another entry.
+
+### Upgrade notes
+- Existing VPN clients, configurations and cascade transports are retained. Updating the panel does not install or rebuild VPN protocols.
+- Schema rollback is refused while native profiles or new isolated cascade routes exist. Automatic OpenVPN PKI rollback is disabled to avoid restoring revoked certificates.
+
 ## [0.83.3] - 2026-11-02
 
 ### Fixed

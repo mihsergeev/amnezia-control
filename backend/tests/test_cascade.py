@@ -169,10 +169,13 @@ async def test_pair_validation(client: httpx.AsyncClient, auth_headers, session_
     async with session_factory() as session:
         session.add(Cascade(entry_server_id=a, exit_server_id=b, transport="gre", status="ready"))
         await session.commit()
-    r = await client.post("/api/cascades", json={"entry_id": c, "exit_id": b, "transport": "gre"},
+    r = await client.post("/api/cascades", json={"entry_id": b, "exit_id": c, "transport": "gre"},
                           headers=auth_headers)
     assert r.status_code == 409
     down = (await _servers(session_factory, 1, ok=False))[0]
+    async with session_factory() as session:
+        (await session.get(Server, down)).host = "203.0.113.90"
+        await session.commit()
     r = await client.post("/api/cascades/probe", json={"entry_id": c, "exit_id": down},
                           headers=auth_headers)
     assert r.status_code == 409 and "не на связи" in r.json()["detail"]

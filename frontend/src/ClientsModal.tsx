@@ -12,6 +12,9 @@ import {
   type Protocol,
   type Server,
   type VersionInfo,
+  type DeployProtocol,
+  type NativeCreatedClient,
+  type NativeClientConfig,
 } from './api'
 import { copyText } from './clipboard'
 import { formatBytes, formatHandshake, isOnline } from './format'
@@ -29,6 +32,7 @@ import { TorrentBadge } from './Torrent'
 import { useTorrentHits } from './useTorrentHits'
 import { useI18n } from './i18n'
 import { useModalDismiss, useModalLayer } from './useModalDismiss'
+import { configFilename } from './clientExports'
 
 type Props = {
   server: Server
@@ -36,7 +40,7 @@ type Props = {
   onClose: () => void
   onUnauthorized: () => void
   // без него кнопок обновления протокола нет (окно открыто из поиска)
-  onRequestUpdate?: (protocol: 'awg' | 'awg3' | 'xray' | 'openvpn') => void
+  onRequestUpdate?: (protocol: DeployProtocol) => void
   onRequestUpgrade31?: () => void
   onRequestAdopt?: () => void
   // вкладка, открытая сразу; без нее - первая (самый новый протокол)
@@ -47,7 +51,7 @@ type Props = {
 
 type SortKey = 'name' | 'handshake' | 'traffic'
 type CfgFormat = 'conf' | 'amnezia'
-type ConfigView = { name: string; config: string; amnezia: string }
+type ConfigView = { name: string; config: string; amnezia: string; native: boolean; filename?: string }
 
 export function ClientsModal({
   server,
@@ -70,13 +74,14 @@ export function ClientsModal({
   )
   // 'awglegacy' — старый AmneziaWG (wg0) рядом с новым; путь /awg-legacy
   // 'awg3' — AmneziaWG 3.0, отдельный контейнер и свой путь /awg3
-  const isAwg = proto === 'awg' || proto === 'awglegacy' || proto === 'awg3'
+  const nativeWireguard = proto === 'wireguard'
+  const isAwg = proto === 'awg' || proto === 'awglegacy' || proto === 'awg3' || nativeWireguard
   const awgBase =
-    proto === 'awglegacy' ? 'awg-legacy' : proto === 'awg3' ? 'awg3' : 'awg'
+    proto === 'wireguard' ? 'wireguard' : proto === 'awglegacy' ? 'awg-legacy' : proto === 'awg3' ? 'awg3' : 'awg'
   // ключ протокола для сроков и истории трафика: бэкенд хранит их отдельно для
   // 2.0, 3.1 и Legacy, а раньше сюда всегда уходило 'awg'
-  const limitProto: 'awg' | 'awg3' | 'awglegacy' =
-    proto === 'awg3' ? 'awg3' : proto === 'awglegacy' ? 'awglegacy' : 'awg'
+  const limitProto: 'awg' | 'awg3' | 'awglegacy' | 'wireguard' =
+    proto === 'wireguard' ? 'wireguard' : proto === 'awg3' ? 'awg3' : proto === 'awglegacy' ? 'awglegacy' : 'awg'
   const [state, setState] = useState<AwgState | null>(null)
   const torrentHits = useTorrentHits(server.id)
   const [version, setVersion] = useState<VersionInfo | null>(null)
@@ -101,6 +106,8 @@ export function ClientsModal({
   const [cfgFormat, setCfgFormat] = useState<CfgFormat>('amnezia')
   const [qr, setQr] = useState<string | null>(null)
   const [copied, setCopied] = useState(false)
+  const configGeneration = useRef(0)
+  useEffect(() => () => { configGeneration.current += 1 }, [])
 
   const [search, setSearch] = useState('')
   const [sortKey, setSortKey] = useState<SortKey>('name')
@@ -170,14 +177,14 @@ export function ClientsModal({
     }
   }, [load, server.id, isAwg, proto])
 
-  function showConfig(name: string, config: string, amnezia: string) {
-    setView({ name, config, amnezia })
-    setCfgFormat('amnezia')
+  function showConfig(name: string, config: string, amnezia: string | undefined, filename?: string) {
+    setView({ name, config, amnezia: amnezia || '', native: nativeWireguard, filename })
+    setCfgFormat(nativeWireguard ? 'conf' : 'amnezia')
     setCopied(false)
   }
 
   const currentText = view
-    ? cfgFormat === 'conf'
+    ? view.native || cfgFormat === 'conf'
       ? view.config
       : view.amnezia
     : ''
@@ -214,8 +221,9 @@ export function ClientsModal({
     creatingRef.current = true
     setCreating(true)
     setError(null)
+    const generation = configGeneration.current
     try {
-      const result = await api<CreatedClient>(
+      const result = await api<CreatedClient | NativeCreatedClient<AwgClient>>(
         `/api/servers/${server.id}/${awgBase}/clients`,
         {
           method: 'POST',
@@ -226,11 +234,12 @@ export function ClientsModal({
           }),
         },
       )
+      if (generation !== configGeneration.current) return
       setAddOpen(false)
-      showConfig(result.client.name, result.config, result.config_amnezia)
+      showConfig(result.client.name, result.config, 'config_amnezia' in result ? result.config_amnezia : undefined, 'filename' in result ? result.filename : undefined)
       await loadRef.current()
     } catch (err) {
-      handleError(err)
+      if (generation === configGeneration.current) handleError(err)
     } finally {
       creatingRef.current = false
       setCreating(false)
@@ -270,8 +279,9 @@ export function ClientsModal({
   async function viewConfig(client: AwgClient) {
     setBusyKey(client.public_key)
     setError(null)
+    const generation = configGeneration.current
     try {
-      const result = await api<{
+      const result = await api<NativeClientConfig | {
         config: string
         config_amnezia: string
         name: string
@@ -279,11 +289,12 @@ export function ClientsModal({
         method: 'POST',
         body: JSON.stringify({ public_key: client.public_key }),
       })
-      showConfig(result.name, result.config, result.config_amnezia)
+      if (generation !== configGeneration.current) return
+      showConfig(result.name, result.config, 'config_amnezia' in result ? result.config_amnezia : undefined, 'filename' in result ? result.filename : undefined)
     } catch (err) {
-      handleError(err)
+      if (generation === configGeneration.current) handleError(err)
     } finally {
-      setBusyKey(null)
+      if (generation === configGeneration.current) setBusyKey(null)
     }
   }
 
@@ -298,17 +309,19 @@ export function ClientsModal({
       return
     setBusyKey(client.public_key)
     setError(null)
+    const generation = configGeneration.current
     try {
-      const result = await api<CreatedClient>(
+      const result = await api<CreatedClient | NativeCreatedClient<AwgClient>>(
         `/api/servers/${server.id}/${awgBase}/reissue`,
         { method: 'POST', body: JSON.stringify({ public_key: client.public_key }) },
       )
-      showConfig(result.client.name, result.config, result.config_amnezia)
+      if (generation !== configGeneration.current) return
+      showConfig(result.client.name, result.config, 'config_amnezia' in result ? result.config_amnezia : undefined, 'filename' in result ? result.filename : undefined)
       await loadRef.current()
     } catch (err) {
-      handleError(err)
+      if (generation === configGeneration.current) handleError(err)
     } finally {
-      setBusyKey(null)
+      if (generation === configGeneration.current) setBusyKey(null)
     }
   }
 
@@ -385,13 +398,12 @@ export function ClientsModal({
 
   function downloadConfig() {
     if (!view) return
-    const safe = view.name.replace(/[^a-zA-Z0-9_-]+/g, '_')
-    const ext = cfgFormat === 'conf' ? 'conf' : 'txt'
+    const ext = view.native || cfgFormat === 'conf' ? 'conf' : 'txt'
     const blob = new Blob([currentText], { type: 'text/plain' })
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
     a.href = url
-    a.download = `${safe || 'client'}.${ext}`
+    a.download = configFilename(view.name, ext, view.native ? view.filename : undefined)
     a.click()
     URL.revokeObjectURL(url)
   }
@@ -453,6 +465,10 @@ export function ClientsModal({
                 key={p.key}
                 className={proto === p.key ? 'tab tab-active' : 'tab'}
                 onClick={() => {
+                  configGeneration.current += 1
+                  setView(null)
+                  setAddOpen(false)
+                  setBusyKey(null)
                   setProto(p.key)
                   setFocus(null)
                 }}
@@ -472,13 +488,15 @@ export function ClientsModal({
           </div>
         )}
 
-        {proto === 'openvpn' && (
+        {(proto === 'openvpn' || proto === 'openvpn-native') && (
           <OpenVpnClients
+            key={`${server.id}:${proto}`}
             serverId={server.id}
             serverName={server.name}
+            protocol={proto}
             groupName={server.group_name}
             onUnauthorized={onUnauthorized}
-            onRequestUpdate={onRequestUpdate && (() => onRequestUpdate('openvpn'))}
+            onRequestUpdate={onRequestUpdate && (() => onRequestUpdate(proto))}
             focusClient={focus}
           />
         )}
@@ -620,6 +638,14 @@ export function ClientsModal({
             </div>
           </div>
         )}
+
+        {nativeWireguard && state && !focus && <div className="version-line">
+          <span className="muted small">{t('WireGuard — обычный протокол, без параметров AmneziaWG.')}{state.version && <> · <span className="mono">{state.version}</span></>}</span>
+          <div className="version-actions">
+            {state.capabilities?.config_restore === true && <RollbackMenu serverId={server.id} serverName={server.name} proto="wireguard" onRestored={load} onUnauthorized={onUnauthorized} />}
+            {onRequestUpdate && state.capabilities?.update === true && <button className="ghost" onClick={() => onRequestUpdate('wireguard')}>{t('Переустановить')}</button>}
+          </div>
+        </div>}
 
         {error && <p className="form-error">{error}</p>}
         {loading && <p className="muted">{t('загрузка…')}</p>}
@@ -879,10 +905,11 @@ export function ClientsModal({
 
         {view && (
           <div className="modal-backdrop">
-            <div className="card modal" onClick={(e) => e.stopPropagation()}>
+            <div className="card modal modal-config" onClick={(e) => e.stopPropagation()}>
               <h3>{t('Конфиг клиента «{name}»', { name: view.name })}</h3>
+              <div className="modal-config-body">
 
-              <div className="tabs">
+              {!view.native && <div className="tabs">
                 <button
                   className={cfgFormat === 'amnezia' ? 'tab tab-active' : 'tab'}
                   onClick={() => {
@@ -901,16 +928,16 @@ export function ClientsModal({
                 >
                   {t('AmneziaWG (.conf)')}
                 </button>
-              </div>
+              </div>}
 
               <p className="muted small">
-                {cfgFormat === 'conf'
-                  ? t('Оригинальный AmneziaWG — импортируется в приложение AmneziaWG или WireGuard.')
+                {view.native ? t('Обычная конфигурация WireGuard. Импортируйте .conf или отсканируйте QR в приложении WireGuard.') : cfgFormat === 'conf'
+                  ? t('Конфигурация для приложения AmneziaWG. Для обычного WireGuard используйте отдельный протокол WireGuard.')
                   : t('Ссылка vpn:// — вставьте её в приложение AmneziaVPN («+» → вставить из буфера) или отсканируйте QR.')}
               </p>
 
               <div className="qr-wrap">
-                {cfgFormat === 'amnezia' ? (
+                {!view.native && cfgFormat === 'amnezia' ? (
                   <AmneziaQr text={view.amnezia} format="vpn" />
                 ) : qr ? (
                   <img src={qr} alt={t('QR конфига')} width={240} height={240} />
@@ -919,19 +946,20 @@ export function ClientsModal({
                 )}
               </div>
               <pre className="script-box">{currentText}</pre>
+              {shareLink.result}
+              </div>
               <div className="modal-actions">
                 <button className="ghost" onClick={() => setView(null)}>
                   {t('Готово')}
                 </button>
                 <button className="ghost" onClick={downloadConfig}>
-                  {t('Скачать')} {cfgFormat === 'conf' ? '.conf' : '.txt'}
+                  {t('Скачать')} {view.native || cfgFormat === 'conf' ? '.conf' : '.txt'}
                 </button>
                 {shareLink.control}
                 <button onClick={copyConfig}>
                   {copied ? t('Скопировано ✓') : t('Скопировать')}
                 </button>
               </div>
-              {shareLink.result}
             </div>
           </div>
         )}

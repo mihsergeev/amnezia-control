@@ -66,4 +66,9 @@ def test_without_check_info_falls_back_sanely() -> None:
 
 
 def test_unknown_protocol_is_never_blank() -> None:
-    assert protocol_label(CORP, "wireguard") == "wireguard"
+    assert protocol_label(CORP, "foobar") == "foobar"
+
+
+def test_native_protocol_labels_do_not_depend_on_legacy_container_info() -> None:
+    assert protocol_label(CORP, "wireguard") == "WireGuard"
+    assert protocol_label(None, "openvpn-native") == "OpenVPN"

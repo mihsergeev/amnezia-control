@@ -41,6 +41,13 @@ _PROTO_PROBE = (
     "done"
 )
 
+_NATIVE_PROTO_PROBE = (
+    "for pair in wireguard:acontrol-wireguard openvpn-native:acontrol-openvpn-native; do "
+    'p=${pair%%:*}; c=${pair#*:}; '
+    "owned=$($D container inspect -f '{{.State.Running}}|{{index .Config.Labels \"org.amnezia.control.native\"}}' \"$c\" 2>/dev/null); "
+    '[ "$owned" = "true|$p" ] && echo "PROTO=$c|$p"; done; true'
+)
+
 # GRE-туннели ноды (каскад через GRE: ТСПУ не трогает proto 47). Сырые строки
 # `ip -o -d link`, разбираем в _parse_tunnel; служебный gre0 (remote any) отсеиваем
 _TUNNEL_PROBE = (
@@ -53,7 +60,7 @@ CHECK_COMMAND = (
     "if docker ps --format '{{.Names}}' 2>/dev/null; then D=docker; "
     "elif sudo -n docker ps --format '{{.Names}}' 2>/dev/null; then D='sudo -n docker'; "
     "else echo DOCKER_UNAVAILABLE; D=''; fi; "
-    '[ -n "$D" ] && { ' + _PROTO_PROBE + "; } || true"
+    '[ -n "$D" ] && { ' + _PROTO_PROBE + "; " + _NATIVE_PROTO_PROBE + "; } || true"
 )
 
 
@@ -66,6 +73,10 @@ EGRESS_COMMAND = (
     "elif sudo -n true 2>/dev/null; then D='sudo -n docker'; "
     "else exit 0; fi; "
     "c=$($D ps --format '{{.Names}}' 2>/dev/null | grep -i '^amnezia' | head -1); "
+    'if [ -z "$c" ]; then for pair in wireguard:acontrol-wireguard openvpn-native:acontrol-openvpn-native; do '
+    'p=${pair%%:*}; n=${pair#*:}; '
+    "owned=$($D container inspect -f '{{.State.Running}}|{{index .Config.Labels \"org.amnezia.control.native\"}}' \"$n\" 2>/dev/null); "
+    '[ "$owned" = "true|$p" ] && { c=$n; break; }; done; fi; '
     '[ -n "$c" ] || exit 0; '
     # busybox wget по https запускает помощника ssl_client и не дожидается его:
     # тот становится сиротой у PID 1 контейнера, а `tail -f /dev/null` детей не
@@ -183,6 +194,7 @@ def _parse_check_output(output: str) -> CheckResult:
             result.containers.append(line)
     result.amnezia_containers = [
         name for name in result.containers if name.startswith("amnezia")
+        or result.protocols.get(name) in {"wireguard", "openvpn-native"}
     ]
     return result
 

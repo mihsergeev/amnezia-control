@@ -23,7 +23,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app import audit, expiry, nodelock, pausestore, protolabel
 from app.config import get_settings
 from app.deps import CurrentUser, SessionDep
-from app.models import AwgConfig, AwgNote, ClientName, OvpnConfig, PausedClient, Server
+from app.models import AwgConfig, AwgNote, ClientName, NativeVpnConfig, OvpnConfig, PausedClient, Server
 from app.schemas import (
     ClientSearchHit,
     RevokeBulkRequest,
@@ -142,6 +142,10 @@ async def search_clients(
     ovpn_cfg = select(OvpnConfig.server_id, OvpnConfig.client_id, OvpnConfig.name)
     for sid, cid, name in (await session.execute(ovpn_cfg)).all():
         rows.append(((sid, "openvpn", cid), {"name": name, "has_config": True}, name, True))
+    native_cfg = select(NativeVpnConfig.server_id, NativeVpnConfig.protocol,
+                        NativeVpnConfig.client_id, NativeVpnConfig.name)
+    for sid, proto, cid, name in (await session.execute(native_cfg)).all():
+        rows.append(((sid, proto, cid), {"name": name, "has_config": True}, name, True))
 
     for (sid, proto, cid), _fields, text, by_key in rows:
         if only is not None:

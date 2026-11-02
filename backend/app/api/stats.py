@@ -17,6 +17,7 @@ from app.models import (
     ClientTrafficSample,
     NodeMetric,
     OvpnConfig,
+    NativeVpnConfig,
     Server,
     TrafficSample,
 )
@@ -104,6 +105,9 @@ async def top_clients(
             )
         ).all()
     }
+    native_names = {(sid, proto, cid): name for sid, proto, cid, name in (
+        await session.execute(select(NativeVpnConfig.server_id, NativeVpnConfig.protocol,
+                                     NativeVpnConfig.client_id, NativeVpnConfig.name))).all()}
 
     def resolve_name(s: ClientTrafficSample) -> str:
         key = (s.server_id, s.client_id)
@@ -114,6 +118,8 @@ async def top_clients(
             return awg_names.get(key) or awg_notes.get(key) or s.client_id[:12]
         if s.protocol == "openvpn":
             return ovpn_names.get(key) or s.client_id[:12]
+        if s.protocol in ("wireguard", "openvpn-native"):
+            return native_names.get((s.server_id, s.protocol, s.client_id)) or s.client_id[:12]
         return s.client_id[:12]
 
     return [

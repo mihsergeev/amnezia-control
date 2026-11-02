@@ -548,7 +548,7 @@ class AlertTestResult(BaseModel):
 
 
 class SetLimitRequest(BaseModel):
-    protocol: str = Field(pattern="^(awg|awg3|awglegacy|openvpn|xray)$")
+    protocol: str = Field(pattern="^(awg|awg3|awglegacy|openvpn|xray|wireguard|openvpn-native)$")
     client_id: str = Field(min_length=1)
     name: str = Field(default="", max_length=128)
     expires_at: datetime | None = None

@@ -33,7 +33,7 @@ import asyncssh
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey
 
-from app import cascade_awg
+from app import cascade_awg, cascade_exit
 from app.cascade_underlay import CASCADE_PROBE_COMMAND
 
 # Оба конца каскада обновляются вместе; наш chrome-профиль поддерживает
@@ -122,7 +122,10 @@ unrule() { t=$1; shift; while iptables -t "$t" -D "$@" 2>/dev/null; do :; done; 
 
 up() {
   modprobe ip_gre 2>/dev/null || true
-  ip link show "$IF" >/dev/null 2>&1 || ip tunnel add "$IF" mode gre local "$LOCAL" remote "$REMOTE" ttl 64 || exit 1
+  if ! ip link show "$IF" >/dev/null 2>&1; then
+    if [ -n "${KEY:-}" ]; then ip tunnel add "$IF" mode gre local "$LOCAL" remote "$REMOTE" key "$KEY" ttl 64 || exit 1
+    else ip tunnel add "$IF" mode gre local "$LOCAL" remote "$REMOTE" ttl 64 || exit 1; fi
+  fi
   ip addr replace "$INNER" dev "$IF"
   ip link set "$IF" mtu 1476 up
   # ответы из туннеля приходят с внешних адресов, строгий rp_filter их бы выкинул
@@ -464,10 +467,12 @@ _SRC_OF = "sed -n 's/.* src \\([0-9.]*\\).*/\\1/p'"
 _DEV_OF = "sed -n 's/.* dev \\([^ ]*\\).*/\\1/p'"
 
 
-def _gre_defaults(role: str, remote: str, inner: str, net: str) -> str:
+def _gre_defaults(role: str, remote: str, inner: str, net: str, key: int | None = None) -> str:
     lines = [
         f"IF={GRE_IF}", "LOCAL=$LOCAL", f"REMOTE={remote}", f"INNER={inner}", f"ROLE={role}",
     ]
+    if key is not None:
+        lines.append(f"KEY={int(key)}")
     if role == "exit":
         lines += ["EGRESS=$EGRESS", f"NET={net}"]
     else:
@@ -475,10 +480,10 @@ def _gre_defaults(role: str, remote: str, inner: str, net: str) -> str:
     return "\n".join(lines) + "\n"
 
 
-def _gre_install(role: str, remote: str, inner: str, net: str) -> list[str]:
+def _gre_install(role: str, remote: str, inner: str, net: str, key: int | None = None) -> list[str]:
     """Строки скрипта: поставить и поднять GRE-службу. LOCAL - адрес, с которого
     нода ходит к соседу (за NAT это внутренний адрес), EGRESS - внешний интерфейс."""
-    defaults = _gre_defaults(role, remote, inner, net)
+    defaults = _gre_defaults(role, remote, inner, net, key)
     return [
         f'LOCAL=$(ip -4 route get {remote} | {_SRC_OF} | head -1)',
         '[ -n "$LOCAL" ] || fail "no route to peer"',
@@ -498,6 +503,12 @@ def _gre_install(role: str, remote: str, inner: str, net: str) -> list[str]:
 
 
 def build_exit_script(transport: str, entry_ip: str, cascade_id: int, params: dict) -> str:
+    if cascade_exit.scoped(params):
+        lines = [_HEAD]
+        if transport != "gre":
+            lines.append(_DOCKER)
+        lines += cascade_exit.install(cascade_id, transport, entry_ip, params)
+        return "\n".join(lines + ['echo "DEPLOY_DONE"']) + "\n"
     net, _ein, xin = inner_net(cascade_id)
     lines = [_HEAD]
     if transport == "awg":
@@ -693,10 +704,11 @@ def _check_lines(country: str = "") -> list[str]:
     return lines + ['echo "CASCADE_EGRESS=$EG"', 'echo "CASCADE_RU=$RU"']
 
 
-def gateway_run(confdir: str) -> str:
+def gateway_run(confdir: str, owner: str = "") -> str:
     """Строка скрипта: запустить шлюз каскада с конфигом из confdir."""
     return (
         f"sudo docker run -d --name {GATEWAY} --restart always --network host "
+        + (f"--label org.amnezia.control.owner={shlex.quote(owner)} " if owner else "") +
         "-e GODEBUG=multipathtcp=0 "
         "--user 0:0 --read-only --cap-drop ALL --cap-add NET_ADMIN --cap-add NET_BIND_SERVICE "
         "--security-opt no-new-privileges:true --log-opt max-size=10m --log-opt max-file=3 "
@@ -708,17 +720,23 @@ def gateway_run(confdir: str) -> str:
 
 def build_entry_script(transport: str, exit_ip: str, cascade_id: int, params: dict,
                        country: str = "") -> str:
-    net, ein, _xin = inner_net(cascade_id)
-    lines = [_HEAD, 'log "[1/5] docker"', _DOCKER]
+    net, ein, _xin = cascade_exit.network(cascade_id, params)
+    lines = [_HEAD]
+    if cascade_exit.scoped(params):
+        lines += [cascade_exit.entry_preflight(cascade_id, transport, params).replace("exit 73", "fail 'entry ownership'"),
+                  cascade_exit.network_preflight(cascade_id, transport, params, "entry").replace("exit 73", "fail 'cascade subnet overlaps an existing route'"),
+                  f"sudo install -d -m 700 {DIR}",
+                  _put(f"{DIR}/owner.json", json.dumps(cascade_exit._owner(cascade_id, transport, params)), "600")]
+    lines += ['log "[1/5] docker"', _DOCKER]
     if transport == "awg":
         lines += ['log "[2/5] зашифрованный канал AWG 3.1"']
         lines += cascade_awg.install("entry", exit_ip, cascade_id, params,
-                                     ein.split('/')[0], inner_net(cascade_id)[2].split('/')[0])
+                                     ein.split('/')[0], _xin.split('/')[0])
     elif transport == "gre":
         lines += [cascade_awg.foreign_guard().replace("exit 73", "fail 'external encrypted underlay'")]
         lines += ['log "[2/5] GRE-туннель до выхода"']
-        lines += _gre_install("entry", exit_ip, ein, net)
-        xpeer = inner_net(cascade_id)[2].split("/")[0]
+        lines += _gre_install("entry", exit_ip, ein, net, params.get("gre_key"))
+        xpeer = _xin.split("/")[0]
         lines += [
             f"ping -c 3 -W 2 {xpeer} >/dev/null 2>&1 && log 'туннель отвечает' "
             "|| log 'выход не отвечает на ping внутри туннеля, проверю через шлюз'",
@@ -751,14 +769,14 @@ def build_entry_script(transport: str, exit_ip: str, cascade_id: int, params: di
         # запустится. Поднимаем его без правил и качаем базы через выход
         f"if ! sudo test -s {DIR}/geo/geosite.dat; then",
         f"  sudo docker rm -f {GATEWAY} >/dev/null 2>&1",
-        "  " + gateway_run(f"{DIR}/boot"),
+        "  " + gateway_run(f"{DIR}/boot", params.get("runtime_owner", "")),
         "  sleep 3",
         "fi",
         f"sudo {DIR}/geo-update.sh 2>&1 | tail -2",
         f"sudo test -s {DIR}/geo/geosite.dat || fail 'geo download (github.com)'",
         'log "[4/5] шлюз каскада"',
         f"sudo docker rm -f {GATEWAY} >/dev/null 2>&1",
-        gateway_run(f"{DIR}/config"),
+        gateway_run(f"{DIR}/config", params.get("runtime_owner", "")),
         "sleep 3",
         f"sudo docker ps --format '{{{{.Names}}}}' | grep -qx {GATEWAY} "
         f"|| fail \"xray: $(sudo docker logs --tail 3 {GATEWAY} 2>&1 | tr '\\n' ' ')\"",
@@ -779,6 +797,16 @@ def build_entry_script(transport: str, exit_ip: str, cascade_id: int, params: di
         'echo "DEPLOY_DONE"',
     ]
     return "\n".join(lines) + "\n"
+
+
+def _client_container_select() -> list[str]:
+    from app import native_deploy
+    lines = ["C=$(sudo docker ps --format '{{.Names}}' 2>/dev/null | grep -i '^amnezia' | grep -vx amnezia-dns | head -1)"]
+    for spec in native_deploy.SPECS.values():
+        template = "{{index .Config.Labels \"" + native_deploy.LABEL + "\"}}|{{.State.Running}}"
+        lines.append(f'if [ -z "$C" ]; then N=$(sudo docker container inspect -f {shlex.quote(template)} {shlex.quote(spec.container)} 2>/dev/null); '
+                     f'[ "$N" != {shlex.quote(spec.protocol + "|true")} ] || C={shlex.quote(spec.container)}; fi')
+    return lines
 
 
 def build_check_command(country: str = "") -> str:
@@ -807,9 +835,9 @@ def build_check_command(country: str = "") -> str:
         'echo "CASCADE_DIRECT=$(curl -4 -fsS -m 10 https://api.ipify.org 2>/dev/null)"',
         # curl хоста в сети VPN-контейнера (см. egresscheck): свой curl в
         # контейнере не нужен и зомби там не остаются. DNS резолвит хост
-        "C=$(sudo docker ps --format '{{.Names}}' 2>/dev/null | grep -i '^amnezia' | grep -vx amnezia-dns | head -1)",
+        *_client_container_select(),
         'CL=""',
-        'P=""; [ -z "$C" ] || P=$(sudo docker inspect -f \'{{.State.Pid}}\' "$C" 2>/dev/null)',
+        'P=""; [ -z "$C" ] || P=$(sudo docker container inspect -f \'{{.State.Pid}}\' "$C" 2>/dev/null)',
         "A=$(getent ahostsv4 api.ipify.org | awk 'NR == 1 {print $1}')",
         'if [ -n "$P" ] && [ "$P" != 0 ] && [ -n "$A" ]; then CL=$(sudo -n nsenter -t "$P" -n '
         'curl -4 -fsS -m 15 --resolve "api.ipify.org:443:$A" https://api.ipify.org 2>/dev/null); fi',
@@ -822,7 +850,7 @@ def _reality_encryption_command() -> str:
     script = r'''
 import json,os,stat,subprocess
 try:
-    item=json.loads(subprocess.check_output(['docker','inspect','acontrol-cascade'],timeout=3))[0]
+    item=json.loads(subprocess.check_output(['docker','container','inspect','acontrol-cascade'],timeout=3))[0]
     if item.get('State',{}).get('Running') is not True: raise ValueError()
     mounts=[m for m in item.get('Mounts',[]) if m.get('Destination')=='/usr/local/etc/xray']
     if len(mounts)!=1: raise ValueError()
@@ -964,12 +992,13 @@ def leaks(res: dict[str, str]) -> bool:
     return client == res["direct"] if res.get("direct") else True
 
 
-def build_remove_entry(transport: str = "gre", cascade_id: int = 0) -> str:
+def build_remove_entry(transport: str = "gre", cascade_id: int = 0, params: dict | None = None) -> str:
     units = ("acontrol-cascade-heal.service acontrol-cascade-tproxy.service "
              "acontrol-cascade-geo.timer")
     if transport != "awg":
         units += " acontrol-gre.service"
     return "\n".join([
+        cascade_exit.entry_preflight(cascade_id, transport, params) if cascade_exit.scoped(params or {}) else "",
         cascade_awg.foreign_guard(),
         cascade_awg.preflight_command(cascade_id) if transport == "awg" else "",
         f"sudo systemctl disable --now {units} >/dev/null 2>&1",
@@ -980,7 +1009,9 @@ def build_remove_entry(transport: str = "gre", cascade_id: int = 0) -> str:
     ]) + "\n"
 
 
-def build_remove_exit(transport: str = "gre", cascade_id: int = 0) -> str:
+def build_remove_exit(transport: str = "gre", cascade_id: int = 0, params: dict | None = None) -> str:
+    if cascade_exit.scoped(params or {}):
+        return cascade_exit.remove(cascade_id, transport, params)
     if transport == "awg":
         return "\n".join([cascade_awg.preflight_command(cascade_id),
                           cascade_awg.remove(cascade_id), _remove_common()]) + "\n"
