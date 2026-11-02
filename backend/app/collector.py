@@ -1,7 +1,6 @@
 """Фоновый сборщик метрик: периодически снимает статистику со всех серверов."""
 
 import asyncio
-import json
 import logging
 import time
 from datetime import datetime, timedelta, timezone
@@ -382,11 +381,11 @@ async def collect_once(
     # (check.docker=True). Пустой список — валидное «протоколов нет» (контейнер
     # удалили извне). None/docker=False — не трогаем прежний список (транзиентный
     # сбой не должен спрятать вкладки протоколов).
-    check_map: dict[int, str] = {}
+    check_map: dict[int, dict] = {}
     for s, r in zip(servers, results):
         chk = r.get("check") if r else None
         if chk is not None and chk.docker:
-            check_map[s.id] = json.dumps(chk.as_dict(), ensure_ascii=False)
+            check_map[s.id] = chk.as_dict()
     # отражаем живой online/offline прямо на карточке сервера, чтобы упавшая нода
     # краснела без ручной «Проверки», и обновляем список контейнеров (вкладки
     # протоколов), чтобы удалённый извне протокол пропадал автоматически.
@@ -403,7 +402,7 @@ async def collect_once(
                     if geo_map.get(srv.id):
                         srv.country = geo_map[srv.id]
                     if srv.id in check_map:
-                        srv.last_check_info = check_map[srv.id]
+                        await server_ops.store_check_info(session, srv, check_map[srv.id])
                     if srv.id in egress_map:
                         server_ops.apply_egress(srv, egress_map[srv.id], now)
                 await session.commit()

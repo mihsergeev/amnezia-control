@@ -5,7 +5,7 @@ import json
 
 import pytest
 
-from app import collector, config
+from app import cascade_alias, collector, config
 from app.db import Base, create_engine_and_factory
 from app.models import Server
 from app.sshops import CheckResult
@@ -98,6 +98,77 @@ async def test_docker_down_keeps_protocol(factory, monkeypatch):
     await _run(factory, monkeypatch, _sample(sid, chk))
     info = await _info(factory, sid)
     assert info["amnezia_containers"] == ["amnezia-awg2"]
+
+
+async def _manual_alias(factory, sid):
+    route = {"transport": "vless", "security": "reality", "network": "xhttp",
+             "exit_host": "203.0.113.20", "exit_port": 443}
+    async with factory() as session:
+        server = await session.get(Server, sid)
+        info = json.loads(server.last_check_info)
+        info["manual_cascade"] = route | {"exit_country": "KZ"}
+        server.last_check_info = json.dumps(info)
+        await cascade_alias.set_name(session, server, "vpn-exit (transit)")
+        await session.commit()
+    return route
+
+
+async def test_periodic_check_preserves_manual_alias_and_country(factory, monkeypatch):
+    sid = await _seed(factory, ["amnezia-awg2"])
+    route = await _manual_alias(factory, sid)
+
+    async def no_lookup(host):
+        raise AssertionError("The country for this configured peer is already known")
+
+    monkeypatch.setattr(collector.geo, "country_code", no_lookup)
+    # Each runtime observation intentionally has no user alias or geography.
+    for _ in range(2):
+        check = CheckResult(ok=True, docker=True, manual_cascade=dict(route))
+        await _run(factory, monkeypatch, _sample(sid, check))
+        peer = (await _info(factory, sid))["manual_cascade"]
+        assert peer["exit_name"] == "vpn-exit (transit)"
+        assert peer["exit_country"] == "KZ"
+
+
+async def test_periodic_check_does_not_transfer_alias_or_country_to_new_peer(factory, monkeypatch):
+    sid = await _seed(factory, ["amnezia-awg2"])
+    route = await _manual_alias(factory, sid)
+
+    async def country(host):
+        assert host == "203.0.113.21"
+        return "FI"
+
+    monkeypatch.setattr(collector.geo, "country_code", country)
+    check = CheckResult(ok=True, docker=True,
+                        manual_cascade=route | {"exit_host": "203.0.113.21"})
+    await _run(factory, monkeypatch, _sample(sid, check))
+    peer = (await _info(factory, sid))["manual_cascade"]
+    assert "exit_name" not in peer
+    assert peer["exit_country"] == "FI"
+
+
+async def test_periodic_check_recovers_alias_and_country_from_previously_raw_metadata(factory, monkeypatch):
+    sid = await _seed(factory, ["amnezia-awg2"])
+    route = await _manual_alias(factory, sid)
+    # Reproduce a DTO already overwritten by an older collector. Its alias
+    # still exists separately, so the next scheduled check must recover it.
+    async with factory() as session:
+        server = await session.get(Server, sid)
+        server.last_check_info = json.dumps({"manual_cascade": route})
+        await session.commit()
+    lookups = []
+
+    async def country(host):
+        lookups.append(host)
+        return "KZ"
+
+    monkeypatch.setattr(collector.geo, "country_code", country)
+    for _ in range(2):
+        check = CheckResult(ok=True, docker=True, manual_cascade=dict(route))
+        await _run(factory, monkeypatch, _sample(sid, check))
+        peer = (await _info(factory, sid))["manual_cascade"]
+        assert peer["exit_name"] == "vpn-exit (transit)" and peer["exit_country"] == "KZ"
+    assert lookups == ["203.0.113.20"]
 
 
 async def test_server_sample_skipped_while_protocol_set_changes(factory, monkeypatch):

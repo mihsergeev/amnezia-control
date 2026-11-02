@@ -4,6 +4,13 @@ All notable changes to Amnezia Control are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.83.1] - 2026-11-02
+
+### Fixed
+- Preserve manual cascade peer names and country flags after scheduled checks and protocol refreshes, with metadata bound to the configured endpoint.
+- Keep cascade hostnames and flags together in a compact sidebar row, without empty columns between nodes, while retaining aligned client counters.
+- Show the destination country after the exit server. Hide descriptive hostname suffixes in cascade rows while retaining full stored names, tooltips and search.
+
 ## [0.83.0] - 2026-11-02
 
 ### Added
