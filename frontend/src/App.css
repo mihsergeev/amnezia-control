@@ -2147,25 +2147,31 @@ button.srv-side-gh:hover .drag-handle {
   display: block;
 }
 
-.srv-item-kind {
-  color: var(--text-muted);
-  font-size: 0.73rem;
-  font-weight: 400;
-  margin-bottom: 0.15rem;
+.srv-cascade-name {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  align-items: center;
+  gap: 0.3rem;
+  white-space: nowrap;
+  overflow-wrap: normal;
 }
 
 .srv-item-name > .srv-cascade-node {
-  display: grid;
-  grid-template-columns: 1.1rem minmax(0, 1fr);
-  align-items: start;
+  display: flex;
+  align-items: center;
   gap: 0.3rem;
-  margin-top: 0.15rem;
   min-width: 0;
 }
 
 .srv-cascade-node > span:last-child {
   min-width: 0;
-  overflow-wrap: anywhere;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.srv-cascade-arrow {
+  color: var(--text-muted);
 }
 
 /* «→ 🇫🇮» в строке списка: нода - вход каскада, клиенты выходят в другой стране */
@@ -2179,6 +2185,7 @@ button.srv-side-gh:hover .drag-handle {
 }
 
 .srv-item-cl {
+  flex-shrink: 0;
   color: var(--text-muted);
   font-size: 0.78rem;
   font-variant-numeric: tabular-nums;
