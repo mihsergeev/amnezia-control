@@ -72,10 +72,19 @@ export function ShareServicesModal({ onClose, onUnauthorized }: Props) {
             {t('Закрыть')}
           </button>
         </div>
-        <p className="muted small">
+        <p className="muted small share-service-help">
           {t(
-            'Вместо файла в мессенджере - одноразовая ссылка: панель кладет конфиг в сервис секретов, ссылка открывается один раз и через 7 дней сгорит сама. Подходят sup3rS3cretMes5age и Password Pusher: поставьте любой у себя и укажите его адрес. В окне конфига появится кнопка «Ссылка».',
-          )}
+            'Панель передает конфиг в сервис одноразовых ссылок. Ссылку можно открыть один раз, а через 7 дней она истечет.',
+          )}{' '}
+          {t('Поддерживаются')}{' '}
+          <a href="https://github.com/algolia/sup3rS3cretMes5age" target="_blank" rel="noreferrer">
+            sup3rS3cretMes5age
+          </a>{' '}
+          {t('и')}{' '}
+          <a href="https://github.com/pglombardo/PasswordPusher" target="_blank" rel="noreferrer">
+            Password Pusher
+          </a>.{' '}
+          {t('Разверните любой из этих сервисов и укажите его адрес. В окне конфига появится кнопка «Ссылка».')}
         </p>
 
         {loading ? (

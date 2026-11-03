@@ -4,6 +4,11 @@ All notable changes to Amnezia Control are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.84.2] - 2026-11-03
+
+### Added
+- Link to the official GitHub repositories for sup3rS3cretMes5age and Password Pusher from the config link settings.
+
 ## [0.84.1] - 2026-11-03
 
 ### Fixed

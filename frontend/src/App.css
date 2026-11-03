@@ -2569,6 +2569,12 @@ button.srv-hop-selected {
 }
 
 /* список сервисов в настройках ссылок */
+.share-service-help a {
+  color: inherit;
+  text-decoration: underline;
+  overflow-wrap: anywhere;
+}
+
 .share-services {
   display: flex;
   flex-direction: column;
