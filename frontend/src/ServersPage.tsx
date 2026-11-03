@@ -131,13 +131,7 @@ function CascadeListName({ route }: { route: NonNullable<ReturnType<typeof serve
 }
 
 // Путь клиентов каскада, настроенного вручную: известен только адрес выхода.
-function EgressRoute({
-  server,
-  onCheck,
-}: {
-  server: Server
-  onCheck: () => void
-}) {
+function EgressRoute({ server }: { server: Server }) {
   const { t } = useI18n()
   const viaGre = greTunnels(server).length > 0
   const exitIp = server.egress_ip
@@ -158,9 +152,6 @@ function EgressRoute({
         title={exitIp}
         sub={exitSub ? t('выход в интернет, {org}', { org: exitSub }) : t('выход в интернет')}
       />
-      <button className="ghost srv-route-check" onClick={onCheck}>
-        {t('Проверить каскад')}
-      </button>
     </div>
   )
 }
@@ -172,14 +163,12 @@ function CascadeRoute({
   exit,
   selectedId,
   onOpen,
-  onCheck,
 }: {
   cascade: Cascade
   entry?: Server
   exit?: Server
   selectedId?: number
   onOpen: (s: Server) => void
-  onCheck: () => void
 }) {
   const { t } = useI18n()
   return (
@@ -206,9 +195,6 @@ function CascadeRoute({
         selected={exit?.id === selectedId}
         hint={t('Открыть сервер выхода')}
       />
-      <button className="ghost srv-route-check" onClick={onCheck}>
-        {t(cascade.status === 'ready' && entry && exit ? 'Проверить каскад' : 'Подробнее')}
-      </button>
     </div>
   )
 }
@@ -356,7 +342,7 @@ function ServerDetail({
   stat: ServerStat | undefined
   checking: boolean
   menu: MenuItem[]
-  onCheck: () => void
+  onCheck: () => Promise<void>
   onClients: (proto?: Protocol['key']) => void
   // каскад панели с этим сервером и второй его сервер
   cascade?: Cascade
@@ -381,6 +367,15 @@ function ServerDetail({
   const isEntry = cascade?.entry_server_id === server.id
   const health = isEntry ? cascade?.result.health : undefined
   const exitDown = isEntry && (peer?.last_check_ok === false || health?.ok === false)
+  const checkManaged = cascade?.status === 'ready' && !!peer
+  const checkExternal = !cascade && !!server.egress_ip
+
+  async function runCheck() {
+    await onCheck()
+    if (checkManaged && cascade) onCascadeCheck(cascade)
+    else if (checkExternal) onEgressCheck()
+  }
+
   return (
     <div className={`card srv-detail${server.last_check_ok === false ? ' server-down' : ''}`}>
       <div className="srv-detail-head">
@@ -393,8 +388,8 @@ function ServerDetail({
           {online && protocols.length > 0 && (
             <button onClick={() => onClients()}>{t('Клиенты')}</button>
           )}
-          <button className="ghost" onClick={onCheck} disabled={checking}>
-            {checking ? t('Проверка…') : t('Проверить')}
+          <button className="ghost" onClick={() => void runCheck()} disabled={checking}>
+            {checking ? t('Проверка…') : t(checkManaged || checkExternal ? 'Проверить каскад' : 'Проверить')}
           </button>
           <Menu label={t('Ещё')} items={menu} />
         </div>
@@ -425,7 +420,6 @@ function ServerDetail({
             exit={isEntry ? peer : server}
             selectedId={server.id}
             onOpen={onOpen}
-            onCheck={() => cascade.status === 'ready' && peer ? onCascadeCheck(cascade) : onCascade(cascade)}
           />
           {!isEntry && <div className="muted small">
             {protocols.length > 0
@@ -434,10 +428,7 @@ function ServerDetail({
           </div>}
         </>
       ) : server.egress_ip ? (
-        <EgressRoute
-          server={server}
-          onCheck={onEgressCheck}
-        />
+        <EgressRoute server={server} />
       ) : (
         greTunnels(server).length > 0 && (
           <div>
@@ -457,12 +448,16 @@ function ServerDetail({
         </div>
       )}
       {cascade && cascade.status === 'ready' && cascade.entry_server_id === server.id && (
-        <div className="muted small">
-          {cascade.routes?.length ? t('Ручные маршруты: {n}', { n: cascade.routes.length }) : server.country
-            ? t('Сайты страны входа напрямую с этого сервера, остальное через выход.')
-            : t('Весь трафик клиентов идет через выход: страна этого сервера неизвестна.')}
-          {' '}
-          <button className="link-btn" onClick={() => onCascadeRoutes(cascade)}>{t('Маршруты каскада')}</button>
+        <div className="srv-route-settings">
+          <div>
+            <strong>{t('Маршруты каскада')}</strong>
+            <div className="muted small">
+              {cascade.routes?.length ? t('Ручные маршруты: {n}', { n: cascade.routes.length }) : server.country
+                ? t('Сайты страны входа напрямую с этого сервера, остальное через выход.')
+                : t('Весь трафик клиентов идет через выход: страна этого сервера неизвестна.')}
+            </div>
+          </div>
+          <button className="ghost" onClick={() => onCascadeRoutes(cascade)}>{t('Настроить маршруты')}</button>
         </div>
       )}
       {health?.ok === false && (
@@ -1430,7 +1425,7 @@ export function ServersPage({ onUnauthorized }: Props) {
                 stat={stats[selected.id]}
                 checking={checkingId === selected.id}
                 menu={serverMenu(selected)}
-                onCheck={() => void check(selected)}
+                onCheck={() => check(selected)}
                 onClients={(proto) => {
                   setClientsTab(proto)
                   setClientsFor(selected)
@@ -1447,7 +1442,10 @@ export function ServersPage({ onUnauthorized }: Props) {
             ) : selectedItem?.cascade ? (
               <div className="card srv-detail">
                 <CascadeRoute cascade={selectedItem.cascade} entry={selectedItem.entry} exit={selectedItem.exit}
-                  onOpen={select} onCheck={() => setWizard({ resume: selectedItem.cascade })} />
+                  onOpen={select} />
+                <button className="ghost" onClick={() => setWizard({ resume: selectedItem.cascade })}>
+                  {t('Подробнее')}
+                </button>
                 <p className="muted">{t('Узлы каскада недоступны. Откройте ход установки или обновите список.')}</p>
               </div>
             ) : (
@@ -1939,6 +1937,8 @@ export function ServersPage({ onUnauthorized }: Props) {
       {casRoutes && (
         <CascadeRoutesModal
           cascade={casRoutes}
+          entry={servers.find((server) => server.id === casRoutes.entry_server_id)}
+          exit={servers.find((server) => server.id === casRoutes.exit_server_id)}
           onClose={() => setCasRoutes(null)}
           onUnauthorized={onUnauthorized}
           onSaved={(saved) => {
