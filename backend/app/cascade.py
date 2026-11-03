@@ -33,7 +33,7 @@ import asyncssh
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey
 
-from app import cascade_awg, cascade_exit
+from app import cascade_awg, cascade_exit, cascade_routes
 from app.cascade_underlay import CASCADE_PROBE_COMMAND
 
 # Оба конца каскада обновляются вместе; наш chrome-профиль поддерживает
@@ -673,6 +673,7 @@ def entry_gateway_config(transport: str, exit_ip: str, params: dict, bootstrap: 
             "domainStrategy": "IPIfNonMatch",
             "rules": [
                 {"ip": ["geoip:private"], "outboundTag": "block"},
+                *cascade_routes.xray_rules(params.get("routes", [])),
                 *local_rules(country),
             ],
         },

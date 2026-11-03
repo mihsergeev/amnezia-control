@@ -4,6 +4,11 @@ All notable changes to Amnezia Control are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.84.3] - 2026-11-03
+
+### Added
+- Configure per-cascade routes by domain, IPv4 address, or subnet and choose the entry or exit server for internet access.
+
 ## [0.84.2] - 2026-11-03
 
 ### Added

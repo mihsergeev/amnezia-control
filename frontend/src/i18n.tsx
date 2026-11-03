@@ -434,6 +434,20 @@ const EN: Record<string, string> = {
   'Ссылка через {name}: откроется один раз, через {n} дн. сгорит сама.':
     'Link via {name}: opens once, expires by itself in {n} days.',
   'Ссылки на конфиги': 'Config links',
+  'Маршруты каскада': 'Cascade routes',
+  'Ручные маршруты: {n}': 'Manual routes: {n}',
+  'Домен, IPv4 или подсеть': 'Domain, IPv4 or subnet',
+  'Маршрут': 'Route',
+  'Через вход': 'Via entry server',
+  'Через выход': 'Via exit server',
+  'Добавить правило': 'Add rule',
+  'Укажите домен, IPv4 или подсеть. Для домена правило действует и на поддомены. Первое совпавшее правило задает маршрут, для остальных адресов действуют настройки каскада. При сохранении шлюз кратко перезапускается.':
+    'Enter a domain, IPv4 or subnet. Domain rules include subdomains. The first matching rule wins. Other destinations use the cascade defaults. Saving briefly restarts the gateway.',
+  'Маршруты доступны после установки каскада': 'Routes are available after the cascade is installed',
+  'Шлюз каскада не соответствует настройкам панели': 'The cascade gateway does not match the panel settings',
+  'Не удалось запустить шлюз после отката маршрутов': 'The gateway failed to start after rolling back the routes',
+  'Шлюз занят или предыдущие маршруты восстановлены': 'The gateway is busy or the previous routes were restored',
+  'Не удалось применить маршруты': 'Could not apply routes',
   'Панель передает конфиг в сервис одноразовых ссылок. Ссылку можно открыть один раз, а через 7 дней она истечет.':
     'The panel sends the config to a one-time link service. The link can be opened once and expires after 7 days.',
   'Поддерживаются': 'Supported services include',

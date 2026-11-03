@@ -997,7 +997,10 @@ export type CascadeTransportProbe = {
   prerequisite_tcp?: { ok: boolean; error: string }
 }
 
+export type CascadeRoute = { destination: string; via: 'entry' | 'exit' }
+
 export type Cascade = {
+  routes?: CascadeRoute[]
   id: number
   entry_server_id: number
   exit_server_id: number
@@ -1118,6 +1121,13 @@ export function createCascade(
   return api<Cascade>('/api/cascades', {
     method: 'POST',
     body: JSON.stringify({ entry_id: entryId, exit_id: exitId, transport, ...(transport === 'awg' ? ports : {}) }),
+  })
+}
+
+export function updateCascadeRoutes(id: number, routes: CascadeRoute[]): Promise<Cascade> {
+  return api<Cascade>(`/api/cascades/${id}/routes`, {
+    method: 'PUT',
+    body: JSON.stringify({ routes }),
   })
 }
 
