@@ -865,6 +865,11 @@ input:focus {
   margin: 0.3rem 0.35rem;
 }
 
+.menu-pop-above .menu-item {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
 .menu-gear {
   font-size: 1.05rem;
   line-height: 1;
@@ -2546,12 +2551,16 @@ button.srv-hop-selected {
 
 .share-link-row {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
   gap: 0.8rem;
 }
 
 .share-link-row p {
+  flex: 1 1 13rem;
+  min-width: 0;
+  overflow-wrap: anywhere;
   margin: 0;
 }
 
@@ -3227,6 +3236,6 @@ tr.row-link:hover td {
 .modal-config > h3 { overflow-wrap: anywhere; }
 .modal-config-body { flex: 1 1 auto; min-height: 0; overflow: auto; display: flex; flex-direction: column; gap: 0.9rem; }
 .modal-config-body > p { margin: 0; }
-.modal-config-body > .script-box { flex: 0 0 auto; max-height: min(30dvh, 320px); overflow: auto; }
+.modal-config-body > .script-box { flex: 0 0 auto; max-height: min(30dvh, 320px); overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
 .modal-config-body > .qr-wrap { flex: 0 0 auto; }
 .modal-config > .modal-actions { flex-wrap: wrap; }

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react'
+import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react'
 
 export type MenuItem = {
   label?: string
@@ -18,6 +18,7 @@ type Props = {
   /** позиционировать всплывашку через position:fixed по координатам кнопки —
    * нужно внутри скролл-контейнеров (таблица клиентов), иначе overflow её режет */
   fixed?: boolean
+  placement?: 'above' | 'below'
 }
 
 /** Лёгкое выпадающее меню: закрывается по клику вне, Escape и скролле. */
@@ -29,21 +30,29 @@ export function Menu({
   caret = true,
   title,
   fixed = false,
+  placement = 'below',
 }: Props) {
   const [open, setOpen] = useState(false)
-  const [coords, setCoords] = useState<{ top: number; right: number; left: number } | null>(
-    null,
-  )
+  const [popStyle, setPopStyle] = useState<CSSProperties>()
   const ref = useRef<HTMLDivElement>(null)
   const btnRef = useRef<HTMLButtonElement>(null)
 
   function toggle() {
     if (!open && fixed && btnRef.current) {
       const r = btnRef.current.getBoundingClientRect()
-      setCoords({
-        top: r.bottom + 4,
-        right: window.innerWidth - r.right,
-        left: r.left,
+      const right = window.innerWidth - r.right
+      setPopStyle({
+        position: 'fixed',
+        ...(placement === 'above'
+          ? {
+              top: 'auto',
+              bottom: window.innerHeight - r.top + 4,
+              right: Math.max(8, Math.min(right, window.innerWidth - 188)),
+              maxWidth: Math.min(window.innerWidth - 16, Math.max(180, r.right - 8)),
+              maxHeight: Math.max(0, r.top - 12),
+              overflow: 'auto',
+            }
+          : { top: r.bottom + 4, ...(align === 'right' ? { right } : { left: r.left }) }),
       })
     }
     setOpen((v) => !v)
@@ -68,22 +77,23 @@ export function Menu({
     }
     document.addEventListener('mousedown', onDoc)
     document.addEventListener('keydown', onKey, true)
-    if (fixed) window.addEventListener('scroll', onScroll, true)
+    function onFixedScroll(e: Event) {
+      if (e.target instanceof Node && ref.current?.contains(e.target)) return
+      onScroll()
+    }
+    if (fixed) {
+      window.addEventListener('scroll', onFixedScroll, true)
+      window.addEventListener('resize', onScroll)
+    }
     return () => {
       document.removeEventListener('mousedown', onDoc)
       document.removeEventListener('keydown', onKey, true)
-      if (fixed) window.removeEventListener('scroll', onScroll, true)
+      if (fixed) {
+        window.removeEventListener('scroll', onFixedScroll, true)
+        window.removeEventListener('resize', onScroll)
+      }
     }
   }, [open, fixed])
-
-  const popStyle =
-    fixed && coords
-      ? ({
-          position: 'fixed',
-          top: coords.top,
-          ...(align === 'right' ? { right: coords.right } : { left: coords.left }),
-        } as const)
-      : undefined
 
   return (
     <div className="menu-wrap" ref={ref}>
@@ -92,13 +102,14 @@ export function Menu({
         className={className}
         title={title}
         aria-label={title}
+        aria-expanded={open}
         onClick={toggle}
       >
         {label}
         {caret && <span className="menu-caret"> ▾</span>}
       </button>
       {open && (
-        <div className={`menu-pop menu-pop-${align}`} style={popStyle}>
+        <div className={`menu-pop menu-pop-${align}${placement === 'above' ? ' menu-pop-above' : ''}`} style={fixed ? popStyle : undefined}>
           {items.map((it, i) =>
             it.divider ? (
               <div key={i} className="menu-divider" role="separator" />

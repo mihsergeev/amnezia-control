@@ -95,7 +95,8 @@ export function useShareLink(
     ) : (
       <Menu
         label={label}
-        align="left"
+        fixed
+        placement="above"
         items={ordered.map((s) => ({ label: s.name, onClick: () => share(s), disabled: busy }))}
       />
     )
