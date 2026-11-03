@@ -4,6 +4,12 @@ All notable changes to Amnezia Control are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.84.4] - 2026-11-03
+
+### Changed
+- Show entry and exit server names and addresses beside each cascade route.
+- Run the server and cascade checks from one button on the server card.
+
 ## [0.84.3] - 2026-11-03
 
 ### Added

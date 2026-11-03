@@ -1,21 +1,28 @@
 import { useRef, useState, type FormEvent } from 'react'
-import { ApiError, updateCascadeRoutes, type Cascade, type CascadeRoute } from './api'
+import { ApiError, updateCascadeRoutes, type Cascade, type CascadeRoute, type Server } from './api'
+import { countryFlag } from './format'
 import { useI18n } from './i18n'
 import { useModalDismiss } from './useModalDismiss'
 
 type Props = {
   cascade: Cascade
+  entry?: Server
+  exit?: Server
   onClose: () => void
   onSaved: (cascade: Cascade) => void
   onUnauthorized: () => void
 }
 
-export function CascadeRoutesModal({ cascade, onClose, onSaved, onUnauthorized }: Props) {
+export function CascadeRoutesModal({ cascade, entry, exit, onClose, onSaved, onUnauthorized }: Props) {
   const { t } = useI18n()
   const [rows, setRows] = useState(() => (cascade.routes ?? []).map((route, id) => ({ ...route, id })))
   const nextId = useRef(rows.length)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
+  const nodes = [
+    { via: 'entry', label: t('Вход'), server: entry, address: cascade.entry_ip },
+    { via: 'exit', label: t('Выход'), server: exit, address: cascade.exit_ip },
+  ] as const
   const dismiss = useModalDismiss(() => { if (!saving) onClose() })
 
   function edit(id: number, changes: Partial<CascadeRoute>) {
@@ -39,7 +46,7 @@ export function CascadeRoutesModal({ cascade, onClose, onSaved, onUnauthorized }
 
   return (
     <div className="modal-backdrop" onClick={dismiss}>
-      <form className="card modal" role="dialog" aria-modal="true" aria-labelledby="cascade-routes-title"
+      <form className="card modal cascade-routes-modal" role="dialog" aria-modal="true" aria-labelledby="cascade-routes-title"
         onClick={(event) => event.stopPropagation()} onSubmit={save}>
         <div className="clients-head">
           <h3 id="cascade-routes-title">{t('Маршруты каскада')}</h3>
@@ -47,19 +54,40 @@ export function CascadeRoutesModal({ cascade, onClose, onSaved, onUnauthorized }
         </div>
         <p className="muted small">{t('Укажите домен, IPv4 или подсеть. Для домена правило действует и на поддомены. Первое совпавшее правило задает маршрут, для остальных адресов действуют настройки каскада. При сохранении шлюз кратко перезапускается.')}</p>
         <div className="cascade-route-list">
-          {rows.map(({ id, destination, via }) => (
-            <div className="cascade-route-row" key={id}>
-              <input aria-label={t('Домен, IPv4 или подсеть')} placeholder="example.com"
-                required maxLength={253} value={destination} disabled={saving}
-                onChange={(event) => edit(id, { destination: event.target.value })} />
-              <select aria-label={t('Маршрут')} value={via} disabled={saving}
-                onChange={(event) => edit(id, { via: event.target.value as CascadeRoute['via'] })}>
-                <option value="entry">{t('Через вход')}</option>
-                <option value="exit">{t('Через выход')}</option>
-              </select>
-              <button type="button" className="ghost" disabled={saving}
-                onClick={() => setRows((prev) => prev.filter((row) => row.id !== id))}>{t('Удалить')}</button>
-            </div>
+          {rows.length === 0 && <div className="muted small cascade-route-empty">{t('Ручных маршрутов пока нет')}</div>}
+          {rows.map(({ id, destination, via }, index) => (
+            <fieldset className="cascade-route-row" key={id} disabled={saving}>
+              <legend>{t('Правило {n}', { n: index + 1 })}</legend>
+              <div className="cascade-route-address">
+                <label>
+                  <span>{t('Домен, IPv4 или подсеть')}</span>
+                  <input placeholder="example.com" required maxLength={253} value={destination}
+                    onChange={(event) => edit(id, { destination: event.target.value })} />
+                </label>
+                <button type="button" className="ghost"
+                  onClick={() => setRows((prev) => prev.filter((row) => row.id !== id))}>{t('Удалить')}</button>
+              </div>
+              <div className="cascade-route-options" role="group" aria-label={t('Сервер выхода в интернет')}>
+                {nodes.map((node) => {
+                  const host = node.server?.host || node.address
+                  const flag = node.server ? countryFlag(node.server.country) : ''
+                  return (
+                    <label className="cascade-route-option" key={node.via}>
+                      <input type="radio" name={`route-${id}`} checked={via === node.via}
+                        onChange={() => edit(id, { via: node.via })} />
+                      <span>
+                        <strong>{node.label}</strong>
+                        <span className="cascade-route-node">
+                          {flag && <span className="server-flag" aria-hidden="true">{flag}</span>}
+                          {node.server?.name || host || '—'}
+                        </span>
+                        {node.server?.name && host && <span className="muted small mono">{host}</span>}
+                      </span>
+                    </label>
+                  )
+                })}
+              </div>
+            </fieldset>
           ))}
         </div>
         {error && <div className="err-text small" role="alert">{error}</div>}
@@ -69,7 +97,7 @@ export function CascadeRoutesModal({ cascade, onClose, onSaved, onUnauthorized }
               const id = nextId.current++
               setRows((prev) => [...prev, { id, destination: '', via: 'entry' }])
             }}>{t('Добавить правило')}</button>
-          <button type="submit" disabled={saving}>{t(saving ? 'Сохраняем…' : 'Сохранить')}</button>
+          <button type="submit" disabled={saving || (rows.length === 0 && !cascade.routes?.length)}>{t(saving ? 'Сохраняем…' : 'Сохранить')}</button>
         </div>
       </form>
     </div>

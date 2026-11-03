@@ -2385,11 +2385,6 @@ button.srv-hop-selected {
   color: #3b82f6;
 }
 
-/* кнопка проверки каскада в конце маршрута */
-.srv-route-check {
-  margin-left: auto;
-}
-
 .srv-detail-note {
   color: var(--text-muted);
   font-size: 0.88rem;
@@ -3246,30 +3241,103 @@ tr.row-link:hover td {
 .modal-config-body > .qr-wrap { flex: 0 0 auto; }
 .modal-config > .modal-actions { flex-wrap: wrap; }
 
+.srv-route-settings {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+}
+
+.cascade-routes-modal {
+  width: min(720px, 100%);
+}
+
 .cascade-route-list {
   display: grid;
-  gap: 8px;
-  max-height: 45vh;
+  gap: 10px;
+  max-height: 48vh;
   overflow-y: auto;
+  padding: 2px;
 }
 
+.cascade-route-empty,
 .cascade-route-row {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto auto;
-  gap: 8px;
-  align-items: center;
+  margin: 0;
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
 }
 
-.cascade-route-row input {
+.cascade-route-row legend {
+  padding-inline: 5px;
+  font-weight: 600;
+}
+
+.cascade-route-address,
+.cascade-route-options {
+  display: grid;
+  gap: 8px;
+}
+
+.cascade-route-address {
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: end;
+}
+
+.cascade-route-address label {
+  display: grid;
+  gap: 4px;
   min-width: 0;
 }
 
-@media (max-width: 540px) {
-  .cascade-route-row {
-    grid-template-columns: minmax(0, 1fr) auto;
-  }
+.cascade-route-address input {
+  width: 100%;
+  min-width: 0;
+}
 
-  .cascade-route-row input {
-    grid-column: 1 / -1;
+.cascade-route-options {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  margin-top: 12px;
+}
+
+.cascade-route-option {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 9px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow-wrap: anywhere;
+  cursor: pointer;
+}
+
+.cascade-route-option:has(input:checked) {
+  border-color: #3563e9;
+  background: var(--hover);
+}
+
+.cascade-route-option input {
+  width: auto;
+  margin: 3px 0 0;
+  accent-color: #3563e9;
+}
+
+.cascade-route-node {
+  display: block;
+  margin-block: 2px;
+}
+
+.cascade-route-node .server-flag {
+  margin-inline-end: 5px;
+}
+
+@media (max-width: 480px) {
+  .cascade-route-options {
+    grid-template-columns: minmax(0, 1fr);
   }
 }
