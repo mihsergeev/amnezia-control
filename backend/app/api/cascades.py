@@ -14,6 +14,7 @@ from fastapi import APIRouter, HTTPException, Request, status
 from sqlalchemy import select
 
 from app import audit, cascade, cascade_awg, cascade_exit, cascade_lock, cascade_probe, cascadejob, deploy, geo, nodelock, server_ops
+from app.cascade_routes import RouteUpdate, update_script
 from app.config import get_settings
 from app.deps import CurrentUser, SessionDep
 from app.models import Cascade, Server
@@ -115,6 +116,7 @@ def _out(c: Cascade, entry: Server | None = None) -> CascadeOut:
         log=prog.get("log", ""),
         entry_ip=params.get("entry_ip", ""),
         exit_ip=params.get("exit_ip", ""),
+        routes=params.get("routes", []),
         entry_port=params.get("entry_port"),
         exit_port=params.get("exit_port"),
         **encryption,
@@ -426,6 +428,43 @@ async def get_cascade(cascade_id: int, _: CurrentUser, session: SessionDep) -> C
     c = await _get_or_404(cascade_id, session)
     await _settle(session, c)
     return _out(c, await session.get(Server, c.entry_server_id))
+
+
+@router.put("/{cascade_id}/routes", response_model=CascadeOut)
+@_pair_operation
+async def update_routes(
+    cascade_id: int, body: RouteUpdate, user: CurrentUser, session: SessionDep
+) -> CascadeOut:
+    c = await session.scalar(select(Cascade).where(Cascade.id == cascade_id)
+                             .with_for_update().execution_options(populate_existing=True))
+    if c is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Каскад не найден")
+    if c.status != "ready" or cascadejob.running(c.id):
+        raise HTTPException(status.HTTP_409_CONFLICT, "Маршруты доступны после установки каскада")
+    entry = await session.get(Server, c.entry_server_id)
+    if entry is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Сервер не найден")
+    params = json.loads(c.params or "{}")
+    routes = [rule.model_dump() for rule in body.routes]
+    owner = params.get("runtime_owner", "")
+    script = update_script(f"{cascade.DIR}/config", cascade.GATEWAY, cascade.SOCKS_PORT, owner, routes)
+    command = cascade_lock.wrap(c.id, script, owner, edit=True)
+    try:
+        async with _locked(entry) as conn:
+            result = await conn.run(command, check=False, timeout=125)
+    except (asyncssh.Error, OSError, TimeoutError) as exc:
+        raise _ssh_error(exc) from exc
+    if result.exit_status != 0:
+        detail = {
+            73: "Шлюз каскада не соответствует настройкам панели",
+            74: "Не удалось запустить шлюз после отката маршрутов",
+            75: "Шлюз занят или предыдущие маршруты восстановлены",
+        }.get(result.exit_status, "Не удалось применить маршруты")
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, detail)
+    c.params = json.dumps(params | {"routes": routes})
+    await session.commit()
+    await audit.record(session, user.username, "cascade_routes", entry.name, str(len(routes)))
+    return _out(c, entry)
 
 
 @router.post("/{cascade_id}/install", response_model=CascadeOut,

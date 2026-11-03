@@ -3245,3 +3245,31 @@ tr.row-link:hover td {
 .modal-config-body > .script-box { flex: 0 0 auto; max-height: min(30dvh, 320px); overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
 .modal-config-body > .qr-wrap { flex: 0 0 auto; }
 .modal-config > .modal-actions { flex-wrap: wrap; }
+
+.cascade-route-list {
+  display: grid;
+  gap: 8px;
+  max-height: 45vh;
+  overflow-y: auto;
+}
+
+.cascade-route-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  gap: 8px;
+  align-items: center;
+}
+
+.cascade-route-row input {
+  min-width: 0;
+}
+
+@media (max-width: 540px) {
+  .cascade-route-row {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .cascade-route-row input {
+    grid-column: 1 / -1;
+  }
+}

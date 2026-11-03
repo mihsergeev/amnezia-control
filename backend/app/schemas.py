@@ -4,6 +4,9 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, computed_field, model_validator
 
 
+from app.cascade_routes import Route
+
+
 class LoginRequest(BaseModel):
     # длина ограничена: логин уходит в ключ лимитера, и мегабайтные логины
     # раздували бы его память
@@ -797,6 +800,7 @@ class CascadeOut(BaseModel):
     probe: dict = {}
     result: dict = {}
     created_at: datetime
+    routes: list[Route] = Field(default_factory=list)
 
 
 class EgressSiteOut(BaseModel):

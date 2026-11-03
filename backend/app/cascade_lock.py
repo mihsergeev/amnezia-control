@@ -9,12 +9,12 @@ def _program(cascade_id: int, *, mode: str = "check", owner: str = "",
              generation: str = "", base: str = BASE) -> str:
     if not 0 < cascade_id <= 2147483647:
         raise ValueError("Invalid cascade id")
-    if mode not in ("check", "arm", "run", "remove"):
+    if mode not in ("check", "arm", "run", "remove", "edit"):
         raise ValueError("Invalid cascade operation")
     for value in (owner, generation):
         if value and (len(value) != 32 or any(c not in "0123456789abcdef" for c in value)):
             raise ValueError("Invalid cascade operation owner")
-    if mode != "check" and not owner or mode in ("arm", "run") and not generation:
+    if mode not in ("check", "edit") and not owner or mode in ("arm", "run") and not generation:
         raise ValueError("Cascade operation is not armed")
     return f'''
 import fcntl,json,os,pathlib,stat,sys
@@ -49,6 +49,8 @@ elif mode=='arm':
  print('CASCADE_OPERATION_ARMED',flush=True)
 else:
  if mode=='remove':save({{'owner':owner,'generation':None,'revoked':True}})
+ elif mode=='edit':
+  if owner and (not state or state.get('revoked') is not False):sys.exit(73)
  elif not state or state.get('revoked') is not False or state.get('owner')!=owner or state.get('generation')!=generation:
   print('CASCADE_OPERATION_SUPERSEDED',flush=True);sys.exit(73)
  # Preserve the same locked inode across exec and all resource-writing children.
@@ -65,12 +67,12 @@ def arm_command(cascade_id: int, owner: str, generation: str) -> str:
     return "sudo -n python3 -c " + shlex.quote(_program(cascade_id, mode="arm", owner=owner, generation=generation))
 
 
-def wrap(cascade_id: int, script: str, owner: str, *, generation: str = "", remove: bool = False) -> str:
+def wrap(cascade_id: int, script: str, owner: str, *, generation: str = "", remove: bool = False, edit: bool = False) -> str:
     delimiter = "AC_CASCADE_OPERATION_PAYLOAD"
     while delimiter in script:
         delimiter += "_"
     # The generated configuration travels through stdin, never Python argv.
-    program = _program(cascade_id, mode="remove" if remove else "run", owner=owner, generation=generation)
+    program = _program(cascade_id, mode="edit" if edit else "remove" if remove else "run", owner=owner, generation=generation)
     return ("sudo -n python3 -c " + shlex.quote(program) + " <<'" + delimiter + "'\n"
             + script + "\n" + delimiter + "\n"
             "CASCADE_RC=$?\n"

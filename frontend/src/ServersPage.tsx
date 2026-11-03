@@ -35,6 +35,7 @@ import { copyText } from './clipboard'
 import { countryFlag, formatBytes, formatUptime } from './format'
 import { CascadeWizard } from './CascadeWizard'
 import { CascadeCheckModal } from './CascadeCheck'
+import { CascadeRoutesModal } from './CascadeRoutes'
 import { cascadeTransportLabel } from './cascadeUi'
 import { EgressCheckModal } from './EgressCheck'
 import { TorrentLine } from './Torrent'
@@ -347,6 +348,7 @@ function ServerDetail({
   onCascade,
   onOpen,
   onCascadeCheck,
+  onCascadeRoutes,
   onEgressCheck,
 }: {
   server: Server
@@ -362,6 +364,7 @@ function ServerDetail({
   onCascade: (c: Cascade) => void
   onOpen: (s: Server) => void
   onCascadeCheck: (c: Cascade) => void
+  onCascadeRoutes: (c: Cascade) => void
   // проверка выхода путем клиентов: для каскада, собранного руками
   onEgressCheck: () => void
 }) {
@@ -455,9 +458,11 @@ function ServerDetail({
       )}
       {cascade && cascade.status === 'ready' && cascade.entry_server_id === server.id && (
         <div className="muted small">
-          {server.country
+          {cascade.routes?.length ? t('Ручные маршруты: {n}', { n: cascade.routes.length }) : server.country
             ? t('Сайты страны входа напрямую с этого сервера, остальное через выход.')
             : t('Весь трафик клиентов идет через выход: страна этого сервера неизвестна.')}
+          {' '}
+          <button className="link-btn" onClick={() => onCascadeRoutes(cascade)}>{t('Маршруты каскада')}</button>
         </div>
       )}
       {health?.ok === false && (
@@ -654,6 +659,7 @@ export function ServersPage({ onUnauthorized }: Props) {
   const [wizard, setWizard] = useState<{ resume?: Cascade } | null>(null)
   const [unbuild, setUnbuild] = useState<{ c: Cascade; error?: string } | null>(null)
   const [unbuilding, setUnbuilding] = useState(false)
+  const [casRoutes, setCasRoutes] = useState<Cascade | null>(null)
   // окно проверки канала каскада
   const [casCheck, setCasCheck] = useState<Cascade | null>(null)
   const [egressCheck, setEgressCheck] = useState<Server | null>(null)
@@ -1434,6 +1440,7 @@ export function ServersPage({ onUnauthorized }: Props) {
                 onCascade={(c) => setWizard({ resume: c })}
                 onOpen={select}
                 onCascadeCheck={setCasCheck}
+                onCascadeRoutes={setCasRoutes}
                 onEgressCheck={() => setEgressCheck(selected)}
               />
               </>
@@ -1927,6 +1934,17 @@ export function ServersPage({ onUnauthorized }: Props) {
           onClose={() => setEgressCheck(null)}
           onChecked={() => void load()}
           onUnauthorized={onUnauthorized}
+        />
+      )}
+      {casRoutes && (
+        <CascadeRoutesModal
+          cascade={casRoutes}
+          onClose={() => setCasRoutes(null)}
+          onUnauthorized={onUnauthorized}
+          onSaved={(saved) => {
+            setCascades((prev) => prev.map((row) => row.id === saved.id ? saved : row))
+            setCasRoutes(null)
+          }}
         />
       )}
       {casCheck && (
