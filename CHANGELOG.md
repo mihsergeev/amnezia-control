@@ -4,6 +4,12 @@ All notable changes to Amnezia Control are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.84.1] - 2026-11-03
+
+### Fixed
+- Wrap long VPN links and one-time sharing details inside the client configuration dialog while preserving the exact text when copied.
+- Open the share-service menu above its button so it stays visible, including in narrow dialogs and with many services.
+
 ## [0.84.0] - 2026-11-02
 
 ### Added

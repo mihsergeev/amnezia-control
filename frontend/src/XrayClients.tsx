@@ -511,69 +511,72 @@ export function XrayClients({
 
       {view && variant && (
         <div className="modal-backdrop">
-          <div className="card modal" onClick={(e) => e.stopPropagation()}>
+          <div className="card modal modal-config" onClick={(e) => e.stopPropagation()}>
             <h3>{t('Конфиг клиента «{name}»', { name: view.name })}</h3>
-            {view.variants.length > 1 && (
-              <div className="tabs">
-                {view.variants.map((v, i) => (
+            <div className="modal-config-body">
+              {view.variants.length > 1 && (
+                <div className="tabs">
+                  {view.variants.map((v, i) => (
+                    <button
+                      key={v.key}
+                      className={i === variantIdx ? 'tab tab-active' : 'tab'}
+                      onClick={() => {
+                        setVariantIdx(i)
+                        setCopied(false)
+                      }}
+                    >
+                      {v.label}
+                    </button>
+                  ))}
+                </div>
+              )}
+              {variant.uri && (
+                <div className="tabs">
                   <button
-                    key={v.key}
-                    className={i === variantIdx ? 'tab tab-active' : 'tab'}
+                    className={format === 'amnezia' ? 'tab tab-active' : 'tab'}
                     onClick={() => {
-                      setVariantIdx(i)
+                      setFormat('amnezia')
                       setCopied(false)
                     }}
                   >
-                    {v.label}
+                    {t('Для приложения AmneziaVPN')}
                   </button>
-                ))}
-              </div>
-            )}
-            {variant.uri && (
-              <div className="tabs">
-                <button
-                  className={format === 'amnezia' ? 'tab tab-active' : 'tab'}
-                  onClick={() => {
-                    setFormat('amnezia')
-                    setCopied(false)
-                  }}
-                >
-                  {t('Для приложения AmneziaVPN')}
-                </button>
-                <button
-                  className={format === 'uri' ? 'tab tab-active' : 'tab'}
-                  onClick={() => {
-                    setFormat('uri')
-                    setCopied(false)
-                  }}
-                >
-                  {t('Ссылка vless://')}
-                </button>
-              </div>
-            )}
-            <p className="muted small">
-              {format === 'uri' && variant.uri
-                ? t(
-                    'Ссылка vless:// для Happ, v2rayN, v2rayNG, INCY, Shadowrocket и других клиентов на Xray: импорт из буфера или по QR.',
-                  )
-                : t(
-                    'Ссылка vpn:// — вставьте её в приложение AmneziaVPN («+» → вставить из буфера) или отсканируйте QR.',
-                  )}
-              {variant.key === 'xhttp' &&
-                ' ' +
-                  t(
-                    'XHTTP - запасной вариант на том же порту: включайте, если Vision режут или он рвется.',
-                  )}
-            </p>
-
-            <div className="qr-wrap">
-              {format === 'uri' && variant.uri ? (
-                <PlainQr text={variant.uri} />
-              ) : (
-                <AmneziaQr text={variant.amnezia} format="vpn" />
+                  <button
+                    className={format === 'uri' ? 'tab tab-active' : 'tab'}
+                    onClick={() => {
+                      setFormat('uri')
+                      setCopied(false)
+                    }}
+                  >
+                    {t('Ссылка vless://')}
+                  </button>
+                </div>
               )}
+              <p className="muted small">
+                {format === 'uri' && variant.uri
+                  ? t(
+                      'Ссылка vless:// для Happ, v2rayN, v2rayNG, INCY, Shadowrocket и других клиентов на Xray: импорт из буфера или по QR.',
+                    )
+                  : t(
+                      'Ссылка vpn:// — вставьте её в приложение AmneziaVPN («+» → вставить из буфера) или отсканируйте QR.',
+                    )}
+                {variant.key === 'xhttp' &&
+                  ' ' +
+                    t(
+                      'XHTTP - запасной вариант на том же порту: включайте, если Vision режут или он рвется.',
+                    )}
+              </p>
+
+              <div className="qr-wrap">
+                {format === 'uri' && variant.uri ? (
+                  <PlainQr text={variant.uri} />
+                ) : (
+                  <AmneziaQr text={variant.amnezia} format="vpn" />
+                )}
+              </div>
+              <pre className="script-box">{shownText}</pre>
+              {shareLink.result}
             </div>
-            <pre className="script-box">{shownText}</pre>
             <div className="modal-actions">
               <button className="ghost" onClick={() => setView(null)}>
                 {t('Готово')}
@@ -586,7 +589,6 @@ export function XrayClients({
                 {copied ? t('Скопировано ✓') : t('Скопировать')}
               </button>
             </div>
-            {shareLink.result}
           </div>
         </div>
       )}
