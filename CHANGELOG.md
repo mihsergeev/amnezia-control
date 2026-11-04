@@ -4,6 +4,12 @@ All notable changes to Amnezia Control are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.84.5] - 2026-11-04
+
+### Fixed
+- Show the SSH address and the actual connection error when checking a new cascade server.
+- Explain DNS lookup failures and ask for an IP address or a domain the panel can resolve.
+
 ## [0.84.4] - 2026-11-03
 
 ### Changed

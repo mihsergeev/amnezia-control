@@ -226,7 +226,10 @@ export function CascadeWizard({
       const s = await api<Server>(`/api/servers/${script.server.id}/check`, { method: 'POST' })
       onChanged()
       if (s.last_check_ok !== true) {
-        setError(t('Сервер пока не отвечает по ключу панели: скрипт выполнен под root ?'))
+        const reason = parseCheckInfo(s)?.error
+        const target = `${s.ssh_user}@${s.host.includes(':') ? `[${s.host}]` : s.host}:${s.ssh_port}`
+        const message = t('Не удалось подключиться по SSH к {target}.', { target })
+        setError(reason ? `${message} ${t(reason)}` : message)
         return null
       }
       setExtra((x) => [...x, s])
@@ -483,7 +486,7 @@ export function CascadeWizard({
           <>
             <div className="cas-row2">
               <label>
-                {t('Адрес')}
+                {t('Хост (IP или домен)')}
                 <input
                   className="mono"
                   value={nf.host}

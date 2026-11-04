@@ -2,6 +2,7 @@ import asyncio
 import ipaddress
 import os
 import re
+import socket
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -444,6 +445,11 @@ async def check_server(
         return CheckResult(
             ok=False,
             error="SSH-ключ панели не авторизован (выполните настройку сервера)",
+        )
+    except socket.gaierror:
+        return CheckResult(
+            ok=False,
+            error="Панель не нашла адрес сервера в DNS. Укажите IP или доступный панели домен.",
         )
     except (OSError, asyncssh.Error) as exc:
         return CheckResult(ok=False, error=str(exc) or type(exc).__name__)

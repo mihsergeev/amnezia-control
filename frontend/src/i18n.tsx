@@ -942,8 +942,12 @@ const EN: Record<string, string> = {
     'The password is used once: the panel logs in with it, installs its key and uses the key from then on.',
   'Панель добавит сервер и покажет скрипт, его надо выполнить на сервере под root.':
     'The panel adds the server and shows a script to run on it as root.',
-  'Сервер пока не отвечает по ключу панели: скрипт выполнен под root ?':
-    'The server does not accept the panel key yet: was the script run as root?',
+  'Не удалось подключиться по SSH к {target}.': 'Could not connect to {target} over SSH.',
+  'Панель не нашла адрес сервера в DNS. Укажите IP или доступный панели домен.':
+    'The panel could not resolve the server address. Enter an IP address or a domain the panel can resolve.',
+  'Таймаут подключения': 'Connection timed out',
+  'SSH-ключ панели не авторизован (выполните настройку сервера)':
+    'The panel SSH key was rejected. Run the server setup script.',
   'Проверка канала: панель отправляет 20 мб со входа на выход':
     'Link test: the panel sends 20 MB from the entry to the exit',
   'Проверяю, это до минуты…': 'Testing, up to a minute…',

@@ -1,4 +1,5 @@
 import json
+import socket
 
 import httpx
 
@@ -93,6 +94,24 @@ async def test_check_failure_stored(
     body = response.json()
     assert body["last_check_ok"] is False
     assert "Таймаут" in json.loads(body["last_check_info"])["error"]
+
+
+async def test_check_reports_dns_failure(
+    client: httpx.AsyncClient, auth_headers, monkeypatch
+) -> None:
+    async def unresolved_host(*args, **kwargs):
+        raise socket.gaierror(socket.EAI_AGAIN, "Temporary failure in name resolution")
+
+    monkeypatch.setattr(sshops, "_tofu_connect", unresolved_host)
+    server_id = await _create_server(client, auth_headers)
+    response = await client.post(f"/api/servers/{server_id}/check", headers=auth_headers)
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["last_check_ok"] is False
+    assert json.loads(body["last_check_info"])["error"] == (
+        "Панель не нашла адрес сервера в DNS. Укажите IP или доступный панели домен."
+    )
 
 
 async def test_bootstrap_success(
