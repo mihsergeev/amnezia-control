@@ -4,6 +4,13 @@ All notable changes to Amnezia Control are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.84.6] - 2026-11-05
+
+### Fixed
+
+- Allow reissuing a paused AmneziaWG profile when another client already uses its old address.
+- Give the restored client a free address and a new key, preserving its name, note, and expiration. The current owner keeps their address and profile.
+
 ## [0.84.5] - 2026-11-04
 
 ### Fixed

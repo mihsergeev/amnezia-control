@@ -15,6 +15,7 @@ from app.api.awg import (
     _amnezia_link,
     _connect,
     _get_or_404,
+    _reissue_peer,
     _ssh_error,
     _store_config,
 )
@@ -196,43 +197,13 @@ async def reissue_client(
     try:
         async with _connect(server) as conn:
             state = await _legacy_state(conn, server.host)
-            target = next(
-                (c for c in state.clients if c.public_key == body.public_key), None
-            )
-            if target is None:
-                raise HTTPException(status.HTTP_404_NOT_FOUND, "Клиент не найден")
-            name = target.name if target.name and target.name != "—" else "client"
-            fixed_ip = target.address.split("/")[0] if target.address else None
-            # сначала новый ключ на тот же адрес, потом снимаем старый: если
-            # выдача упадет (оборвался SSH), старый клиент останется рабочим
-            client, config = await awg.create_client(
-                conn, state, name, dns, fixed_ip=fixed_ip
-            )
-            await awg.revoke_client(
-                conn, state.container, state.interface, body.public_key
+            client, config = await _reissue_peer(
+                session, server_id, PROTO, conn, state, body.public_key, dns
             )
     except HTTPException:
         raise
     except Exception as exc:  # noqa: BLE001
         raise _ssh_error(exc) from exc
-    await session.execute(
-        delete(AwgConfig).where(
-            AwgConfig.server_id == server_id,
-            AwgConfig.public_key == body.public_key,
-            AwgConfig.protocol == PROTO,
-        )
-    )
-    await _store_config(
-        session, server_id, client.public_key, client.name, config, PROTO
-    )
-    await _set_note(session, server_id, body.public_key, "")
-    if old_note:
-        await _set_note(session, server_id, client.public_key, old_note)
-    await limits.drop_limit(session, server_id, PROTO, body.public_key)
-    if old_exp:
-        await limits.set_limit(
-            session, server_id, PROTO, client.public_key, client.name, old_exp
-        )
     await audit.record(
         session, user.username, "awglegacy_reissue", server.name, client.name
     )

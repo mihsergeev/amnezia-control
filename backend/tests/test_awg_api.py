@@ -1,8 +1,12 @@
+from datetime import datetime, timezone
+
 import httpx
 import pytest
 
-from app import awg
+from app import awg, limits, notes, pausestore
 from app.api import awg as awg_api
+from app.api import awg3, awg_legacy
+from app.models import AwgConfig
 
 SERVER = {"name": "n", "host": "1.2.3.4", "ssh_port": 22, "ssh_user": "root"}
 
@@ -191,3 +195,80 @@ async def test_create_with_note(
 
 async def _wrap(value):
     return value
+
+@pytest.mark.parametrize(("path", "protocol", "module", "read"), [
+    ("awg", "awg", awg_api, None),
+    ("awg3", "awg3", awg3, "_state"),
+    ("awg-legacy", "awglegacy", awg_legacy, "_legacy_state"),
+])
+async def test_reissue_paused_client_with_occupied_address(
+    client, auth_headers, session_factory, monkeypatch, path, protocol, module, read,
+):
+    sid = await _make_server(client, auth_headers)
+    base = f"/api/servers/{sid}/{path}"
+    active = awg.AwgClient(name="laptop", public_key="ACTIVE", address="10.8.1.2/32")
+    state = _state([active])
+    monkeypatch.setattr(module, "_connect", lambda server: _DummyConn())
+    if read:
+        monkeypatch.setattr(module, read, lambda *_: _wrap(state))
+    else:
+        monkeypatch.setattr(awg, "read_state", lambda *_: _wrap(state))
+
+    async def issue(conn, st, name, dns, fixed_ip=None, reserved=None):
+        assert fixed_ip is None
+        ip = awg.allocate_ip(st.address, reserved | {active.address.split("/")[0]})
+        new = awg.AwgClient(name=name, public_key="REPLACEMENT", address=f"{ip}/32")
+        st.clients.append(new)
+        return new, f"Address = {new.address}"
+
+    async def revoke(conn, container, interface, key):
+        assert key == "REPLACEMENT"
+        state.clients[:] = [peer for peer in state.clients if peer.public_key != key]
+
+    monkeypatch.setattr(awg, "create_client", issue)
+    monkeypatch.setattr(awg, "revoke_client", revoke)
+    expires = datetime(2030, 1, 1, tzinfo=timezone.utc)
+    async with session_factory() as session:
+        await pausestore.add(session, sid, protocol, "PAUSED", "phone", {"ip": "10.8.1.2"})
+        await pausestore.add(session, sid, protocol, "OTHER", "tablet", {"ip": "10.8.1.1"})
+        await pausestore.add(session, sid, protocol, "THIRD", "desktop", {"ip": "10.8.1.3"})
+        await notes.set_note(session, sid, protocol, "PAUSED", "keep this")
+        await limits.set_limit(session, sid, protocol, "PAUSED", "phone", expires)
+        session.add(AwgConfig(server_id=sid, protocol=protocol, public_key="PAUSED",
+                              name="phone", config="Address = 10.8.1.2/32"))
+        await session.commit()
+
+    payload = {"public_key": "PAUSED"}
+    failed = await client.post(f"{base}/resume", json=payload, headers=auth_headers)
+    assert failed.status_code == 502
+    assert state.clients == [active]
+
+    async def fail_to_drop(*args):
+        raise RuntimeError("pause metadata write failed")
+
+    with monkeypatch.context() as injected:
+        injected.setattr(pausestore, "drop", fail_to_drop)
+        failed = await client.post(f"{base}/reissue", json=payload, headers=auth_headers)
+    assert failed.status_code == 500
+    assert state.clients == [active]
+    async with session_factory() as session:
+        assert "PAUSED" in await pausestore.list_paused(session, sid, protocol)
+
+    repaired = await client.post(f"{base}/reissue", json=payload, headers=auth_headers)
+    assert repaired.status_code == 201, repaired.text
+    replacement = repaired.json()["client"]
+    assert replacement["name"] == "phone"
+    assert replacement["address"] == "10.8.1.4/32"
+    assert replacement["note"] == "keep this"
+    assert replacement["expires_at"].startswith("2030-01-01")
+    assert state.clients[0] is active
+
+    async with session_factory() as session:
+        assert set(await pausestore.list_paused(session, sid, protocol)) == {"OTHER", "THIRD"}
+        assert await notes.notes_map(session, sid, protocol) == {"REPLACEMENT": "keep this"}
+        assert set(await limits.limits_map(session, sid, protocol)) == {"REPLACEMENT"}
+    assert (await client.post(f"{base}/config", json=payload, headers=auth_headers)).status_code == 404
+    saved = await client.post(
+        f"{base}/config", json={"public_key": "REPLACEMENT"}, headers=auth_headers,
+    )
+    assert saved.json()["config"] == repaired.json()["config"]

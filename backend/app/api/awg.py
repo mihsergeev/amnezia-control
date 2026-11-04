@@ -3,12 +3,12 @@ import re
 import asyncssh
 import httpx
 from fastapi import APIRouter, HTTPException, Request, status
-from sqlalchemy import delete, select
+from sqlalchemy import delete, select, update
 
 from app import audit, awg, deploy, deploywatch, limits, nodelock, notes, pausestore, sshops
 from app.config import get_settings
 from app.deps import CurrentUser, SessionDep
-from app.models import AwgConfig, ClientLimit, Server
+from app.models import AwgConfig, AwgNote, ClientLimit, ClientName, Server
 from app.schemas import (
     AwgStateOut,
     ConfigTextResponse,
@@ -90,6 +90,50 @@ async def _store_config(
         )
     )
     await session.commit()
+
+
+async def _reissue_peer(session, server_id, protocol, conn, state, public_key, dns):
+    target = next((c for c in state.clients if c.public_key == public_key), None)
+    paused = await pausestore.list_paused(session, server_id, protocol)
+    if target is None and public_key not in paused:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Клиент не найден")
+
+    name = target.name if target else paused[public_key]["name"]
+    if protocol != "awg3" and (not name or name == "—"):
+        name = "client"
+    fixed_ip = target.address.split("/")[0] if target and target.address else None
+    reserved = {ip for record in paused.values() if (ip := record["data"].get("ip"))}
+    client, config = await awg.create_client(
+        conn, state, name, dns, fixed_ip=fixed_ip, reserved=reserved
+    )
+    if target:
+        await awg.revoke_client(conn, state.container, state.interface, public_key)
+
+    try:
+        await session.execute(delete(AwgConfig).where(
+            AwgConfig.server_id == server_id,
+            AwgConfig.public_key == public_key,
+            AwgConfig.protocol == protocol,
+        ))
+        session.add(AwgConfig(
+            server_id=server_id, public_key=client.public_key, name=client.name,
+            config=config, protocol=protocol,
+        ))
+        for model, key in ((AwgNote, AwgNote.public_key),
+                           (ClientLimit, ClientLimit.client_id),
+                           (ClientName, ClientName.client_id)):
+            await session.execute(update(model).where(
+                model.server_id == server_id, model.protocol == protocol, key == public_key,
+            ).values({key: client.public_key}))
+        await pausestore.drop(session, server_id, protocol, public_key)
+        await session.commit()
+    except Exception:
+        await session.rollback()
+        if target is None:
+            # Старый клиент остается на паузе. Новый пир с отдельным IP можно снять.
+            await awg.revoke_client(conn, state.container, state.interface, client.public_key)
+        raise
+    return client, config
 
 
 async def _set_note(session, server_id, public_key, note) -> None:
@@ -301,43 +345,13 @@ async def reissue_client(
     try:
         async with _connect(server) as conn:
             state = await awg.read_state(conn, server.host)
-            target = next(
-                (c for c in state.clients if c.public_key == body.public_key), None
-            )
-            if target is None:
-                raise HTTPException(status.HTTP_404_NOT_FOUND, "Клиент не найден")
-            name = target.name if target.name and target.name != "—" else "client"
-            fixed_ip = target.address.split("/")[0] if target.address else None
-            # сначала новый ключ на тот же адрес, потом снимаем старый: если
-            # выдача упадет (оборвался SSH), старый клиент останется рабочим
-            client, config = await awg.create_client(
-                conn, state, name, dns, fixed_ip=fixed_ip
-            )
-            await awg.revoke_client(
-                conn, state.container, state.interface, body.public_key
+            client, config = await _reissue_peer(
+                session, server_id, "awg", conn, state, body.public_key, dns
             )
     except HTTPException:
         raise
     except Exception as exc:  # noqa: BLE001
         raise _ssh_error(exc) from exc
-    await session.execute(
-        delete(AwgConfig).where(
-            AwgConfig.server_id == server_id,
-            AwgConfig.public_key == body.public_key,
-            AwgConfig.protocol == "awg",
-        )
-    )
-    await _store_config(session, server_id, client.public_key, client.name, config)
-    # переносим заметку со старого ключа на новый
-    await _set_note(session, server_id, body.public_key, "")
-    if old_note:
-        await _set_note(session, server_id, client.public_key, old_note)
-    # переносим срок действия со старого ключа на новый
-    await limits.drop_limit(session, server_id, "awg", body.public_key)
-    if old_exp:
-        await limits.set_limit(
-            session, server_id, "awg", client.public_key, client.name, old_exp
-        )
     await audit.record(session, user.username, "awg_reissue", server.name, client.name)
     return CreateClientResponse(
         client=client.__dict__

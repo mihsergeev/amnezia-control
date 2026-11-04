@@ -375,6 +375,9 @@ const EN: Record<string, string> = {
   'Клиентов пока нет.': 'No clients yet.',
   'Конфиг': 'Config',
   'Перевыпустить': 'Reissue',
+  'Перевыпустить и возобновить': 'Reissue and resume',
+  'Перевыпустить конфиг и возобновить «{name}»? Клиент получит новый адрес и должен импортировать новый конфиг.':
+    'Reissue the config and resume “{name}”? The client will receive a new address and must import the new config.',
   'Отозвать': 'Revoke',
   'Готово': 'Done',
   'Закрыть': 'Close',

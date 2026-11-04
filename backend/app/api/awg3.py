@@ -19,6 +19,7 @@ from app.api.awg import (
     _amnezia_link,
     _connect,
     _get_or_404,
+    _reissue_peer,
     _ssh_error,
     _store_config,
 )
@@ -219,7 +220,7 @@ async def get_stored_config(
 async def reissue_client(
     server_id: int, body: PublicKeyRequest, user: CurrentUser, session: SessionDep
 ) -> CreateClientResponse:
-    """Перевыпуск с сохранением имени и IP: старый ключ отзывается, выдаётся новый."""
+    """Перевыпуск конфига. Клиенту на паузе выделяется свободный адрес."""
     server = await _get_or_404(server_id, session)
     dns = get_settings().awg_client_dns
     note = (await notes.notes_map(session, server_id, PROTO)).get(body.public_key, "")
@@ -227,46 +228,14 @@ async def reissue_client(
     try:
         async with _connect(server) as conn:
             state = await _state(conn, server.host)
-            target = next(
-                (c for c in state.clients if c.public_key == body.public_key), None
-            )
-            if target is None:
-                raise HTTPException(status.HTTP_404_NOT_FOUND, "Клиент не найден")
-            name = target.name
-            ip = target.address.split("/")[0]
-            # сначала новый ключ на тот же адрес, потом снимаем старый: если
-            # выдача упадет (оборвался SSH), старый клиент останется рабочим
-            client, config = await awg.create_client(
-                conn, state, name, dns, fixed_ip=ip or None
-            )
-            await awg.revoke_client(
-                conn, state.container, state.interface, body.public_key
+            client, config = await _reissue_peer(
+                session, server_id, PROTO, conn, state, body.public_key, dns
             )
     except HTTPException:
         raise
     except Exception as exc:  # noqa: BLE001
         raise _ssh_error(exc) from exc
-    await session.execute(
-        delete(AwgConfig).where(
-            AwgConfig.server_id == server_id,
-            AwgConfig.public_key == body.public_key,
-            AwgConfig.protocol == PROTO,
-        )
-    )
-    await _store_config(
-        session, server_id, client.public_key, client.name, config, PROTO
-    )
-    await _set_note(session, server_id, body.public_key, "")
-    if note:
-        await _set_note(session, server_id, client.public_key, note)
-    # срок переносится на новый ключ, как в 2.0: раньше перевыпущенный клиент
-    # 3.1 становился бессрочным
-    await limits.drop_limit(session, server_id, PROTO, body.public_key)
-    if old_exp:
-        await limits.set_limit(
-            session, server_id, PROTO, client.public_key, client.name, old_exp
-        )
-    await audit.record(session, user.username, "awg3_reissue", server.name, name)
+    await audit.record(session, user.username, "awg3_reissue", server.name, client.name)
     return CreateClientResponse(
         client=client.__dict__
         | {"has_config": True, "note": note, "expires_at": old_exp},

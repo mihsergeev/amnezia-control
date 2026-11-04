@@ -301,9 +301,9 @@ export function ClientsModal({
   async function reissue(client: AwgClient) {
     if (
       !window.confirm(
-        t('Перевыпустить конфиг для «{name}»? Старый ключ перестанет работать.', {
-          name: client.name,
-        }),
+        client.paused
+          ? t('Перевыпустить конфиг и возобновить «{name}»? Клиент получит новый адрес и должен импортировать новый конфиг.', { name: client.name })
+          : t('Перевыпустить конфиг для «{name}»? Старый ключ перестанет работать.', { name: client.name }),
       )
     )
       return
@@ -845,6 +845,12 @@ export function ClientsModal({
                               items={
                                 c.paused
                                   ? [
+                                      ...(!nativeWireguard
+                                        ? [{
+                                            label: t('Перевыпустить и возобновить'),
+                                            onClick: () => reissue(c),
+                                          }]
+                                        : []),
                                       {
                                         label: t('Переименовать'),
                                         onClick: () => rename(c),
