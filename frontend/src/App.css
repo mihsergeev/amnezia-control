@@ -11,7 +11,7 @@
   margin-bottom: 2rem;
 }
 
-.header h1 {
+.brand-title {
   font-size: 1.5rem;
   margin: 0;
 }
@@ -25,8 +25,11 @@
 }
 
 .brand-logo {
-  width: 80px;
-  height: 80px;
+  --logo-width: 80px;
+  --logo-compact-width: 40px;
+  width: calc(var(--logo-width) * var(--logo-desktop-scale, 1));
+  max-width: 100%;
+  height: calc(80px * var(--logo-desktop-scale, 1));
   object-fit: contain;
   display: block;
 }
@@ -40,7 +43,8 @@
 }
 
 .brand-logo.custom-logo {
-  width: 168px;
+  --logo-width: 168px;
+  --logo-compact-width: 112px;
 }
 
 .login-logo.custom-logo {
@@ -164,21 +168,58 @@
   cursor: pointer;
 }
 
+.branding-size {
+  display: grid;
+  gap: 0.7rem;
+  margin-bottom: 0.75rem;
+}
+
+.branding-screens {
+  display: flex;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+}
+
+.branding-screens button[aria-pressed="true"] {
+  background: var(--hover);
+  color: var(--text);
+  border-color: #3563e9;
+}
+
+.branding-scale {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0.3rem;
+}
+
+.branding-scale input {
+  grid-column: 1 / -1;
+  width: 100%;
+  margin: 0;
+  accent-color: #3563e9;
+}
+
 .branding-previews {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 0.75rem;
+}
+
+.branding-previews-mobile {
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 170px), 1fr));
 }
 
 .branding-preview {
   display: grid;
-  justify-items: center;
-  gap: 0.65rem;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 0.35rem;
   padding: 0.7rem;
   border: 1px solid var(--border);
   border-radius: 10px;
   font-size: 0.85rem;
-  text-align: center;
+}
+
+.branding-preview .brand {
+  flex-wrap: wrap;
 }
 
 .branding-preview-light {
@@ -187,15 +228,13 @@
 }
 
 .branding-preview-dark {
-  background: #171a23;
+  background: #0f1117;
   color: #e6e9f0;
 }
 
-.branding-preview-logo {
-  display: block;
-  width: min(100%, 140px);
-  height: 80px;
-  object-fit: contain;
+.branding-previews-mobile .brand-logo {
+  width: calc(var(--logo-compact-width) * var(--logo-mobile-scale, 1));
+  height: calc(40px * var(--logo-mobile-scale, 1));
 }
 
 .about-modal .modal-actions {
@@ -1057,7 +1096,7 @@ input:focus {
 }
 
 /* Навигация получает свою строку раньше, чем включается компактный логотип. */
-@media (max-width: 1000px) {
+@media (max-width: 1100px) {
   .header {
     flex-wrap: wrap;
   }
@@ -1075,6 +1114,13 @@ input:focus {
   }
 }
 
+/* На узком планшете версия уступает место логотипу и кнопкам. */
+@media (max-width: 760px) {
+  .header-right .source-link {
+    display: none;
+  }
+}
+
 /* мобильная шапка: логотип меньше, навигация переносится на свою строку */
 @media (max-width: 680px) {
   .page {
@@ -1085,20 +1131,13 @@ input:focus {
     gap: 0.5rem;
     margin-bottom: 1.2rem;
   }
-  .brand-logo {
-    width: 40px;
-    height: 40px;
-  }
-  .brand-logo.custom-logo {
-    width: 112px;
+  .header .brand-logo {
+    width: calc(var(--logo-compact-width) * var(--logo-mobile-scale, 1));
+    height: calc(40px * var(--logo-mobile-scale, 1));
   }
   /* на узком экране оставляем только лого — бренд-текст съедает место, из-за
      чего иконки справа (версия/тема/язык/меню) уезжали за край */
-  .brand h1 {
-    display: none;
-  }
-  /* версию прячем — она не критична и освобождает место для иконок */
-  .header-right .source-link {
+  .header .brand-title {
     display: none;
   }
   .topnav {

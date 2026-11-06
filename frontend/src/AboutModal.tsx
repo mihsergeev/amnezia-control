@@ -1,5 +1,5 @@
 import { useRef, useState, type ChangeEvent } from 'react'
-import { api, ApiError, logoUrl, type Branding } from './api'
+import { api, ApiError, logoUrl, type Branding, type LogoSize } from './api'
 import { useI18n } from './i18n'
 import { LOGO_TYPES, logoThemes, MAX_LOGO_BYTES, prepareLogo, type LogoVariants } from './logoAdapt'
 import { PanelLogo } from './PanelLogo'
@@ -7,23 +7,33 @@ import { useModalDismiss } from './useModalDismiss'
 
 export const PROJECT_URL = 'https://github.com/mihsergeev/amnezia-control'
 
-export function AboutModal({ version, logoVersion, logoSrc, onChanged, onClose, onUnauthorized }: {
+const DEFAULT_SIZE: LogoSize = { desktop: 100, mobile: 100 }
+
+export function AboutModal({ version, branding, logoSrc, onChanged, onClose, onUnauthorized }: {
   version: string | null
-  logoVersion: string | null | undefined
+  branding: Branding | undefined
   logoSrc: string | null | undefined
-  onChanged: (version: string | null) => void
+  onChanged: (branding: Branding) => void
   onClose: () => void
   onUnauthorized: () => void
 }) {
   const { t } = useI18n()
   const [section, setSection] = useState<'about' | 'logo'>('about')
   const [draft, setDraft] = useState<LogoVariants | null>(null)
+  const [sizeDraft, setSizeDraft] = useState<LogoSize | null>(null)
+  const [screen, setScreen] = useState<keyof LogoSize>(() =>
+    window.matchMedia('(max-width: 680px)').matches ? 'mobile' : 'desktop',
+  )
   const [busy, setBusy] = useState<'prepare' | 'save' | 'reset' | null>(null)
   const [error, setError] = useState('')
   const [message, setMessage] = useState('')
   const fileInput = useRef<HTMLInputElement>(null)
   const saving = busy === 'save' || busy === 'reset'
   const dismiss = useModalDismiss(() => { if (!saving) onClose() })
+  const logoVersion = branding?.version
+  const savedSize = branding?.size ?? DEFAULT_SIZE
+  const size = sizeDraft ?? savedSize
+  const sizeChanged = size.desktop !== savedSize.desktop || size.mobile !== savedSize.mobile
 
   async function selectFile(event: ChangeEvent<HTMLInputElement>) {
     const input = event.currentTarget
@@ -60,10 +70,11 @@ export function AboutModal({ version, logoVersion, logoSrc, onChanged, onClose, 
     try {
       const next = await api<Branding>('/api/branding', {
         method,
-        body: method === 'PUT' ? JSON.stringify(draft) : undefined,
+        body: method === 'PUT' ? JSON.stringify({ ...draft, ...(sizeChanged && { size }) }) : undefined,
       })
-      onChanged(next.version)
+      onChanged(next)
       setDraft(null)
+      setSizeDraft(null)
       if (fileInput.current) fileInput.current.value = ''
       setMessage(t('Сохранено.'))
     } catch (err) {
@@ -117,14 +128,41 @@ export function AboutModal({ version, logoVersion, logoSrc, onChanged, onClose, 
               <input ref={fileInput} type="file" accept={LOGO_TYPES} onChange={selectFile} disabled={Boolean(busy)} />
               <span className="muted small">{t('PNG, JPEG, WebP или SVG, до 5 МБ')}</span>
             </label>
-            <div className="branding-previews" aria-busy={busy === 'prepare'}>
+            <div className="branding-size">
+              <div className="branding-screens" role="group" aria-label={t('Предпросмотр шапки')}>
+                <button type="button" className="ghost" aria-pressed={screen === 'desktop'} onClick={() => setScreen('desktop')}>
+                  {t('Компьютер')}
+                </button>
+                <button type="button" className="ghost" aria-pressed={screen === 'mobile'} onClick={() => setScreen('mobile')}>
+                  {t('Телефон')}
+                </button>
+              </div>
+              <label className="branding-scale">
+                <span>{t('Размер логотипа в шапке')}</span>
+                <span className="muted" aria-hidden="true">{size[screen]}%</span>
+                <input
+                  type="range"
+                  min={60}
+                  max={screen === 'desktop' ? 140 : 130}
+                  value={size[screen]}
+                  aria-valuetext={`${size[screen]}%`}
+                  onChange={(event) => setSizeDraft({ ...size, [screen]: event.currentTarget.valueAsNumber })}
+                  disabled={Boolean(busy) || !branding}
+                />
+              </label>
+            </div>
+            <div className={`branding-previews branding-previews-${screen}`} aria-busy={busy === 'prepare'}>
               {logoThemes.map((theme) => (
                 <div className={`branding-preview branding-preview-${theme}`} key={theme}>
                   <span>{theme === 'light' ? t('Светлая тема') : t('Темная тема')}</span>
-                  <PanelLogo
-                    className="branding-preview-logo"
-                    src={draft ? `data:image/png;base64,${draft[theme]}` : logoVersion ? logoUrl(logoVersion, theme) : logoVersion}
-                  />
+                  <div className="brand">
+                    <PanelLogo
+                      className="brand-logo"
+                      headerSize={size}
+                      src={draft ? `data:image/png;base64,${draft[theme]}` : logoVersion ? logoUrl(logoVersion, theme) : logoVersion}
+                    />
+                    {screen === 'desktop' && <strong className="brand-title">Amnezia Control</strong>}
+                  </div>
                 </div>
               ))}
             </div>
@@ -132,10 +170,10 @@ export function AboutModal({ version, logoVersion, logoSrc, onChanged, onClose, 
             {error && <p className="form-error" role="alert">{error}</p>}
             {message && <p className="muted" role="status">{message}</p>}
             <div className="modal-actions">
-              {logoVersion && <button className="ghost" onClick={() => void changeLogo('DELETE')} disabled={Boolean(busy)}>
-                {t('Вернуть стандартный логотип')}
+              {(logoVersion || branding?.size) && <button className="ghost" onClick={() => void changeLogo('DELETE')} disabled={Boolean(busy)}>
+                {t('Вернуть стандартное оформление')}
               </button>}
-              <button className="primary" onClick={() => void changeLogo('PUT')} disabled={!draft || Boolean(busy)}>
+              <button className="primary" onClick={() => void changeLogo('PUT')} disabled={(!draft && !sizeChanged) || Boolean(busy)}>
                 {t('Сохранить')}
               </button>
             </div>

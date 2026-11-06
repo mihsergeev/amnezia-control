@@ -1,9 +1,11 @@
-import { useState } from 'react'
+import { useState, type CSSProperties } from 'react'
+import type { LogoSize } from './api'
 
-export function PanelLogo({ src, className, alt = '' }: {
+export function PanelLogo({ src, className, alt = '', headerSize }: {
   src: string | null | undefined
   className: string
   alt?: string
+  headerSize?: LogoSize
 }) {
   const [failed, setFailed] = useState<string>()
   if (src === undefined) return <span className={className} aria-hidden="true" />
@@ -13,6 +15,10 @@ export function PanelLogo({ src, className, alt = '' }: {
       className={`${className}${custom ? ' custom-logo' : ''}`}
       src={custom ? src : '/logo.png'}
       alt={alt}
+      style={headerSize && {
+        '--logo-desktop-scale': headerSize.desktop / 100,
+        '--logo-mobile-scale': headerSize.mobile / 100,
+      } as CSSProperties}
       onError={custom ? () => setFailed(src) : undefined}
     />
   )

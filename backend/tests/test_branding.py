@@ -133,11 +133,45 @@ async def test_simultaneous_first_uploads_keep_a_complete_pair(client, auth_head
 
 
 @pytest.mark.asyncio
+async def test_change_size_without_replacing_logo(client, auth_headers):
+    size = {"desktop": 125, "mobile": 75}
+    data = {"light": b64(LIGHT), "dark": b64(DARK)}
+    assert (await client.put("/api/branding", json={"size": size})).status_code == 401
+    default_logo = await client.put("/api/branding", headers=auth_headers, json={"size": size})
+    assert default_logo.json() == {"version": None, "size": size}
+
+    uploaded = await client.put("/api/branding", headers=auth_headers, json=data)
+    assert uploaded.status_code == 200
+    version = uploaded.json()["version"]
+    assert uploaded.json()["size"] == size
+    changed = await client.put(
+        "/api/branding", headers=auth_headers, json={"size": {"desktop": 140, "mobile": 60}}
+    )
+    assert changed.status_code == 200
+    assert changed.json() == {"version": version, "size": {"desktop": 140, "mobile": 60}}
+    assert (await client.get("/api/branding")).json() == changed.json()
+    assert (await client.get(f"/api/branding/logo/light?v={version}")).content == LIGHT
+
+    for invalid in (None, {}, {"desktop": 100}, *(
+        {**size, "mobile": value} for value in (True, "100", 100.0, 59, 131)
+    )):
+        rejected = await client.put(
+            "/api/branding", headers=auth_headers, json={"light": b64(DARK), "dark": b64(LIGHT), "size": invalid}
+        )
+        assert rejected.status_code == 400
+    incomplete = await client.put("/api/branding", headers=auth_headers, json={"light": b64(DARK), "size": size})
+    assert incomplete.status_code == 400
+    assert (await client.get("/api/branding")).json() == changed.json()
+
+
+@pytest.mark.asyncio
 async def test_panel_backup_restores_the_logo(client, auth_headers):
     saved = await client.put(
-        "/api/branding", headers=auth_headers, json={"light": b64(LIGHT), "dark": b64(DARK)}
+        "/api/branding", headers=auth_headers,
+        json={"light": b64(LIGHT), "dark": b64(DARK), "size": {"desktop": 140, "mobile": 130}},
     )
     assert saved.status_code == 200
+    assert saved.json()["size"] == {"desktop": 140, "mobile": 130}
     backup = await client.post("/api/backup/download", headers=auth_headers, json={"password": "testpass"})
     assert backup.status_code == 200
     assert (await client.delete("/api/branding", headers=auth_headers)).json() == {"version": None}

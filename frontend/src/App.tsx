@@ -45,24 +45,25 @@ function App() {
   const [twoFaOpen, setTwoFaOpen] = useState(false)
   const [pwOpen, setPwOpen] = useState(false)
   const [aboutOpen, setAboutOpen] = useState(false)
-  // Undefined while loading, null when the panel uses the standard logo.
-  const [logoVersion, setLogoVersion] = useState<string | null>()
+  // Undefined while loading. A null version uses the standard logo.
+  const [branding, setBranding] = useState<Branding>()
   const [theme, setTheme] = useState<'dark' | 'light'>(() =>
     document.documentElement.getAttribute('data-theme') === 'light'
       ? 'light'
       : 'dark',
   )
   const fileRef = useRef<HTMLInputElement>(null)
+  const logoVersion = branding?.version
   const logoSrc = logoVersion ? logoUrl(logoVersion, theme) : logoVersion
 
   useEffect(() => {
     const controller = new AbortController()
     api<Branding>('/api/branding', { signal: controller.signal })
-      .then((branding) => {
-        if (!controller.signal.aborted) setLogoVersion((current) => current === undefined ? (branding?.version ?? null) : current)
+      .then((next) => {
+        if (!controller.signal.aborted) setBranding((current) => current ?? next ?? { version: null })
       })
       .catch(() => {
-        if (!controller.signal.aborted) setLogoVersion((current) => current ?? null)
+        if (!controller.signal.aborted) setBranding((current) => current ?? { version: null })
       })
     return () => controller.abort()
   }, [])
@@ -200,8 +201,8 @@ function App() {
         {/* на экране входа лого уже есть в карточке — в шапке не дублируем */}
         {authed && (
           <a className="brand" href="/" title={t('На главную')}>
-            <PanelLogo src={logoSrc} className="brand-logo" />
-            <h1>Amnezia Control</h1>
+            <PanelLogo src={logoSrc} className="brand-logo" headerSize={branding?.size} />
+            <h1 className="brand-title">Amnezia Control</h1>
           </a>
         )}
         {authed && (
@@ -325,9 +326,9 @@ function App() {
       {aboutOpen && (
         <AboutModal
           version={version}
-          logoVersion={logoVersion}
+          branding={branding}
           logoSrc={logoSrc}
-          onChanged={setLogoVersion}
+          onChanged={setBranding}
           onClose={() => setAboutOpen(false)}
           onUnauthorized={logout}
         />
