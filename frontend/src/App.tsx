@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import {
   ApiError,
   api,
+  DEFAULT_PANEL_TITLE,
   downloadBackup,
   getToken,
   logoUrl,
@@ -55,6 +56,10 @@ function App() {
   const fileRef = useRef<HTMLInputElement>(null)
   const logoVersion = branding?.version
   const logoSrc = logoVersion ? logoUrl(logoVersion, theme) : logoVersion
+  const headerTitle = branding && !branding.hide_header_title
+    ? branding.header_title || DEFAULT_PANEL_TITLE
+    : null
+  const tabTitle = branding && (branding.tab_title || DEFAULT_PANEL_TITLE)
 
   useEffect(() => {
     const controller = new AbortController()
@@ -67,6 +72,10 @@ function App() {
       })
     return () => controller.abort()
   }, [])
+
+  useEffect(() => {
+    if (tabTitle !== undefined) document.title = tabTitle
+  }, [tabTitle])
 
   useEffect(() => {
     const icon = document.querySelector<HTMLLinkElement>('link[rel="icon"]')
@@ -200,9 +209,9 @@ function App() {
       <header className="header">
         {/* на экране входа лого уже есть в карточке — в шапке не дублируем */}
         {authed && (
-          <a className="brand" href="/" title={t('На главную')}>
+          <a className="brand" href="/" aria-label={t('На главную')}>
             <PanelLogo src={logoSrc} className="brand-logo" headerSize={branding?.size} />
-            <h1 className="brand-title">Amnezia Control</h1>
+            {headerTitle && <h1 className="brand-title" dir="auto" title={headerTitle}>{headerTitle}</h1>}
           </a>
         )}
         {authed && (

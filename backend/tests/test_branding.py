@@ -1,5 +1,6 @@
 import asyncio
 import base64
+import json
 import re
 import struct
 import zlib
@@ -192,10 +193,43 @@ async def test_login_size_is_independent_and_validated(client, auth_headers):
 
 
 @pytest.mark.asyncio
-async def test_panel_backup_restores_the_logo(client, auth_headers):
+async def test_titles_are_independent_and_reject_invalid_updates(client, auth_headers):
+    data = {"header_title": "  Пример <VPN>  ", "hide_header_title": True, "tab_title": "VPN admin"}
+    assert (await client.put("/api/branding", json=data)).status_code == 401
+    saved = await client.put("/api/branding", headers=auth_headers, json=data)
+    expected = {"version": None, **data, "header_title": "Пример <VPN>"}
+    assert saved.status_code == 200
+    assert saved.json() == expected
+    assert (await client.get("/api/branding")).json() == expected
+
+    for invalid in (
+        {"header_title": "x" * 81}, {"header_title": "x\ny"}, {"header_title": "\ud800"},
+        {"tab_title": None}, {"tab_title": "x\x00"}, {"tab_title": 5},
+        {"hide_header_title": 1}, {"hide_header_title": "false"},
+    ):
+        rejected = await client.put(
+            "/api/branding", headers=auth_headers, content=json.dumps({"login_size": 110, **invalid}),
+        )
+        assert rejected.status_code == 400
+    assert (await client.get("/api/branding")).json() == expected
+
+    changed = await client.put(
+        "/api/branding", headers=auth_headers, json={"hide_header_title": False, "tab_title": " "},
+    )
+    assert changed.status_code == 200
+    assert changed.json() == {**expected, "hide_header_title": False, "tab_title": ""}
+    assert (await client.delete("/api/branding", headers=auth_headers)).json() == {"version": None}
+    assert (await client.get("/api/branding")).json() == {"version": None}
+
+
+@pytest.mark.asyncio
+async def test_panel_backup_restores_branding(client, auth_headers):
     saved = await client.put(
         "/api/branding", headers=auth_headers,
-        json={"light": b64(LIGHT), "dark": b64(DARK), "size": {"desktop": 140, "mobile": 130}, "login_size": 110},
+        json={
+            "light": b64(LIGHT), "dark": b64(DARK), "size": {"desktop": 140, "mobile": 130},
+            "login_size": 110, "header_title": "Example VPN", "hide_header_title": True, "tab_title": "VPN panel",
+        },
     )
     assert saved.status_code == 200
     assert saved.json()["size"] == {"desktop": 140, "mobile": 130}

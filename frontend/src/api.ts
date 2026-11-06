@@ -2,7 +2,17 @@ import { translate } from './i18n'
 import type { LogoTheme } from './logoAdapt'
 
 export type LogoSize = { desktop: number; mobile: number }
-export type Branding = { version: string | null; size?: LogoSize; login_size?: number }
+export const DEFAULT_PANEL_TITLE = 'Amnezia Control'
+export const MAX_BRANDING_TITLE_LENGTH = 80
+
+export type Branding = {
+  version: string | null
+  size?: LogoSize
+  login_size?: number
+  header_title?: string
+  hide_header_title?: boolean
+  tab_title?: string
+}
 
 export function logoUrl(version: string, theme: LogoTheme) {
   return `/api/branding/logo/${theme}?v=${encodeURIComponent(version)}`

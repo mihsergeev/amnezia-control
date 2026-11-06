@@ -2,6 +2,7 @@ import base64
 import hashlib
 import json
 import re
+import unicodedata
 
 from fastapi import APIRouter, HTTPException, Request, Response
 from sqlalchemy import delete, select
@@ -19,12 +20,18 @@ router = APIRouter(prefix="/branding", tags=["branding"])
 _SETTING = "panel_logo"
 _SIZE_SETTING = "panel_logo_size"
 _LOGIN_SIZE_SETTING = "panel_login_logo_size"
-_SETTINGS = (_SETTING, _SIZE_SETTING, _LOGIN_SIZE_SETTING)
+_TITLE_SETTINGS = {
+    "header_title": "panel_header_title",
+    "tab_title": "panel_tab_title",
+}
+_HIDE_HEADER_TITLE_SETTING = "panel_hide_header_title"
+_SETTINGS = (_SETTING, _SIZE_SETTING, _LOGIN_SIZE_SETTING, _HIDE_HEADER_TITLE_SETTING, *_TITLE_SETTINGS.values())
 _THEMES = ("light", "dark")
 _MAX_BASE64 = ((MAX_PNG_BYTES + 2) // 3) * 4
 # Both encoded variants, their JSON fields and a small envelope. Stay below
 # nginx's default 1 MiB request limit even for a direct backend request.
-_MAX_REQUEST = 2 * _MAX_BASE64 + 128
+_MAX_REQUEST = 2 * _MAX_BASE64 + 4096
+_MAX_TITLE_LENGTH = 80
 _VERSION = re.compile(r"[0-9a-f]{64}")
 _NO_CACHE = {"Cache-Control": "no-store"}
 _INVALID = "Нужны корректные PNG для светлой и темной темы"
@@ -32,7 +39,7 @@ _INVALID_SIZE = "Размер логотипа должен быть от 60 д�
 _INVALID_LOGIN_SIZE = "Размер логотипа на странице входа должен быть от 60 до 140%"
 _TOO_LARGE = "Изображения логотипа слишком большие"
 
-BrandingMetadata = dict[str, str | dict[str, int] | int | None]
+BrandingMetadata = dict[str, str | dict[str, int] | int | bool | None]
 
 
 def _decode_png(value: str) -> bytes:
@@ -73,6 +80,14 @@ def _valid_size(value: object) -> bool:
     )
 
 
+def _valid_title(value: object) -> bool:
+    return (
+        isinstance(value, str)
+        and len(value) <= _MAX_TITLE_LENGTH
+        and all(unicodedata.category(char) not in {"Cc", "Cs", "Zl", "Zp"} for char in value)
+    )
+
+
 async def _metadata(session: SessionDep) -> BrandingMetadata:
     rows = await session.execute(select(AppSetting.key, AppSetting.value).where(
         AppSetting.key.in_(_SETTINGS)
@@ -83,6 +98,8 @@ async def _metadata(session: SessionDep) -> BrandingMetadata:
     for key, field, validate in (
         (_SIZE_SETTING, "size", _valid_size),
         (_LOGIN_SIZE_SETTING, "login_size", _valid_scale),
+        (_HIDE_HEADER_TITLE_SETTING, "hide_header_title", lambda value: type(value) is bool),
+        *((key, field, _valid_title) for field, key in _TITLE_SETTINGS.items()),
     ):
         try:
             value = json.loads(settings.get(key, "null"))
@@ -137,7 +154,8 @@ async def update_branding(
         data = json.loads(body)
     except (ValueError, RecursionError):
         raise HTTPException(400, _INVALID) from None
-    if not isinstance(data, dict) or not data.keys() <= {*_THEMES, "size", "login_size"} or not data:
+    fields = {*_THEMES, "size", "login_size", "hide_header_title", *_TITLE_SETTINGS}
+    if not isinstance(data, dict) or not data.keys() <= fields or not data:
         raise HTTPException(400, _INVALID)
     values = {}
     if "size" in data:
@@ -148,6 +166,16 @@ async def update_branding(
         if not _valid_scale(data["login_size"]):
             raise HTTPException(400, _INVALID_LOGIN_SIZE)
         values[_LOGIN_SIZE_SETTING] = data["login_size"]
+    if "hide_header_title" in data:
+        if type(data["hide_header_title"]) is not bool:
+            raise HTTPException(400, "Некорректная настройка подписи в шапке")
+        values[_HIDE_HEADER_TITLE_SETTING] = data["hide_header_title"]
+    for field, key in _TITLE_SETTINGS.items():
+        if field in data:
+            value = data[field]
+            if not _valid_title(value):
+                raise HTTPException(400, "Название должно занимать одну строку и содержать не более 80 символов")
+            values[key] = value.strip()
     if any(theme in data for theme in _THEMES):
         if not all(isinstance(data.get(theme), str) for theme in _THEMES):
             raise HTTPException(400, _INVALID)
@@ -174,7 +202,7 @@ async def update_branding(
         await session.commit()
     except SQLAlchemyError:
         # Database exceptions can include all bound parameters, including the PNGs.
-        raise HTTPException(503, "Не удалось сохранить логотип", headers=_NO_CACHE) from None
+        raise HTTPException(503, "Не удалось сохранить оформление", headers=_NO_CACHE) from None
     await audit.record(session, user.username, "branding.update")
     response.headers.update(_NO_CACHE)
     return result

@@ -1,5 +1,5 @@
 import { useRef, useState, type ChangeEvent } from 'react'
-import { api, ApiError, logoUrl, type Branding, type LogoSize } from './api'
+import { api, ApiError, DEFAULT_PANEL_TITLE, logoUrl, MAX_BRANDING_TITLE_LENGTH, type Branding, type LogoSize } from './api'
 import { useI18n } from './i18n'
 import { LOGO_TYPES, logoThemes, MAX_LOGO_BYTES, prepareLogo, type LogoVariants } from './logoAdapt'
 import { PanelLogo } from './PanelLogo'
@@ -22,6 +22,9 @@ export function AboutModal({ version, branding, logoSrc, onChanged, onClose, onU
   const [draft, setDraft] = useState<LogoVariants | null>(null)
   const [sizeDraft, setSizeDraft] = useState<LogoSize | null>(null)
   const [loginSizeDraft, setLoginSizeDraft] = useState<number | null>(null)
+  const [headerTitleDraft, setHeaderTitleDraft] = useState<string | null>(null)
+  const [hideHeaderTitleDraft, setHideHeaderTitleDraft] = useState<boolean | null>(null)
+  const [tabTitleDraft, setTabTitleDraft] = useState<string | null>(null)
   const [screen, setScreen] = useState<keyof LogoSize | 'login'>(() =>
     window.matchMedia('(max-width: 680px)').matches ? 'mobile' : 'desktop',
   )
@@ -38,6 +41,15 @@ export function AboutModal({ version, branding, logoSrc, onChanged, onClose, onU
   const savedLoginSize = branding?.login_size ?? 100
   const loginSize = loginSizeDraft ?? savedLoginSize
   const loginSizeChanged = loginSize !== savedLoginSize
+  const savedHeaderTitle = branding?.header_title ?? ''
+  const headerTitle = headerTitleDraft ?? savedHeaderTitle
+  const savedHideHeaderTitle = branding?.hide_header_title ?? false
+  const hideHeaderTitle = hideHeaderTitleDraft ?? savedHideHeaderTitle
+  const savedTabTitle = branding?.tab_title ?? ''
+  const tabTitle = tabTitleDraft ?? savedTabTitle
+  const titlesChanged = headerTitle.trim() !== savedHeaderTitle ||
+    hideHeaderTitle !== savedHideHeaderTitle || tabTitle.trim() !== savedTabTitle
+  const previewTitle = headerTitle.trim() || DEFAULT_PANEL_TITLE
   const scale = screen === 'login' ? loginSize : size[screen]
 
   async function selectFile(event: ChangeEvent<HTMLInputElement>) {
@@ -68,7 +80,7 @@ export function AboutModal({ version, branding, logoSrc, onChanged, onClose, onU
     }
   }
 
-  async function changeLogo(method: 'PUT' | 'DELETE') {
+  async function changeBranding(method: 'PUT' | 'DELETE') {
     setBusy(method === 'PUT' ? 'save' : 'reset')
     setMessage('')
     setError('')
@@ -79,17 +91,23 @@ export function AboutModal({ version, branding, logoSrc, onChanged, onClose, onU
           ...draft,
           ...(sizeChanged && { size }),
           ...(loginSizeChanged && { login_size: loginSize }),
+          ...(headerTitle.trim() !== savedHeaderTitle && { header_title: headerTitle.trim() }),
+          ...(hideHeaderTitle !== savedHideHeaderTitle && { hide_header_title: hideHeaderTitle }),
+          ...(tabTitle.trim() !== savedTabTitle && { tab_title: tabTitle.trim() }),
         }) : undefined,
       })
       onChanged(next)
       setDraft(null)
       setSizeDraft(null)
       setLoginSizeDraft(null)
+      setHeaderTitleDraft(null)
+      setHideHeaderTitleDraft(null)
+      setTabTitleDraft(null)
       if (fileInput.current) fileInput.current.value = ''
       setMessage(t('Сохранено.'))
     } catch (err) {
       if (err instanceof ApiError && err.status === 401) onUnauthorized()
-      else setError(t('Не удалось сохранить логотип.'))
+      else setError(t('Не удалось сохранить оформление.'))
     } finally {
       setBusy(null)
     }
@@ -138,6 +156,42 @@ export function AboutModal({ version, branding, logoSrc, onChanged, onClose, onU
               <input ref={fileInput} type="file" accept={LOGO_TYPES} onChange={selectFile} disabled={Boolean(busy)} />
               <span className="muted small">{t('PNG, JPEG, WebP или SVG, до 5 МБ')}</span>
             </label>
+            <div className="branding-titles">
+              <label className="field">
+                <span>{t('Подпись рядом с логотипом')}</span>
+                <input
+                  type="text"
+                  dir="auto"
+                  value={headerTitle}
+                  placeholder={DEFAULT_PANEL_TITLE}
+                  maxLength={MAX_BRANDING_TITLE_LENGTH}
+                  onChange={(event) => setHeaderTitleDraft(event.currentTarget.value)}
+                  disabled={hideHeaderTitle || Boolean(busy) || !branding}
+                />
+              </label>
+              <label className="branding-hide-title">
+                <input
+                  type="checkbox"
+                  checked={hideHeaderTitle}
+                  onChange={(event) => setHideHeaderTitleDraft(event.currentTarget.checked)}
+                  disabled={Boolean(busy) || !branding}
+                />
+                {t('Скрыть подпись')}
+              </label>
+              <label className="field">
+                <span>{t('Название вкладки браузера')}</span>
+                <input
+                  type="text"
+                  dir="auto"
+                  value={tabTitle}
+                  placeholder={DEFAULT_PANEL_TITLE}
+                  maxLength={MAX_BRANDING_TITLE_LENGTH}
+                  onChange={(event) => setTabTitleDraft(event.currentTarget.value)}
+                  disabled={Boolean(busy) || !branding}
+                />
+              </label>
+              <p className="muted small">{t('Пустое поле использует стандартное название. На телефоне в шапке виден только логотип.')}</p>
+            </div>
             <div className="branding-size">
               <div className="branding-screens" role="group" aria-label={t('Предпросмотр логотипа')}>
                 <button type="button" className="ghost" aria-pressed={screen === 'desktop'} onClick={() => setScreen('desktop')}>
@@ -179,7 +233,9 @@ export function AboutModal({ version, branding, logoSrc, onChanged, onClose, onU
                       loginSize={screen === 'login' ? loginSize : undefined}
                       src={draft ? `data:image/png;base64,${draft[theme]}` : logoVersion ? logoUrl(logoVersion, theme) : logoVersion}
                     />
-                    {screen === 'desktop' && <strong className="brand-title">Amnezia Control</strong>}
+                    {screen === 'desktop' && !hideHeaderTitle && (
+                      <strong className="brand-title" dir="auto" title={previewTitle}>{previewTitle}</strong>
+                    )}
                     {screen === 'login' && <strong>{t('Вход в панель')}</strong>}
                   </div>
                 </div>
@@ -189,10 +245,10 @@ export function AboutModal({ version, branding, logoSrc, onChanged, onClose, onU
             {error && <p className="form-error" role="alert">{error}</p>}
             {message && <p className="muted" role="status">{message}</p>}
             <div className="modal-actions">
-              {(logoVersion || branding?.size || branding?.login_size) && <button className="ghost" onClick={() => void changeLogo('DELETE')} disabled={Boolean(busy)}>
+              {(logoVersion || branding?.size || branding?.login_size || savedHeaderTitle || savedHideHeaderTitle || savedTabTitle) && <button className="ghost" onClick={() => void changeBranding('DELETE')} disabled={Boolean(busy)}>
                 {t('Вернуть стандартное оформление')}
               </button>}
-              <button className="primary" onClick={() => void changeLogo('PUT')} disabled={(!draft && !sizeChanged && !loginSizeChanged) || Boolean(busy)}>
+              <button className="primary" onClick={() => void changeBranding('PUT')} disabled={(!draft && !sizeChanged && !loginSizeChanged && !titlesChanged) || Boolean(busy) || !branding}>
                 {t('Сохранить')}
               </button>
             </div>

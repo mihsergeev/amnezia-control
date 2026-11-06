@@ -4,6 +4,10 @@ All notable changes to Amnezia Control are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.84.14] - 2026-11-07
+
+- Customize or hide the label beside the header logo and set a separate browser tab title in About.
+
 ## [0.84.13] - 2026-11-06
 
 - Adjust the sign-in page logo size separately in About, with live previews for light and dark themes.
