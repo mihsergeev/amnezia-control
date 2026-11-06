@@ -1,12 +1,13 @@
 import { useState } from 'react'
 
 export function PanelLogo({ src, className, alt = '' }: {
-  src?: string
+  src: string | null | undefined
   className: string
   alt?: string
 }) {
   const [failed, setFailed] = useState<string>()
-  const custom = Boolean(src && src !== failed)
+  if (src === undefined) return <span className={className} aria-hidden="true" />
+  const custom = src !== null && src !== failed
   return (
     <img
       className={`${className}${custom ? ' custom-logo' : ''}`}

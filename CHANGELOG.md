@@ -4,6 +4,12 @@ All notable changes to Amnezia Control are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.84.10] - 2026-11-06
+
+### Fixed
+
+- Show the configured logo on the sign-in page and in the panel header after a reload without flashing the standard logo or tab icon.
+
 ## [0.84.9] - 2026-11-06
 
 ### Changed

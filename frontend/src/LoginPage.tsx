@@ -5,7 +5,7 @@ import { PanelLogo } from './PanelLogo'
 
 type Props = {
   onLogin: () => void
-  logoSrc?: string
+  logoSrc: string | null | undefined
 }
 
 export function LoginPage({ onLogin, logoSrc }: Props) {

@@ -9,8 +9,8 @@ export const PROJECT_URL = 'https://github.com/mihsergeev/amnezia-control'
 
 export function AboutModal({ version, logoVersion, logoSrc, onChanged, onClose, onUnauthorized }: {
   version: string | null
-  logoVersion: string | null
-  logoSrc?: string
+  logoVersion: string | null | undefined
+  logoSrc: string | null | undefined
   onChanged: (version: string | null) => void
   onClose: () => void
   onUnauthorized: () => void
@@ -123,7 +123,7 @@ export function AboutModal({ version, logoVersion, logoSrc, onChanged, onClose, 
                   <span>{theme === 'light' ? t('Светлая тема') : t('Темная тема')}</span>
                   <PanelLogo
                     className="branding-preview-logo"
-                    src={draft ? `data:image/png;base64,${draft[theme]}` : logoVersion ? logoUrl(logoVersion, theme) : undefined}
+                    src={draft ? `data:image/png;base64,${draft[theme]}` : logoVersion ? logoUrl(logoVersion, theme) : logoVersion}
                   />
                 </div>
               ))}

@@ -45,6 +45,7 @@ function App() {
   const [twoFaOpen, setTwoFaOpen] = useState(false)
   const [pwOpen, setPwOpen] = useState(false)
   const [aboutOpen, setAboutOpen] = useState(false)
+  // Undefined while loading, null when the panel uses the standard logo.
   const [logoVersion, setLogoVersion] = useState<string | null>()
   const [theme, setTheme] = useState<'dark' | 'light'>(() =>
     document.documentElement.getAttribute('data-theme') === 'light'
@@ -52,13 +53,13 @@ function App() {
       : 'dark',
   )
   const fileRef = useRef<HTMLInputElement>(null)
-  const logoSrc = logoVersion ? logoUrl(logoVersion, theme) : undefined
+  const logoSrc = logoVersion ? logoUrl(logoVersion, theme) : logoVersion
 
   useEffect(() => {
     const controller = new AbortController()
     api<Branding>('/api/branding', { signal: controller.signal })
       .then((branding) => {
-        if (!controller.signal.aborted) setLogoVersion((current) => current === undefined ? branding.version : current)
+        if (!controller.signal.aborted) setLogoVersion((current) => current === undefined ? (branding?.version ?? null) : current)
       })
       .catch(() => {
         if (!controller.signal.aborted) setLogoVersion((current) => current ?? null)
@@ -68,8 +69,8 @@ function App() {
 
   useEffect(() => {
     const icon = document.querySelector<HTMLLinkElement>('link[rel="icon"]')
-    if (!icon) return
-    if (!logoSrc) {
+    if (!icon || logoSrc === undefined) return
+    if (logoSrc === null) {
       icon.href = '/favicon.png'
       return
     }
@@ -324,7 +325,7 @@ function App() {
       {aboutOpen && (
         <AboutModal
           version={version}
-          logoVersion={logoVersion ?? null}
+          logoVersion={logoVersion}
           logoSrc={logoSrc}
           onChanged={setLogoVersion}
           onClose={() => setAboutOpen(false)}
