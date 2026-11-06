@@ -4,6 +4,13 @@ All notable changes to Amnezia Control are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.84.9] - 2026-11-06
+
+### Changed
+
+- Use the saved panel logo as the browser tab icon. The icon follows the panel theme, preserves the logo proportions, and resets with the logo.
+- Move logo settings to About → Appearance → Logo. The About page shows the panel version and links to the source, issue tracker, and license.
+
 ## [0.84.8] - 2026-11-06
 
 ### Added

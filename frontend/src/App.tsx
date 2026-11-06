@@ -11,7 +11,7 @@ import {
   type Branding,
 } from './api'
 import { LoginPage } from './LoginPage'
-import { BrandingModal } from './BrandingModal'
+import { AboutModal, PROJECT_URL } from './AboutModal'
 import { PanelLogo } from './PanelLogo'
 import { ServersPage } from './ServersPage'
 import { Dashboard } from './Dashboard'
@@ -44,7 +44,7 @@ function App() {
   const [shareOpen, setShareOpen] = useState(false)
   const [twoFaOpen, setTwoFaOpen] = useState(false)
   const [pwOpen, setPwOpen] = useState(false)
-  const [brandingOpen, setBrandingOpen] = useState(false)
+  const [aboutOpen, setAboutOpen] = useState(false)
   const [logoVersion, setLogoVersion] = useState<string | null>()
   const [theme, setTheme] = useState<'dark' | 'light'>(() =>
     document.documentElement.getAttribute('data-theme') === 'light'
@@ -65,6 +65,32 @@ function App() {
       })
     return () => controller.abort()
   }, [])
+
+  useEffect(() => {
+    const icon = document.querySelector<HTMLLinkElement>('link[rel="icon"]')
+    if (!icon) return
+    if (!logoSrc) {
+      icon.href = '/favicon.png'
+      return
+    }
+
+    // Wide and tall logos need transparent padding in the square tab icon.
+    const image = new Image()
+    image.onload = () => {
+      const canvas = document.createElement('canvas')
+      canvas.width = canvas.height = 64
+      const ctx = canvas.getContext('2d')
+      if (!ctx) return
+      const scale = 60 / Math.max(image.naturalWidth, image.naturalHeight)
+      const width = image.naturalWidth * scale
+      const height = image.naturalHeight * scale
+      ctx.drawImage(image, (64 - width) / 2, (64 - height) / 2, width, height)
+      icon.href = canvas.toDataURL('image/png')
+    }
+    image.onerror = () => { icon.href = '/favicon.png' }
+    image.src = logoSrc
+    return () => { image.onload = image.onerror = null }
+  }, [logoSrc])
 
   function toggleTheme() {
     const next = theme === 'dark' ? 'light' : 'dark'
@@ -158,7 +184,7 @@ function App() {
     setTwoFaOpen(false)
     setPwOpen(false)
     setShareOpen(false)
-    setBrandingOpen(false)
+    setAboutOpen(false)
   }, [])
 
   // Выход по кнопке: токен отзывается и на сервере
@@ -215,7 +241,7 @@ function App() {
           {version && (
             <a
               className="muted source-link"
-              href="https://github.com/mihsergeev/amnezia-control"
+              href={PROJECT_URL}
               target="_blank"
               rel="noopener noreferrer"
               title={t('Исходный код (AGPL-3.0)')}
@@ -252,7 +278,7 @@ function App() {
                 title={t('Меню')}
                 label={<span className="menu-gear">⚙</span>}
                 items={[
-                  { label: t('Логотип панели'), onClick: () => setBrandingOpen(true) },
+                  { label: t('О панели'), onClick: () => setAboutOpen(true) },
                   { label: t('Алерты'), onClick: () => setAlertsOpen(true) },
                   { label: t('Ссылки на конфиги'), onClick: () => setShareOpen(true) },
                   {
@@ -295,11 +321,13 @@ function App() {
         <LoginPage logoSrc={logoSrc} onLogin={() => setAuthed(true)} />
       )}
 
-      {brandingOpen && (
-        <BrandingModal
-          version={logoVersion ?? null}
+      {aboutOpen && (
+        <AboutModal
+          version={version}
+          logoVersion={logoVersion ?? null}
+          logoSrc={logoSrc}
           onChanged={setLogoVersion}
-          onClose={() => setBrandingOpen(false)}
+          onClose={() => setAboutOpen(false)}
           onUnauthorized={logout}
         />
       )}
