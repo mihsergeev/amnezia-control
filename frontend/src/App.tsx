@@ -320,7 +320,7 @@ function App() {
           <ServersPage onUnauthorized={logout} />
         )
       ) : (
-        <LoginPage logoSrc={logoSrc} onLogin={() => setAuthed(true)} />
+        <LoginPage logoSrc={logoSrc} logoSize={branding?.login_size} onLogin={() => setAuthed(true)} />
       )}
 
       {aboutOpen && (

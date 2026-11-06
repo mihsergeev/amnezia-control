@@ -6,9 +6,10 @@ import { PanelLogo } from './PanelLogo'
 type Props = {
   onLogin: () => void
   logoSrc: string | null | undefined
+  logoSize?: number
 }
 
-export function LoginPage({ onLogin, logoSrc }: Props) {
+export function LoginPage({ onLogin, logoSrc, logoSize }: Props) {
   const { t } = useI18n()
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
@@ -57,7 +58,7 @@ export function LoginPage({ onLogin, logoSrc }: Props) {
   return (
     <div className="login-wrap">
       <form className="card login-card" onSubmit={submit}>
-        <PanelLogo src={logoSrc} className="login-logo" alt="Amnezia Control" />
+        <PanelLogo src={logoSrc} className="login-logo" alt="Amnezia Control" loginSize={logoSize} />
         <h2>{t('Вход в панель')}</h2>
         <label>
           {t('Логин')}

@@ -35,8 +35,10 @@
 }
 
 .login-logo {
-  width: 168px;
-  height: 168px;
+  --login-logo-width: 168px;
+  width: calc(var(--login-logo-width) * var(--logo-login-scale, 1) * var(--login-preview-scale, 1));
+  max-width: 100%;
+  height: calc(168px * var(--logo-login-scale, 1) * var(--login-preview-scale, 1));
   object-fit: contain;
   align-self: center;
   margin-bottom: 0.25rem;
@@ -48,7 +50,7 @@
 }
 
 .login-logo.custom-logo {
-  width: min(100%, 220px);
+  --login-logo-width: 220px;
 }
 
 .about-layout {
@@ -208,6 +210,23 @@
   grid-template-columns: repeat(auto-fit, minmax(min(100%, 170px), 1fr));
 }
 
+.branding-previews-login {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.branding-preview-login {
+  --login-preview-scale: 0.62;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: end;
+  gap: 0.5rem;
+  padding: 0.65rem;
+  border: 1px solid var(--preview-card-border);
+  border-radius: 10px;
+  background: var(--preview-card);
+}
+
 .branding-preview {
   display: grid;
   grid-template-columns: minmax(0, 1fr);
@@ -223,13 +242,29 @@
 }
 
 .branding-preview-light {
+  --preview-card: #ffffff;
+  --preview-card-border: #ccd3de;
   background: #e4e8ef;
   color: #141824;
 }
 
 .branding-preview-dark {
+  --preview-card: #171a23;
+  --preview-card-border: #262b38;
   background: #0f1117;
   color: #e6e9f0;
+}
+
+@media (max-width: 480px) {
+  .branding-previews-login .branding-preview {
+    padding: 0.4rem;
+  }
+
+  .branding-preview-login {
+    --login-preview-scale: 0.28;
+    padding: 0.3rem;
+    text-align: center;
+  }
 }
 
 .branding-previews-mobile .brand-logo {

@@ -165,13 +165,41 @@ async def test_change_size_without_replacing_logo(client, auth_headers):
 
 
 @pytest.mark.asyncio
+async def test_login_size_is_independent_and_validated(client, auth_headers):
+    assert (await client.put("/api/branding", json={"login_size": 140})).status_code == 401
+    saved = await client.put("/api/branding", headers=auth_headers, json={"login_size": 140})
+    assert saved.status_code == 200
+    assert saved.json() == {"version": None, "login_size": 140}
+
+    size = {"desktop": 125, "mobile": 75}
+    saved = await client.put("/api/branding", headers=auth_headers, json={
+        "light": b64(LIGHT), "dark": b64(DARK), "size": size,
+    })
+    assert saved.status_code == 200
+    version = saved.json()["version"]
+    assert saved.json() == {"version": version, "size": size, "login_size": 140}
+
+    changed = await client.put("/api/branding", headers=auth_headers, json={"login_size": 60})
+    assert changed.status_code == 200
+    assert changed.json() == {"version": version, "size": size, "login_size": 60}
+    for invalid in (None, True, "100", 100.0, 59, 141):
+        rejected = await client.put("/api/branding", headers=auth_headers, json={
+            "size": {"desktop": 100, "mobile": 100}, "login_size": invalid,
+        })
+        assert rejected.status_code == 400
+    assert (await client.get("/api/branding")).json() == changed.json()
+    assert (await client.get(f"/api/branding/logo/light?v={version}")).content == LIGHT
+
+
+@pytest.mark.asyncio
 async def test_panel_backup_restores_the_logo(client, auth_headers):
     saved = await client.put(
         "/api/branding", headers=auth_headers,
-        json={"light": b64(LIGHT), "dark": b64(DARK), "size": {"desktop": 140, "mobile": 130}},
+        json={"light": b64(LIGHT), "dark": b64(DARK), "size": {"desktop": 140, "mobile": 130}, "login_size": 110},
     )
     assert saved.status_code == 200
     assert saved.json()["size"] == {"desktop": 140, "mobile": 130}
+    assert saved.json()["login_size"] == 110
     backup = await client.post("/api/backup/download", headers=auth_headers, json={"password": "testpass"})
     assert backup.status_code == 200
     assert (await client.delete("/api/branding", headers=auth_headers)).json() == {"version": None}

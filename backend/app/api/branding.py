@@ -18,6 +18,8 @@ from app.models import AppSetting
 router = APIRouter(prefix="/branding", tags=["branding"])
 _SETTING = "panel_logo"
 _SIZE_SETTING = "panel_logo_size"
+_LOGIN_SIZE_SETTING = "panel_login_logo_size"
+_SETTINGS = (_SETTING, _SIZE_SETTING, _LOGIN_SIZE_SETTING)
 _THEMES = ("light", "dark")
 _MAX_BASE64 = ((MAX_PNG_BYTES + 2) // 3) * 4
 # Both encoded variants, their JSON fields and a small envelope. Stay below
@@ -27,7 +29,10 @@ _VERSION = re.compile(r"[0-9a-f]{64}")
 _NO_CACHE = {"Cache-Control": "no-store"}
 _INVALID = "Нужны корректные PNG для светлой и темной темы"
 _INVALID_SIZE = "Размер логотипа должен быть от 60 до 140% для компьютера и от 60 до 130% для телефона"
+_INVALID_LOGIN_SIZE = "Размер логотипа на странице входа должен быть от 60 до 140%"
 _TOO_LARGE = "Изображения логотипа слишком большие"
+
+BrandingMetadata = dict[str, str | dict[str, int] | int | None]
 
 
 def _decode_png(value: str) -> bytes:
@@ -53,35 +58,43 @@ def _parse_logo(raw: str | None) -> dict[str, str] | None:
     return record
 
 
+def _valid_scale(value: object, limit: int = 140) -> bool:
+    return type(value) is int and 60 <= value <= limit
+
+
 def _valid_size(value: object) -> bool:
     return (
         isinstance(value, dict)
         and value.keys() == {"desktop", "mobile"}
         and all(
-            type(value[screen]) is int and 60 <= value[screen] <= limit
+            _valid_scale(value[screen], limit)
             for screen, limit in (("desktop", 140), ("mobile", 130))
         )
     )
 
 
-async def _metadata(session: SessionDep) -> dict[str, str | dict[str, int] | None]:
+async def _metadata(session: SessionDep) -> BrandingMetadata:
     rows = await session.execute(select(AppSetting.key, AppSetting.value).where(
-        AppSetting.key.in_((_SETTING, _SIZE_SETTING))
+        AppSetting.key.in_(_SETTINGS)
     ))
     settings = {key: value for key, value in rows}
     logo = _parse_logo(settings.get(_SETTING))
-    result: dict[str, str | dict[str, int] | None] = {"version": logo["version"] if logo else None}
-    try:
-        size = json.loads(settings.get(_SIZE_SETTING, "null"))
-    except (ValueError, RecursionError):
-        size = None
-    if _valid_size(size):
-        result["size"] = size
+    result: BrandingMetadata = {"version": logo["version"] if logo else None}
+    for key, field, validate in (
+        (_SIZE_SETTING, "size", _valid_size),
+        (_LOGIN_SIZE_SETTING, "login_size", _valid_scale),
+    ):
+        try:
+            value = json.loads(settings.get(key, "null"))
+        except (ValueError, RecursionError):
+            continue
+        if validate(value):
+            result[field] = value
     return result
 
 
 @router.get("")
-async def get_branding(response: Response, session: SessionDep) -> dict[str, str | dict[str, int] | None]:
+async def get_branding(response: Response, session: SessionDep) -> BrandingMetadata:
     response.headers.update(_NO_CACHE)
     return await _metadata(session)
 
@@ -112,7 +125,7 @@ async def get_logo(theme: str, session: SessionDep, v: str | None = None) -> Res
 @router.put("")
 async def update_branding(
     request: Request, response: Response, session: SessionDep, user: CurrentUser
-) -> dict[str, str | dict[str, int] | None]:
+) -> BrandingMetadata:
     # Bound the whole request even without Content-Length. Don't expose the
     # payload in FastAPI's validation errors for malformed JSON or fields.
     body = bytearray()
@@ -124,13 +137,17 @@ async def update_branding(
         data = json.loads(body)
     except (ValueError, RecursionError):
         raise HTTPException(400, _INVALID) from None
-    if not isinstance(data, dict) or not data.keys() <= {*_THEMES, "size"} or not data:
+    if not isinstance(data, dict) or not data.keys() <= {*_THEMES, "size", "login_size"} or not data:
         raise HTTPException(400, _INVALID)
     values = {}
     if "size" in data:
         if not _valid_size(data["size"]):
             raise HTTPException(400, _INVALID_SIZE)
         values[_SIZE_SETTING] = data["size"]
+    if "login_size" in data:
+        if not _valid_scale(data["login_size"]):
+            raise HTTPException(400, _INVALID_LOGIN_SIZE)
+        values[_LOGIN_SIZE_SETTING] = data["login_size"]
     if any(theme in data for theme in _THEMES):
         if not all(isinstance(data.get(theme), str) for theme in _THEMES):
             raise HTTPException(400, _INVALID)
@@ -167,7 +184,7 @@ async def update_branding(
 async def reset_branding(
     response: Response, session: SessionDep, user: CurrentUser
 ) -> dict[str, None]:
-    await session.execute(delete(AppSetting).where(AppSetting.key.in_((_SETTING, _SIZE_SETTING))))
+    await session.execute(delete(AppSetting).where(AppSetting.key.in_(_SETTINGS)))
     await session.commit()
     await audit.record(session, user.username, "branding.reset")
     response.headers.update(_NO_CACHE)

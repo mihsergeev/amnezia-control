@@ -4,6 +4,10 @@ All notable changes to Amnezia Control are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.84.13] - 2026-11-06
+
+- Adjust the sign-in page logo size separately in About, with live previews for light and dark themes.
+
 ## [0.84.12] - 2026-11-06
 
 - Set separate desktop and phone header logo sizes in About, with live previews for both light and dark themes.

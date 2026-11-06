@@ -2,7 +2,7 @@ import { translate } from './i18n'
 import type { LogoTheme } from './logoAdapt'
 
 export type LogoSize = { desktop: number; mobile: number }
-export type Branding = { version: string | null; size?: LogoSize }
+export type Branding = { version: string | null; size?: LogoSize; login_size?: number }
 
 export function logoUrl(version: string, theme: LogoTheme) {
   return `/api/branding/logo/${theme}?v=${encodeURIComponent(version)}`
