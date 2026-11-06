@@ -4,6 +4,12 @@ All notable changes to Amnezia Control are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.84.11] - 2026-11-06
+
+### Changed
+
+- Show custom logos larger in the panel header on desktop and mobile while preserving their proportions.
+
 ## [0.84.10] - 2026-11-06
 
 ### Fixed

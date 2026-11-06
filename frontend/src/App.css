@@ -40,7 +40,7 @@
 }
 
 .brand-logo.custom-logo {
-  width: 120px;
+  width: 168px;
 }
 
 .login-logo.custom-logo {
@@ -1090,7 +1090,7 @@ input:focus {
     height: 40px;
   }
   .brand-logo.custom-logo {
-    width: 85px;
+    width: 112px;
   }
   /* на узком экране оставляем только лого — бренд-текст съедает место, из-за
      чего иконки справа (версия/тема/язык/меню) уезжали за край */
