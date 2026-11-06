@@ -90,6 +90,8 @@ const LABELS: Record<string, string> = {
   backup_download_denied: 'Скачивание бэкапа отклонено',
   login_ok: 'Вход выполнен',
   logout: 'Выход',
+  'branding.update': 'Изменен логотип панели',
+  'branding.reset': 'Возвращен стандартный логотип',
   admin_password_reset: 'Аварийный сброс пароля из .env',
   login_fail: 'Неудачный вход',
   login_2fa_fail: 'Неудачный вход (2FA)',

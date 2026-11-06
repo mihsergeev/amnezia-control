@@ -1,4 +1,11 @@
 import { translate } from './i18n'
+import type { LogoTheme } from './logoAdapt'
+
+export type Branding = { version: string | null }
+
+export function logoUrl(version: string, theme: LogoTheme) {
+  return `/api/branding/logo/${theme}?v=${encodeURIComponent(version)}`
+}
 
 const TOKEN_KEY = 'acontrol_token'
 

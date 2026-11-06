@@ -4,11 +4,15 @@ import {
   api,
   downloadBackup,
   getToken,
+  logoUrl,
   logoutServer,
   restoreBackup,
   setToken,
+  type Branding,
 } from './api'
 import { LoginPage } from './LoginPage'
+import { BrandingModal } from './BrandingModal'
+import { PanelLogo } from './PanelLogo'
 import { ServersPage } from './ServersPage'
 import { Dashboard } from './Dashboard'
 import { ApiKeysPage } from './ApiKeysPage'
@@ -40,12 +44,27 @@ function App() {
   const [shareOpen, setShareOpen] = useState(false)
   const [twoFaOpen, setTwoFaOpen] = useState(false)
   const [pwOpen, setPwOpen] = useState(false)
+  const [brandingOpen, setBrandingOpen] = useState(false)
+  const [logoVersion, setLogoVersion] = useState<string | null>()
   const [theme, setTheme] = useState<'dark' | 'light'>(() =>
     document.documentElement.getAttribute('data-theme') === 'light'
       ? 'light'
       : 'dark',
   )
   const fileRef = useRef<HTMLInputElement>(null)
+  const logoSrc = logoVersion ? logoUrl(logoVersion, theme) : undefined
+
+  useEffect(() => {
+    const controller = new AbortController()
+    api<Branding>('/api/branding', { signal: controller.signal })
+      .then((branding) => {
+        if (!controller.signal.aborted) setLogoVersion((current) => current === undefined ? branding.version : current)
+      })
+      .catch(() => {
+        if (!controller.signal.aborted) setLogoVersion((current) => current ?? null)
+      })
+    return () => controller.abort()
+  }, [])
 
   function toggleTheme() {
     const next = theme === 'dark' ? 'light' : 'dark'
@@ -139,6 +158,7 @@ function App() {
     setTwoFaOpen(false)
     setPwOpen(false)
     setShareOpen(false)
+    setBrandingOpen(false)
   }, [])
 
   // Выход по кнопке: токен отзывается и на сервере
@@ -153,7 +173,7 @@ function App() {
         {/* на экране входа лого уже есть в карточке — в шапке не дублируем */}
         {authed && (
           <a className="brand" href="/" title={t('На главную')}>
-            <img src="/logo.png" className="brand-logo" alt="" />
+            <PanelLogo src={logoSrc} className="brand-logo" />
             <h1>Amnezia Control</h1>
           </a>
         )}
@@ -232,6 +252,7 @@ function App() {
                 title={t('Меню')}
                 label={<span className="menu-gear">⚙</span>}
                 items={[
+                  { label: t('Логотип панели'), onClick: () => setBrandingOpen(true) },
                   { label: t('Алерты'), onClick: () => setAlertsOpen(true) },
                   { label: t('Ссылки на конфиги'), onClick: () => setShareOpen(true) },
                   {
@@ -271,9 +292,17 @@ function App() {
           <ServersPage onUnauthorized={logout} />
         )
       ) : (
-        <LoginPage onLogin={() => setAuthed(true)} />
+        <LoginPage logoSrc={logoSrc} onLogin={() => setAuthed(true)} />
       )}
 
+      {brandingOpen && (
+        <BrandingModal
+          version={logoVersion ?? null}
+          onChanged={setLogoVersion}
+          onClose={() => setBrandingOpen(false)}
+          onUnauthorized={logout}
+        />
+      )}
       {backupsOpen && (
         <BackupsModal
           onClose={() => setBackupsOpen(false)}

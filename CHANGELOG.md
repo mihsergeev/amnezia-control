@@ -4,6 +4,13 @@ All notable changes to Amnezia Control are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.84.8] - 2026-11-06
+
+### Added
+
+- Upload a custom panel logo and preview it in light and dark themes. The panel trims transparent margins, adjusts contrast, and preserves the image proportions.
+- Show the custom logo in the header and on the sign-in page, with an option to restore the default logo.
+
 ## [0.84.7] - 2026-11-06
 
 ### Added

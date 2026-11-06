@@ -16,6 +16,7 @@ from app.api import (
     awg3,
     awg_legacy,
     backup,
+    branding,
     cascades,
     clients,
     fullaccess,
@@ -114,8 +115,9 @@ def create_app() -> FastAPI:
             "внешних систем: аутентификация ключом в заголовке `X-API-Key` "
             "(создать ключ: в панели → «API-ключи»). Права ключа ограничены "
             "клиентскими операциями AmneziaWG и чтением списка серверов.\n\n"
-            "Остальные ручки обслуживают веб-интерфейс панели, требуют "
-            "пользовательский JWT и могут меняться без сохранения совместимости."
+            "Остальные ручки обслуживают веб-интерфейс панели и могут меняться без "
+            "сохранения совместимости. Для управления нужен пользовательский JWT; "
+            "чтение логотипа доступно и на экране входа."
         ),
     )
     app.state.engine = engine
@@ -123,6 +125,7 @@ def create_app() -> FastAPI:
 
     app.include_router(health.router, prefix="/api")
     app.include_router(auth.router, prefix="/api")
+    app.include_router(branding.router, prefix="/api")
     app.include_router(servers.router, prefix="/api")
     app.include_router(awg.router, prefix="/api")
     app.include_router(awg_legacy.router, prefix="/api")

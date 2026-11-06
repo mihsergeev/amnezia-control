@@ -1,12 +1,14 @@
 import { useState, type FormEvent } from 'react'
 import { api, ApiError, setToken } from './api'
 import { useI18n } from './i18n'
+import { PanelLogo } from './PanelLogo'
 
 type Props = {
   onLogin: () => void
+  logoSrc?: string
 }
 
-export function LoginPage({ onLogin }: Props) {
+export function LoginPage({ onLogin, logoSrc }: Props) {
   const { t } = useI18n()
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
@@ -55,7 +57,7 @@ export function LoginPage({ onLogin }: Props) {
   return (
     <div className="login-wrap">
       <form className="card login-card" onSubmit={submit}>
-        <img src="/logo.png" className="login-logo" alt="Amnezia Control" />
+        <PanelLogo src={logoSrc} className="login-logo" alt="Amnezia Control" />
         <h2>{t('Вход в панель')}</h2>
         <label>
           {t('Логин')}

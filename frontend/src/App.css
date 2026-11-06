@@ -39,6 +39,76 @@
   margin-bottom: 0.25rem;
 }
 
+.brand-logo.custom-logo {
+  width: 120px;
+}
+
+.login-logo.custom-logo {
+  width: min(100%, 220px);
+}
+
+.branding-modal {
+  width: min(100%, 550px);
+}
+
+.branding-file {
+  display: grid;
+  gap: 0.35rem;
+  margin: 1rem 0;
+}
+
+.branding-file input {
+  min-width: 0;
+}
+
+.branding-file input::file-selector-button {
+  margin-inline-end: 0.5rem;
+  border: 0;
+  border-radius: 5px;
+  padding: 0.25rem 0.45rem;
+  background: var(--border);
+  color: inherit;
+  cursor: pointer;
+}
+
+.branding-previews {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.75rem;
+}
+
+.branding-preview {
+  display: grid;
+  justify-items: center;
+  gap: 0.65rem;
+  padding: 0.7rem;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  font-size: 0.85rem;
+  text-align: center;
+}
+
+.branding-preview-light {
+  background: #e4e8ef;
+  color: #141824;
+}
+
+.branding-preview-dark {
+  background: #171a23;
+  color: #e6e9f0;
+}
+
+.branding-preview-logo {
+  display: block;
+  width: min(100%, 140px);
+  height: 80px;
+  object-fit: contain;
+}
+
+.branding-modal .modal-actions {
+  flex-wrap: wrap;
+}
+
 .header-right {
   margin-left: auto;
   display: flex;
@@ -925,6 +995,9 @@ input:focus {
   .brand-logo {
     width: 40px;
     height: 40px;
+  }
+  .brand-logo.custom-logo {
+    width: 85px;
   }
   /* на узком экране оставляем только лого — бренд-текст съедает место, из-за
      чего иконки справа (версия/тема/язык/меню) уезжали за край */
