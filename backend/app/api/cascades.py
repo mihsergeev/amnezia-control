@@ -263,7 +263,7 @@ async def probe_transport(
                 }
                 task = asyncio.create_task(cascade_probe.run(
                     xc, ec, entry_ip, exit_ip, body.transport, body.entry_port, body.exit_port,
-                    entry_source_ip=entry_source,
+                    entry_source_ip=entry_source, prepare_missing_image=body.prepare_missing_image,
                 ))
                 try:
                     while not task.done():

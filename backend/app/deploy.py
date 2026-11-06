@@ -186,8 +186,11 @@ def _dockerfile_v3_final(go_src: str, awg_src: str, quick_src: str) -> str:
     )
 
 
-def _v3_build_lines(tail: int) -> list[str]:
+def _v3_build_lines(tail: int, *, probe: bool = False) -> list[str]:
     """Сборка образа 3.x в $IMG из $BUILD (Dockerfile и start.sh уже там).
+
+    При probe рабочий контейнер не читаем, временные контейнеры помечаем
+    $BUILDER и $BUILDER_LABEL для очистки при отмене проверки.
 
     Старый seccomp отвечает на незнакомые ему системные вызовы EPERM вместо
     ENOSYS. musl в Alpine 3.14+ пробует faccessat2 и откатывается на старый
@@ -204,12 +207,16 @@ def _v3_build_lines(tail: int) -> list[str]:
     Alpine под обычным seccomp, секунды две.
     """
     check = "[ ${PIPESTATUS[0]} -eq 0 ] || { echo DEPLOY_ERROR; exit 1; }"
-    probe = (
+    seccomp_test = (
         "apk add --no-cache make >/dev/null 2>&1; "
         'printf "all:\\n\\t@true && true\\n" > /tmp/m; make -s -f /tmp/m'
     )
     # bin/ хоста монтируется в /res: /out у тулзов занят под DESTDIR их make install
-    run = 'sudo docker run --rm --security-opt seccomp=unconfined -v "$BIN":/res'
+    docker_run = 'sudo docker run --rm'
+    if probe:
+        docker_run += ' --name "$BUILDER" --label "$BUILDER_LABEL"'
+    run = docker_run + ' --security-opt seccomp=unconfined -v "$BIN":/res'
+    build = 'sudo docker build --force-rm' if probe else 'sudo docker build'
     want = f"go={AWG3_GO_TAG} tools={AWG3_TOOLS_TAG}"
     go = (
         f"apk add --no-cache {_V3_GO_PKGS} >/dev/null && {_V3_GO_MAKE} "
@@ -219,14 +226,16 @@ def _v3_build_lines(tail: int) -> list[str]:
         f"apk add --no-cache {_V3_TOOLS_PKGS} >/dev/null && {_V3_TOOLS_MAKE} "
         "&& cp /out/usr/bin/awg /out/usr/bin/awg-quick /res/"
     )
-    return [
+    preserve_previous = [] if probe else [
         # образ, на котором контейнер работал до пересборки, держим под тегом
         # :prev - иначе после сборки он становится безымянным и уходит при чистке,
         # а откатить движок, если новый не понравится клиентам, уже не на что
         "PREV=$(sudo docker inspect -f '{{.Image}}' \"$CONT\" 2>/dev/null || true)",
         'if [ -n "$PREV" ]; then sudo docker tag "$PREV" "$IMG:prev" '
         '&& log "прежний образ сохранен как $IMG:prev"; fi',
-        f"if sudo docker run --rm {_V3_TOOLS_IMAGE} sh -c '{probe}' >/dev/null 2>&1; "
+    ]
+    return preserve_previous + [
+        f"if {docker_run} {_V3_TOOLS_IMAGE} sh -c '{seccomp_test}' >/dev/null 2>&1; "
         "then OLDSC=0; else OLDSC=1; fi",
         'if [ "$OLDSC" = 1 ]; then',
         "  DV=$(sudo docker version --format '{{.Server.Version}}' 2>/dev/null || true)",
@@ -247,7 +256,7 @@ def _v3_build_lines(tail: int) -> list[str]:
         f"2>&1 | tail -{tail}; {check}",
         "else",
         # без --pull: тулчейн-образы кешируются, повторная сборка быстрая
-        f'  sudo docker build -t $IMG "$BUILD" 2>&1 | tail -{tail}; {check}',
+        f'  {build} -t $IMG "$BUILD" 2>&1 | tail -{tail}; {check}',
         "fi",
     ]
 

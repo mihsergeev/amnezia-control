@@ -11,7 +11,10 @@ from app import cascade, cascade_awg, deploy
 
 PAYLOAD_BYTES = 20 * 1024 * 1024
 LEASE_SECONDS = 100
+PREPARE_SECONDS = 180
 LABEL = "org.amnezia.control.probe"
+AWG_PROBE_IMAGE = f"acontrol-cascade-probe-awg3:{deploy.AWG3_GO_TAG}-{deploy.AWG3_TOOLS_TAG}"
+LOCAL_IMAGE_MISSING = "local_image_missing"
 
 
 class PrerequisiteError(Exception):
@@ -27,7 +30,7 @@ REASONS = {
     "resource operation failed": "Не удалось подготовить временный ресурс проверки",
     "resource operation timed out": "Превышено время подготовки временного ресурса",
     "temporary interface name is occupied": "Имя временного интерфейса занято",
-    "required local image is unavailable; install it separately": "На сервере нет нужного локального образа; установите его отдельно",
+    LOCAL_IMAGE_MISSING: "На сервере нет нужного локального образа",
     "temporary container name is occupied": "Имя временного контейнера занято",
     "temporary subnet overlaps an existing interface": "Временная подсеть пересекается с сетью сервера",
     "temporary subnet overlaps an existing route": "Временная подсеть пересекается с маршрутом сервера",
@@ -42,13 +45,37 @@ REASONS = {
     "missing ss": "На сервере нет утилиты ss",
 }
 
+IMAGE_SELECTION = r'''
+class Unavailable(Exception): pass
+
+def local_image(images, xray_version, command, check_legacy_xray):
+    for candidate in images:
+        inspected=command(['docker','image','inspect',candidate])
+        if inspected.returncode:
+            if inspected.returncode==124:
+                raise Unavailable('resource operation timed out')
+            if b'No such image' in inspected.stderr or b'No such object' in inspected.stderr:
+                continue
+            raise Unavailable('resource operation failed')
+        selected=json.loads(inspected.stdout)[0]['Id']
+        if candidate=='amnezia-xray':
+            version=check_legacy_xray(selected)
+            if version.returncode==124:
+                raise Unavailable('resource operation timed out')
+            if version.returncode or ('Xray '+xray_version+' ').encode() not in version.stdout:
+                continue
+            return selected, '/usr/bin/xray'
+        return selected, None
+    return None, None
+'''
+
 # The worker and its detached watchdog share only a private, random lease.
 # Configuration/keys travel through SSH stdin, never argv or command output.
 WORKER = r'''
 import hashlib,ipaddress,json,os,shutil,signal,socket,subprocess,sys,time
 from pathlib import Path
+''' + IMAGE_SELECTION + r'''
 
-class Unavailable(Exception): pass
 class WorkerStopped(BaseException): pass
 uncertain=[False]
 def emit(**value): print(json.dumps(value),flush=True)
@@ -226,22 +253,18 @@ def main():
         if transport!='gre':
             if command(['docker','inspect',name],False).returncode==0:
                 raise Unavailable('temporary container name is occupied')
-            image=None; executable=None
-            for candidate in cfg['images']:
-                inspected=command(['docker','image','inspect',candidate],False)
-                if inspected.returncode==0:
-                    selected=json.loads(inspected.stdout)[0]['Id']
-                    if candidate=='amnezia-xray':
-                        container_attempted=True
-                        version=command(['docker','run','--rm','--pull=never','--name',name,
-                            '--label',label+'='+tag,'--network','none',
-                            '--read-only','--cap-drop','ALL','--entrypoint','/usr/bin/xray',selected,'version'],False)
-                        if version.returncode==124: uncertain[0]=True
-                        if version.returncode or b'Xray 26.10.31 ' not in version.stdout: continue
-                        executable='/usr/bin/xray'
-                    image=selected; break
+            def check_legacy_xray(selected):
+                nonlocal container_attempted
+                container_attempted=True
+                version=command(['docker','run','--rm','--pull=never','--name',name,
+                    '--label',label+'='+tag,'--network','none',
+                    '--read-only','--cap-drop','ALL','--entrypoint','/usr/bin/xray',selected,'version'],False)
+                if version.returncode==124: uncertain[0]=True
+                return version
+            image,executable=local_image(cfg['images'],cfg['xray_version'],
+                lambda args: command(args,False),check_legacy_xray)
             if not image:
-                raise Unavailable('required local image is unavailable; install it separately')
+                raise Unavailable('local_image_missing')
         own=cfg['inner']; peer=cfg['peer_inner']
         if transport!='vless':
             network=ipaddress.ip_network(cfg['network'])
@@ -355,6 +378,167 @@ def main():
 if __name__=='__main__': main()
 '''
 
+# SSH keeps stdin open while preparation is wanted. EOF also reaches the
+# worker when the panel dies, so no detached build waits on an absent caller.
+PREPARE_WORKER = r'''
+import fcntl,json,os,select,shutil,signal,subprocess,sys,tempfile,time,uuid
+from pathlib import Path
+''' + IMAGE_SELECTION + r'''
+
+class Stopped(Exception): pass
+
+def stop(*args):
+    raise Stopped()
+
+def prepare(config):
+    if not shutil.which('docker'):
+        return 6
+    os.umask(0o077)
+    with open('/run/acontrol-probe-image.lock','a') as lock:
+        try:
+            fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
+        except BlockingIOError:
+            return 5
+        return locked_prepare(config)
+
+def locked_prepare(config):
+    deadline=time.monotonic()+config['seconds']
+    name='acontrol-probe-build-'+uuid.uuid4().hex
+    label='org.amnezia.control.probe-builder='+name
+    builder_used=False
+    build=None
+
+    def command(args,capture=True,env=None):
+        if select.select([sys.stdin],[],[],0)[0]:
+            raise Stopped()
+        output=subprocess.PIPE if capture else subprocess.DEVNULL
+        with subprocess.Popen(args,stdin=subprocess.DEVNULL,stdout=output,stderr=output,
+                              start_new_session=True,env=env) as process:
+            try:
+                while True:
+                    if select.select([sys.stdin],[],[],0)[0]:
+                        raise Stopped()
+                    remaining=deadline-time.monotonic()
+                    if remaining<=0:
+                        raise TimeoutError()
+                    try:
+                        stdout,stderr=process.communicate(timeout=min(0.2,remaining))
+                    except subprocess.TimeoutExpired:
+                        continue
+                    return subprocess.CompletedProcess(args,process.returncode,stdout,stderr)
+            finally:
+                if process.poll() is None:
+                    try:
+                        os.killpg(process.pid,signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
+
+    def check_legacy_xray(image):
+        nonlocal builder_used
+        builder_used=True
+        return command(['docker','run','--rm','--pull=never','--name',name,'--label',label,
+                        '--network','none','--read-only','--cap-drop','ALL',
+                        '--entrypoint','/usr/bin/xray',image,'version'])
+
+    status=0
+    try:
+        image,_=local_image(config['images'],config['xray_version'],command,check_legacy_xray)
+        if image is None:
+            status=2
+            if config['build_script']:
+                build=tempfile.TemporaryDirectory(prefix='acontrol-probe-build-',dir='/run')
+                builder_used=True
+                env=dict(os.environ,BUILD=build.name,BUILDER=name,BUILDER_LABEL=label)
+                status=2 if command(['bash','-c',config['build_script']],False,env).returncode else 0
+            else:
+                status=2 if command(['docker','pull',config['images'][0]],False).returncode else 0
+    except Stopped:
+        status=7
+    except TimeoutError:
+        status=3
+    except (Unavailable,OSError,ValueError,KeyError,IndexError):
+        status=6
+    finally:
+        if builder_used:
+            # A killed Docker client can leave a daemon-side build container.
+            # Only containers carrying this invocation's random label are ours.
+            try:
+                containers=subprocess.run(['docker','ps','-aq','--filter','label='+label],
+                                          capture_output=True,check=True,timeout=5).stdout.split()
+                if containers:
+                    subprocess.run(['docker','rm','-f',*(item.decode() for item in containers)],
+                                   capture_output=True,check=True,timeout=5)
+            except (subprocess.SubprocessError,OSError):
+                status=4
+        if build:
+            try:
+                build.cleanup()
+            except OSError:
+                status=4
+    return status
+
+if __name__=='__main__':
+    signal.signal(signal.SIGTERM,stop)
+    signal.signal(signal.SIGHUP,stop)
+    try:
+        sys.exit(prepare(json.loads(sys.argv[1])))
+    except (Stopped,OSError):
+        sys.exit(6)
+'''
+
+PREPARE_ERRORS = {
+    2: ("Не удалось подготовить образ для проверки", LOCAL_IMAGE_MISSING),
+    3: ("Превышено время подготовки образа для проверки", LOCAL_IMAGE_MISSING),
+    4: ("Не подтверждена очистка временной подготовки образа", None),
+    5: ("На сервере уже идет подготовка образа для проверки", None),
+    6: ("Не удалось запустить подготовку образа для проверки", None),
+}
+
+
+def _prepare_config(transport: str, images: list[str], xray_version: str) -> dict:
+    script = ""
+    if transport == "awg":
+        script = "\n".join([
+            "set -euo pipefail",
+            'cd "$BUILD"',
+            f"IMG={shlex.quote(AWG_PROBE_IMAGE)}",
+            "log() { :; }",
+            f'printf %s {shlex.quote(deploy._dockerfile_v3())} > Dockerfile',
+            "printf '#!/bin/sh\\nexit 1\\n' > start.sh",
+            *deploy._v3_build_lines(8, probe=True),
+        ])
+    return {"images": images, "xray_version": xray_version, "build_script": script,
+            "seconds": PREPARE_SECONDS}
+
+
+async def _stop_preparation(process) -> None:
+    try:
+        process.stdin.write_eof()
+        await asyncio.wait_for(process.wait_closed(), timeout=15)
+    except (OSError, RuntimeError, TimeoutError):
+        process.close()
+
+
+async def _prepare(conn, config: dict) -> int:
+    command = "sudo -n python3 -c " + shlex.quote(PREPARE_WORKER) + " " + shlex.quote(json.dumps(config))
+    opening = asyncio.ensure_future(asyncio.wait_for(conn.create_process(command), timeout=10))
+    try:
+        process = await asyncio.shield(opening)
+    except asyncio.CancelledError:
+        try:
+            process = await opening
+        except Exception:
+            pass
+        else:
+            await _stop_preparation(process)
+        raise
+    try:
+        await asyncio.wait_for(process.wait_closed(), timeout=PREPARE_SECONDS + 15)
+    except (asyncio.CancelledError, TimeoutError):
+        await _stop_preparation(process)
+        raise
+    return process.exit_status
+
 
 def verdict(sent: dict, received: dict) -> dict:
     """Only receiver-confirmed full delivery is success; never use socket-buffer bytes."""
@@ -455,10 +639,12 @@ async def _close(process) -> bool:
 
 async def run(exit_conn, entry_conn, entry_ip: str, exit_ip: str, transport: str,
               entry_port: int | None = None, exit_port: int | None = None,
-              entry_source_ip: str | None = None) -> dict:
+              entry_source_ip: str | None = None, *, prepare_missing_image: bool = False) -> dict:
     """One measurement with two independently expiring remote leases."""
     if transport not in {"awg", "vless", "gre"}:
         raise ValueError("Unknown transport")
+    if prepare_missing_image and transport == "gre":
+        raise ValueError("GRE does not use a Docker image")
     entry_ip, exit_ip = str(ipaddress.IPv4Address(entry_ip)), str(ipaddress.IPv4Address(exit_ip))
     if entry_ip == exit_ip:
         raise ValueError("Entry and exit must be different hosts")
@@ -466,10 +652,11 @@ async def run(exit_conn, entry_conn, entry_ip: str, exit_ip: str, transport: str
     run_id = uuid.uuid4().hex
     subnet = ipaddress.ip_network(f"198.18.{secrets.randbelow(256)}.{secrets.randbelow(64) * 4}/30")
     entry_inner, exit_inner = str(subnet[1]), str(subnet[2])
-    images = [cascade_awg.IMAGE, deploy.IMAGE_V3] if transport == "awg" else [cascade.XRAY_IMAGE, "amnezia-xray"]
+    images = [cascade_awg.IMAGE, deploy.IMAGE_V3, AWG_PROBE_IMAGE] if transport == "awg" else [cascade.XRAY_IMAGE, "amnezia-xray"]
+    xray_version = cascade.XRAY_IMAGE.rsplit(":", 1)[1]
     base = {"tag": run_id, "transport": transport, "token": secrets.token_hex(24),
             "total": PAYLOAD_BYTES, "lease": LEASE_SECONDS, "images": images, "network": str(subnet),
-            "gre_key": int(run_id[:8], 16) or 1}
+            "gre_key": int(run_id[:8], 16) or 1, "xray_version": xray_version}
     configs = []
     processes = []
     result = {"transport": transport, "measurement": transport, "run_id": run_id,
@@ -483,6 +670,18 @@ async def run(exit_conn, entry_conn, entry_ip: str, exit_ip: str, transport: str
                                      cascade_awg.PORTS if transport == "awg" else ())
             exit_port = await _port(exit_conn, exit_port if transport == "awg" else None, protocol,
                                     cascade.VLESS_PORTS if transport == "vless" else cascade_awg.PORTS)
+        if prepare_missing_image:
+            prepare_config = _prepare_config(transport, images, xray_version)
+            statuses = await asyncio.gather(_prepare(exit_conn, prepare_config), _prepare(entry_conn, prepare_config),
+                                            return_exceptions=True)
+            codes = [status if isinstance(status, int) else 3 if isinstance(status, TimeoutError) else 6
+                     for status in statuses]
+            code = 4 if 4 in codes else next((code for code in codes if code != 0), 0)
+            if code != 0:
+                result["error"], result["reason"] = PREPARE_ERRORS.get(code, PREPARE_ERRORS[6])
+                if code == 4:
+                    result.update(status="failed", ok=False)
+                return result
         if transport == "awg":
             params = cascade_awg.new_params() | {"entry_ip": entry_ip, "exit_ip": exit_ip,
                 "entry_port": entry_port, "exit_port": exit_port, "entry_inner": entry_inner,
@@ -519,12 +718,16 @@ async def run(exit_conn, entry_conn, entry_ip: str, exit_ip: str, transport: str
         ready = await _event(exit_process)
         if ready.get("event") != "ready":
             result["error"] = REASONS.get(ready.get("error"), "Выход не готов к проверке")
+            if ready.get("error") == LOCAL_IMAGE_MISSING:
+                result["reason"] = LOCAL_IMAGE_MISSING
             return result
         configs[1]["receiver_port"] = ready["receiver_port"]
         entry_process = await _start(entry_conn, configs[1]); processes.append(entry_process)
         ready = await _event(entry_process)
         if ready.get("event") != "ready":
             result["error"] = REASONS.get(ready.get("error"), "Вход не готов к проверке")
+            if ready.get("error") == LOCAL_IMAGE_MISSING:
+                result["reason"] = LOCAL_IMAGE_MISSING
             return result
         if transport == "vless": result["prerequisite_tcp"] = ready.get("prerequisite_tcp")
         if result.get("prerequisite_tcp") and result["prerequisite_tcp"].get("error"):
@@ -548,5 +751,6 @@ async def run(exit_conn, entry_conn, entry_ip: str, exit_ip: str, transport: str
                 await cleanup
                 raise
         if not cleanup_ok:
-            result.update(status="failed", ok=False, error="Не подтверждена полная очистка временной проверки")
+            result.update(status="failed", ok=False, reason=None,
+                          error="Не подтверждена полная очистка временной проверки")
     return result

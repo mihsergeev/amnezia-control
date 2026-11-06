@@ -1,4 +1,4 @@
-import type { Cascade, CascadeEncryption, CascadeTransport, CascadeTransportProbe } from './api'
+import type { Cascade, CascadeEncryption, CascadeImageTransport, CascadeTransport, CascadeTransportProbe } from './api'
 
 export const DEFAULT_CASCADE_TRANSPORT: CascadeTransport = 'awg'
 
@@ -28,7 +28,7 @@ export function formatProbeMetric(value: number, lang: string, kind: 'secs' | 'm
 
 export const PROBE_TRANSPORTS = ['awg', 'vless', 'gre'] as const
 export type TransportProbeRow = {
-  state: 'queued' | 'running' | 'done' | 'error' | 'unavailable'
+  state: 'queued' | 'running' | 'preparing' | 'done' | 'error' | 'unavailable'
   result: CascadeTransportProbe | null
   error: string
 }
@@ -39,7 +39,7 @@ export function queuedProbeRows(): TransportProbeRows {
 }
 
 export function probeRowTone(row: TransportProbeRow): 'ok' | 'bad' | 'run' | 'muted' {
-  if (row.state === 'running') return 'run'
+  if (row.state === 'running' || row.state === 'preparing') return 'run'
   if (row.state === 'unavailable' || row.state === 'queued') return 'muted'
   if (row.state === 'error') return 'bad'
   return row.result?.status === 'ok' && row.result.ok === true ? 'ok' : 'bad'
@@ -52,10 +52,11 @@ export async function runTransportProbes(
   update: (transport: CascadeTransport, row: TransportProbeRow) => void,
   signal: AbortSignal,
   errorText: (error: unknown) => string,
+  prepareTransport?: CascadeImageTransport,
 ): Promise<void> {
-  for (const transport of PROBE_TRANSPORTS) {
+  for (const transport of prepareTransport ? [prepareTransport] : PROBE_TRANSPORTS) {
     if (signal.aborted) return
-    update(transport, { state: 'running', result: null, error: '' })
+    update(transport, { state: prepareTransport ? 'preparing' : 'running', result: null, error: '' })
     try {
       const result = await request(transport, signal)
       if (signal.aborted) return

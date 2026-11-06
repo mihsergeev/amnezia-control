@@ -958,6 +958,7 @@ export function createShareLink(
 // --- каскады: вход и выход ---------------------------------------------------
 
 export type CascadeTransport = 'awg' | 'vless' | 'gre'
+export type CascadeImageTransport = Exclude<CascadeTransport, 'gre'>
 export type CascadeEncryption = 'awg' | 'reality' | 'none' | 'unknown'
 
 export type ProbeSide = { ok: boolean; bytes: number; secs: number; mbps: number; error: string }
@@ -980,6 +981,7 @@ export type CascadeTransportProbe = {
   run_id: string
   requested_bytes: number
   status: 'ok' | 'failed' | 'unavailable'
+  reason?: 'local_image_missing' | null
   ok: boolean | null
   bytes: number
   secs: number | null
@@ -1105,10 +1107,14 @@ export function probeCascadeTransport(
   entryId: number, exitId: number, transport: CascadeTransport,
   ports?: { entry_port: number | null; exit_port: number | null },
   signal?: AbortSignal,
+  prepareMissingImage = false,
 ): Promise<CascadeTransportProbe> {
   return api('/api/cascades/probe-transport', {
     method: 'POST', signal,
-    body: JSON.stringify({ entry_id: entryId, exit_id: exitId, transport, ...(transport === 'awg' ? ports : {}) }),
+    body: JSON.stringify({
+      entry_id: entryId, exit_id: exitId, transport, ...(transport === 'awg' ? ports : {}),
+      ...(prepareMissingImage && transport !== 'gre' ? { prepare_missing_image: true } : {}),
+    }),
   })
 }
 

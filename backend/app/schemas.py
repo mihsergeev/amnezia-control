@@ -758,6 +758,14 @@ class CascadeProbeOut(BaseModel):
 class CascadeTransportProbe(CascadeCreate):
     """One independent temporary transport measurement."""
 
+    prepare_missing_image: bool = False
+
+    @model_validator(mode="after")
+    def docker_transport_only(self):
+        if self.prepare_missing_image and self.transport == "gre":
+            raise ValueError("Image preparation is only supported for AWG and VLESS")
+        return self
+
 
 class CascadeTransportProbeOut(BaseModel):
     transport: Literal["awg", "vless", "gre"]
@@ -770,6 +778,7 @@ class CascadeTransportProbeOut(BaseModel):
     secs: float | None = None
     mbps: float | None = None
     error: str = ""
+    reason: Literal["local_image_missing"] | None = None
     entry_ip: str
     exit_ip: str
     exit_country: str = ""

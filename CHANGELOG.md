@@ -4,6 +4,13 @@ All notable changes to Amnezia Control are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.84.7] - 2026-11-06
+
+### Added
+
+- Prepare missing AmneziaWG and VLESS Reality images from the cascade wizard, then measure throughput through a temporary tunnel.
+- Reuse existing images when available and keep newly prepared images for later checks. Temporary tunnel resources are cleaned up and existing VPN profiles and services are preserved.
+
 ## [0.84.6] - 2026-11-05
 
 ### Fixed

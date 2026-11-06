@@ -50,6 +50,32 @@ test('unavailable stays neutral, measured failure is red, and another transport 
   assert.equal(rows.gre.state, 'done'); assert.equal(probeRowTone(rows.gre), 'bad')
 })
 
+test('explicit image preparation reruns only its transport and keeps other results', async () => {
+  const rows = queuedProbeRows()
+  const awg = result('awg')
+  const gre = result('gre', 'failed')
+  rows.awg = { state: 'done', result: awg, error: '' }
+  rows.vless = { state: 'unavailable', result: { ...result('vless', 'unavailable'), reason: 'local_image_missing' }, error: '' }
+  rows.gre = { state: 'done', result: gre, error: '' }
+  const calls: CascadeTransport[] = []
+  let finish!: (value: CascadeTransportProbe) => void
+  const run = runTransportProbes(kind => {
+    calls.push(kind)
+    return new Promise(resolve => { finish = resolve })
+  }, (kind, row) => { rows[kind] = row }, new AbortController().signal, errorText, 'vless')
+
+  assert.equal(rows.vless.state, 'preparing')
+  assert.equal(rows.vless.result, null)
+  assert.equal(probeRowTone(rows.vless), 'run')
+  finish(result('vless'))
+  await run
+
+  assert.deepEqual(calls, ['vless'])
+  assert.equal(probeRowTone(rows.vless), 'ok')
+  assert.equal(rows.awg.result, awg)
+  assert.equal(rows.gre.result, gre)
+})
+
 test('abort ignores a late response and prevents all subsequent requests', async () => {
   const controller = new AbortController(), events: string[] = [], calls: string[] = []
   let finish!: (value: CascadeTransportProbe) => void

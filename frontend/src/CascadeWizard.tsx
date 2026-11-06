@@ -9,6 +9,7 @@ import {
   probeCascadeTransport,
   reinstallCascade,
   type Cascade,
+  type CascadeImageTransport,
   type CascadeTransportProbe,
   type CascadeTransport,
   type Server,
@@ -17,7 +18,7 @@ import { copyText } from './clipboard'
 import { countryFlag, formatBytes } from './format'
 import {
   cascadeMeasurement, cascadePort, cascadeTransportLabel, DEFAULT_CASCADE_TRANSPORT, formatProbeMetric,
-  probeRowTone, queuedProbeRows, runTransportProbes, testedAwgPorts,
+  probeRowTone, PROBE_TRANSPORTS, queuedProbeRows, runTransportProbes, testedAwgPorts,
   type TransportProbeRow, type TransportProbeRows,
 } from './cascadeUi'
 import { CascadeSecurity } from './CascadeSecurity'
@@ -50,14 +51,15 @@ function TransportProbeStatus({ row }: { row: TransportProbeRow }) {
   const tone = probeRowTone(row)
   const result = row.result
   const text = row.state === 'queued' ? t('В очереди')
+    : row.state === 'preparing' ? t('Подготовка образа и проверка…')
     : row.state === 'running' ? t('Проверяется…')
     : row.state === 'error' ? t(row.error)
     : row.state === 'unavailable' ? t(result?.error || row.error || 'Проверка недоступна')
     : result?.ok ? t('Данные прошли') : t(result?.error || 'Данные не прошли')
   return (
-    <div className={`cas-transport-probe cas-probe-${tone}`} data-probe-state={row.state} aria-live="polite" aria-busy={row.state === 'running'}>
+    <div className={`cas-transport-probe cas-probe-${tone}`} data-probe-state={row.state} aria-live="polite" aria-busy={tone === 'run'}>
       <div className="cas-transport-status">
-        <span aria-hidden="true">{tone === 'ok' ? '✓' : tone === 'bad' ? '✕' : row.state === 'running' ? '●' : '○'}</span>
+        <span aria-hidden="true">{tone === 'ok' ? '✓' : tone === 'bad' ? '✕' : tone === 'run' ? '●' : '○'}</span>
         <span>{text}</span>
       </div>
       {result && result.bytes > 0 && <div className="muted small">
@@ -68,7 +70,7 @@ function TransportProbeStatus({ row }: { row: TransportProbeRow }) {
       {result?.prerequisite_tcp && result.ok !== true && <div className="muted small">
         {result.prerequisite_tcp.ok ? t('Предварительное TCP-соединение доступно; это не замер VLESS.') : t('Предварительное TCP-соединение недоступно.')}
       </div>}
-      {row.state === 'running' && <div className="cas-probe-indeterminate" aria-hidden="true" />}
+      {tone === 'run' && <div className="cas-probe-indeterminate" aria-hidden="true" />}
     </div>
   )
 }
@@ -112,7 +114,6 @@ export function CascadeWizard({
   onUnauthorized,
 }: Props) {
   const { t, lang } = useI18n()
-  const dismiss = useModalDismiss(onClose)
   const [step, setStep] = useState<Step>(
     resume ? (resume.status === 'ready' ? 'done' : 'install') : 'entry',
   )
@@ -128,8 +129,12 @@ export function CascadeWizard({
   const [copied, setCopied] = useState(false)
   const [probe, setProbe] = useState<CascadeTransportProbe | null>(null)
   const [probeRows, setProbeRows] = useState<TransportProbeRows>(queuedProbeRows)
-  const probeController = useRef<AbortController | null>(null)
-  const probeGeneration = useRef(0)
+  const activeProbe = useRef<{ controller: AbortController; preparing: boolean } | null>(null)
+  const preparing = probeRows.awg.state === 'preparing' || probeRows.vless.state === 'preparing'
+  function close() {
+    if (!activeProbe.current?.preparing) onClose()
+  }
+  const dismiss = useModalDismiss(close)
   const [transport, setTransport] = useState<CascadeTransport>(DEFAULT_CASCADE_TRANSPORT)
   const [entryPort, setEntryPort] = useState('')
   const [exitPort, setExitPort] = useState('')
@@ -246,31 +251,32 @@ export function CascadeWizard({
 
   useEffect(() => {
     return () => {
-      probeGeneration.current += 1
-      probeController.current?.abort()
+      activeProbe.current?.controller.abort()
+      activeProbe.current = null
     }
   }, [])
 
-  async function runProbe(eId = entryId, xId = exitId) {
-    if (eId == null || xId == null) return
+  async function runProbe(eId = entryId, xId = exitId, prepareTransport?: CascadeImageTransport) {
+    if (eId == null || xId == null || activeProbe.current) return
     const ports = { entry_port: cascadePort(entryPort), exit_port: cascadePort(exitPort) }
-    if (ports.entry_port === undefined || ports.exit_port === undefined) {
+    if (prepareTransport !== 'vless' && (ports.entry_port === undefined || ports.exit_port === undefined)) {
       setError(t('UDP-порт должен быть целым числом от 1 до 65535 или пустым для автовыбора.'))
       return
     }
-    const generation = ++probeGeneration.current
-    probeController.current?.abort()
     const controller = new AbortController()
-    probeController.current = controller
+    const run = { controller, preparing: prepareTransport !== undefined }
+    activeProbe.current = run
     setBusy(true)
     setError(null)
-    setProbe(null)
-    setProbeRows(queuedProbeRows())
+    if (!prepareTransport) {
+      setProbe(null)
+      setProbeRows(queuedProbeRows())
+    }
     try {
       await runTransportProbes(async (kind, signal) => {
         try {
           return await probeCascadeTransport(eId, xId, kind,
-            { entry_port: ports.entry_port ?? null, exit_port: ports.exit_port ?? null }, signal)
+            { entry_port: ports.entry_port ?? null, exit_port: ports.exit_port ?? null }, signal, kind === prepareTransport)
         } catch (err) {
           if (err instanceof ApiError && err.status === 401) {
             controller.abort()
@@ -279,20 +285,24 @@ export function CascadeWizard({
           throw err
         }
       }, (kind, row) => {
-        if (generation !== probeGeneration.current || controller.signal.aborted) return
+        if (activeProbe.current !== run || controller.signal.aborted) return
         setProbeRows(current => ({ ...current, [kind]: row }))
         if (row.result) setProbe(row.result)
-      }, controller.signal, err => err instanceof Error ? err.message : t('Ответ проверки не соответствует транспорту.'))
+      }, controller.signal, err => err instanceof Error ? err.message : t('Ответ проверки не соответствует транспорту.'), prepareTransport)
     } finally {
-      if (generation === probeGeneration.current && !controller.signal.aborted) setBusy(false)
+      if (activeProbe.current === run) {
+        activeProbe.current = null
+        if (!controller.signal.aborted) setBusy(false)
+      }
     }
   }
 
   function changeProbePort(set: (value: string) => void, value: string) {
     set(value)
-    setProbeRows(current => ({ ...current, awg: {
+    // A missing image is independent of the UDP ports.
+    setProbeRows(current => current.awg.result?.reason === 'local_image_missing' ? current : { ...current, awg: {
       state: 'unavailable', result: null, error: t('UDP-порты изменены. Повторите проверку AWG.'),
-    } }))
+    } })
   }
 
   async function next() {
@@ -564,7 +574,7 @@ export function CascadeWizard({
     <div className="clients-head">
       <h3>{title}</h3>
       {closable && (
-        <button className="ghost" onClick={onClose}>
+        <button className="ghost" disabled={preparing} onClick={close}>
           {t('Закрыть')}
         </button>
       )}
@@ -607,34 +617,47 @@ export function CascadeWizard({
             {route(false)}
             <p className="muted small">{t('Короткие проверки каждого транспорта. Скорость ориентировочная.')}</p>
             <div className="cas-opts">
-              {(['awg', 'vless', 'gre'] as const).map((k) => (
-                <label key={k} className={transport === k ? 'on' : ''}>
-                  <input
-                    type="radio"
-                    name="cas-transport"
-                    checked={transport === k}
-                    onChange={() => setTransport(k)}
-                  />
-                  <div>
-                    <b>
-                      {k === 'awg' ? 'AmneziaWG 3.1' : k === 'vless' ? 'VLESS Reality' : 'GRE'}
-                      {k === 'awg' && (
-                        <span className="cas-rec">{t('по умолчанию')}</span>
-                      )}
-                    </b>
-                    <p className="muted small">
-                      {k === 'awg' ? t('Шифрованный межсерверный туннель по UDP с отдельными ключами. Клиентские VPN-конфигурации не меняются.') : k === 'vless'
-                        ? t(
-                            'Шифрованный туннель, снаружи похож на обычный HTTPS. Подходит, когда TCP от входа к выходу проходит.',
-                          )
-                        : t(
-                            'Туннель без шифрования межсерверного участка. Выбирайте только при осознанной необходимости открытого GRE.',
-                          )}
-                    </p>
-                    <TransportProbeStatus row={probeRows[k]} />
+              {PROBE_TRANSPORTS.map(k => {
+                const name = k === 'awg' ? 'AmneziaWG 3.1' : k === 'vless' ? 'VLESS Reality' : 'GRE'
+                const row = probeRows[k]
+                const needsImage = row.state === 'unavailable' && row.result?.reason === 'local_image_missing'
+                return (
+                  <div key={k} className={`cas-transport-option${transport === k ? ' on' : ''}`}>
+                    <label>
+                      <input
+                        type="radio"
+                        name="cas-transport"
+                        checked={transport === k}
+                        disabled={preparing}
+                        onChange={() => setTransport(k)}
+                      />
+                      <div>
+                        <b>
+                          {name}
+                          {k === 'awg' && <span className="cas-rec">{t('по умолчанию')}</span>}
+                        </b>
+                        <p className="muted small">
+                          {k === 'awg' ? t('Шифрованный межсерверный туннель по UDP с отдельными ключами. Клиентские VPN-конфигурации не меняются.') : k === 'vless'
+                            ? t('Шифрованный туннель, снаружи похож на обычный HTTPS. Подходит, когда TCP от входа к выходу проходит.')
+                            : t('Туннель без шифрования межсерверного участка. Выбирайте только при осознанной необходимости открытого GRE.')}
+                        </p>
+                        <TransportProbeStatus row={row} />
+                      </div>
+                    </label>
+                    {k !== 'gre' && (row.state === 'preparing' || needsImage) && (
+                      <button
+                        type="button"
+                        className="ghost cas-prepare-probe"
+                        disabled={busy}
+                        aria-label={t('Подготовить и проверить {transport}', { transport: name })}
+                        onClick={() => void runProbe(entryId, exitId, k)}
+                      >
+                        {t('Подготовить и проверить')}
+                      </button>
+                    )}
                   </div>
-                </label>
-              ))}
+                )
+              })}
             </div>
             {transport === 'awg' && <details className="cas-port-options">
               <summary>{t('UDP-порты межсерверного канала')}</summary>

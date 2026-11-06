@@ -195,16 +195,93 @@ class Process:
 
 
 async def test_setup_unavailable_is_not_a_fake_transport_measurement(monkeypatch):
-    process = Process([{"event": "unavailable", "error": "required local image is unavailable; install it separately"},
+    process = Process([{"event": "unavailable", "error": "local_image_missing"},
                        {"event": "cleanup", "ok": True}])
     async def start(*args): return process
     async def port(*args): return 43123
+    async def prepare(*args): pytest.fail("ordinary checks must not prepare an image")
     monkeypatch.setattr(cascade_probe, "_start", start)
     monkeypatch.setattr(cascade_probe, "_port", port)
+    monkeypatch.setattr(cascade_probe, "_prepare", prepare)
     result = await cascade_probe.run(None, None, "203.0.113.10", "203.0.113.20", "awg")
     assert result["status"] == "unavailable" and result["ok"] is None
     assert result["secs"] is None and result["mbps"] is None
     assert result["bytes"] == 0 and "образа" in result["error"]
+    assert result["reason"] == "local_image_missing"
+
+
+def test_docker_daemon_error_is_not_reported_as_missing_image():
+    worker = worker_namespace()
+    def command(args):
+        return subprocess.CompletedProcess(args, 1, b"", b"Cannot connect to the Docker daemon")
+    with pytest.raises(worker["Unavailable"], match="resource operation failed"):
+        worker["local_image"](["example"], "0", command, None)
+
+
+@pytest.mark.parametrize("transport", ["awg", "vless"])
+async def test_opt_in_prepares_both_nodes_before_starting_measurement(monkeypatch, transport):
+    size = cascade_probe.PAYLOAD_BYTES
+    nodes = [object(), object()]
+    processes = iter([
+        Process([{"event": "ready", "receiver_port": 43123}, {"event": "result", "bytes": size},
+                 {"event": "cleanup", "ok": True}]),
+        Process([{"event": "ready"}, {"event": "result", "bytes": size, "sent": size,
+                                      "secs": 0.2, "digest_matches": True}, {"event": "cleanup", "ok": True}]),
+    ])
+    prepared = set()
+    async def prepare(node, config):
+        prepared.add(node)
+        if transport == "awg":
+            assert cascade_probe.AWG_PROBE_IMAGE in config["images"]
+            script = config["build_script"]
+            assert cascade_probe.deploy.AWG3_GO_TAG in script and cascade_probe.deploy.AWG3_TOOLS_TAG in script
+            assert "systemctl" not in script and "docker tag" not in script
+        else:
+            assert config["images"][0] == cascade.XRAY_IMAGE and config["build_script"] == ""
+        return 0
+    async def start(node, config):
+        assert prepared == set(nodes)
+        return next(processes)
+    async def port(*args): return 43123
+    monkeypatch.setattr(cascade_probe, "_prepare", prepare)
+    monkeypatch.setattr(cascade_probe, "_start", start)
+    monkeypatch.setattr(cascade_probe, "_port", port)
+    result = await cascade_probe.run(*nodes, "203.0.113.10", "203.0.113.20", transport,
+                                     prepare_missing_image=True)
+    assert result["status"] == "ok" and result["bytes"] == size
+
+
+@pytest.mark.parametrize("code,status,reason", [(2, "unavailable", "local_image_missing"),
+                                                (4, "failed", None), (5, "unavailable", None)])
+async def test_failed_preparation_stops_before_measurement(monkeypatch, code, status, reason):
+    async def prepare(node, config): return code if node == "exit" else 0
+    async def start(*args): pytest.fail("measurement must not start after failed image preparation")
+    async def port(*args): return 43123
+    monkeypatch.setattr(cascade_probe, "_prepare", prepare)
+    monkeypatch.setattr(cascade_probe, "_start", start)
+    monkeypatch.setattr(cascade_probe, "_port", port)
+    result = await cascade_probe.run("exit", "entry", "203.0.113.10", "203.0.113.20", "awg",
+                                     prepare_missing_image=True)
+    assert result["status"] == status and result["reason"] == reason
+    assert result["bytes"] == 0
+
+
+async def test_cancelling_preparation_closes_stdin_and_waits_for_worker():
+    waiting, eof, cleaned = asyncio.Event(), asyncio.Event(), asyncio.Event()
+    async def wait_closed():
+        waiting.set()
+        await eof.wait()
+        await asyncio.sleep(0)
+        cleaned.set()
+    async def create_process(*args):
+        return SimpleNamespace(wait_closed=wait_closed, stdin=SimpleNamespace(write_eof=eof.set))
+    connection = SimpleNamespace(create_process=create_process)
+    task = asyncio.create_task(cascade_probe._prepare(connection, {}))
+    await waiting.wait()
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert cleaned.is_set()
 
 
 async def test_cleanup_failure_overrides_full_measurement(monkeypatch):
@@ -286,10 +363,14 @@ async def test_transport_api_requires_jwt_and_rejects_unknown_transport(client, 
     body["transport"] = "tcp"
     assert (await client.post("/api/cascades/probe-transport", json=body,
                               headers=auth_headers)).status_code == 422
+    body.update(transport="gre", prepare_missing_image=True)
+    assert (await client.post("/api/cascades/probe-transport", json=body,
+                              headers=auth_headers)).status_code == 422
 
 
+@pytest.mark.parametrize("prepare", [{}, {"prepare_missing_image": True}])
 async def test_transport_api_preserves_measurement_on_geo_error_and_binds_endpoint_ports(
-    client, auth_headers, session_factory, monkeypatch,
+    client, auth_headers, session_factory, monkeypatch, prepare,
 ):
     entry, exit_ = await add_servers(session_factory)
     mock_pair(monkeypatch)
@@ -301,13 +382,15 @@ async def test_transport_api_preserves_measurement_on_geo_error_and_binds_endpoi
         return measured("awg")
     monkeypatch.setattr(cascade_probe, "run", run)
     response = await client.post("/api/cascades/probe-transport", headers=auth_headers,
-        json={"entry_id": entry, "exit_id": exit_, "transport": "awg", "entry_port": 43123, "exit_port": 43124})
+        json={"entry_id": entry, "exit_id": exit_, "transport": "awg", "entry_port": 43123,
+              "exit_port": 43124, **prepare})
     assert response.status_code == 200
     result = response.json()
     assert result["ok"] is True and result["exit_country"] == "ZZ"
     assert result["entry_ip"] == "203.0.113.10"
     assert captured[0][0][2:7] == ("203.0.113.10", "203.0.113.20", "awg", 43123, 43124)
     assert captured[0][1]["entry_source_ip"] == "203.0.113.10"
+    assert captured[0][1]["prepare_missing_image"] == bool(prepare)
     assert api._last_probe[(entry, exit_)]["awg"]["measurement"] == "awg"
     assert "tcp" not in api._last_probe[(entry, exit_)]
 
