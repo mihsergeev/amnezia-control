@@ -187,17 +187,6 @@
   min-width: 0;
 }
 
-.branding-hide-title {
-  display: flex;
-  align-items: center;
-  gap: 0.4rem;
-  width: fit-content;
-}
-
-.branding-hide-title input {
-  margin: 0;
-}
-
 .branding-size {
   display: grid;
   gap: 0.7rem;
@@ -265,8 +254,8 @@
   font-size: 0.85rem;
 }
 
-.branding-preview .brand {
-  flex-wrap: wrap;
+.branding-preview .brand:has(.brand-title) .brand-logo {
+  max-width: 70%;
 }
 
 .branding-preview-light {
@@ -1177,7 +1166,7 @@ input:focus {
   }
 }
 
-@media (681px <= width <= 1100px) {
+@media (680px < width <= 1100px) {
   .header .brand {
     max-width: 62%;
   }

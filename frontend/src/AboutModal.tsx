@@ -169,7 +169,7 @@ export function AboutModal({ version, branding, logoSrc, onChanged, onClose, onU
                   disabled={hideHeaderTitle || Boolean(busy) || !branding}
                 />
               </label>
-              <label className="branding-hide-title">
+              <label className="checkbox">
                 <input
                   type="checkbox"
                   checked={hideHeaderTitle}
