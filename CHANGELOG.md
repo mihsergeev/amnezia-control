@@ -4,6 +4,10 @@ All notable changes to Amnezia Control are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.84.15] - 2026-11-07
+
+- Optionally append Amnezia Control after a custom browser tab title and preview the result in About.
+
 ## [0.84.14] - 2026-11-07
 
 - Customize or hide the label beside the header logo and set a separate browser tab title in About.

@@ -24,8 +24,11 @@ _TITLE_SETTINGS = {
     "header_title": "panel_header_title",
     "tab_title": "panel_tab_title",
 }
-_HIDE_HEADER_TITLE_SETTING = "panel_hide_header_title"
-_SETTINGS = (_SETTING, _SIZE_SETTING, _LOGIN_SIZE_SETTING, _HIDE_HEADER_TITLE_SETTING, *_TITLE_SETTINGS.values())
+_BOOLEAN_SETTINGS = {
+    "hide_header_title": "panel_hide_header_title",
+    "append_tab_brand": "panel_append_tab_brand",
+}
+_SETTINGS = (_SETTING, _SIZE_SETTING, _LOGIN_SIZE_SETTING, *_BOOLEAN_SETTINGS.values(), *_TITLE_SETTINGS.values())
 _THEMES = ("light", "dark")
 _MAX_BASE64 = ((MAX_PNG_BYTES + 2) // 3) * 4
 # Both encoded variants, their JSON fields and a small envelope. Stay below
@@ -80,6 +83,10 @@ def _valid_size(value: object) -> bool:
     )
 
 
+def _valid_boolean(value: object) -> bool:
+    return type(value) is bool
+
+
 def _valid_title(value: object) -> bool:
     return (
         isinstance(value, str)
@@ -98,7 +105,7 @@ async def _metadata(session: SessionDep) -> BrandingMetadata:
     for key, field, validate in (
         (_SIZE_SETTING, "size", _valid_size),
         (_LOGIN_SIZE_SETTING, "login_size", _valid_scale),
-        (_HIDE_HEADER_TITLE_SETTING, "hide_header_title", lambda value: type(value) is bool),
+        *((key, field, _valid_boolean) for field, key in _BOOLEAN_SETTINGS.items()),
         *((key, field, _valid_title) for field, key in _TITLE_SETTINGS.items()),
     ):
         try:
@@ -154,7 +161,7 @@ async def update_branding(
         data = json.loads(body)
     except (ValueError, RecursionError):
         raise HTTPException(400, _INVALID) from None
-    fields = {*_THEMES, "size", "login_size", "hide_header_title", *_TITLE_SETTINGS}
+    fields = {*_THEMES, "size", "login_size", *_BOOLEAN_SETTINGS, *_TITLE_SETTINGS}
     if not isinstance(data, dict) or not data.keys() <= fields or not data:
         raise HTTPException(400, _INVALID)
     values = {}
@@ -166,10 +173,11 @@ async def update_branding(
         if not _valid_scale(data["login_size"]):
             raise HTTPException(400, _INVALID_LOGIN_SIZE)
         values[_LOGIN_SIZE_SETTING] = data["login_size"]
-    if "hide_header_title" in data:
-        if type(data["hide_header_title"]) is not bool:
-            raise HTTPException(400, "Некорректная настройка подписи в шапке")
-        values[_HIDE_HEADER_TITLE_SETTING] = data["hide_header_title"]
+    for field, key in _BOOLEAN_SETTINGS.items():
+        if field in data:
+            if not _valid_boolean(data[field]):
+                raise HTTPException(400, "Некорректная настройка оформления")
+            values[key] = data[field]
     for field, key in _TITLE_SETTINGS.items():
         if field in data:
             value = data[field]

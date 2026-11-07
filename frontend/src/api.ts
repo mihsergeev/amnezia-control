@@ -12,6 +12,14 @@ export type Branding = {
   header_title?: string
   hide_header_title?: boolean
   tab_title?: string
+  append_tab_brand?: boolean
+}
+
+export function panelTabTitle({ tab_title, append_tab_brand }: Pick<Branding, "tab_title" | "append_tab_brand">) {
+  const title = tab_title?.trim() || DEFAULT_PANEL_TITLE
+  const suffix = ` · ${DEFAULT_PANEL_TITLE}`
+  if (!append_tab_brand || title === DEFAULT_PANEL_TITLE || title.endsWith(suffix)) return title
+  return title + suffix
 }
 
 export function logoUrl(version: string, theme: LogoTheme) {

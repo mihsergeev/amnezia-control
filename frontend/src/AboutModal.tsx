@@ -1,5 +1,5 @@
 import { useRef, useState, type ChangeEvent } from 'react'
-import { api, ApiError, DEFAULT_PANEL_TITLE, logoUrl, MAX_BRANDING_TITLE_LENGTH, type Branding, type LogoSize } from './api'
+import { api, ApiError, DEFAULT_PANEL_TITLE, logoUrl, MAX_BRANDING_TITLE_LENGTH, panelTabTitle, type Branding, type LogoSize } from './api'
 import { useI18n } from './i18n'
 import { LOGO_TYPES, logoThemes, MAX_LOGO_BYTES, prepareLogo, type LogoVariants } from './logoAdapt'
 import { PanelLogo } from './PanelLogo'
@@ -25,6 +25,7 @@ export function AboutModal({ version, branding, logoSrc, onChanged, onClose, onU
   const [headerTitleDraft, setHeaderTitleDraft] = useState<string | null>(null)
   const [hideHeaderTitleDraft, setHideHeaderTitleDraft] = useState<boolean | null>(null)
   const [tabTitleDraft, setTabTitleDraft] = useState<string | null>(null)
+  const [appendTabBrandDraft, setAppendTabBrandDraft] = useState<boolean | null>(null)
   const [screen, setScreen] = useState<keyof LogoSize | 'login'>(() =>
     window.matchMedia('(max-width: 680px)').matches ? 'mobile' : 'desktop',
   )
@@ -47,8 +48,11 @@ export function AboutModal({ version, branding, logoSrc, onChanged, onClose, onU
   const hideHeaderTitle = hideHeaderTitleDraft ?? savedHideHeaderTitle
   const savedTabTitle = branding?.tab_title ?? ''
   const tabTitle = tabTitleDraft ?? savedTabTitle
+  const savedAppendTabBrand = branding?.append_tab_brand ?? false
+  const appendTabBrand = appendTabBrandDraft ?? savedAppendTabBrand
   const titlesChanged = headerTitle.trim() !== savedHeaderTitle ||
-    hideHeaderTitle !== savedHideHeaderTitle || tabTitle.trim() !== savedTabTitle
+    hideHeaderTitle !== savedHideHeaderTitle || tabTitle.trim() !== savedTabTitle ||
+    appendTabBrand !== savedAppendTabBrand
   const previewTitle = headerTitle.trim() || DEFAULT_PANEL_TITLE
   const scale = screen === 'login' ? loginSize : size[screen]
 
@@ -94,6 +98,7 @@ export function AboutModal({ version, branding, logoSrc, onChanged, onClose, onU
           ...(headerTitle.trim() !== savedHeaderTitle && { header_title: headerTitle.trim() }),
           ...(hideHeaderTitle !== savedHideHeaderTitle && { hide_header_title: hideHeaderTitle }),
           ...(tabTitle.trim() !== savedTabTitle && { tab_title: tabTitle.trim() }),
+          ...(appendTabBrand !== savedAppendTabBrand && { append_tab_brand: appendTabBrand }),
         }) : undefined,
       })
       onChanged(next)
@@ -103,6 +108,7 @@ export function AboutModal({ version, branding, logoSrc, onChanged, onClose, onU
       setHeaderTitleDraft(null)
       setHideHeaderTitleDraft(null)
       setTabTitleDraft(null)
+      setAppendTabBrandDraft(null)
       if (fileInput.current) fileInput.current.value = ''
       setMessage(t('Сохранено.'))
     } catch (err) {
@@ -190,6 +196,18 @@ export function AboutModal({ version, branding, logoSrc, onChanged, onClose, onU
                   disabled={Boolean(busy) || !branding}
                 />
               </label>
+              <label className="checkbox">
+                <input
+                  type="checkbox"
+                  checked={appendTabBrand}
+                  onChange={(event) => setAppendTabBrandDraft(event.currentTarget.checked)}
+                  disabled={Boolean(busy) || !branding}
+                />
+                {t('Добавлять Amnezia Control к названию вкладки')}
+              </label>
+              <p className="muted small branding-tab-preview">
+                {t('Предпросмотр вкладки')} · <bdi>{panelTabTitle({ tab_title: tabTitle, append_tab_brand: appendTabBrand })}</bdi>
+              </p>
               <p className="muted small">{t('Пустое поле использует стандартное название. На телефоне в шапке виден только логотип.')}</p>
             </div>
             <div className="branding-size">
@@ -245,7 +263,7 @@ export function AboutModal({ version, branding, logoSrc, onChanged, onClose, onU
             {error && <p className="form-error" role="alert">{error}</p>}
             {message && <p className="muted" role="status">{message}</p>}
             <div className="modal-actions">
-              {(logoVersion || branding?.size || branding?.login_size || savedHeaderTitle || savedHideHeaderTitle || savedTabTitle) && <button className="ghost" onClick={() => void changeBranding('DELETE')} disabled={Boolean(busy)}>
+              {(logoVersion || branding?.size || branding?.login_size || savedHeaderTitle || savedHideHeaderTitle || savedTabTitle || savedAppendTabBrand) && <button className="ghost" onClick={() => void changeBranding('DELETE')} disabled={Boolean(busy)}>
                 {t('Вернуть стандартное оформление')}
               </button>}
               <button className="primary" onClick={() => void changeBranding('PUT')} disabled={(!draft && !sizeChanged && !loginSizeChanged && !titlesChanged) || Boolean(busy) || !branding}>

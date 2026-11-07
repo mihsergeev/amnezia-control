@@ -202,10 +202,16 @@ async def test_titles_are_independent_and_reject_invalid_updates(client, auth_he
     assert saved.json() == expected
     assert (await client.get("/api/branding")).json() == expected
 
+    with_brand = await client.put("/api/branding", headers=auth_headers, json={"append_tab_brand": True})
+    assert with_brand.status_code == 200
+    expected["append_tab_brand"] = True
+    assert with_brand.json() == expected
+
     for invalid in (
         {"header_title": "x" * 81}, {"header_title": "x\ny"}, {"header_title": "\ud800"},
         {"tab_title": None}, {"tab_title": "x\x00"}, {"tab_title": 5},
         {"hide_header_title": 1}, {"hide_header_title": "false"},
+        {"append_tab_brand": 1}, {"append_tab_brand": "false"}, {"append_tab_brand": None},
     ):
         rejected = await client.put(
             "/api/branding", headers=auth_headers, content=json.dumps({"login_size": 110, **invalid}),
@@ -217,7 +223,11 @@ async def test_titles_are_independent_and_reject_invalid_updates(client, auth_he
         "/api/branding", headers=auth_headers, json={"hide_header_title": False, "tab_title": " "},
     )
     assert changed.status_code == 200
-    assert changed.json() == {**expected, "hide_header_title": False, "tab_title": ""}
+    expected.update(hide_header_title=False, tab_title="")
+    assert changed.json() == expected
+    without_brand = await client.put("/api/branding", headers=auth_headers, json={"append_tab_brand": False})
+    assert without_brand.status_code == 200
+    assert without_brand.json() == {**expected, "append_tab_brand": False}
     assert (await client.delete("/api/branding", headers=auth_headers)).json() == {"version": None}
     assert (await client.get("/api/branding")).json() == {"version": None}
 
@@ -229,6 +239,7 @@ async def test_panel_backup_restores_branding(client, auth_headers):
         json={
             "light": b64(LIGHT), "dark": b64(DARK), "size": {"desktop": 140, "mobile": 130},
             "login_size": 110, "header_title": "Example VPN", "hide_header_title": True, "tab_title": "VPN panel",
+            "append_tab_brand": True,
         },
     )
     assert saved.status_code == 200

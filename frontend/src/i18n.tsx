@@ -566,6 +566,8 @@ const EN: Record<string, string> = {
   'Подпись рядом с логотипом': 'Label beside the logo',
   'Скрыть подпись': 'Hide the label',
   'Название вкладки браузера': 'Browser tab title',
+  'Добавлять Amnezia Control к названию вкладки': 'Append Amnezia Control to the tab title',
+  'Предпросмотр вкладки': 'Tab title preview',
   'Пустое поле использует стандартное название. На телефоне в шапке виден только логотип.':
     'Leave a field blank to use the default title. The phone header shows just the logo.',
   'Светлая тема': 'Light theme',

@@ -7,6 +7,7 @@ import {
   getToken,
   logoUrl,
   logoutServer,
+  panelTabTitle,
   restoreBackup,
   setToken,
   type Branding,
@@ -59,7 +60,7 @@ function App() {
   const headerTitle = branding && !branding.hide_header_title
     ? branding.header_title || DEFAULT_PANEL_TITLE
     : null
-  const tabTitle = branding && (branding.tab_title || DEFAULT_PANEL_TITLE)
+  const tabTitle = branding && panelTabTitle(branding)
 
   useEffect(() => {
     const controller = new AbortController()

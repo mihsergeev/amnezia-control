@@ -187,6 +187,10 @@
   min-width: 0;
 }
 
+.branding-tab-preview {
+  overflow-wrap: anywhere;
+}
+
 .branding-size {
   display: grid;
   gap: 0.7rem;
