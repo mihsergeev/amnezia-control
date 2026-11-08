@@ -686,6 +686,7 @@ def entry_gateway_config(transport: str, exit_ip: str, params: dict, bootstrap: 
 # сервис адреса в зоне страны входа: шлюз обязан выпустить его напрямую.
 # Для других стран такого сервиса не держим, местный адрес не проверяется
 _LOCAL_IP_URL = {"ru": "https://ip.nic.ru"}
+_DIRECT_IP_CHECK = 'echo "CASCADE_DIRECT=$(curl -4 -fsS -m 10 https://api.ipify.org 2>/dev/null)"'
 
 
 def _check_lines(country: str = "") -> list[str]:
@@ -783,6 +784,7 @@ def build_entry_script(transport: str, exit_ip: str, cascade_id: int, params: di
         f"|| fail \"xray: $(sudo docker logs --tail 3 {GATEWAY} 2>&1 | tr '\\n' ' ')\"",
         'log "[5/5] проверка через шлюз"',
         *_check_lines(country),
+        *([_DIRECT_IP_CHECK] if (country or "").lower() in _LOCAL_IP_URL else []),
         '[ -n "$EG" ] || fail "через выход интернет не открывается"',
         (f"sudo {cascade_awg.SCRIPT} status | grep -q '^CASCADE_AWG=yes$' "
          "|| fail 'AWG handshake or routing'" if transport == "awg" else ""),
@@ -833,7 +835,7 @@ def build_check_command(country: str = "") -> str:
         'echo "CASCADE_REV=${REV:-0}"; fi',
         *_check_lines(country),
         # адрес самого входа: свой трафик хоста в шлюз не заворачивается
-        'echo "CASCADE_DIRECT=$(curl -4 -fsS -m 10 https://api.ipify.org 2>/dev/null)"',
+        _DIRECT_IP_CHECK,
         # curl хоста в сети VPN-контейнера (см. egresscheck): свой curl в
         # контейнере не нужен и зомби там не остаются. DNS резолвит хост
         *_client_container_select(),

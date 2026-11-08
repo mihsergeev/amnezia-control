@@ -17,7 +17,7 @@ import {
 import { copyText } from './clipboard'
 import { countryFlag, formatBytes } from './format'
 import {
-  cascadeMeasurement, cascadePort, cascadeTransportLabel, DEFAULT_CASCADE_TRANSPORT, formatProbeMetric,
+  cascadeLocalRoute, cascadeMeasurement, cascadePort, cascadeTransportLabel, DEFAULT_CASCADE_TRANSPORT, formatProbeMetric,
   probeRowTone, PROBE_TRANSPORTS, queuedProbeRows, runTransportProbes, testedAwgPorts,
   type TransportProbeRow, type TransportProbeRows,
 } from './cascadeUi'
@@ -149,6 +149,7 @@ export function CascadeWizard({
   const byId = (id: number | null) => all.find((s) => s.id === id) ?? null
   const entry = byId(entryId)
   const exit = byId(exitId)
+  const localRoute = cascade ? cascadeLocalRoute(cascade.result) : 'unknown'
 
   const handleError = useCallback(
     (err: unknown) => {
@@ -713,10 +714,15 @@ export function CascadeWizard({
                   {t('Остальные сайты открываются с {ip}', { ip: cascade.result.egress })}
                 </div>
               )}
-              {cascade.result.ru && (
+              {(entry?.country.toUpperCase() === 'RU' || cascade.result.ru) && (
                 <div>
-                  <span className="ok-text">✓</span>{' '}
-                  {t('Сайты страны входа идут напрямую с {ip}', { ip: cascade.result.ru })}
+                  {localRoute === 'entry' && <><span className="ok-text">✓</span>{' '}</>}
+                  {localRoute === 'entry'
+                    ? t('Проверочный сайт страны входа открыт напрямую')
+                    : localRoute === 'exit'
+                      ? t('Проверочный сайт страны входа идет через выход')
+                      : t('Прямой маршрут для сайта страны входа не подтвержден')}
+                  {cascade.result.ru && <span className="muted"> · {t('адрес {ip}', { ip: cascade.result.ru })}</span>}
                 </div>
               )}
               {measurement && (

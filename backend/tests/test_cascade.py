@@ -265,6 +265,41 @@ async def test_install_wait_includes_unresponsive_ssh_poll(monkeypatch):
     assert result == "error" and "не дождался конца установки" in log
 
 
+@pytest.mark.parametrize("cached_country", ["", "RU"])
+async def test_install_uses_entry_country_before_collector_runs(session_factory, monkeypatch, cached_country):
+    entry_id, exit_id, _ = await _servers(session_factory)
+    async with session_factory() as session:
+        entry = await session.get(Server, entry_id)
+        entry.country = cached_country
+        host = entry.host
+        row = Cascade(entry_server_id=entry_id, exit_server_id=exit_id, transport="vless",
+                      params=json.dumps(VLESS), status="installing")
+        session.add(row)
+        await session.commit()
+        cascade_id = row.id
+
+    lookups = []
+    entry_scripts = []
+
+    async def country_code(address):
+        lookups.append(address)
+        return "RU"
+
+    async def side(_cid, phase, _server, script, *_args, **_kwargs):
+        if phase == "entry":
+            entry_scripts.append(script)
+            return "error", "DEPLOY_ERROR: simulated"
+        return "done", "DEPLOY_DONE"
+
+    monkeypatch.setattr(cascadejob.geo, "country_code", country_code)
+    monkeypatch.setattr(cascadejob, "_side", side)
+    monkeypatch.setattr(cascadejob, "_progress", {})
+    await cascadejob._run_locked(cascade_id, session_factory, None)
+    assert lookups == ([] if cached_country else [host])
+    assert len(entry_scripts) == 1
+    assert "ip.nic.ru" in entry_scripts[0] and "CASCADE_DIRECT=" in entry_scripts[0]
+
+
 async def test_delete_dismantles_entry_first(
     client: httpx.AsyncClient, auth_headers, session_factory, monkeypatch
 ) -> None:

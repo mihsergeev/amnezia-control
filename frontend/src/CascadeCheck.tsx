@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { ApiError, checkCascade, type Cascade, type CascadeCheck, type Server } from './api'
 import { countryFlag } from './format'
-import { cascadeTransportLabel } from './cascadeUi'
+import { cascadeLocalRoute, cascadeTransportLabel } from './cascadeUi'
 import { CascadeSecurity } from './CascadeSecurity'
 import { greLinkLabel } from './serverList'
 import { useI18n } from './i18n'
@@ -132,13 +132,19 @@ export function CascadeCheckModal({ cascade, entry, exit, onClose, onChecked, on
             ? st(!!result.egress)
             : 'warn',
   })
-  if (ru || result?.ru) {
+  const localRoute = result ? cascadeLocalRoute(result) : 'unknown'
+  const checksLocalRoute = ru || Boolean(result?.ru)
+  const localRouteWarning = checksLocalRoute && localRoute !== 'entry'
+  if (checksLocalRoute) {
     steps.push({
-      label: t('Сайты страны входа напрямую'),
+      label: !result || localRoute === 'entry'
+        ? t('Проверочный сайт страны входа открыт напрямую')
+        : localRoute === 'exit'
+          ? t('Проверочный сайт страны входа идет через выход')
+          : t('Прямой маршрут для сайта страны входа не подтвержден'),
       fail: '',
       detail: result?.ru ? t('адрес {ip}', { ip: result.ru }) : undefined,
-      // без этой проверки каскад работает, просто местное идет не так, как задумано
-      state: result ? (result.ru ? 'ok' : 'warn') : 'wait',
+      state: result ? (localRouteWarning ? 'warn' : 'ok') : 'wait',
     })
   }
 
@@ -235,7 +241,7 @@ export function CascadeCheckModal({ cascade, entry, exit, onClose, onChecked, on
         {done && result && (
           <p className={result.ok ? 'cc-verdict cc-verdict-ok' : 'cc-verdict cc-verdict-bad'}>
             {result.ok
-              ? t('Каскад работает')
+              ? (localRouteWarning ? t('Связь через выход работает') : t('Каскад работает'))
               : reason
                 ? t('Каскад не работает: {reason}', { reason })
                 : t('Каскад не работает')}

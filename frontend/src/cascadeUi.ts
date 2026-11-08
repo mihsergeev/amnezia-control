@@ -16,6 +16,13 @@ export function cascadeSecurityState(value: { encrypted?: boolean | null; encryp
   return value.encrypted === false && value.encryption === 'none' ? 'plain' : 'unknown'
 }
 
+export function cascadeLocalRoute(result: { ru?: string; direct?: string; egress?: string }): 'entry' | 'exit' | 'unknown' {
+  const { ru, direct, egress } = result
+  if (!ru || !direct || !egress || direct === egress) return 'unknown'
+  if (ru === direct) return 'entry'
+  return ru === egress ? 'exit' : 'unknown'
+}
+
 export function cascadeTransportLabel(transport: CascadeTransport): string {
   return transport === 'awg' ? 'AWG 3.1' : transport === 'gre' ? 'GRE' : 'VLESS'
 }

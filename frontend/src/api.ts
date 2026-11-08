@@ -1037,6 +1037,7 @@ export type Cascade = {
   result: {
     egress?: string
     ru?: string
+    direct?: string
     checked_at?: string
     // фоновая проверка панели раз в пару минут
     health?: { ok: boolean; reason?: string; since?: string; checked_at?: string }

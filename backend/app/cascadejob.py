@@ -14,7 +14,7 @@ from datetime import datetime, timezone
 
 from fastapi import HTTPException
 
-from app import alerts, cascade, cascade_exit, cascade_lock, deploy, nodelock, server_ops, sshops
+from app import alerts, cascade, cascade_exit, cascade_lock, deploy, geo, nodelock, server_ops, sshops
 from app.config import get_settings
 from app.models import Cascade, Server
 from app.sshkeys import ensure_panel_key, key_paths
@@ -133,10 +133,12 @@ async def _run_locked(cid: int, factory, settings) -> None:
         params = json.loads(c.params or "{}")
     if entry is None or exit_ is None:
         return
+    # The collector may not have looked up a newly added entry yet.
+    country = entry.country or await geo.country_code(entry.host)
     steps = [
         ("exit", exit_, cascade.build_exit_script(transport, params["entry_ip"], cid, params)),
         ("entry", entry, cascade.build_entry_script(transport, params["exit_ip"], cid, params,
-                                                     entry.country)),
+                                                     country)),
     ]
     logs: dict[str, tuple[str, str]] = {}
     entry_log = ""
