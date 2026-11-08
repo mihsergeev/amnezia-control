@@ -9,6 +9,7 @@ All notable changes to Amnezia Control are documented here. The format is based 
 - Fix server export with non-ASCII names and preserve the Unicode filename in downloads.
 - Explain cascade and full-access conflicts in the interface and log their causes without including connection details.
 - Let administrators dismantle a failed cascade from the wizard, preserve active installer locks, and limit waiting when a node stops responding.
+- Apply Debian's zlib security update to the backend image.
 
 ## [0.84.15] - 2026-11-07
 

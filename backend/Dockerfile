@@ -1,5 +1,10 @@
 FROM python:3.14-slim
 
+# Apply Debian's zlib security update when the upstream image still has the older package.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends --only-upgrade zlib1g \
+    && rm -rf /var/lib/apt/lists/*
+
 WORKDIR /srv
 
 # Зависимости ставим строго из lock-файла с хэшами: сборка образа повторяема, и
