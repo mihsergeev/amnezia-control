@@ -36,7 +36,7 @@ import { countryFlag, formatBytes, formatUptime } from './format'
 import { CascadeWizard } from './CascadeWizard'
 import { CascadeCheckModal } from './CascadeCheck'
 import { CascadeRoutesModal } from './CascadeRoutes'
-import { cascadeTransportLabel } from './cascadeUi'
+import { cascadeEntryCountry, cascadeTransportLabel } from './cascadeUi'
 import { EgressCheckModal } from './EgressCheck'
 import { TorrentLine } from './Torrent'
 import { translate, useI18n } from './i18n'
@@ -176,7 +176,7 @@ function CascadeRoute({
       <span className="srv-route-label">{t('Клиенты')}</span>
       <span className="srv-route-arrow">→</span>
       <Hop
-        flag={countryFlag(entry?.country || '')}
+        flag={countryFlag(cascadeEntryCountry(cascade, entry))}
         title={entry?.host || cascade.entry_ip}
         sub={entry ? t('вход каскада, {name}', { name: entry.name }) : t('Сервер входа недоступен')}
         onClick={entry ? () => onOpen(entry) : undefined}
@@ -452,7 +452,7 @@ function ServerDetail({
           <div>
             <strong>{t('Маршруты каскада')}</strong>
             <div className="muted small">
-              {cascade.routes?.length ? t('Ручные маршруты: {n}', { n: cascade.routes.length }) : server.country
+              {cascade.routes?.length ? t('Ручные маршруты: {n}', { n: cascade.routes.length }) : cascadeEntryCountry(cascade, server)
                 ? t('Сайты страны входа напрямую с этого сервера, остальное через выход.')
                 : t('Весь трафик клиентов идет через выход: страна этого сервера неизвестна.')}
             </div>

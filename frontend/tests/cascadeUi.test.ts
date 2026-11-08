@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { cascadeClientExitConfirmed, cascadeLocalRoute, cascadePort, cascadeSecurityState, DEFAULT_CASCADE_TRANSPORT } from '../src/cascadeUi.ts'
+import { cascadeClientExitConfirmed, cascadeLocalExpected, cascadeLocalRoute, cascadePort, cascadeRequestId, cascadeSecurityState, DEFAULT_CASCADE_TRANSPORT } from '../src/cascadeUi.ts'
 
 test('the new default is AWG, not an unencrypted transport recommendation', () => {
   assert.equal(DEFAULT_CASCADE_TRANSPORT, 'awg')
@@ -34,6 +34,20 @@ test('a responding local site only confirms a direct route if the entry and exit
   assert.equal(cascadeLocalRoute({ ru: direct, direct }), 'unknown')
   assert.equal(cascadeLocalRoute({ ru: egress, egress }), 'unknown')
   assert.equal(cascadeLocalRoute({ direct, egress }), 'unknown')
+})
+
+test('the first matching saved domain rule determines the expected path of ip.nic.ru', () => {
+  assert.equal(cascadeLocalExpected(), 'entry')
+  assert.equal(cascadeLocalExpected([{ destination: 'ic.ru', via: 'exit' }, { destination: '192.0.2.0/24', via: 'exit' }]), 'entry')
+  assert.equal(cascadeLocalExpected([{ destination: 'ip.nic.ru', via: 'exit' }]), 'exit')
+  assert.equal(cascadeLocalExpected([{ destination: 'nic.ru', via: 'exit' }, { destination: 'ip.nic.ru', via: 'entry' }]), 'exit')
+  assert.equal(cascadeLocalExpected([{ destination: 'nic.ru', via: 'entry' }, { destination: 'ip.nic.ru', via: 'exit' }]), 'entry')
+})
+
+test('cascade request IDs are valid v4 UUIDs using Web Crypto on HTTP', () => {
+  const first = cascadeRequestId()
+  assert.match(first, /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/)
+  assert.notEqual(cascadeRequestId(), first)
 })
 
 test('client egress needs a matching exit address distinct from the entry', () => {

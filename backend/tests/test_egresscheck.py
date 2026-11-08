@@ -34,6 +34,8 @@ def test_command_runs_in_container_network() -> None:
     script = _script(egresscheck.build_command("RU"))
     # путь клиентов: сеть контейнера, curl хоста; сервис DNS контейнера там не нужен
     assert 'nsenter -t "$P" -n curl' in script and "--resolve" in script
+    assert 'wireguard|true' in script and 'openvpn-native|true' in script
+    assert "--noproxy" in script
     assert "https://ip.nic.ru" in script
     assert "Telegram=https://telegram.org/" in script
     # для страны без своего сервиса адреса местный адрес не спрашиваем

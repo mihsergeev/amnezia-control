@@ -10,6 +10,7 @@ from app.models import Cascade, Server
 
 NOW = datetime(2026, 10, 28, 12, 0, tzinfo=timezone.utc)
 OK = "CASCADE_GW=yes\nCASCADE_TPROXY=active\nCASCADE_TUN=UNKNOWN\nCASCADE_EGRESS=198.51.100.3\nCASCADE_RU=203.0.113.2\n"
+OK += "CASCADE_CLIENT=198.51.100.3\nCASCADE_DIRECT=203.0.113.2\n"
 NO_EXIT = "CASCADE_GW=yes\nCASCADE_TPROXY=active\nCASCADE_TUN=UNKNOWN\nCASCADE_EGRESS=\nCASCADE_RU=203.0.113.2\n"
 
 
@@ -87,6 +88,9 @@ async def test_alert_only_after_grace_and_once(factory, sent) -> None:
         "🔴 vpn-b", "Каскад не работает больше 10 мин",
         "через выход интернет не открывается, выход fi-exit",
     ]
+    await cascadewatch.watch_once(factory, settings, now=NOW + timedelta(minutes=50),
+                                  check=_check(OK.replace("CASCADE_CLIENT=198.51.100.3", "CASCADE_CLIENT=")))
+    assert len(sent) == 1 and (await _health(factory))["ok"] is False
     await cascadewatch.watch_once(factory, settings, now=NOW + timedelta(minutes=60), check=_check(OK))
     assert len(sent) == 2 and "снова работает" in sent[1]
     assert (await _health(factory))["ok"] is True
@@ -200,6 +204,7 @@ async def test_cascade_changed_during_check(factory, sent) -> None:
     проверка: удаленный пропускаем, свежий result не затираем."""
     from sqlalchemy import delete
 
+    manual = {"egress": "fresh-manual", "client": "x", "health": {"ok": True}}
     async with factory() as s:
         for sid in (3, 4, 5, 6):
             s.add(Server(id=sid, name=f"vpn-{sid}", host=f"203.0.113.{sid}",
@@ -214,7 +219,7 @@ async def test_cascade_changed_during_check(factory, sent) -> None:
             async with factory() as s:
                 await s.execute(delete(Cascade).where(Cascade.id == 2))
                 c = await s.get(Cascade, 3)
-                c.result = json.dumps({"egress": "fresh-manual", "client": "x"})
+                c.result = json.dumps(manual)
                 await s.commit()
         return NO_EXIT if entry.id == 5 else OK
 
@@ -222,5 +227,4 @@ async def test_cascade_changed_during_check(factory, sent) -> None:
     async with factory() as s:
         assert await s.get(Cascade, 2) is None
         res = json.loads((await s.get(Cascade, 3)).result)
-    assert res["egress"] == "fresh-manual" and res["client"] == "x"
-    assert res["health"]["ok"] is False
+    assert res == manual

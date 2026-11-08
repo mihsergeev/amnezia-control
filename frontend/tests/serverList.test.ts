@@ -38,6 +38,17 @@ test('the selected exit retains the cascade row and its own details', () => {
   assert.equal(resolveServerSelection(rows, { key: null, serverId: 2 }).server?.id, 2)
 })
 
+test('managed cascade entry displays the saved routing country before server geolocation', () => {
+  const servers = [node(1, { country: 'DE' }), node(2, { country: 'FI' })]
+  const [configured] = serverListItems(servers, [cascade(1, 1, 2, { entry_country: 'RU' })])
+  const [legacy] = serverListItems(servers, [cascade()])
+  const [missingEntry] = serverListItems([servers[1]], [cascade(1, 1, 2, { entry_country: 'RU' })])
+  assert.equal(serverListRoute(configured, servers)?.entry.country, 'RU')
+  assert.equal(serverListRoute(configured, servers)?.exit.country, 'FI')
+  assert.equal(serverListRoute(legacy, servers)?.entry.country, 'DE')
+  assert.equal(serverListRoute(missingEntry, servers)?.entry.country, 'RU')
+})
+
 test('search finds either node, its note, group and address without changing exit selection', () => {
   const servers = [node(1, { name: 'Entry example', group_name: 'Group A' }), node(2, { name: 'Exit example', note: 'direct clients', group_name: 'Group B' })]
   const rows = serverListItems(servers, [cascade()])

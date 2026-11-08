@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { ApiError, checkCascade, type Cascade, type CascadeCheck, type Server } from './api'
 import { countryFlag } from './format'
-import { cascadeClientExitConfirmed, cascadeLocalRoute, cascadeTransportLabel } from './cascadeUi'
+import { cascadeClientExitConfirmed, cascadeEntryCountry, cascadeLocalExpected, cascadeLocalRoute, cascadeTransportLabel } from './cascadeUi'
 import { CascadeSecurity } from './CascadeSecurity'
 import { greLinkLabel } from './serverList'
 import { useI18n } from './i18n'
@@ -39,8 +39,7 @@ export function CascadeCheckModal({ cascade, entry, exit, onClose, onChecked, on
   const gre = cascade.transport === 'gre'
   const awg = cascade.transport === 'awg'
   const tunnelled = gre || awg
-  const entryCountry = cascade.entry_country || entry?.country || ''
-  const ru = entryCountry.toUpperCase() === 'RU'
+  const entryCountry = cascadeEntryCountry(cascade, entry)
 
   useEffect(() => {
     let alive = true
@@ -104,11 +103,12 @@ export function CascadeCheckModal({ cascade, entry, exit, onClose, onChecked, on
     })
   }
   const egressIdx = steps.length
+  const gatewayConfirmed = result && (result.egress_confirmed ?? Boolean(result.egress && result.direct && result.egress !== result.direct))
   steps.push({
-    label: t('Интернет через выход'),
-    fail: t('через выход интернет не открывается'),
+    label: gatewayConfirmed === false ? t('Выход шлюза через каскад не подтвержден') : t('Интернет через выход'),
+    fail: t('Выход шлюза через каскад не подтвержден'),
     detail: result?.egress ? t('адрес {ip}', { ip: result.egress }) : undefined,
-    state: st(result ? !!result.egress : undefined),
+    state: st(gatewayConfirmed ?? undefined),
   })
   // путь клиентов целиком: адрес изнутри VPN-контейнера на входе. Шлюз выше
   // проверяется напрямую и не заметит, если клиенты идут в интернет мимо него
@@ -120,7 +120,7 @@ export function CascadeCheckModal({ cascade, entry, exit, onClose, onChecked, on
       : !result || clientConfirmed
         ? t('Клиенты выходят с адреса выхода')
         : t('Выход клиентов через каскад не подтвержден'),
-    fail: t('клиенты выходят в интернет мимо выхода'),
+    fail: result?.leak ? t('клиенты выходят в интернет мимо выхода') : t('Выход клиентов через каскад не подтвержден'),
     detail: result
       ? result.client
         ? t('адрес {ip}', { ip: result.client })
@@ -130,18 +130,21 @@ export function CascadeCheckModal({ cascade, entry, exit, onClose, onChecked, on
       ? 'wait'
       : result.leak
         ? 'bad'
-        : clientConfirmed ? 'ok' : 'warn',
+        : clientConfirmed ? 'ok' : result.ok ? 'warn' : 'bad',
   })
   const localRoute = result ? cascadeLocalRoute(result) : 'unknown'
-  const checksLocalRoute = ru || Boolean(result?.ru)
-  const localRouteWarning = checksLocalRoute && localRoute !== 'entry'
+  const localExpected = cascadeLocalExpected(cascade.routes)
+  const checksLocalRoute = entryCountry === 'RU' || Boolean(result?.ru)
+  const localRouteWarning = checksLocalRoute && localRoute !== localExpected
   if (checksLocalRoute) {
     steps.push({
-      label: !result || localRoute === 'entry'
+      label: localExpected === 'exit' && (!result || localRoute === 'exit')
+        ? t('Проверочный сайт страны входа идет через выход по ручному правилу')
+        : !result || localRoute === 'entry'
         ? t('Проверочный сайт страны входа открыт напрямую')
         : localRoute === 'exit'
           ? t('Проверочный сайт страны входа идет через выход')
-          : t('Прямой маршрут для сайта страны входа не подтвержден'),
+          : t('Маршрут для сайта страны входа не подтвержден'),
       fail: '',
       detail: result?.ru ? t('адрес {ip}', { ip: result.ru }) : undefined,
       state: result ? (localRouteWarning ? 'warn' : 'ok') : 'wait',
@@ -168,12 +171,12 @@ export function CascadeCheckModal({ cascade, entry, exit, onClose, onChecked, on
   const toExit = link(tunnelled ? [view(2)] : [view(egressIdx)])
   const toNet = link([view(egressIdx), view(clientIdx)])
   const done = !running && !!result && shown >= steps.length
-  const verdictTone = !result?.ok ? 'bad' : !clientConfirmed || localRouteWarning ? 'warn' : 'ok'
+  const healthy = result?.ok && gatewayConfirmed
+  const verdictTone = !healthy ? 'bad' : !clientConfirmed || localRouteWarning ? 'warn' : 'ok'
 
-  const reason = (() => {
-    if (!result || result.ok) return ''
-    return steps.find((s) => s.state === 'bad')?.fail ?? ''
-  })()
+  const reason = result && !healthy
+    ? result.reason ? t(result.reason) : steps.find((s) => s.state === 'bad')?.fail ?? ''
+    : ''
 
   const node = (flag: string, title: string, sub: string, state: 'ok' | 'bad' | 'idle') => (
     <div className={`cc-node cc-node-${state}`}>
@@ -241,7 +244,7 @@ export function CascadeCheckModal({ cascade, entry, exit, onClose, onChecked, on
 
         {done && result && (
           <p className={`cc-verdict cc-verdict-${verdictTone}`}>
-            {result.ok
+            {healthy
               ? !clientConfirmed
                 ? t('Шлюз отвечает, выход клиентов через каскад не подтвержден')
                 : localRouteWarning ? t('Связь через выход работает') : t('Каскад работает')

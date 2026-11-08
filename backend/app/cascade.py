@@ -33,7 +33,7 @@ import asyncssh
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey
 
-from app import cascade_awg, cascade_exit, cascade_routes
+from app import cascade_awg, cascade_exit, cascade_gateway, cascade_routes
 from app.cascade_underlay import CASCADE_PROBE_COMMAND
 
 # Оба конца каскада обновляются вместе; наш chrome-профиль поддерживает
@@ -358,6 +358,9 @@ _GEO_SH = r"""#!/bin/sh
 # Новые базы проверяются через xray -test до подмены, при ошибке остаются старые.
 set -eu
 DIR=@DIR@/geo
+CONF=${1:-@DIR@/config}
+# The installer holds a backup of the active config during gateway replacement.
+[ "$#" -gt 0 ] || [ ! -d @DIR@/gateway-transaction ] || exit 0
 BASE=https://github.com/runetfreedom/russia-v2ray-rules-dat/releases/latest/download
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
@@ -389,10 +392,10 @@ done
 [ "$changed" = 1 ] || exit 0
 mkdir -p "$TMP/geo" "$DIR"
 cp geoip.dat geosite.dat "$TMP/geo/"
-docker run --rm --user 0:0 -e GODEBUG=multipathtcp=0 -e XRAY_LOCATION_ASSET=/geo -v "$TMP/geo:/geo:ro" -v @DIR@/config:/cfg:ro \
+docker run --rm --user 0:0 -e GODEBUG=multipathtcp=0 -e XRAY_LOCATION_ASSET=/geo -v "$TMP/geo:/geo:ro" -v "$CONF:/cfg:ro" \
   @IMAGE@ run -test -confdir /cfg >/dev/null
 install -m 644 geoip.dat geosite.dat "$DIR/"
-if docker ps --format "{{.Names}}" | grep -qx @GATEWAY@; then
+if [ "$#" -eq 0 ] && docker ps --format "{{.Names}}" | grep -qx @GATEWAY@; then
   docker restart @GATEWAY@ >/dev/null
 fi
 echo "geo updated: $(date -Is)"
@@ -492,11 +495,14 @@ def _gre_install(role: str, remote: str, inner: str, net: str, key: int | None =
         f"sudo mkdir -p {DIR} || fail mkdir",
         _put(f"{DIR}/gre-tun.sh", _fill(_GRE_TUN_SH), "755"),
         # в файле параметров нужны значения LOCAL и EGRESS, поэтому heredoc, а не base64
-        f"sudo tee {GRE_DEFAULTS} >/dev/null <<EOF\n{defaults}EOF",
+        f"sudo tee {GRE_DEFAULTS}.next >/dev/null <<EOF || fail 'GRE environment'\n{defaults}EOF",
+        f"sudo mv -f {GRE_DEFAULTS}.next {GRE_DEFAULTS} || fail 'GRE environment'",
         _put("/etc/systemd/system/acontrol-gre.service", _fill(_GRE_UNIT)),
         f"if command -v ufw >/dev/null 2>&1; then sudo ufw allow proto gre from {remote} >/dev/null 2>&1 || true; fi",
-        "sudo systemctl daemon-reload",
-        "sudo systemctl restart acontrol-gre.service || fail 'gre up'",
+        "sudo systemctl daemon-reload || fail 'GRE daemon-reload'",
+        "if sudo systemctl is-active --quiet acontrol-gre.service; then "
+        f"sudo {DIR}/gre-tun.sh up || fail 'gre up'; "
+        "else sudo systemctl start acontrol-gre.service || fail 'gre up'; fi",
         "sudo systemctl enable acontrol-gre.service >/dev/null 2>&1",
         f'log "{GRE_IF}: $LOCAL -> {remote}, {inner}"',
     ]
@@ -531,16 +537,24 @@ def build_exit_script(transport: str, entry_ip: str, cascade_id: int, params: di
             'log "[1/3] docker"',
             _DOCKER,
             'log "[2/3] конфиг VLESS Reality"',
+            "NAMES=$(sudo docker container ls -a --format '{{.Names}}') || fail 'exit containers'",
+            f"if printf '%s\\n' \"$NAMES\" | grep -Fxq {EXIT_CONTAINER}; then",
+            "  MOUNT=$(sudo docker container inspect -f '{{range .Mounts}}{{if eq .Destination \"/usr/local/etc/xray\"}}{{.Source}}{{end}}{{end}}' "
+            f"{EXIT_CONTAINER}) || fail 'exit ownership'",
+            f"  [ \"$MOUNT\" = {EXIT_DIR} ] || fail 'exit ownership'",
+            f"  if [ \"$(sudo docker container inspect -f '{{{{.State.Running}}}}' {EXIT_CONTAINER})\" != true ]; then "
+            f"sudo docker start {EXIT_CONTAINER} >/dev/null || fail 'exit start'; fi",
+            "else",
             f"sudo mkdir -p {EXIT_DIR} || fail mkdir",
             _put(f"{EXIT_DIR}/config.json", exit_vless_config(params), "600"),
             f"sudo docker pull -q {XRAY_IMAGE} >/dev/null || fail 'docker pull'",
             f'log "[3/3] контейнер, порт {port}/tcp открыт только для {entry_ip}"',
-            f"sudo docker rm -f {EXIT_CONTAINER} >/dev/null 2>&1",
             f"sudo docker run -d --name {EXIT_CONTAINER} --restart always --network host "
             "-e GODEBUG=multipathtcp=0 "
             "--user 0:0 --read-only --cap-drop ALL --cap-add NET_BIND_SERVICE "
             "--security-opt no-new-privileges:true --log-opt max-size=10m --log-opt max-file=3 "
             f"-v {EXIT_DIR}:/usr/local/etc/xray:ro {XRAY_IMAGE} >/dev/null || fail 'docker run'",
+            "fi",
             "sleep 3",
             f"sudo docker ps --format '{{{{.Names}}}}' | grep -qx {EXIT_CONTAINER} "
             f"|| fail \"xray: $(sudo docker logs --tail 3 {EXIT_CONTAINER} 2>&1 | tr '\\n' ' ')\"",
@@ -709,17 +723,19 @@ def _gateway_install_checks(country: str) -> list[str]:
     return lines + ['echo "CASCADE_RU=$RU"']
 
 
-def gateway_run(confdir: str, owner: str = "") -> str:
-    """Строка скрипта: запустить шлюз каскада с конфигом из confdir."""
+def gateway_run(confdir: str, owner: str = "", *, prepare: bool = False, transaction: bool = False) -> str:
+    """Create the replacement without binding its ports until cutover."""
+    command = f'docker create --name "{GATEWAY}-next-$GW_TOKEN"' if prepare else f"docker run -d --name {GATEWAY}"
     return (
-        f"sudo docker run -d --name {GATEWAY} --restart always --network host "
-        + (f"--label org.amnezia.control.owner={shlex.quote(owner)} " if owner else "") +
+        f"sudo {command} --restart always --network host "
+        + (f"--label org.amnezia.control.owner={shlex.quote(owner)} " if owner else "")
+        + ('--label "$GW_LABEL=$GW_TOKEN" ' if transaction else "") +
         "-e GODEBUG=multipathtcp=0 "
         "--user 0:0 --read-only --cap-drop ALL --cap-add NET_ADMIN --cap-add NET_BIND_SERVICE "
         "--security-opt no-new-privileges:true --log-opt max-size=10m --log-opt max-file=3 "
         "-e XRAY_LOCATION_ASSET=/usr/local/share/xray "
         f"-v {confdir}:/usr/local/etc/xray:ro -v {DIR}/geo:/usr/local/share/xray:ro "
-        f"{XRAY_IMAGE} >/dev/null || fail 'docker run'"
+        f"{XRAY_IMAGE}" + ("" if prepare else " >/dev/null || fail 'docker run'")
     )
 
 
@@ -732,7 +748,9 @@ def build_entry_script(transport: str, exit_ip: str, cascade_id: int, params: di
                   cascade_exit.network_preflight(cascade_id, transport, params, "entry").replace("exit 73", "fail 'cascade subnet overlaps an existing route'"),
                   f"sudo install -d -m 700 {DIR}",
                   _put(f"{DIR}/owner.json", json.dumps(cascade_exit._owner(cascade_id, transport, params)), "600")]
-    lines += ['log "[1/5] docker"', _DOCKER]
+    owner = params.get("runtime_owner", "")
+    lines += ['log "[1/5] docker"', _DOCKER, cascade_gateway.commands(DIR, GATEWAY, owner, _remove_tproxy()),
+              "gateway_recover || fail 'previous gateway transaction'"]
     if transport == "awg":
         lines += ['log "[2/5] зашифрованный канал AWG 3.1"']
         lines += cascade_awg.install("entry", exit_ip, cascade_id, params,
@@ -750,12 +768,10 @@ def build_entry_script(transport: str, exit_ip: str, cascade_id: int, params: di
         lines += ['log "[2/5] связь VLESS Reality, настроит шлюз"']
     lines += [
         'log "[3/5] геобазы для сайтов страны входа"',
-        f"sudo mkdir -p {DIR}/config {DIR}/geo || fail mkdir",
-        _put(f"{DIR}/config/config.json",
+        "gateway_begin",
+        f'sudo mkdir -p {DIR}/config {DIR}/geo {DIR}/boot "$GW_TX/config" || fail mkdir',
+        _put(f"{DIR}/gateway-transaction/config/config.json",
              entry_gateway_config(transport, exit_ip, params, country=country), "600"),
-        f"sudo mkdir -p {DIR}/boot || fail mkdir",
-        _put(f"{DIR}/boot/config.json",
-             entry_gateway_config(transport, exit_ip, params, bootstrap=True), "600"),
         _put(f"{DIR}/geo-update.sh", _fill(_GEO_SH), "755"),
         _put(f"{DIR}/cascade-tproxy.sh", _fill(_TPROXY_SH), "755"),
     ]
@@ -768,49 +784,60 @@ def build_entry_script(transport: str, exit_ip: str, cascade_id: int, params: di
                   _put("/etc/systemd/system/acontrol-cascade-tproxy.service.d/awg.conf",
                        "[Unit]\nWants=acontrol-cascade-awg.service\nAfter=acontrol-cascade-awg.service\n")]
     lines += [
-        "sudo systemctl daemon-reload",
+        "sudo systemctl daemon-reload || fail 'gateway daemon-reload'",
         f"sudo docker pull -q {XRAY_IMAGE} >/dev/null || fail 'docker pull'",
-        # первая установка: баз еще нет, а без них шлюз с полными правилами не
-        # запустится. Поднимаем его без правил и качаем базы через выход
-        f"if ! sudo test -s {DIR}/geo/geosite.dat; then",
-        f"  sudo docker rm -f {GATEWAY} >/dev/null 2>&1",
-        "  " + gateway_run(f"{DIR}/boot", params.get("runtime_owner", "")),
-        "  sleep 3",
+        # Wait out an updater started before the transaction marker existed.
+        "sudo systemctl stop acontrol-cascade-geo.service || fail 'stop geo update'",
+        f"if ! sudo test -s {DIR}/geo/geoip.dat || ! sudo test -s {DIR}/geo/geosite.dat; then",
+        '  if [ -z "$GW_OLD" ]; then',
+        "    " + _put(f"{DIR}/boot/config.json",
+                       entry_gateway_config(transport, exit_ip, params, bootstrap=True), "600"),
+        "    " + gateway_run(f"{DIR}/boot", owner, transaction=True),
+        "    sleep 3",
+        "  fi",
+        f'  sudo {DIR}/geo-update.sh "$GW_TX/config" || fail "geo download (github.com)"',
+        f'  if [ -z "$GW_OLD" ]; then sudo docker rm -f {GATEWAY} >/dev/null || fail "remove bootstrap gateway"; fi',
         "fi",
-        f"sudo {DIR}/geo-update.sh 2>&1 | tail -2",
-        f"sudo test -s {DIR}/geo/geosite.dat || fail 'geo download (github.com)'",
         'log "[4/5] шлюз каскада"',
-        f"sudo docker rm -f {GATEWAY} >/dev/null 2>&1",
-        gateway_run(f"{DIR}/config", params.get("runtime_owner", "")),
+        "sudo docker run --rm --network none --user 0:0 -e GODEBUG=multipathtcp=0 "
+        "-e XRAY_LOCATION_ASSET=/geo -v \"$GW_TX/config:/cfg:ro\" "
+        f"-v {DIR}/geo:/geo:ro {XRAY_IMAGE} run -test -confdir /cfg >/dev/null || fail 'gateway config check'",
+        f'GW_NEXT=$({gateway_run(f"{DIR}/config", owner, prepare=True, transaction=True)}) || fail "create new gateway"',
+        "gateway_switch",
         "sleep 3",
-        f"sudo docker ps --format '{{{{.Names}}}}' | grep -qx {GATEWAY} "
-        f"|| fail \"xray: $(sudo docker logs --tail 3 {GATEWAY} 2>&1 | tr '\\n' ' ')\"",
+        '[ "$(sudo docker container inspect -f \'{{.State.Running}}\' "$GW_NEXT")" = true ] || fail "new gateway is not running"',
         'log "[5/5] проверка через шлюз"',
         *_gateway_install_checks(country),
         *([_DIRECT_IP_CHECK] if (country or "").lower() in _LOCAL_IP_URL else []),
         '[ -n "$EG" ] || fail "через выход интернет не открывается"',
         (f"sudo {cascade_awg.SCRIPT} status | grep -q '^CASCADE_AWG=yes$' "
          "|| fail 'AWG handshake or routing'" if transport == "awg" else ""),
+        "gateway_commit",
         cascade_awg.check_command() if transport == "awg" else _reality_encryption_command(),
         'log "выход в интернет: $EG"',
         # только теперь заворачиваем клиентов: до этого они ходили напрямую
+        'if ! sudo systemctl is-active --quiet acontrol-cascade-tproxy.service; then '
+        'sudo touch "$GW_TX/new-tproxy" || fail "gateway transaction state"; fi',
         "sudo systemctl enable --now acontrol-cascade-tproxy.service >/dev/null 2>&1 "
         "|| fail 'tproxy'",
+        'if ! sudo systemctl is-active --quiet acontrol-cascade-heal.service; then '
+        'sudo touch "$GW_TX/new-heal" || fail "gateway transaction state"; fi',
+        "sudo systemctl enable --now acontrol-cascade-heal.service >/dev/null 2>&1 || fail 'heal'",
+        'sudo touch "$GW_TX/committed" || fail "gateway transaction state"',
+        "trap - EXIT HUP INT TERM",
+        "gateway_finish || exit 1",
         "sudo systemctl enable --now acontrol-cascade-geo.timer >/dev/null 2>&1",
-        # restart: при переустановке подхватить новый скрипт
-        "sudo systemctl enable acontrol-cascade-heal.service >/dev/null 2>&1",
-        "sudo systemctl restart acontrol-cascade-heal.service || fail 'heal'",
         'echo "DEPLOY_DONE"',
     ]
     return "\n".join(lines) + "\n"
 
 
-def _client_container_select() -> list[str]:
+def _client_container_select(docker: str = "sudo docker") -> list[str]:
     from app import native_deploy
-    lines = ["C=$(sudo docker ps --format '{{.Names}}' 2>/dev/null | grep -i '^amnezia' | grep -vx amnezia-dns | head -1)"]
+    lines = [f"C=$({docker} ps --format '{{{{.Names}}}}' 2>/dev/null | grep -i '^amnezia' | grep -vx amnezia-dns | head -1)"]
     for spec in native_deploy.SPECS.values():
         template = "{{index .Config.Labels \"" + native_deploy.LABEL + "\"}}|{{.State.Running}}"
-        lines.append(f'if [ -z "$C" ]; then N=$(sudo docker container inspect -f {shlex.quote(template)} {shlex.quote(spec.container)} 2>/dev/null); '
+        lines.append(f'if [ -z "$C" ]; then N=$({docker} container inspect -f {shlex.quote(template)} {shlex.quote(spec.container)} 2>/dev/null); '
                      f'[ "$N" != {shlex.quote(spec.protocol + "|true")} ] || C={shlex.quote(spec.container)}; fi')
     return lines
 
@@ -818,31 +845,30 @@ def _client_container_select() -> list[str]:
 def build_check_command(country: str = "") -> str:
     """Check the gateway, the host and both client routes from the VPN network."""
     local_url = _LOCAL_IP_URL.get((country or "").lower())
+    primary = cascade_routes.HEALTH_HOST
+    fallback = cascade_routes.HEALTH_FALLBACK_HOST
     return "\n".join([
         # Run independent checks together so a slow public IP service cannot
         # consume the SSH deadline before client and transport checks run.
-        "{",
-        _gateway_egress(),
-        'echo "CASCADE_EGRESS=$EG"',
-        "} &",
+        f'{{ echo "CASCADE_EGRESS=$({_GATEWAY_CURL} -m 10 https://{primary} 2>/dev/null)"; }} &',
+        f'{{ echo "CASCADE_ALTEGRESS=$({_GATEWAY_CURL} -m 10 https://{fallback} 2>/dev/null)"; }} &',
         f"{{ {_DIRECT_IP_CHECK}; }} &",
+        f'''{{ echo "CASCADE_ALTDIRECT=$(curl -4 -fsS -m 10 --noproxy '*' https://{fallback} 2>/dev/null)"; }} &''',
         "{",
         *_client_container_select(),
-        'CL=""; RU=""',
         'P=""; [ -z "$C" ] || P=$(sudo docker container inspect -f \'{{.State.Pid}}\' "$C" 2>/dev/null)',
         'client_https() {',
+        '  [ -n "$P" ] && [ "$P" != 0 ] || return 1',
         '  HOST=$1',
         "  ADDR=$(timeout 3s getent ahostsv4 \"$HOST\" | awk 'NR == 1 {print $1}')",
         '  [ -n "$ADDR" ] || return 1',
         '  sudo -n nsenter -t "$P" -n curl -4 -fsS -m 10 --noproxy \'*\' '
         '--resolve "$HOST:443:$ADDR" "https://$HOST"',
         '}',
-        'if [ -n "$P" ] && [ "$P" != 0 ]; then',
-        '  CL=$(client_https api.ipify.org 2>/dev/null)',
-        *([f'  RU=$(client_https {local_url.removeprefix("https://")} 2>/dev/null | {_IP_FROM_HTML})'] if local_url else []),
-        'fi',
-        'echo "CASCADE_CLIENT=$CL"',
-        'echo "CASCADE_RU=$RU"',
+        f'{{ echo "CASCADE_CLIENT=$(client_https {primary} 2>/dev/null)"; }} &',
+        f'{{ echo "CASCADE_ALTCLIENT=$(client_https {fallback} 2>/dev/null)"; }} &',
+        *([f'echo "CASCADE_RU=$(client_https {local_url.removeprefix("https://")} 2>/dev/null | {_IP_FROM_HTML})"'] if local_url else []),
+        'wait',
         "} &",
         cascade_awg.check_command(),
         CASCADE_PROBE_COMMAND,
@@ -965,12 +991,23 @@ def encryption_result(kv: dict[str, str]) -> dict:
 
 def check_result(kv: dict[str, str]) -> dict:
     """Адреса из вывода проверки: мусор вместо адреса (страница ошибки) - пусто."""
-    return {
-        "egress": _ip_or_empty(kv.get("egress", "")), "ru": _ip_or_empty(kv.get("ru", "")),
-        "client": _ip_or_empty(kv.get("client", "")),
-        "direct": _ip_or_empty(kv.get("direct", "")),
-        **encryption_result(kv),
-    }
+    keys = ("egress", "client", "direct")
+    paths = {key: _ip_or_empty(kv.get(key, "")) for key in keys}
+    fallback = {key: _ip_or_empty(kv.get(f"alt{key}", "")) for key in keys}
+    # Compare observations from the same service. An alternate service can
+    # recover from a provider outage or an entry-country routing rule.
+    if egress_confirmed(fallback) and (
+        not egress_confirmed(paths)
+        or (not leaks(paths) and paths["client"] != paths["egress"]
+            and fallback["client"] == fallback["egress"])
+    ):
+        paths = fallback
+    return paths | {"ru": _ip_or_empty(kv.get("ru", ""))} | encryption_result(kv)
+
+
+def egress_confirmed(res: dict) -> bool:
+    direct, egress = res.get("direct"), res.get("egress")
+    return bool(direct and egress and direct != egress)
 
 
 def health(transport: str, kv: dict[str, str], res: dict[str, str]) -> tuple[bool, str]:
@@ -994,8 +1031,14 @@ def health(transport: str, kv: dict[str, str], res: dict[str, str]) -> tuple[boo
         return False, "пропало правило маршрутизации в шлюз"
     if not res.get("egress"):
         return False, "через выход интернет не открывается"
+    if not res.get("client"):
+        return False, "из сети клиентов не удалось получить внешний адрес"
+    if not egress_confirmed(res):
+        return False, "адрес выхода не удалось отличить от прямого подключения"
     if leaks(res):
         return False, "клиенты выходят в интернет мимо выхода"
+    if res["client"] != res["egress"]:
+        return False, "внешние адреса клиентов и шлюза различаются"
     return True, ""
 
 
@@ -1050,8 +1093,11 @@ def build_remove_entry(transport: str = "gre", cascade_id: int = 0, params: dict
         cascade_awg.preflight_command(cascade_id) if transport == "awg" else "",
         stop_units(*units),
         _remove_tproxy(),
+        f"if sudo test -e {DIR}/gateway-transaction || sudo test -L {DIR}/gateway-transaction; then\n"
+        + cascade_gateway.commands(DIR, GATEWAY, (params or {}).get("runtime_owner", ""), _remove_tproxy())
+        + "gateway_recover || exit 73\nfi",
         _remove_container(GATEWAY),
-        cascade_awg.remove(cascade_id) if transport == "awg" else "",
+        cascade_awg.remove(cascade_id, owner=(params or {}).get("runtime_owner", "")) if transport == "awg" else "",
         "sudo rm -f /etc/systemd/system/acontrol-cascade-tproxy.service.d/awg.conf || exit 73",
         _remove_common(),
     ]) + "\n"

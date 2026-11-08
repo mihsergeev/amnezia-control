@@ -17,7 +17,7 @@ import json
 import logging
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 
 from app import alerts, cascade, cascadejob, nodelock, settings_store
 from app.config import Settings
@@ -106,6 +106,10 @@ async def watch_once(session_factory, settings: Settings, *, now: datetime | Non
             fresh = await session.get(Cascade, c.id)
             if fresh is None or fresh.status != "ready" or cascadejob.running(c.id):
                 continue
+            # A manual check or route change may have completed during SSH.
+            if (fresh.result != c.result or fresh.params != c.params
+                    or fresh.created_at != c.created_at):
+                continue
             result = json.loads(fresh.result or "{}")
             # SSH мог идти полторы минуты: галочку успели выключить во время
             # проверки, поэтому разрешение отправки перечитываем сейчас.
@@ -125,12 +129,15 @@ async def watch_once(session_factory, settings: Settings, *, now: datetime | Non
                     health["since"] = stamp.isoformat()
                     health["alerted"] = False
             result["health"] = health
-            # A missing/timed-out runtime proof invalidates the old crypto
-            # observation even when the egress probe also failed.
-            result.update(cascade.encryption_result(kv))
-            if res["egress"]:
-                result.update(res, checked_at=stamp.isoformat())
-            fresh.result = json.dumps(result)
+            result.update(res, checked_at=stamp.isoformat())
+            saved = await session.execute(
+                update(Cascade).where(
+                    Cascade.id == c.id, Cascade.status == "ready",
+                    Cascade.params == c.params, Cascade.result == c.result,
+                ).values(result=json.dumps(result)).execution_options(synchronize_session=False)
+            )
+            if saved.rowcount != 1:
+                continue
             await session.commit()
             if event:
                 await _send(

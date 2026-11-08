@@ -1,4 +1,5 @@
 import type { Cascade, CheckInfo, Server, ServerStat } from './api'
+import { cascadeEntryCountry } from './cascadeUi.ts'
 
 export type ServerRouteNode = { name: string; host: string; country: string }
 export type ServerListRoute = { entry: ServerRouteNode; exit: ServerRouteNode; manual: boolean }
@@ -29,7 +30,7 @@ export function manualExitNameChange(value: string | null | undefined, original:
 export function serverListRoute(item: ServerListItem, servers: Server[]): ServerListRoute | null {
   const c = item.cascade
   const node = (server: Server | undefined, host: string): ServerRouteNode => ({ name: server?.name || host, host: server?.host || host, country: server?.country || '' })
-  if (c) return { entry: node(item.entry, c.entry_ip), exit: node(item.exit, c.exit_ip), manual: false }
+  if (c) return { entry: { ...node(item.entry, c.entry_ip), country: cascadeEntryCountry(c, item.entry) }, exit: node(item.exit, c.exit_ip), manual: false }
   if (item.sharedExitCount > 1) return null
   const entry = item.anchor
   if (!entry) return null

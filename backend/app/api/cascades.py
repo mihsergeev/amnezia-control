@@ -5,7 +5,7 @@ import asyncio
 import inspect
 import json
 import secrets
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, nullcontext
 from datetime import datetime, timedelta, timezone
 from functools import wraps
 
@@ -276,6 +276,7 @@ async def probe_transport(
                 task = asyncio.create_task(cascade_probe.run(
                     xc, ec, entry_ip, exit_ip, body.transport, body.entry_port, body.exit_port,
                     entry_source_ip=entry_source, prepare_missing_image=body.prepare_missing_image,
+                    reserved_exit_ports=_reserved_ports(await _siblings(session, exit_.id), body.transport),
                 ))
                 try:
                     while not task.done():
@@ -396,6 +397,24 @@ def _bound_probe(raw: dict, transport: str, params: dict) -> dict:
 async def create(
     body: CascadeCreate, request: Request, user: CurrentUser, session: SessionDep
 ) -> CascadeOut:
+    # Bound the number of locks even when each request uses a fresh ID.
+    request_lock = nodelock.hold("cascade-create-request", body.request_id.int % 64) if body.request_id else nullcontext()
+    async with request_lock:
+        if body.request_id:
+            data = body.model_dump(mode="json")
+            rows = await session.scalars(select(Cascade))
+            for row in rows:
+                previous = json.loads(row.params or "{}").get("create_request")
+                if previous and previous.get("request_id") == data["request_id"]:
+                    if previous != data:
+                        raise conflict("cascade_create_request_changed",
+                                       "Этот запрос уже использован с другими параметрами каскада")
+                    await _settle(session, row)
+                    return _out(row)
+        return await _create_cascade(body, request, user, session)
+
+
+async def _create_cascade(body: CascadeCreate, request: Request, user: CurrentUser, session: SessionDep) -> CascadeOut:
     entry, exit_ = await _pair(body, session)
     try:
         async with _locked_pair(entry, exit_) as (ec, xc):
@@ -409,6 +428,8 @@ async def create(
                             "inner_net": _inner_reservation(siblings)}
             if body.entry_country:
                 params["entry_country"] = body.entry_country.upper()
+            if body.request_id:
+                params["create_request"] = body.model_dump(mode="json")
             if body.transport == "vless":
                 params |= cascade.new_vless_params()
                 params["port"] = await _vless_port(xc, _reserved_ports(siblings, "vless"))
@@ -431,8 +452,12 @@ async def create(
                 probe=json.dumps(_bound_probe(_last_probe.get((entry.id, exit_.id), {}),
                                              body.transport, params)),
             )
-            session.add(c)
-            await session.commit()
+            # Different inventory IDs can resolve to the same host and bypass
+            # the pair lock. Recheck physical ownership while serializing writes.
+            async with nodelock.hold("cascade", 0):
+                await _ensure_free(session, entry, exit_)
+                session.add(c)
+                await session.commit()
             cascadejob.spawn(request.app, c.id)
             await session.refresh(c)
     except Exception as exc:  # noqa: BLE001
@@ -547,13 +572,14 @@ async def check(cascade_id: int, _: CurrentUser, session: SessionDep) -> Cascade
         raise _ssh_error(exc) from exc
     kv = cascade.parse_kv(out)
     res = cascade.check_result(kv)
+    confirmed = cascade.egress_confirmed(res)
     now = datetime.now(timezone.utc)
     result = json.loads(c.result or "{}") | res | {"checked_at": now.isoformat()}
     c.result = json.dumps(result)
     # на карточку сервера - адрес, с которого реально выходят клиенты
-    if res["client"] or res["egress"]:
+    if res["client"]:
         server_ops.apply_egress(
-            entry, await server_ops.describe_egress(entry.host, res["client"] or res["egress"]), now
+            entry, await server_ops.describe_egress(entry.host, res["client"]), now
         )
     await session.commit()
     tunnel = kv.get("tun", "") if c.transport == "gre" else (
@@ -564,11 +590,11 @@ async def check(cascade_id: int, _: CurrentUser, session: SessionDep) -> Cascade
     rule = kv.get("rule") != "no" and (c.transport != "gre" or kv.get("grerule") != "no")
     if c.transport == "awg":
         rule = rule and kv.get("awg") == "yes"
-    ok, _reason = cascade.health(c.transport, kv, res)
+    ok, reason = cascade.health(c.transport, kv, res)
     return CascadeCheckOut(
         ok=ok, gateway=gateway, tproxy=tproxy, rule=rule, tunnel=tunnel,
         egress=res["egress"], ru=res["ru"], client=res["client"], direct=res["direct"],
-        leak=cascade.leaks(res), checked_at=now,
+        leak=cascade.leaks(res), egress_confirmed=confirmed, reason=reason, checked_at=now,
         **cascade.encryption_result(kv),
     )
 

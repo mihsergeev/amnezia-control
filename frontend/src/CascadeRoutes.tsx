@@ -1,5 +1,6 @@
 import { useRef, useState, type FormEvent } from 'react'
 import { ApiError, updateCascadeRoutes, type Cascade, type CascadeRoute, type Server } from './api'
+import { cascadeEntryCountry } from './cascadeUi'
 import { countryFlag } from './format'
 import { useI18n } from './i18n'
 import { useModalDismiss } from './useModalDismiss'
@@ -20,8 +21,8 @@ export function CascadeRoutesModal({ cascade, entry, exit, onClose, onSaved, onU
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
   const nodes = [
-    { via: 'entry', label: t('Вход'), server: entry, address: cascade.entry_ip },
-    { via: 'exit', label: t('Выход'), server: exit, address: cascade.exit_ip },
+    { via: 'entry', label: t('Вход'), server: entry, address: cascade.entry_ip, country: cascadeEntryCountry(cascade, entry) },
+    { via: 'exit', label: t('Выход'), server: exit, address: cascade.exit_ip, country: exit?.country ?? '' },
   ] as const
   const dismiss = useModalDismiss(() => { if (!saving) onClose() })
 
@@ -70,7 +71,7 @@ export function CascadeRoutesModal({ cascade, entry, exit, onClose, onSaved, onU
               <div className="cascade-route-options" role="group" aria-label={t('Сервер выхода в интернет')}>
                 {nodes.map((node) => {
                   const host = node.server?.host || node.address
-                  const flag = node.server ? countryFlag(node.server.country) : ''
+                  const flag = countryFlag(node.country)
                   return (
                     <label className="cascade-route-option" key={node.via}>
                       <input type="radio" name={`route-${id}`} checked={via === node.via}

@@ -538,7 +538,8 @@ async def test_occupied_requested_port_is_unavailable_without_starting_resources
     assert result["secs"] is None and result["mbps"] is None
 
 
-async def test_awg_auto_ports_match_installer_candidates(monkeypatch):
+@pytest.mark.parametrize("reserved_exit", [False, True])
+async def test_awg_auto_ports_match_installer_candidates(monkeypatch, reserved_exit):
     choices = []
     async def owner(conn, port, protocol):
         choices.append((port, protocol)); return None
@@ -546,8 +547,11 @@ async def test_awg_auto_ports_match_installer_candidates(monkeypatch):
     async def start(*args): return process
     monkeypatch.setattr(cascade_probe.deploy, "port_owner", owner)
     monkeypatch.setattr(cascade_probe, "_start", start)
-    await cascade_probe.run(None, None, "203.0.113.10", "203.0.113.20", "awg")
-    assert choices == [(cascade_probe.cascade_awg.PORTS[0], "udp")] * 2
+    ports = cascade_probe.cascade_awg.PORTS
+    reserved = {ports[0]} if reserved_exit else set()
+    await cascade_probe.run(None, None, "203.0.113.10", "203.0.113.20", "awg",
+                            reserved_exit_ports=reserved)
+    assert choices == [(ports[0], "udp"), (ports[int(reserved_exit)], "udp")]
 
 
 async def test_close_terminates_blocked_receiver_but_waits_for_confirmed_cleanup(monkeypatch):

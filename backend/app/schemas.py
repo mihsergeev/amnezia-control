@@ -1,5 +1,6 @@
 from datetime import datetime
 from typing import Literal
+from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, computed_field, field_validator, model_validator
 
@@ -741,6 +742,7 @@ class CascadeCreate(CascadePair, CascadeInstall):
     transport: Literal["vless", "gre", "awg"]
     entry_port: int | None = Field(default=None, ge=1, le=65535)
     exit_port: int | None = Field(default=None, ge=1, le=65535)
+    request_id: UUID | None = None
 
     @model_validator(mode="after")
     def awg_ports_only(self):
@@ -853,6 +855,8 @@ class CascadeCheckOut(BaseModel):
     rule: bool = True  # ip rule в шлюз на месте
     tunnel: str  # состояние acgre (UP/DOWN) или "" без GRE
     egress: str
+    egress_confirmed: bool | None = None
+    reason: str = ""
     ru: str
     client: str = ""  # адрес изнутри VPN-контейнера, "" - спросить не вышло
     direct: str = ""  # свой адрес входа: если клиенты выходят с него, каскад они обходят

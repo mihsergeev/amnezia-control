@@ -1056,6 +1056,8 @@ export type CascadeCheck = {
   encryption?: CascadeEncryption
   encrypted?: boolean | null
   handshake_age?: number | null
+  egress_confirmed?: boolean | null
+  reason?: string
   egress: string
   ru: string
   client: string
@@ -1132,19 +1134,20 @@ export function probeCascadeTransport(
   })
 }
 
-export function createCascade(
-  entryId: number,
-  exitId: number,
-  transport: CascadeTransport,
-  ports?: { entry_port: number | null; exit_port: number | null },
-  entryCountry?: string,
-): Promise<Cascade> {
+export type CascadeCreateRequest = {
+  entry_id: number
+  exit_id: number
+  transport: CascadeTransport
+  entry_port?: number | null
+  exit_port?: number | null
+  entry_country?: string
+  request_id: string
+}
+
+export function createCascade(request: CascadeCreateRequest): Promise<Cascade> {
   return api<Cascade>('/api/cascades', {
     method: 'POST',
-    body: JSON.stringify({
-      entry_id: entryId, exit_id: exitId, transport, ...(transport === 'awg' ? ports : {}),
-      ...(entryCountry ? { entry_country: entryCountry } : {}),
-    }),
+    body: JSON.stringify(request),
   })
 }
 

@@ -9,6 +9,8 @@ from typing import Literal
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 RULE_TAG = "acontrol-manual-route-"
+HEALTH_HOST = "api.ipify.org"
+HEALTH_FALLBACK_HOST = "ipv4.icanhazip.com"
 
 
 class Route(BaseModel):
@@ -32,7 +34,7 @@ class Route(BaseModel):
         except UnicodeError:
             domain = ""
         labels = domain.split(".")
-        if domain == "api.ipify.org":
+        if domain == HEALTH_HOST:
             raise ValueError("This domain is reserved for cascade health checks")
         if (len(domain) <= 253 and len(labels) >= 2 and not labels[-1].isdigit()
                 and all(re.fullmatch(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?", label) for label in labels)):
@@ -51,14 +53,17 @@ class RouteUpdate(BaseModel):
 
 
 def xray_rules(routes: list[dict]) -> list[dict]:
-    if not routes:
-        return []
-    # The panel probes this destination from the VPN client namespace to
-    # detect accidental direct egress. Keep it on the exit path.
+    # The gateway must verify its exit even when the entry country's rules
+    # would send the IP service directly. Preserve user routes on the fallback.
     result = [{
-        "domain": ["full:api.ipify.org"],
+        "domain": [f"full:{HEALTH_HOST}"],
         "ruleTag": f"{RULE_TAG}health",
-        "inboundTag": ["tproxy"],
+        "inboundTag": ["tproxy", "check"],
+        "outboundTag": "exit",
+    }, {
+        "domain": [f"full:{HEALTH_FALLBACK_HOST}"],
+        "ruleTag": f"{RULE_TAG}health-fallback",
+        "inboundTag": ["check"],
         "outboundTag": "exit",
     }]
     for index, route in enumerate(routes):

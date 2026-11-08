@@ -1,4 +1,4 @@
-import type { Cascade, CascadeEncryption, CascadeImageTransport, CascadeTransport, CascadeTransportProbe } from './api'
+import type { Cascade, CascadeEncryption, CascadeImageTransport, CascadeRoute, CascadeTransport, CascadeTransportProbe, Server } from './api'
 
 export const DEFAULT_CASCADE_TRANSPORT: CascadeTransport = 'awg'
 
@@ -21,6 +21,25 @@ export function cascadeLocalRoute(result: { ru?: string; direct?: string; egress
   if (!ru || !direct || !egress || direct === egress) return 'unknown'
   if (ru === direct) return 'entry'
   return ru === egress ? 'exit' : 'unknown'
+}
+
+export function cascadeEntryCountry(cascade: Pick<Cascade, 'entry_country'>, entry?: Pick<Server, 'country'> | null): string {
+  return (cascade.entry_country || entry?.country || '').toUpperCase()
+}
+
+export function cascadeLocalExpected(routes: CascadeRoute[] = []): CascadeRoute['via'] {
+  const host = 'ip.nic.ru'
+  // Saved domain rules use Xray's domain: matcher in their original order.
+  return routes.find(({ destination }) => host === destination || host.endsWith(`.${destination}`))?.via ?? 'entry'
+}
+
+export function cascadeRequestId(): string {
+  // Web Crypto's randomUUID is unavailable on panels served over plain HTTP.
+  const bytes = crypto.getRandomValues(new Uint8Array(16))
+  bytes[6] = (bytes[6] & 0x0f) | 0x40
+  bytes[8] = (bytes[8] & 0x3f) | 0x80
+  const hex = Array.from(bytes, byte => byte.toString(16).padStart(2, '0')).join('')
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`
 }
 
 export function cascadeClientExitConfirmed({ client, direct, egress }: { client?: string; direct?: string; egress?: string }): boolean {

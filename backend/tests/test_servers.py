@@ -1,3 +1,5 @@
+import asyncio
+
 import httpx
 
 NEW_SERVER = {
@@ -120,6 +122,33 @@ async def test_create_validates_port(client: httpx.AsyncClient, auth_headers) ->
     bad = dict(NEW_SERVER, ssh_port=99999)
     response = await client.post("/api/servers", json=bad, headers=auth_headers)
     assert response.status_code == 422
+
+
+async def test_cascade_onboarding_reuses_one_exact_ssh_endpoint(client: httpx.AsyncClient, auth_headers) -> None:
+    url = "/api/servers?reuse_ssh_endpoint=true"
+    original = dict(NEW_SERVER, host="node.example.com")
+    retry = dict(original, host="NODE.EXAMPLE.COM", group_name="Another group")
+    first, second = await asyncio.gather(
+        client.post(url, json=original, headers=auth_headers),
+        client.post(url, json=retry, headers=auth_headers),
+    )
+    assert sorted((first.status_code, second.status_code)) == [200, 201]
+    assert first.json()["id"] == second.json()["id"]
+    assert first.json()["group_name"] == second.json()["group_name"]
+    for changes in ({"ssh_port": 2222}, {"ssh_user": "operator"}):
+        response = await client.post(url, json=original | changes, headers=auth_headers)
+        assert response.status_code == 201
+        assert response.json()["id"] != first.json()["id"]
+
+
+async def test_cascade_onboarding_refuses_ambiguous_legacy_endpoints(client: httpx.AsyncClient, auth_headers) -> None:
+    for name in ("Node one", "Node two"):
+        created = await client.post("/api/servers", json=dict(NEW_SERVER, name=name), headers=auth_headers)
+        assert created.status_code == 201
+    response = await client.post("/api/servers?reuse_ssh_endpoint=true", json=NEW_SERVER, headers=auth_headers)
+    assert response.status_code == 409
+    listed = await client.get("/api/servers", headers=auth_headers)
+    assert [server["name"] for server in listed.json()] == ["Node one", "Node two"]
 
 
 async def test_delete_default_keeps_key(client: httpx.AsyncClient, auth_headers) -> None:

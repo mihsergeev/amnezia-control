@@ -295,6 +295,60 @@ async def test_physical_exit_alias_and_reversed_roles_cannot_bypass_locks(
         assert result.status_code==409
 
 
+async def test_concurrent_aliases_of_the_same_physical_exit_conflict(
+    client, auth_headers, session_factory, monkeypatch,
+):
+    a, b, exit_id, alias_id = await setup_nodes(session_factory)
+    async with session_factory() as session:
+        (await session.get(Server, alias_id)).host = (await session.get(Server, exit_id)).host
+        await session.commit()
+    remote_mocks(monkeypatch)
+    barrier = asyncio.Barrier(2)
+    spawns = []
+
+    async def addresses(conn, entry, exit_):
+        await asyncio.wait_for(barrier.wait(), timeout=5)
+        return entry.host, exit_.host
+
+    monkeypatch.setattr(api, "_addresses", addresses)
+    monkeypatch.setattr(cascadejob, "spawn", lambda _app, cid: spawns.append(cid))
+    results = await asyncio.gather(*(
+        client.post("/api/cascades", headers=auth_headers, json={
+            "entry_id": entry, "exit_id": exit_, "transport": "gre", "entry_country": "DE",
+        })
+        for entry, exit_ in ((a, exit_id), (b, alias_id))
+    ))
+    assert sorted(result.status_code for result in results) == [202, 409]
+    async with session_factory() as session:
+        assert [row.id for row in await session.scalars(select(Cascade))] == spawns
+    assert len(spawns) == 1
+
+
+async def test_create_request_replay_returns_existing_job(
+    client, auth_headers, session_factory, monkeypatch,
+):
+    entry, exit_, other, _ = await setup_nodes(session_factory)
+    remote_mocks(monkeypatch)
+    spawns = []
+    monkeypatch.setattr(cascadejob, "spawn", lambda _app, cid: spawns.append(cid))
+    monkeypatch.setattr(cascadejob, "running", lambda cid: cid in spawns)
+    payload = {"entry_id": entry, "exit_id": exit_, "transport": "gre", "entry_country": "DE",
+               "request_id": "da93395d-a562-46b5-8f4a-515cf9bdffbe"}
+    first, retry = await asyncio.gather(*(
+        client.post("/api/cascades", headers=auth_headers, json=payload) for _ in range(2)
+    ))
+    assert first.status_code == retry.status_code == 202
+    cid = first.json()["id"]
+    assert retry.json()["id"] == cid and spawns == [cid]
+    async with session_factory() as session:
+        (await session.get(Cascade, cid)).status = "ready"
+        await session.commit()
+    replay = await client.post("/api/cascades", headers=auth_headers, json=payload)
+    assert replay.status_code == 202 and replay.json()["status"] == "ready"
+    conflict = await client.post("/api/cascades", headers=auth_headers, json=payload | {"exit_id": other})
+    assert conflict.status_code == 409 and spawns == [cid]
+
+
 async def test_delete_one_shared_pair_keeps_sibling_metadata_and_exit_script_scoped(
     client, auth_headers, session_factory, monkeypatch
 ):

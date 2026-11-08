@@ -314,7 +314,7 @@ async def test_install_uses_entry_country_before_collector_runs(
     assert lookups == ([lookup_ip] if lookup_ip else [])
     assert len(entry_scripts) == 1
     config_line = next(line for line in entry_scripts[0].splitlines()
-                       if line.endswith(f"|| fail 'write {cascade.DIR}/config/config.json'"))
+                       if line.endswith(f"|| fail 'write {cascade.DIR}/gateway-transaction/config/config.json'"))
     config = json.loads(base64.b64decode(config_line.split()[1]))
     assert {"ip": ["geoip:ru"], "outboundTag": "direct"} in config["routing"]["rules"]
     assert "ip.nic.ru" in entry_scripts[0] and "CASCADE_DIRECT=" in entry_scripts[0]
@@ -604,8 +604,8 @@ def test_local_rules_follow_entry_country() -> None:
     assert "geosite:category-ir" in json.dumps(rules("IR"))
     ru = json.dumps(rules("RU"))
     assert "geosite:ru-blocked" in ru and "geoip:ru" in ru and "domain:xn--p1ai" in ru
-    # страна неизвестна: только блок частных адресов, остальное на выход
-    assert rules("") == [{"ip": ["geoip:private"], "outboundTag": "block"}]
+    assert rules("")[0] == {"ip": ["geoip:private"], "outboundTag": "block"}
+    assert all(rule["outboundTag"] == "exit" for rule in rules("")[1:])
 
 
 def test_local_ip_check_only_where_known() -> None:
@@ -614,7 +614,7 @@ def test_local_ip_check_only_where_known() -> None:
     assert "RU=$(client_https ip.nic.ru " in ru
     assert not any("ip.nic.ru" in line and "--socks5" in line for line in ru.splitlines())
     kz = cascade.build_check_command("KZ")
-    assert "ip.nic.ru" not in kz and 'RU=""' in kz and "CASCADE_RU=$RU" in kz
+    assert "ip.nic.ru" not in kz and "CASCADE_RU=" not in kz
     script = cascade.build_entry_script("gre", "198.51.100.20", 3, VLESS, "KZ")
     assert "ip.nic.ru" not in script
     install_ru = cascade.build_entry_script("gre", "198.51.100.20", 3, VLESS, "RU")
@@ -642,7 +642,7 @@ def test_lost_gre_rule_drops_instead_of_leaking() -> None:
 def test_heal_service_installed_and_removed() -> None:
     script = cascade.build_entry_script("vless", "198.51.100.20", 3, VLESS)
     assert "/etc/systemd/system/acontrol-cascade-heal.service" in script
-    assert "systemctl restart acontrol-cascade-heal.service" in script
+    assert "systemctl enable --now acontrol-cascade-heal.service" in script
     unit = cascade._fill(cascade._HEAL_UNIT)
     assert f"{cascade.DIR}/cascade-tproxy.sh heal" in unit and f"{cascade.DIR}/gre-tun.sh heal" in unit
     assert "acontrol-cascade-heal.service" in cascade.build_remove_entry()
@@ -650,33 +650,43 @@ def test_heal_service_installed_and_removed() -> None:
 
 def test_check_looks_from_inside_the_vpn_container() -> None:
     cmd = cascade.build_check_command()
-    assert 'nsenter -t "$P" -n curl' in cmd and 'echo "CASCADE_CLIENT=$CL"' in cmd
+    assert 'nsenter -t "$P" -n curl' in cmd and 'echo "CASCADE_CLIENT=$(client_https' in cmd
     assert "CASCADE_DIRECT=" in cmd
     assert "fwmark 0x100 lookup 241" in cmd and "fwmark 0x200 lookup 242" in cmd
 
 
 def test_health_catches_a_leak() -> None:
     base = ("CASCADE_GW=yes\nCASCADE_TPROXY=active\nCASCADE_TUN=UNKNOWN\nCASCADE_RULE=yes\n"
-            "CASCADE_GRERULE=yes\nCASCADE_EGRESS=198.51.100.20\n")
+            "CASCADE_GRERULE=yes\nCASCADE_EGRESS=198.51.100.20\nCASCADE_DIRECT=203.0.113.10\n")
 
     def health(text, transport="vless"):
         kv = cascade.parse_kv(text)
         return cascade.health(transport, kv, cascade.check_result(kv))
 
     assert health(base + "CASCADE_CLIENT=198.51.100.20\n") == (True, "")
-    # из контейнера спросить нечем - не судим
-    assert health(base + "CASCADE_CLIENT=\n") == (True, "")
-    assert health(base + "CASCADE_CLIENT=203.0.113.10\n") == (True, "")
-    # адрес входа известен: обход - только если клиенты выходят именно с него
-    assert health(base + "CASCADE_DIRECT=203.0.113.10\nCASCADE_CLIENT=203.0.113.10\n") == (
+    assert health(base + "CASCADE_CLIENT=\n") == (
+        False, "из сети клиентов не удалось получить внешний адрес")
+    assert health(base + "CASCADE_CLIENT=203.0.113.10\n") == (
         False, "клиенты выходят в интернет мимо выхода")
-    assert health(base + "CASCADE_DIRECT=203.0.113.10\nCASCADE_CLIENT=198.51.100.99\n") == (True, "")
-    assert health(base + "CASCADE_DIRECT=198.51.100.20\nCASCADE_CLIENT=198.51.100.20\n") == (True, "")
+    assert health(base + "CASCADE_CLIENT=198.51.100.99\n") == (
+        False, "внешние адреса клиентов и шлюза различаются")
+    assert health(base + "CASCADE_DIRECT=198.51.100.20\nCASCADE_CLIENT=198.51.100.20\n") == (
+        False, "адрес выхода не удалось отличить от прямого подключения")
     no_rule = base.replace("CASCADE_RULE=yes", "CASCADE_RULE=no")
     assert health(no_rule)[1] == "пропало правило маршрутизации в шлюз"
     no_gre_rule = base.replace("CASCADE_GRERULE=yes", "CASCADE_GRERULE=no")
     assert health(no_gre_rule, "gre")[1] == "пропало правило маршрутизации в шлюз"
-    assert health(no_gre_rule, "vless") == (True, "")
+    assert health(no_gre_rule + "CASCADE_CLIENT=198.51.100.20\n", "vless") == (True, "")
+
+
+def test_fallback_compares_only_addresses_from_the_same_service():
+    primary = {"egress": "203.0.113.10", "client": "203.0.113.10", "direct": "203.0.113.10"}
+    fallback = {"altegress": "198.51.100.20", "altclient": "198.51.100.20", "altdirect": "203.0.113.11"}
+    result = cascade.check_result(primary | fallback)
+    assert result["client"] == result["egress"] == "198.51.100.20"
+    assert result["direct"] == "203.0.113.11"
+    assert cascade.egress_confirmed(result)
+    assert not cascade.egress_confirmed(cascade.check_result(primary | fallback | {"altdirect": ""}))
 
 
 class _Conn:

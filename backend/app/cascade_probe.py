@@ -572,12 +572,12 @@ def xray_configs(params: dict, peer_ip: str, exit_port: int, entry_port: int) ->
     return entry_config, exit_config
 
 
-async def _port(conn, requested: int | None, protocol: str, candidates=()) -> int:
+async def _port(conn, requested: int | None, protocol: str, candidates=(), reserved=()) -> int:
     choices = (requested,) if requested is not None else candidates or tuple(
         secrets.randbelow(20000) + 30000 for _ in range(12)
     )
     for port in choices:
-        if await deploy.port_owner(conn, port, protocol) is None:
+        if port not in reserved and await deploy.port_owner(conn, port, protocol) is None:
             return port
     raise PrerequisiteError("Для проверки нет свободного порта")
 
@@ -639,7 +639,8 @@ async def _close(process) -> bool:
 
 async def run(exit_conn, entry_conn, entry_ip: str, exit_ip: str, transport: str,
               entry_port: int | None = None, exit_port: int | None = None,
-              entry_source_ip: str | None = None, *, prepare_missing_image: bool = False) -> dict:
+              entry_source_ip: str | None = None, *, prepare_missing_image: bool = False,
+              reserved_exit_ports=()) -> dict:
     """One measurement with two independently expiring remote leases."""
     if transport not in {"awg", "vless", "gre"}:
         raise ValueError("Unknown transport")
@@ -669,7 +670,8 @@ async def run(exit_conn, entry_conn, entry_ip: str, exit_ip: str, transport: str
             entry_port = await _port(entry_conn, entry_port if transport == "awg" else None, protocol,
                                      cascade_awg.PORTS if transport == "awg" else ())
             exit_port = await _port(exit_conn, exit_port if transport == "awg" else None, protocol,
-                                    cascade.VLESS_PORTS if transport == "vless" else cascade_awg.PORTS)
+                                    cascade.VLESS_PORTS if transport == "vless" else cascade_awg.PORTS,
+                                    reserved_exit_ports)
         if prepare_missing_image:
             prepare_config = _prepare_config(transport, images, xray_version)
             statuses = await asyncio.gather(_prepare(exit_conn, prepare_config), _prepare(entry_conn, prepare_config),

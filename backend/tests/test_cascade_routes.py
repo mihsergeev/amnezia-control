@@ -13,12 +13,14 @@ def test_route_normalization_and_order():
         {"destination": "198.51.100.0/24", "via": "entry"},
     ])
     rules = cascade_routes.xray_rules([route.model_dump() for route in update.routes])
-    assert [(rule.get("domain"), rule.get("ip"), rule["outboundTag"]) for rule in rules[1:]] == [
+    assert [(rule.get("domain"), rule.get("ip"), rule["outboundTag"]) for rule in rules[2:]] == [
         (["domain:xn--bcher-kva.example"], None, "direct"),
         (None, ["192.0.2.5"], "exit"),
         (None, ["198.51.100.0/24"], "direct"),
     ]
-    assert all(rule["inboundTag"] == ["tproxy"] for rule in rules)
+    assert rules[0]["inboundTag"] == ["tproxy", "check"]
+    assert rules[1]["inboundTag"] == ["check"]
+    assert all(rule["inboundTag"] == ["tproxy"] for rule in rules[2:])
 
 
 @pytest.mark.parametrize("destination", [
@@ -48,8 +50,8 @@ def test_gateway_preserves_private_block_and_defaults(transport):
         transport, "192.0.2.5", params | {"routes": routes}, country="ru"))
     rules = updated["routing"]["rules"]
     assert rules[0] == original["routing"]["rules"][0]
-    assert rules[1:3] == cascade_routes.xray_rules(routes)
-    assert rules[3:] == original["routing"]["rules"][1:]
+    assert rules[1:4] == cascade_routes.xray_rules(routes)
+    assert rules[4:] == original["routing"]["rules"][3:]
     assert updated["outbounds"] == original["outbounds"]
     assert updated["inbounds"] == original["inbounds"]
 

@@ -86,13 +86,15 @@ owner() {
     [ ! -e /lib65/scripts/acontrol-awg-link/node.json ] || return 1
     [ ! -e /etc/systemd/system/acontrol-awg-link.service ] || return 1
   fi
-  L=$(docker container inspect -f '{{ index .Config.Labels "@LABEL@" }}' "$CONT" 2>/dev/null || true)
-  if docker container inspect "$CONT" >/dev/null 2>&1; then
-    [ "$L" = "$CID" ] || return 1
+  NAMES=$(docker container ls -a --format '{{.Names}}') || return 1
+  OWNED=no
+  if printf '%s\n' "$NAMES" | grep -Fxq "$CONT"; then
+    [ "$(docker container inspect -f '{{ index .Config.Labels "@LABEL@" }}' "$CONT")" = "$CID" ] || return 1
     [ -z "$EXPECTED_OWNER" ] || [ "$(docker container inspect -f '{{ index .Config.Labels "org.amnezia.control.owner" }}' "$CONT")" = "$EXPECTED_OWNER" ] || return 1
+    OWNED=yes
   fi
   if ip link show "$IF" >/dev/null 2>&1; then
-    [ "$L" = "$CID" ] || return 1
+    [ "$OWNED" = yes ] || return 1
     [ "$(docker container inspect -f '{{.State.Running}}' "$CONT")" = true ] || return 1
     if [ "$(docker container inspect -f '{{.State.Running}}' "$CONT")" = true ]; then
       PUB=$(docker exec "$CONT" awg show "$IF" public-key 2>/dev/null || true)
@@ -125,9 +127,9 @@ NFT
   fi
 }
 up() {
-  guard
   owner || die
-  if ! docker container inspect "$CONT" >/dev/null 2>&1; then
+  guard
+  if [ "$OWNED" != yes ]; then
     # A host listener cannot be a Docker port publisher with host networking.
     [ -z "$(ss -lnuH "sport = :$PORT")" ] || die
     docker run -d --name "$CONT" --label "$LABEL=$CID" @OWNER_LABEL@ --restart always --network host \
@@ -138,9 +140,8 @@ up() {
       @IMAGE@ -f "$IF" >/dev/null 2>&1 || die
   else
     if [ "$(docker container inspect -f '{{.State.Running}}' "$CONT")" != true ]; then
-      ip link delete "$IF" 2>/dev/null || true
+      docker start "$CONT" >/dev/null 2>&1 || die
     fi
-    docker start "$CONT" >/dev/null 2>&1 || die
   fi
   for n in $(seq 1 20); do
     docker exec "$CONT" awg show "$IF" >/dev/null 2>&1 && break
@@ -220,17 +221,9 @@ down() {
   fi
   if command -v ufw >/dev/null; then ufw --force delete allow from "$PEER" to any port "$PORT" proto udp >/dev/null 2>&1 || true; fi
 }
-recreate() {
-  guard
-  owner || die
-  remove_container
-  ip link delete "$IF" 2>/dev/null || true
-  up
-}
 case "${1:-}" in
-  guard) guard; owner || die ;;
+  guard) owner || die; guard ;;
   up|heal) up ;;
-  recreate) recreate ;;
   status) status ;;
   down) down ;;
   *) die ;;
@@ -361,11 +354,11 @@ WantedBy=timers.target
              "sudo install -d -m 755 /lib65/scripts",
              "EGRESS=$(ip -4 route show default | awk '/^default/ {print $5; exit}')",
              '[ -n "$EGRESS" ] || fail "AWG egress interface"',
-             _put(f"{BASE}/node.env.next", env),
-             f"printf 'EGRESS=%q\\n' \"$EGRESS\" | sudo tee -a {BASE}/node.env.next >/dev/null",
-             f"sudo mv -f {BASE}/node.env.next {BASE}/node.env || fail 'AWG environment'",
-             _put(f"{BASE}/link.conf", config(role, params)),
              _put(SCRIPT, runtime_script(cascade_id if scoped_exit else None, params.get("runtime_owner", "")), "700"),
+             _put(f"{BASE}/link.conf", config(role, params)),
+             _put(f"{BASE}/node.env.next", env),
+             f"printf 'EGRESS=%q\\n' \"$EGRESS\" | sudo tee -a {BASE}/node.env.next >/dev/null || fail 'AWG environment'",
+             f"sudo mv -f {BASE}/node.env.next {BASE}/node.env || fail 'AWG environment'",
              _put(f"{BASE}/build/Dockerfile", deploy._dockerfile_v3()),
              _put(f"{BASE}/build/start.sh", "#!/bin/sh\nexit 1\n", "700"),
              f"BUILD={BASE}/build; IMG={IMAGE}; CONT={CONTAINER}",
@@ -377,8 +370,6 @@ WantedBy=timers.target
               "sudo systemctl daemon-reload",
               f"sudo systemctl enable {UNIT} {TIMER} >/dev/null 2>&1 || fail 'AWG enable'",
               f"sudo {SCRIPT} guard || fail 'AWG guard'",
-              # Recreate only the owned userspace device, preserving its keys.
-              f"sudo {SCRIPT} recreate || fail 'AWG recreate'",
               f"sudo systemctl restart {UNIT} || fail 'AWG start'",
               f"sudo systemctl start {TIMER} || fail 'AWG timer'",
               "if command -v ufw >/dev/null 2>&1; then "
@@ -391,7 +382,7 @@ WantedBy=timers.target
     return lines
 
 
-def remove(cascade_id: int, *, scoped_exit: bool = False) -> str:
+def remove(cascade_id: int, *, scoped_exit: bool = False, owner: str = "") -> str:
     from app import cascade
 
     paths = resources(cascade_id if scoped_exit else None)
@@ -401,7 +392,12 @@ def remove(cascade_id: int, *, scoped_exit: bool = False) -> str:
 {cascade.stop_units(TIMER, paths['heal'], UNIT)}
 if sudo test -f {BASE}/node.env; then
   sudo grep -qx 'CID={int(cascade_id)}' {BASE}/node.env || exit 73
-  sudo {SCRIPT} down || exit 73
+  if sudo test -x {SCRIPT}; then
+    sudo {SCRIPT} down || exit 73
+  else
+    sudo bash -s -- down <<'AC_CASCADE_AWG_RUNTIME' || exit 73
+{runtime_script(cascade_id if scoped_exit else None, owner)}AC_CASCADE_AWG_RUNTIME
+  fi
 fi
 sudo rm -f /etc/systemd/system/{UNIT} /etc/systemd/system/{TIMER} /etc/systemd/system/{paths['heal']} || exit 73
 sudo rm -rf {BASE} || exit 73

@@ -4,6 +4,15 @@ All notable changes to Amnezia Control are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.84.22] - 2026-11-08
+
+- Verify cascade egress from both the gateway and the VPN client network. Report missing, mismatched, or indistinguishable routes and avoid premature recovery alerts.
+- Preserve the previous gateway if a replacement fails, and make cascade installation and cleanup safe to retry.
+- Prevent duplicate cascade creation after a lost response and reject conflicting reservations made through aliases of the same physical server.
+- Reuse an SSH server record when retrying setup, and keep its selected port and the wizard's submitted settings.
+- Respect reserved exit ports when testing transports, and support native WireGuard and OpenVPN in the server egress check.
+- Use the saved entry country and manual route rules when explaining cascade checks and routing.
+
 ## [0.84.21] - 2026-11-08
 
 - Reject unsupported entry country codes and require a code before retrying when automatic detection fails.

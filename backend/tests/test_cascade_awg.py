@@ -55,7 +55,7 @@ def test_native_scripts_are_valid_shell_and_never_install_gre():
     assert "AWG handshake or routing" in entry
     assert entry.index("AWG handshake or routing") < entry.index("[3/5]")
     assert entry.index(f"sudo {cascade_awg.SCRIPT} guard") < entry.index(
-        f"sudo {cascade_awg.SCRIPT} recreate")
+        f"sudo systemctl restart {cascade_awg.UNIT}")
     assert "AWG operation refused" not in entry  # runtime is encoded, not printed
     gateway = json.loads(cascade.entry_gateway_config("awg", p["exit_ip"], p))
     outbound = next(x for x in gateway["outbounds"] if x["tag"] == "exit")
@@ -96,6 +96,7 @@ def _status(tmp_path, monkeypatch, *, age=20, guard=True, allowed="0.0.0.0/0", f
         f'echo "docker $*" >> "{(tmp_path / "calls").as_posix()}"\n'
         "case \"$*\" in\n"
         + ("*setconf*) exit 1;;\n" if fail_config else "") +
+        "'container ls '*) echo acontrol-cascade-awg;;\n"
         "*'index .Config.Labels'*) echo 3;;\n"
         "*'.State.Running'*) echo true;;\n"
         "*public-key*) echo own-public;;\n"
@@ -150,15 +151,16 @@ def test_runtime_proof_distinguishes_encryption_from_health(tmp_path, monkeypatc
 @pytest.mark.skipif(shutil.which("bash") is None, reason="нужен bash")
 def test_failed_device_configuration_leaves_kill_switch_installed(tmp_path, monkeypatch):
     calls = _status(tmp_path, monkeypatch, fail_config=True)
-    assert calls.index("iptables -w -t filter -C OUTPUT") < calls.index("docker start")
-    assert calls.index("nft -f -") < calls.index("docker start")
+    assert calls.index("iptables -w -t filter -C OUTPUT") < calls.index("awg setconf")
+    assert "docker start" not in calls and "docker rm" not in calls
+    assert calls.index("nft -f -") < calls.index("awg setconf")
     assert "docker exec acontrol-cascade-awg awg setconf" in calls
     assert "delete table" not in calls and "-D OUTPUT" not in calls
 
 
 def test_health_rejects_missing_awg_proof_and_stale_encrypted_gre():
     kv = {"gw": "yes", "tproxy": "active", "rule": "yes", "awg": "yes"}
-    result = {"egress": "198.51.100.20"}
+    result = {"egress": "198.51.100.20", "client": "198.51.100.20", "direct": "203.0.113.10"}
     assert cascade.health("awg", kv, result) == (True, "")
     assert cascade.health("awg", kv | {"awg": "no"}, result)[0] is False
     assert cascade.health("gre", kv | {"tun": "UNKNOWN", "linkhealth": "no"}, result)[0] is False

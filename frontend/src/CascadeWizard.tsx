@@ -4,11 +4,13 @@ import {
   ApiError,
   createCascade,
   getCascade,
+  listCascades,
   parseCheckInfo,
   protocolsFromContainers,
   probeCascadeTransport,
   reinstallCascade,
   type Cascade,
+  type CascadeCreateRequest,
   type CascadeImageTransport,
   type CascadeTransportProbe,
   type CascadeTransport,
@@ -17,7 +19,8 @@ import {
 import { copyText } from './clipboard'
 import { countryFlag, formatBytes } from './format'
 import {
-  cascadeLocalRoute, cascadeMeasurement, cascadePort, cascadeTransportLabel, DEFAULT_CASCADE_TRANSPORT, formatProbeMetric,
+  cascadeEntryCountry, cascadeLocalExpected, cascadeLocalRoute, cascadeMeasurement, cascadePort, cascadeRequestId,
+  cascadeTransportLabel, DEFAULT_CASCADE_TRANSPORT, formatProbeMetric,
   probeRowTone, PROBE_TRANSPORTS, queuedProbeRows, runTransportProbes, testedAwgPorts,
   type TransportProbeRow, type TransportProbeRows,
 } from './cascadeUi'
@@ -46,6 +49,8 @@ const STEPS: { key: Step; label: string }[] = [
   { key: 'link', label: '3. Связь' },
   { key: 'install', label: '4. Установка' },
 ]
+
+const EMPTY_SERVER_FORM = { host: '', port: 22, user: 'root', password: '' }
 
 function TransportProbeStatus({ row }: { row: TransportProbeRow }) {
   const { t, lang } = useI18n()
@@ -126,7 +131,7 @@ export function CascadeWizard({
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   // новый сервер: по паролю (панель сама ставит ключ) или скриптом
-  const [nf, setNf] = useState({ host: '', port: 22, user: 'root', password: '' })
+  const [nf, setNf] = useState(EMPTY_SERVER_FORM)
   const [nfMode, setNfMode] = useState<'password' | 'script'>('password')
   const [script, setScript] = useState<{ server: Server; text: string } | null>(null)
   const [copied, setCopied] = useState(false)
@@ -142,6 +147,7 @@ export function CascadeWizard({
   const [entryPort, setEntryPort] = useState('')
   const [exitPort, setExitPort] = useState('')
   const [cascade, setCascade] = useState<Cascade | null>(resume ?? null)
+  const createRequests = useRef(new Map<string, CascadeCreateRequest>())
   const [extra, setExtra] = useState<Server[]>([])
   const timer = useRef<number | undefined>(undefined)
   const [pollTick, setPollTick] = useState(0)
@@ -155,11 +161,12 @@ export function CascadeWizard({
   const invalidCountry = entryCountry !== '' && !validCountry
   const retryNeedsCountry = countryError && !validCountry
   const localRoute = cascade ? cascadeLocalRoute(cascade.result) : 'unknown'
+  const localExpected = cascadeLocalExpected(cascade?.routes)
 
   const handleError = useCallback(
     (err: unknown) => {
       if (err instanceof ApiError && err.status === 401) onUnauthorized()
-      else setError(err instanceof Error ? err.message : t('Ошибка'))
+      else setError(err instanceof Error ? t(err.message) : t('Ошибка'))
     },
     [onUnauthorized, t],
   )
@@ -190,42 +197,54 @@ export function CascadeWizard({
   const candidates = (exclude: number | null, role: 'entry' | 'exit') =>
     all.filter((s) => s.id !== exclude && s.last_check_ok === true && cascadeServerEligible(s, cascades, role))
 
+  function eligibleServer(server: Server, currentCascades: Cascade[]): boolean {
+    const role = step === 'entry' ? 'entry' : 'exit'
+    if (server.id !== (role === 'entry' ? exitId : entryId) && cascadeServerEligible(server, currentCascades, role)) return true
+    setError(t('Сервер недоступен для выбранной роли в каскаде.'))
+    return false
+  }
+
+  function checkedServer(s: Server): Server | null {
+    if (s.last_check_ok === true) return s
+    const reason = parseCheckInfo(s)?.error
+    const target = `${s.ssh_user}@${s.host.includes(':') ? `[${s.host}]` : s.host}:${s.ssh_port}`
+    const message = t('Не удалось подключиться по SSH к {target}.', { target })
+    setError(reason ? `${message} ${t(reason)}` : message)
+    return null
+  }
+
   async function addServer(groupName: string): Promise<Server | null> {
     setBusy(true)
     setError(null)
+    const target = { host: nf.host.trim(), ssh_port: nf.port, ssh_user: nfMode === 'password' ? nf.user.trim() : defaultUser }
+    let server: Server | null = null
     try {
-      const created = await api<Server>('/api/servers', {
+      server = await api<Server>('/api/servers?reuse_ssh_endpoint=true', {
         method: 'POST',
-        body: JSON.stringify({
-          name: nf.host.trim(),
-          host: nf.host.trim(),
-          ssh_port: nf.port,
-          ssh_user: nfMode === 'password' ? nf.user.trim() : defaultUser,
-          note: '',
-          group_name: groupName,
-        }),
+        body: JSON.stringify({ ...target, name: target.host, note: '', group_name: groupName }),
       })
-      onChanged()
+      const currentCascades = await listCascades()
+      if (!eligibleServer(server, currentCascades)) return null
+      const checked = await api<Server>(`/api/servers/${server.id}/check`, { method: 'POST' })
+      if (checked.last_check_ok === true) return eligibleServer(checked, currentCascades) ? checked : null
       if (nfMode === 'script') {
         const { script: text } = await api<{ script: string }>(
-          `/api/servers/${created.id}/setup-script`,
+          `/api/servers/${server.id}/setup-script`,
         )
-        setScript({ server: created, text })
+        setScript({ server, text })
         setCopied(false)
         return null
       }
-      const ready = await api<Server>(`/api/servers/${created.id}/bootstrap`, {
+      const ready = await api<Server>(`/api/servers/${server.id}/bootstrap`, {
         method: 'POST',
         body: JSON.stringify({ password: nf.password, become_password: null }),
       })
-      setExtra((x) => [...x, ready])
-      setNf({ host: '', port: 22, user: 'root', password: '' })
-      setTab('panel')
-      return ready
+      return eligibleServer(ready, currentCascades) ? checkedServer(ready) : null
     } catch (err) {
       handleError(err)
       return null
     } finally {
+      if (server) onChanged()
       setBusy(false)
     }
   }
@@ -238,17 +257,7 @@ export function CascadeWizard({
     try {
       const s = await api<Server>(`/api/servers/${script.server.id}/check`, { method: 'POST' })
       onChanged()
-      if (s.last_check_ok !== true) {
-        const reason = parseCheckInfo(s)?.error
-        const target = `${s.ssh_user}@${s.host.includes(':') ? `[${s.host}]` : s.host}:${s.ssh_port}`
-        const message = t('Не удалось подключиться по SSH к {target}.', { target })
-        setError(reason ? `${message} ${t(reason)}` : message)
-        return null
-      }
-      setExtra((x) => [...x, s])
-      setScript(null)
-      setTab('panel')
-      return s
+      return eligibleServer(s, await listCascades()) ? checkedServer(s) : null
     } catch (err) {
       handleError(err)
       return null
@@ -318,15 +327,19 @@ export function CascadeWizard({
     if (step === 'entry' || step === 'exit') {
       let picked = step === 'entry' ? entry : exit
       if (tab === 'new') {
-        picked = script ? await scriptDone() : await addServer(step === 'exit' ? entry?.group_name ?? '' : '')
-        if (!picked) return
-        if (step === 'entry') pickEntry(picked.id)
-        else setExitId(picked.id)
+        const added = script ? await scriptDone() : await addServer(step === 'exit' ? entry?.group_name ?? '' : '')
+        if (!added) return
+        setExtra((current) => [...current.filter((server) => server.id !== added.id), added])
+        if (step === 'entry') pickEntry(added.id)
+        else setExitId(added.id)
+        picked = added
       }
       if (!picked) return
+      setNf(EMPTY_SERVER_FORM)
+      setScript(null)
+      setTab('panel')
       if (step === 'entry') {
         setStep('exit')
-        setTab('panel')
       } else {
         setStep('link')
         void runProbe(entryId, picked.id)
@@ -341,18 +354,38 @@ export function CascadeWizard({
       setError(t('UDP-порт должен быть целым числом от 1 до 65535 или пустым для автовыбора.'))
       return
     }
+    const requestedPorts = { entry_port: ports.entry_port ?? null, exit_port: ports.exit_port ?? null }
+    const form: Omit<CascadeCreateRequest, 'request_id'> = {
+      entry_id: entryId,
+      exit_id: exitId,
+      transport,
+      ...(transport === 'awg' ? requestedPorts : {}),
+      ...(entryCountry ? { entry_country: entryCountry } : {}),
+    }
+    const signature = JSON.stringify(form)
     setBusy(true)
     setError(null)
     try {
-      const awgPorts = transport === 'awg'
-        ? testedAwgPorts({ entry_port: ports.entry_port ?? null, exit_port: ports.exit_port ?? null }, probeRows.awg.result)
-        : undefined
-      const c = await createCascade(entryId, exitId, transport, awgPorts, entryCountry)
+      // After an ambiguous response, a fresh probe must not change the sent ports.
+      const request = createRequests.current.get(signature) ?? {
+        ...form,
+        ...(transport === 'awg' ? testedAwgPorts(requestedPorts, probeRows.awg.result) : {}),
+        request_id: cascadeRequestId(),
+      }
+      createRequests.current.set(signature, request)
+      const c = await createCascade(request)
       setCascade(c)
-      setStep('install')
+      setStep(c.status === 'ready' ? 'done' : 'install')
       onChanged()
     } catch (err) {
-      handleError(err)
+      if (err instanceof TypeError || err instanceof ApiError && (err.status === 408 || err.status >= 500)) {
+        const message = t('Ответ на создание каскада не получен. Нажмите «Собрать каскад» еще раз, чтобы продолжить.')
+        setError(`${err.message}. ${message}`)
+        onChanged()
+      } else {
+        createRequests.current.delete(signature)
+        handleError(err)
+      }
     } finally {
       setBusy(false)
     }
@@ -443,7 +476,7 @@ export function CascadeWizard({
             <span className="srv-route-arrow">→</span>
           </>
         )}
-        {hop(entry, cascade?.entry_ip || probe?.entry_ip || '', named(entry, 'вход'), false, cascade?.entry_country)}
+        {hop(entry, cascade?.entry_ip || probe?.entry_ip || '', named(entry, 'вход'), false, cascade ? cascadeEntryCountry(cascade, entry) : entryCountry)}
         {step === 'link' ? (
           <div
             className={`cc-link cas-link ${
@@ -478,12 +511,14 @@ export function CascadeWizard({
         <div className="tabs">
           <button
             className={tab === 'panel' ? 'tab tab-active' : 'tab'}
+            disabled={busy}
             onClick={() => setTab('panel')}
           >
             {t('Уже в панели')}
           </button>
           <button
             className={tab === 'new' ? 'tab tab-active' : 'tab'}
+            disabled={busy}
             onClick={() => setTab('new')}
           >
             {t('Новый сервер')}
@@ -500,6 +535,7 @@ export function CascadeWizard({
                     <input
                       type="radio"
                       name={`cas-${kind}`}
+                      disabled={busy}
                       checked={value === s.id}
                       onChange={() => set(s.id)}
                     />
@@ -538,6 +574,7 @@ export function CascadeWizard({
                 <input
                   className="mono"
                   value={nf.host}
+                  disabled={busy}
                   onChange={(e) => setNf({ ...nf, host: e.target.value })}
                   placeholder="203.0.113.10"
                 />
@@ -547,6 +584,7 @@ export function CascadeWizard({
                 <input
                   type="number"
                   value={nf.port}
+                  disabled={busy}
                   onChange={(e) => setNf({ ...nf, port: Number(e.target.value) || 22 })}
                 />
               </label>
@@ -554,12 +592,14 @@ export function CascadeWizard({
             <div className="tabs">
               <button
                 className={nfMode === 'password' ? 'tab tab-active' : 'tab'}
+                disabled={busy}
                 onClick={() => setNfMode('password')}
               >
                 {t('Пароль')}
               </button>
               <button
                 className={nfMode === 'script' ? 'tab tab-active' : 'tab'}
+                disabled={busy}
                 onClick={() => setNfMode('script')}
               >
                 {t('Скрипт')}
@@ -573,6 +613,7 @@ export function CascadeWizard({
                     <input
                       className="mono"
                       value={nf.user}
+                      disabled={busy}
                       onChange={(e) => setNf({ ...nf, user: e.target.value })}
                     />
                   </label>
@@ -582,6 +623,7 @@ export function CascadeWizard({
                       type="password"
                       autoComplete="new-password"
                       value={nf.password}
+                      disabled={busy}
                       onChange={(e) => setNf({ ...nf, password: e.target.value })}
                     />
                   </label>
@@ -752,14 +794,15 @@ export function CascadeWizard({
                   {t('Проверка шлюза через выход показала адрес {ip}', { ip: cascade.result.egress })}
                 </div>
               )}
-              {((cascade.entry_country || entry?.country || '').toUpperCase() === 'RU' || cascade.result.ru) && (
+              {(cascadeEntryCountry(cascade, entry) === 'RU' || cascade.result.ru) && (
                 <div>
-                  {localRoute === 'entry' && <><span className="ok-text">✓</span>{' '}</>}
+                  {localRoute === localExpected && <><span className="ok-text">✓</span>{' '}</>}
                   {localRoute === 'entry'
                     ? t('Шлюз открыл проверочный сайт страны входа напрямую')
                     : localRoute === 'exit'
-                      ? t('Шлюз открыл проверочный сайт страны входа через выход')
-                      : t('Прямой маршрут для сайта страны входа не подтвержден')}
+                      ? localExpected === 'exit' ? t('Проверочный сайт страны входа идет через выход по ручному правилу')
+                        : t('Шлюз открыл проверочный сайт страны входа через выход')
+                      : t('Маршрут для сайта страны входа не подтвержден')}
                   {cascade.result.ru && <span className="muted"> · {t('адрес {ip}', { ip: cascade.result.ru })}</span>}
                 </div>
               )}

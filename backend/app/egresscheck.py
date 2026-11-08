@@ -29,7 +29,7 @@ _SCRIPT = r"""
 D=docker
 [ -w /var/run/docker.sock ] || [ -w /run/docker.sock ] || D="sudo -n docker"
 command -v curl >/dev/null 2>&1 || { echo "EC_ERROR=на сервере нет curl"; exit 0; }
-C=$($D ps --format '{{.Names}}' 2>/dev/null | grep -i '^amnezia' | grep -vx 'amnezia-dns' | head -1)
+@CONTAINER_SELECT@
 [ -n "$C" ] || { echo "EC_ERROR=нет VPN-контейнеров"; exit 0; }
 P=$($D inspect -f '{{.State.Pid}}' "$C" 2>/dev/null)
 [ -n "$P" ] && [ "$P" != 0 ] || { echo "EC_ERROR=контейнер $C не запущен"; exit 0; }
@@ -40,7 +40,7 @@ addr_of() { getent ahostsv4 "$1" | awk 'NR == 1 {print $1}'; }
 fetch() {
   h=$(host_of "$1"); a=$(addr_of "$h")
   [ -n "$a" ] || return 1
-  sudo -n nsenter -t "$P" -n curl -4 -sS -m @TIMEOUT@ --resolve "$h:443:$a" "$@"
+  sudo -n nsenter -t "$P" -n curl -4 -sS -m @TIMEOUT@ --noproxy '*' --resolve "$h:443:$a" "$@"
 }
 ip_from() { grep -oE '([0-9]{1,3}[.]){3}[0-9]{1,3}' | head -1; }
 echo "EC_EGRESS=$(fetch https://api.ipify.org 2>/dev/null | ip_from)"
@@ -58,6 +58,7 @@ def build_command(country: str = "") -> str:
     sites = " ".join(f"{name}={url}" for name, url in SITES)
     script = (
         _SCRIPT.replace("@TIMEOUT@", str(TIMEOUT))
+        .replace("@CONTAINER_SELECT@", "\n".join(cascade._client_container_select("$D")))
         .replace("@LOCAL@", local)
         .replace("@SITES@", sites)
     )

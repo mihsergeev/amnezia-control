@@ -1,7 +1,7 @@
 import json
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, HTTPException, Response, status
 from sqlalchemy import delete as sa_delete
 from sqlalchemy import func, select, update as sa_update
 
@@ -58,15 +58,28 @@ async def list_servers(_: CurrentUser, session: SessionDep) -> list[Server]:
     return list(result)
 
 
-@router.post("", response_model=ServerOut, status_code=status.HTTP_201_CREATED)
+@router.post("", response_model=ServerOut, status_code=status.HTTP_201_CREATED, responses={200: {"model": ServerOut}})
 async def create_server(
-    body: ServerCreate, user: CurrentUser, session: SessionDep
+    body: ServerCreate, response: Response, user: CurrentUser, session: SessionDep,
+    reuse_ssh_endpoint: bool = False,
 ) -> Server:
-    # новый сервер — в конец списка
-    max_pos = await session.scalar(select(func.max(Server.position)))
-    server = Server(**body.model_dump(), position=(max_pos or 0) + 1)
-    session.add(server)
-    await session.commit()
+    async with nodelock.hold("server-registration", 0):
+        if reuse_ssh_endpoint:
+            matches = list(await session.scalars(select(Server).where(
+                func.lower(Server.host) == body.host.lower(),
+                Server.ssh_port == body.ssh_port,
+                Server.ssh_user == body.ssh_user,
+            ).limit(2)))
+            if len(matches) > 1:
+                raise HTTPException(status.HTTP_409_CONFLICT, "В панели несколько записей с этим адресом SSH. Выберите сервер в панели.")
+            if matches:
+                response.status_code = status.HTTP_200_OK
+                return matches[0]
+        # новый сервер — в конец списка
+        max_pos = await session.scalar(select(func.max(Server.position)))
+        server = Server(**body.model_dump(), position=(max_pos or 0) + 1)
+        session.add(server)
+        await session.commit()
     await session.refresh(server)
     await audit.record(session, user.username, "server_create", server.name, server.host)
     return server

@@ -136,8 +136,11 @@ owner() {
     if ip link show "$IF" >/dev/null 2>&1; then
       ip -j -d link show "$IF" | python3 -c 'import ipaddress,json,sys;x=json.load(sys.stdin)[0];d=x.get("linkinfo",{});v=d.get("info_data",{});key=lambda n:int(n) if str(n).isdigit() else int(ipaddress.IPv4Address(n));assert d.get("info_kind")=="gre" and v.get("local")==sys.argv[2] and v.get("remote")==sys.argv[3] and key(v.get("ikey",0))==int(sys.argv[4]) and key(v.get("okey",0))==int(sys.argv[4]) and x.get("ifalias",sys.argv[1])==sys.argv[1]' "$OWNER" "$LOCAL" "$PEER" "$KEY" || exit 73
     fi
-  elif docker container inspect "$CONT" >/dev/null 2>&1; then
-    [ "$(docker container inspect -f '{{ index .Config.Labels "org.amnezia.control.owner" }}' "$CONT")" = "$OWNER" ] || exit 73
+  else
+    NAMES=$(docker container ls -a --format '{{.Names}}') || exit 73
+    if printf '%s\n' "$NAMES" | grep -Fxq "$CONT"; then
+      [ "$(docker container inspect -f '{{ index .Config.Labels "org.amnezia.control.owner" }}' "$CONT")" = "$OWNER" ] || exit 73
+    fi
   fi
 }
 rules() {
@@ -164,7 +167,8 @@ up() {
     ip route replace "$PEER_INNER/32" dev "$IF" src "$INNER"
     sysctl -qw "net.ipv4.conf.$IF.rp_filter=2" net.ipv4.ip_forward=1
   else
-    if docker container inspect "$CONT" >/dev/null 2>&1; then docker start "$CONT" >/dev/null
+    if printf '%s\n' "$NAMES" | grep -Fxq "$CONT"; then
+      if [ "$(docker container inspect -f '{{.State.Running}}' "$CONT")" != true ]; then docker start "$CONT" >/dev/null; fi
     else
       [ -z "$(ss -lntH "sport = :$PORT")" ] || exit 73
       docker run -d --name "$CONT" --label "org.amnezia.control.owner=$OWNER" --label "org.amnezia.control.cascade=$CID" --restart always --network host -e GODEBUG=multipathtcp=0 --user 0:0 --read-only --cap-drop ALL --cap-add NET_BIND_SERVICE --security-opt no-new-privileges:true --log-opt max-size=10m --log-opt max-file=3 -v "$BASE/xray:/usr/local/etc/xray:ro" @XRAY@ >/dev/null
@@ -175,7 +179,8 @@ up() {
 down() {
   owner
   rules unrule
-  if [ "$TRANSPORT" = gre ]; then ip link del "$IF" 2>/dev/null || true
+  if [ "$TRANSPORT" = gre ]; then
+    if ip link show "$IF" >/dev/null 2>&1; then ip link del "$IF"; fi
   else remove_container; fi
 }
 case "${1:-}" in up|heal) up;; down) down;; *) exit 2;; esac
@@ -200,21 +205,23 @@ def install(cid: int, transport: str, peer: str, params: dict) -> list[str]:
               "PEER": str(ipaddress.IPv4Address(peer)), "INNER": exit_.split('/')[0],
               "PEER_INNER": entry.split('/')[0], "KEY": str(int(params.get("gre_key", 0))),
               "PORT": str(int(params.get("port", 0)))}
+    runtime = RUNTIME.replace("@BASE@", p["base"]).replace("@LOCK@", p["lock"]).replace("@XRAY@", cascade.XRAY_IMAGE)
+    script = p["base"] + "/exit.sh"
     lines += ["EGRESS=$(ip -4 route show default | awk '/^default/ {print $5; exit}')",
               '[ -n "$EGRESS" ] || fail "exit egress"',
               "LOCAL=$(ip -4 route get " + values["PEER"] + " | " + cascade._SRC_OF + " | head -1)",
               '[ -n "$LOCAL" ] || fail "exit source address"',
+              cascade._put(script, runtime, "700"),
               cascade._put(p["base"] + "/exit.env.next", ''.join(f"{k}={shlex.quote(v)}\n" for k,v in values.items()), "600"),
-              f"printf 'EGRESS=%q\\nLOCAL=%q\\n' \"$EGRESS\" \"$LOCAL\" | sudo tee -a {p['base']}/exit.env.next >/dev/null",
+              f"printf 'EGRESS=%q\\nLOCAL=%q\\n' \"$EGRESS\" \"$LOCAL\" | sudo tee -a {p['base']}/exit.env.next >/dev/null || fail 'exit environment'",
               f"sudo mv -f {p['base']}/exit.env.next {p['base']}/exit.env || fail 'exit environment'"]
-    runtime = RUNTIME.replace("@BASE@", p["base"]).replace("@LOCK@", p["lock"]).replace("@XRAY@", cascade.XRAY_IMAGE)
-    script = p["base"] + "/exit.sh"
-    lines.append(cascade._put(script, runtime, "700"))
     if transport == "vless":
-        lines += [f"sudo install -d -m 700 {p['base']}/xray",
-                  cascade._put(p["base"] + "/xray/config.json", cascade.exit_vless_config(params), "600"),
-                  f"sudo docker pull -q {cascade.XRAY_IMAGE} >/dev/null || fail 'docker pull'",
-                  f"sudo {script} down || fail 'exit old container removal'"]
+        lines += ["NAMES=$(sudo docker container ls -a --format '{{.Names}}') || fail 'exit containers'",
+                  f"if ! printf '%s\\n' \"$NAMES\" | grep -Fxq {p['container_xray']}; then",
+                  f"  sudo install -d -m 700 {p['base']}/xray || fail 'exit config directory'",
+                  "  " + cascade._put(p["base"] + "/xray/config.json", cascade.exit_vless_config(params), "600"),
+                  f"  sudo docker pull -q {cascade.XRAY_IMAGE} >/dev/null || fail 'docker pull'",
+                  "fi"]
     unit = ("[Unit]\nDescription=Cascade exit\nAfter=network-online.target docker.service\nWants=network-online.target\n"
             f"[Service]\nType=oneshot\nRemainAfterExit=yes\nExecStart={script} up\n[Install]\nWantedBy=multi-user.target\n")
     heal = f"[Unit]\nDescription=Repair cascade exit\n[Service]\nType=oneshot\nExecStart={script} heal\n"
@@ -233,12 +240,23 @@ def remove(cid: int, transport: str, params: dict) -> str:
 
     guard = preflight(cid, transport, params)
     if transport == "awg":
-        return guard + cascade_awg.remove(cid, scoped_exit=True) + "echo CASCADE_REMOVED=yes\n"
+        return guard + cascade_awg.remove(cid, scoped_exit=True, owner=params["runtime_owner"]) + "echo CASCADE_REMOVED=yes\n"
 
     p = paths(cid)
     script = p["base"] + "/exit.sh"
+    runtime = RUNTIME.replace("@BASE@", p["base"]).replace("@LOCK@", p["lock"]).replace("@XRAY@", cascade.XRAY_IMAGE)
     return guard + cascade.stop_units(p["timer"], p["heal"], p["unit"]) + f'''
-if sudo test -f {p['base']}/exit.env; then sudo {script} down || exit 73; fi
+if sudo test -L {p['base']}/exit.env || sudo test -L {script}; then exit 73; fi
+if sudo test -f {p['base']}/exit.env; then
+  sudo grep -qx 'OWNER={params["runtime_owner"]}' {p['base']}/exit.env || exit 73
+  sudo grep -qx 'TRANSPORT={transport}' {p['base']}/exit.env || exit 73
+  if sudo test -x {script}; then
+    sudo {script} down || exit 73
+  else
+    sudo bash -s -- down <<'AC_CASCADE_EXIT_RUNTIME' || exit 73
+{runtime}AC_CASCADE_EXIT_RUNTIME
+  fi
+fi
 sudo rm -f /etc/systemd/system/{p['timer']} /etc/systemd/system/{p['heal']} /etc/systemd/system/{p['unit']} || exit 73
 sudo rm -rf {p['base']} || exit 73
 sudo systemctl daemon-reload || exit 73
