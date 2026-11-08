@@ -15,6 +15,7 @@ from sqlalchemy import select
 
 from app import audit, cascade, cascade_awg, cascade_exit, cascade_lock, cascade_probe, cascadejob, deploy, geo, nodelock, server_ops
 from app.cascade_routes import RouteUpdate, update_script
+from app.conflict import conflict
 from app.config import get_settings
 from app.deps import CurrentUser, SessionDep
 from app.models import Cascade, Server
@@ -34,6 +35,14 @@ router = APIRouter(prefix="/cascades", tags=["cascades"])
 _last_probe: dict[tuple[int, int], dict] = {}
 
 
+def _check_local_install(cascade_id: int) -> None:
+    if cascadejob.running(cascade_id):
+        raise conflict(
+            "cascade_install_running", "Панель еще устанавливает каскад. Дождитесь завершения.",
+            cascade_id=cascade_id,
+        )
+
+
 def _pair_operation(handler):
     signature = inspect.signature(handler)
 
@@ -43,8 +52,7 @@ def _pair_operation(handler):
         session = values["session"]
         cid = values["cascade_id"]
         row = await _get_or_404(cid, session)
-        if cascadejob.running(cid):
-            raise HTTPException(status.HTTP_409_CONFLICT, "Идет установка, дождитесь ее конца")
+        _check_local_install(cid)
         first, second = sorted((row.entry_server_id, row.exit_server_id))
         async with nodelock.hold("cascade", first), nodelock.hold("cascade", second):
             if await session.get(Cascade, cid, populate_existing=True) is None:
@@ -149,11 +157,12 @@ async def _pair(body: CascadePair, session) -> tuple[Server, Server]:
     if entry is None or exit_ is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Сервер не найден")
     await _ensure_free(session, entry, exit_)
-    for s in (entry, exit_):
+    for side, s in (("entry", entry), ("exit", exit_)):
         if s.last_check_ok is not True:
-            raise HTTPException(
-                status.HTTP_409_CONFLICT,
+            raise conflict(
+                "cascade_server_offline",
                 f"«{s.name}» не на связи: проверьте сервер и повторите",
+                server_id=s.id, side=side,
             )
     return entry, exit_
 
@@ -161,7 +170,7 @@ async def _pair(body: CascadePair, session) -> tuple[Server, Server]:
 async def _ensure_free(session, entry: Server, exit_: Server) -> None:
     rows = list(await session.scalars(select(Cascade)))
     if any(c.entry_server_id in (entry.id, exit_.id) or c.exit_server_id == entry.id for c in rows):
-        raise HTTPException(status.HTTP_409_CONFLICT, "Сервер уже входит в каскад")
+        raise conflict("cascade_role_in_use", "Сервер уже входит в каскад", server_id=entry.id)
     entry_addrs = await server_ops._host_addrs(entry.host)
     exit_addrs = await server_ops._host_addrs(exit_.host)
     if entry.host == exit_.host or entry_addrs & exit_addrs:
@@ -174,7 +183,8 @@ async def _ensure_free(session, entry: Server, exit_: Server) -> None:
             continue
         addresses = await server_ops._host_addrs(node.host)
         if node.host in (entry.host, exit_.host) or addresses & (entry_addrs | exit_addrs):
-            raise HTTPException(status.HTTP_409_CONFLICT, "Этот узел уже используется под другой записью сервера")
+            raise conflict("cascade_duplicate_host", "Этот узел уже используется под другой записью сервера",
+                           server_id=node.id)
 
 
 async def _siblings(session, exit_id: int) -> list[Cascade]:
@@ -194,7 +204,7 @@ def _inner_reservation(rows: list[Cascade]) -> str:
         candidate = f"10.99.{n}.0/30"
         if candidate not in used:
             return candidate
-    raise HTTPException(status.HTTP_409_CONFLICT, "На выходе нет свободной внутренней подсети")
+    raise conflict("cascade_no_inner_subnet", "На выходе нет свободной внутренней подсети")
 
 
 async def _addresses(entry_conn, entry: Server, exit_: Server) -> tuple[str, str]:
@@ -308,8 +318,8 @@ async def _vless_port(conn, reserved: set[int] | None = None) -> int:
     for port in choices:
         if port not in (reserved or ()) and await deploy.port_owner(conn, port, "tcp") is None:
             return port
-    raise HTTPException(
-        status.HTTP_409_CONFLICT,
+    raise conflict(
+        "cascade_vless_ports_busy",
         "На выходе заняты все порты для VLESS ("
         + ", ".join(str(p) for p in cascade.VLESS_PORTS) + ")",
     )
@@ -318,34 +328,41 @@ async def _vless_port(conn, reserved: set[int] | None = None) -> int:
 async def _awg_preflight(conn, cascade_id: int | None = None) -> None:
     res = await conn.run(cascade_awg.preflight_command(cascade_id), check=False, timeout=20)
     if "CASCADE_AVAILABLE" not in (res.stdout or ""):
-        raise HTTPException(status.HTTP_409_CONFLICT,
-                            "На сервере уже есть внешний туннель или заняты ресурсы AWG каскада")
+        raise conflict("cascade_awg_resources_busy",
+                       "На сервере уже есть внешний туннель или заняты ресурсы AWG каскада",
+                       cascade_id=cascade_id)
 
 
 async def _awg_port(conn, requested: int | None, reserved: set[int] | None = None) -> int:
     for port in (requested,) if requested is not None else cascade_awg.PORTS:
         if port not in (reserved or ()) and await deploy.port_owner(conn, port, "udp") is None:
             return port
-    raise HTTPException(status.HTTP_409_CONFLICT,
-                        "UDP-порт для канала AWG занят. Укажите другой порт")
+    raise conflict("cascade_awg_port_busy", "UDP-порт для канала AWG занят. Укажите другой порт")
 
 
 async def _external_preflight(conn) -> None:
     result = await conn.run(cascade_awg.foreign_guard() + "echo CASCADE_AVAILABLE\n",
                             check=False, timeout=20)
     if "CASCADE_EXTERNAL_UNDERLAY" in (result.stdout or ""):
-        raise HTTPException(status.HTTP_409_CONFLICT,
-                            "Канал защищен внешним AWG helper. Сначала отключите его штатным способом")
+        raise conflict("cascade_external_underlay",
+                       "Канал защищен внешним AWG helper. Сначала отключите его штатным способом")
     if "CASCADE_AVAILABLE" not in (result.stdout or ""):
         raise HTTPException(status.HTTP_502_BAD_GATEWAY, "Не удалось проверить существующий канал")
 
 
-async def _operation_available(conn, cascade_id: int, owner: str) -> None:
+async def _operation_available(conn, cascade_id: int, owner: str, side: str) -> None:
     result = await conn.run(cascade_lock.check_command(cascade_id, owner), check=False, timeout=20)
     if "CASCADE_OPERATION_BUSY" in (result.stdout or ""):
-        raise HTTPException(status.HTTP_409_CONFLICT, "Установка еще выполняется на узле, дождитесь ее конца")
+        raise _remote_install_busy(cascade_id, side)
     if "CASCADE_OPERATION_FREE" not in (result.stdout or "") or result.exit_status != 0:
         raise HTTPException(status.HTTP_502_BAD_GATEWAY, "Не удалось проверить установку на узле")
+
+
+def _remote_install_busy(cascade_id: int, side: str) -> HTTPException:
+    label = "входном" if side == "entry" else "выходном"
+    return conflict("cascade_remote_install_running",
+                    f"Установка еще выполняется на {label} сервере. Дождитесь ее завершения.",
+                    cascade_id=cascade_id, side=side)
 
 
 def _bound_probe(raw: dict, transport: str, params: dict) -> dict:
@@ -412,10 +429,10 @@ async def create(
             )
             session.add(c)
             await session.commit()
+            cascadejob.spawn(request.app, c.id)
             await session.refresh(c)
     except Exception as exc:  # noqa: BLE001
         raise _ssh_error(exc) from exc
-    cascadejob.spawn(request.app, c.id)
     await audit.record(
         session, user.username, "cascade_create", entry.name,
         f"-> {exit_.name}, {body.transport.upper()}",
@@ -440,7 +457,8 @@ async def update_routes(
     if c is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Каскад не найден")
     if c.status != "ready" or cascadejob.running(c.id):
-        raise HTTPException(status.HTTP_409_CONFLICT, "Маршруты доступны после установки каскада")
+        raise conflict("cascade_routes_not_ready", "Маршруты доступны после установки каскада",
+                       cascade_id=cascade_id)
     entry = await session.get(Server, c.entry_server_id)
     if entry is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Сервер не найден")
@@ -474,20 +492,18 @@ async def reinstall(
     cascade_id: int, request: Request, user: CurrentUser, session: SessionDep
 ) -> CascadeOut:
     c = await _get_or_404(cascade_id, session)
-    if cascadejob.running(c.id):
-        raise HTTPException(status.HTTP_409_CONFLICT, "Установка уже идет")
+    _check_local_install(c.id)
     entry = await session.get(Server, c.entry_server_id)
     exit_ = await session.get(Server, c.exit_server_id)
     if entry is None or exit_ is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Сервер не найден")
     try:
         async with _locked_pair(entry, exit_) as (ec, xc):
-            if cascadejob.running(c.id):
-                raise HTTPException(status.HTTP_409_CONFLICT, "Установка уже идет")
+            _check_local_install(c.id)
             if cascade_exit.scoped(json.loads(c.params or "{}")):
                 owner = json.loads(c.params)["runtime_owner"]
-                await _operation_available(ec, c.id, owner)
-                await _operation_available(xc, c.id, owner)
+                await _operation_available(ec, c.id, owner, "entry")
+                await _operation_available(xc, c.id, owner, "exit")
             if c.transport == "awg":
                 await _awg_preflight(ec, c.id)
                 if not cascade_exit.scoped(json.loads(c.params or "{}")):
@@ -547,20 +563,36 @@ async def check(cascade_id: int, _: CurrentUser, session: SessionDep) -> Cascade
     )
 
 
-async def _dismantle(server: Server, script: str) -> str:
+async def _dismantle(server: Server, script: str, cascade_id: int, side: str) -> str:
     """Пусто - разобрано, иначе текст ошибки."""
     try:
         async with _locked(server) as conn:
             r = await conn.run(script, check=False, timeout=120)
     except Exception as exc:  # noqa: BLE001
-        return f"«{server.name}»: {_ssh_error(exc).detail}"
+        error = _ssh_error(exc)
+        if error.status_code == status.HTTP_409_CONFLICT:
+            raise error from exc
+        return f"«{server.name}»: {error.detail}"
     if "CASCADE_EXTERNAL_UNDERLAY" in (r.stdout or ""):
-        raise HTTPException(status.HTTP_409_CONFLICT,
-                            "Канал защищен внешним AWG helper. Сначала отключите его штатным способом")
+        raise conflict("cascade_external_underlay",
+                       "Канал защищен внешним AWG helper. Сначала отключите его штатным способом",
+                       cascade_id=cascade_id, server_id=server.id, side=side)
     if "CASCADE_OPERATION_BUSY" in (r.stdout or ""):
-        raise HTTPException(status.HTTP_409_CONFLICT, "Установка еще выполняется на узле, дождитесь ее конца")
-    if "CASCADE_REMOVED=yes" not in (r.stdout or ""):
-        return f"«{server.name}»: {(r.stderr or r.stdout or '').strip()[-300:]}"
+        raise _remote_install_busy(cascade_id, side)
+    if r.exit_status != 0 or "CASCADE_REMOVED=yes" not in (r.stdout or ""):
+        return f"«{server.name}»: сервер не подтвердил удаление каскада"
+    return ""
+
+
+async def _check_remove_node(server: Server, cascade_id: int, owner: str, side: str) -> str:
+    try:
+        async with _locked(server) as conn:
+            await _operation_available(conn, cascade_id, owner, side)
+    except (HTTPException, asyncssh.Error, OSError, TimeoutError) as exc:
+        error = _ssh_error(exc)
+        if error.status_code == status.HTTP_409_CONFLICT:
+            raise
+        return f"«{server.name}»: {error.detail}"
     return ""
 
 
@@ -570,28 +602,40 @@ async def delete(
     cascade_id: int, user: CurrentUser, session: SessionDep, force: bool = False
 ) -> None:
     c = await _get_or_404(cascade_id, session)
-    if cascadejob.running(c.id):
-        raise HTTPException(status.HTTP_409_CONFLICT, "Идет установка, дождитесь ее конца")
+    _check_local_install(c.id)
     params = json.loads(c.params or "{}")
     entry = await session.get(Server, c.entry_server_id)
     exit_ = await session.get(Server, c.exit_server_id)
     errors: list[str] = []
+    # Check both nodes before removing anything. The script still takes the
+    # remote lock, since an already launched installer can acquire it later.
+    entry_error = exit_error = ""
+    if cascade_exit.scoped(params):
+        owner = params["runtime_owner"]
+        if entry is not None:
+            entry_error = await _check_remove_node(entry, c.id, owner, "entry")
+        if exit_ is not None:
+            exit_error = await _check_remove_node(exit_, c.id, owner, "exit")
+        errors.extend(error for error in (entry_error, exit_error) if error)
+    if errors and not force:
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, "Разобрать не удалось: " + "; ".join(errors))
     # сначала вход: клиенты сразу пойдут напрямую, а не в разобранный выход
-    if entry is not None:
+    if entry is not None and not entry_error:
         script = cascade.build_remove_entry(c.transport, c.id, params)
         if c.transport != "awg":
             script += cascade.ufw_cleanup(params.get("exit_ip", ""), None)
         if cascade_exit.scoped(params):
             script = cascade_lock.wrap(c.id, script, params["runtime_owner"], remove=True)
-        if err := await _dismantle(entry, script):
-            errors.append(err)
-    if exit_ is not None:
+        entry_error = await _dismantle(entry, script, c.id, "entry")
+        if entry_error:
+            errors.append(entry_error)
+    if exit_ is not None and not (entry_error or exit_error):
         script = cascade.build_remove_exit(c.transport, c.id, params)
         if c.transport != "awg" and not cascade_exit.scoped(params):
             script += cascade.ufw_cleanup(params.get("entry_ip", ""), params.get("port"))
         if cascade_exit.scoped(params):
             script = cascade_lock.wrap(c.id, script, params["runtime_owner"], remove=True)
-        if err := await _dismantle(exit_, script):
+        if err := await _dismantle(exit_, script, c.id, "exit"):
             errors.append(err)
     if errors and not force:
         raise HTTPException(

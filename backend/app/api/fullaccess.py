@@ -2,6 +2,7 @@ import asyncssh
 from fastapi import APIRouter, HTTPException, Request, status
 
 from app import audit, awg, fullaccess, sshops, stepup
+from app.conflict import conflict
 from app.config import get_settings
 from app.deps import CurrentUser, SessionDep
 from app.models import Server
@@ -50,7 +51,6 @@ async def export_full_access(
             )
         raise
     dns1, dns2 = awg.dns_pair(get_settings().awg_client_dns)
-    private_key, pubkey = fullaccess.generate_keypair()
     awg2_config: dict | None = None
     try:
         async with _connect(server) as conn:
@@ -61,11 +61,12 @@ async def export_full_access(
             # приложение полезет искать несуществующий и упадет с ErrorCode 202.
             # Проверяем до установки ключа, иначе на ноде оставался бы лишний root-ключ.
             if not any(fullaccess._canonical(name) for name in containers):
-                raise HTTPException(
-                    status.HTTP_409_CONFLICT,
+                raise conflict(
+                    "fullaccess_unsupported_protocols",
                     "На сервере нет протоколов, которыми умеет управлять приложение "
-                    "AmneziaVPN. AmneziaWG 3.0 оно пока не поддерживает — для неё "
-                    "выдайте обычный клиентский конфиг (кнопка «Клиенты»).",
+                    "AmneziaVPN через полный доступ. Для подключения установите "
+                    "клиентский протокол, если его еще нет, и выдайте конфиг через «Клиенты».",
+                    server_id=server_id,
                 )
             # Для AmneziaWG 2.0 вкладываем в ссылку полный конфиг протокола
             # (protocol_version="2", H-диапазоны, CPS) — иначе приложение
@@ -74,6 +75,7 @@ async def export_full_access(
             if awg_map.get("new"):
                 conf_text = await awg.read_awg_conf(conn, awg_map["new"])
                 awg2_config = awg.build_fullaccess_awg_object(conf_text)
+            private_key, pubkey = fullaccess.generate_keypair()
             await fullaccess.install_desktop_key(conn, pubkey)
     except fullaccess.FullAccessError as exc:
         raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(exc)) from exc

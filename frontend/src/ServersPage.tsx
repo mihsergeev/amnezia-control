@@ -652,7 +652,7 @@ export function ServersPage({ onUnauthorized }: Props) {
   const [cascades, setCascades] = useState<Cascade[]>([])
   // мастер каскада: новый (resume нет) или ход установки уже созданного
   const [wizard, setWizard] = useState<{ resume?: Cascade } | null>(null)
-  const [unbuild, setUnbuild] = useState<{ c: Cascade; error?: string } | null>(null)
+  const [unbuild, setUnbuild] = useState<{ c: Cascade; error?: string; canForget?: boolean } | null>(null)
   const [unbuilding, setUnbuilding] = useState(false)
   const [casRoutes, setCasRoutes] = useState<Cascade | null>(null)
   // окно проверки канала каскада
@@ -1042,11 +1042,17 @@ export function ServersPage({ onUnauthorized }: Props) {
     try {
       await deleteCascade(unbuild.c.id, force)
       setUnbuild(null)
-      setNotice(t('Каскад разобран: клиенты входа снова выходят в интернет с него самого.'))
+      setNotice(force
+        ? t('Запись каскада удалена. Проверьте, остались ли на серверах шлюз и туннель.')
+        : t('Каскад разобран: клиенты входа снова выходят в интернет с него самого.'))
       await load()
     } catch (err) {
       if (err instanceof ApiError && err.status === 401) onUnauthorized()
-      else setUnbuild({ c: unbuild.c, error: err instanceof Error ? err.message : t('Ошибка') })
+      else setUnbuild({
+        c: unbuild.c,
+        error: err instanceof Error ? err.message : t('Ошибка'),
+        canForget: err instanceof ApiError && err.status === 502,
+      })
     } finally {
       setUnbuilding(false)
     }
@@ -1887,6 +1893,10 @@ export function ServersPage({ onUnauthorized }: Props) {
           defaultUser={config?.default_ssh_user ?? FALLBACK_USER}
           resume={wizard.resume}
           onClose={() => setWizard(null)}
+          onRemove={(c) => {
+            setWizard(null)
+            setUnbuild({ c })
+          }}
           onChanged={() => void load()}
           onUnauthorized={onUnauthorized}
         />
@@ -1904,12 +1914,15 @@ export function ServersPage({ onUnauthorized }: Props) {
             {cascades.some(c => c.id !== unbuild.c.id && c.exit_server_id === unbuild.c.exit_server_id) && <p className="muted small">
               {t('Будет удален только выбранный каскад. Другие входы и собственные клиенты общего выхода сохраняются.')}
             </p>}
-            {unbuild.error && <p className="small err-text">{unbuild.error}</p>}
+            {unbuild.error && <p className="small err-text" role="alert">{unbuild.error}</p>}
+            {unbuild.canForget && (
+              <p className="muted small">{t('Если убрать запись из панели, на серверах могут остаться шлюз и туннель.')}</p>
+            )}
             <div className="modal-actions">
               <button className="ghost" onClick={() => setUnbuild(null)}>
                 {t('Отмена')}
               </button>
-              {unbuild.error && (
+              {unbuild.canForget && (
                 <button className="ghost" disabled={unbuilding} onClick={() => confirmUnbuild(true)}>
                   {t('Убрать только из панели')}
                 </button>

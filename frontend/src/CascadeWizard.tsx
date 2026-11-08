@@ -35,6 +35,7 @@ type Props = {
   // открыть сразу на установке уже созданного каскада (ход или ошибка)
   resume?: Cascade
   onClose: () => void
+  onRemove: (cascade: Cascade) => void
   onChanged: () => void
   onUnauthorized: () => void
 }
@@ -110,6 +111,7 @@ export function CascadeWizard({
   defaultUser,
   resume,
   onClose,
+  onRemove,
   onChanged,
   onUnauthorized,
 }: Props) {
@@ -774,9 +776,14 @@ export function CascadeWizard({
               </button>
             )}
             {step === 'install' && cascade?.status === 'error' && (
-              <button disabled={busy} onClick={retry}>
-                {t('Запустить еще раз')}
-              </button>
+              <>
+                <button className="ghost" disabled={busy} onClick={() => onRemove(cascade)}>
+                  {t('Разобрать каскад…')}
+                </button>
+                <button disabled={busy} onClick={retry}>
+                  {t('Запустить еще раз')}
+                </button>
+              </>
             )}
             {step === 'done' && <button onClick={onClose}>{t('Готово')}</button>}
           </div>

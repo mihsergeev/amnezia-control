@@ -18,6 +18,8 @@ from functools import wraps
 
 from fastapi import HTTPException, status
 
+from app.conflict import conflict
+
 # сколько ждать занятую ноду, прежде чем ответить "занята"
 WAIT_SECONDS = 120
 # предел на всю SSH-сессию операции. Сборки и деплой идут на ноде в фоне, так
@@ -74,6 +76,11 @@ async def hold(kind: str, server_id: int, *, wait: float = WAIT_SECONDS):
         async with asyncio.timeout(wait):
             await lk.lock.acquire()
     except TimeoutError as exc:
+        if key[0] == "cascade":
+            raise conflict(
+                "cascade_node_busy", "Нода занята другой операцией панели, повторите через минуту.",
+                server_id=key[1],
+            ) from exc
         raise HTTPException(
             status.HTTP_409_CONFLICT,
             "Нода занята другой операцией панели, повторите через минуту.",

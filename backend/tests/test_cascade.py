@@ -1,14 +1,17 @@
+import asyncio
 import json
 import os
 import shutil
 import socket
 import subprocess
 import sys
+from contextlib import asynccontextmanager
+from types import SimpleNamespace
 
 import httpx
 import pytest
 
-from app import cascade
+from app import cascade, cascadejob
 from app.models import Cascade, Server
 
 VLESS = {
@@ -194,6 +197,33 @@ async def test_interrupted_install_becomes_error(
     assert row["status"] == "error" and "перезапуском" in row["error"]
 
 
+async def test_install_wait_includes_unresponsive_ssh_poll(monkeypatch):
+    @asynccontextmanager
+    async def connect(*args):
+        yield object()
+
+    async def launch(*args, **kwargs):
+        return None
+
+    poll_started = asyncio.Event()
+
+    async def read_status(*args, **kwargs):
+        poll_started.set()
+        await asyncio.Future()
+
+    monkeypatch.setattr(cascadejob, "connect", connect)
+    monkeypatch.setattr(cascadejob, "_progress", {})
+    monkeypatch.setattr(cascadejob, "_POLL_SECONDS", 0)
+    monkeypatch.setattr(cascadejob, "_MAX_SECONDS", 0.1)
+    monkeypatch.setattr(cascadejob.deploy, "launch", launch)
+    monkeypatch.setattr(cascadejob.deploy, "read_status", read_status)
+    result, log = await asyncio.wait_for(cascadejob._side(
+        1, "exit", Server(name="test-exit"), "", {}, SimpleNamespace(ssh_connect_timeout=10),
+    ), timeout=2)
+    assert poll_started.is_set()
+    assert result == "error" and "не дождался конца установки" in log
+
+
 async def test_delete_dismantles_entry_first(
     client: httpx.AsyncClient, auth_headers, session_factory, monkeypatch
 ) -> None:
@@ -208,7 +238,7 @@ async def test_delete_dismantles_entry_first(
         cid = cas.id
     calls: list[tuple[str, str]] = []
 
-    async def fake(server, script):
+    async def fake(server, script, cascade_id, side):
         calls.append((server.name, script))
         return "" if server.id == a else "«vpn-1»: нет связи"
 

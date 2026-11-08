@@ -21,6 +21,7 @@ SSH-ключ панели в файл НЕ кладём: он один на вс
 
 import json
 from datetime import date, datetime, timezone
+from urllib.parse import quote
 
 from fastapi import APIRouter, HTTPException, Request, status
 from fastapi.responses import Response
@@ -157,12 +158,15 @@ async def export_server(
                     alerts.t("{user} с {ip}", user=user.username, ip=client_ip(request))),
     )
     safe = "".join(ch if ch.isalnum() or ch in "-_." else "-" for ch in server.name)
+    fallback = "".join(ch if ch.isascii() else "-" for ch in safe).strip(".-_") or "server"
+    suffix = ".acontrol-server.json"
+    disposition = f'attachment; filename="{fallback}{suffix}"'
+    if safe != fallback:
+        disposition += f"; filename*=UTF-8''{quote(safe.strip('.-_') or 'server', safe='')}{suffix}"
     return Response(
         content=body,
         media_type="application/json",
-        headers={
-            "Content-Disposition": f'attachment; filename="{safe}.acontrol-server.json"'
-        },
+        headers={"Content-Disposition": disposition},
     )
 
 

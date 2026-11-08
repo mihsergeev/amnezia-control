@@ -77,20 +77,22 @@ async def _side(
                 return "error", "DEPLOY_ERROR: previous cascade operation is still active or ownership is unknown"
             script = cascade_lock.wrap(cid, script, owner, generation=generation)
         await deploy.launch(conn, script, tag=tag or cascade.TAG)
-    waited = 0
     st: dict = {"state": "unknown", "log": ""}
-    while waited < _MAX_SECONDS:
-        await asyncio.sleep(_POLL_SECONDS)
-        waited += _POLL_SECONDS
-        try:
-            async with asyncio.timeout(step), connect(server, settings) as conn:
-                st = await deploy.read_status(conn, tag=tag or cascade.TAG)
-        except Exception:  # noqa: BLE001 — нода моргнула, спросим еще раз
-            continue
-        logs[phase] = (server.name, st.get("log", ""))
-        _progress[cid] = {"phase": phase, "log": _joined(logs)}
-        if st.get("state") in ("done", "error"):
-            return st["state"], st.get("log", "")
+    try:
+        async with asyncio.timeout(_MAX_SECONDS):
+            while True:
+                await asyncio.sleep(_POLL_SECONDS)
+                try:
+                    async with asyncio.timeout(step), connect(server, settings) as conn:
+                        st = await deploy.read_status(conn, tag=tag or cascade.TAG)
+                except Exception:  # noqa: BLE001 — нода моргнула, спросим еще раз
+                    continue
+                logs[phase] = (server.name, st.get("log", ""))
+                _progress[cid] = {"phase": phase, "log": _joined(logs)}
+                if st.get("state") in ("done", "error"):
+                    return st["state"], st.get("log", "")
+    except TimeoutError:
+        pass
     return "error", st.get("log", "") + "\nDEPLOY_ERROR: не дождался конца установки"
 
 

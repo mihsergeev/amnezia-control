@@ -120,23 +120,35 @@ def test_cascade_real_client_probe_includes_only_labelled_native_containers():
 
 
 async def test_remote_installer_busy_survives_empty_task_registry_and_force_delete(
-    client,auth_headers,session_factory,monkeypatch
+    client,auth_headers,session_factory,monkeypatch,caplog
 ):
     a,_,x,_=await setup_nodes(session_factory)
     async with session_factory() as session:
         row=Cascade(entry_server_id=a,exit_server_id=x,transport='gre',status='error',params=json.dumps(params()))
         session.add(row);await session.commit();cid=row.id
     class Conn:
-        async def run(self,*args,**kwargs):
-            return SimpleNamespace(stdout='CASCADE_OPERATION_BUSY\n',stderr='',exit_status=75)
+        def __init__(self, sid):
+            self.sid = sid
+
+        async def run(self, command, **kwargs):
+            assert "CASCADE_OPERATION_FREE" in command
+            assert "AC_CASCADE_OPERATION_PAYLOAD" not in command
+            if self.sid == x:
+                return SimpleNamespace(stdout='CASCADE_OPERATION_BUSY\n',
+                                       stderr='private-ssh-output', exit_status=75)
+            return SimpleNamespace(stdout='CASCADE_OPERATION_FREE\n', stderr='', exit_status=0)
     @asynccontextmanager
-    async def locked(server):yield Conn()
+    async def locked(server):yield Conn(server.id)
     monkeypatch.setattr(api,'_locked',locked)
     monkeypatch.setattr(cascadejob,'_tasks',{})
     retry=await client.post(f'/api/cascades/{cid}/install',headers=auth_headers)
     assert retry.status_code==409
+    assert "выходном сервере" in retry.json()["detail"]
     deleted=await client.delete(f'/api/cascades/{cid}?force=true',headers=auth_headers)
     assert deleted.status_code==409
+    assert "выходном сервере" in deleted.json()["detail"]
+    assert f"reason=cascade_remote_install_running cascade_id={cid}" in caplog.text
+    assert "side=exit" in caplog.text and "private-ssh-output" not in caplog.text
     async with session_factory() as session:
         assert (await session.get(Cascade,cid)).status=='error'
 
@@ -264,9 +276,11 @@ async def test_delete_one_shared_pair_keeps_sibling_metadata_and_exit_script_sco
         other=Cascade(entry_server_id=b,exit_server_id=x,transport="gre",params=json.dumps(sibling),status="ready")
         session.add_all([first,other]);await session.commit();cid,oid=first.id,other.id
     scripts=[]
-    async def dismantle(server,script):scripts.append((server.id,script));return ''
+    async def dismantle(server,script,cascade_id,side):scripts.append((server.id,script));return ''
     async def check(*args):return None
+    async def remove_check(*args):return ''
     monkeypatch.setattr(api,'_dismantle',dismantle);monkeypatch.setattr(server_ops,'run_check',check)
+    monkeypatch.setattr(api,'_check_remove_node',remove_check)
     result=await client.delete(f'/api/cascades/{cid}',headers=auth_headers)
     assert result.status_code==204
     async with session_factory() as session:

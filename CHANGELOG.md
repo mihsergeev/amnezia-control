@@ -4,6 +4,12 @@ All notable changes to Amnezia Control are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.84.16] - 2026-11-08
+
+- Fix server export with non-ASCII names and preserve the Unicode filename in downloads.
+- Explain cascade and full-access conflicts in the interface and log their causes without including connection details.
+- Let administrators dismantle a failed cascade from the wizard, preserve active installer locks, and limit waiting when a node stops responding.
+
 ## [0.84.15] - 2026-11-07
 
 - Optionally append Amnezia Control after a custom browser tab title and preview the result in About.

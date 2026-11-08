@@ -1104,6 +1104,18 @@ const EN: Record<string, string> = {
   'Панель уберет шлюз и туннель с обоих серверов. Клиенты входа останутся подключенными, но в интернет пойдут с адреса самого входа.':
     'The panel removes the gateway and the tunnel from both servers. Entry clients stay connected but reach the internet from the entry\'s own address.',
   'Убрать только из панели': 'Remove from the panel only',
+  'Если убрать запись из панели, на серверах могут остаться шлюз и туннель.':
+    'Removing the panel record may leave the gateway and tunnel on the servers.',
+  'Запись каскада удалена. Проверьте, остались ли на серверах шлюз и туннель.':
+    'The cascade record was removed. Check whether the gateway and tunnel remain on the servers.',
+  'Панель еще устанавливает каскад. Дождитесь завершения.':
+    'The panel is still installing the cascade. Wait for it to finish.',
+  'Установка еще выполняется на входном сервере. Дождитесь ее завершения.':
+    'Installation is still running on the entry server. Wait for it to finish.',
+  'Установка еще выполняется на выходном сервере. Дождитесь ее завершения.':
+    'Installation is still running on the exit server. Wait for it to finish.',
+  'На сервере нет протоколов, которыми умеет управлять приложение AmneziaVPN через полный доступ. Для подключения установите клиентский протокол, если его еще нет, и выдайте конфиг через «Клиенты».':
+    'The server has no protocols that AmneziaVPN can manage via full access. To connect, install a client protocol if needed and issue a profile under Clients.',
   'Разбираю…': 'Removing…',
   'Разобрать': 'Remove',
   'Каскад собран панелью': 'Cascade built',

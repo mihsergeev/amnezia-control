@@ -8,6 +8,7 @@
 """
 
 import json
+from urllib.parse import unquote
 
 import httpx
 from sqlalchemy import select
@@ -81,7 +82,7 @@ async def test_export_carries_panel_side_data(
 
     r = await client.get(f"/api/servers/{sid}/export", headers=_pw(auth_headers))
     assert r.status_code == 200
-    assert "attachment" in r.headers["content-disposition"]
+    assert r.headers["content-disposition"] == 'attachment; filename="vpn-f.acontrol-server.json"'
     data = r.json()
 
     assert data["format"] == "acontrol-server-export"
@@ -97,6 +98,20 @@ async def test_export_carries_panel_side_data(
     # id/server_id локальны для БД-источника и в файл не попадают
     assert "id" not in data["tables"]["awg_configs"][0]
     assert "server_id" not in data["tables"]["awg_configs"][0]
+
+
+async def test_export_preserves_unicode_filename(client, auth_headers) -> None:
+    name = 'Тестовый узел "01"'
+    sid = await _make_server(client, auth_headers, name=name)
+
+    r = await client.get(f"/api/servers/{sid}/export?history=false", headers=_pw(auth_headers))
+
+    assert r.status_code == 200
+    plain, extended = r.headers["content-disposition"].split("; filename*=UTF-8''")
+    assert plain == 'attachment; filename="01.acontrol-server.json"'
+    assert extended.isascii()
+    assert unquote(extended) == "Тестовый-узел--01.acontrol-server.json"
+    assert r.json()["server"]["name"] == name
 
 
 async def test_export_skips_history_unless_asked() -> None:

@@ -1,4 +1,5 @@
 import { translate } from './i18n'
+import { downloadResponse } from './download'
 import type { LogoTheme } from './logoAdapt'
 
 export type LogoSize = { desktop: number; mobile: number }
@@ -150,15 +151,7 @@ async function downloadPost(path: string, body: unknown, fallback: string): Prom
     const err = await res.json().catch(() => null)
     throw new ApiError(errorDetail(err, res.status), res.status)
   }
-  const cd = res.headers.get('Content-Disposition') || ''
-  const m = cd.match(/filename="?([^"]+)"?/)
-  const blob = await res.blob()
-  const url = URL.createObjectURL(blob)
-  const a = document.createElement('a')
-  a.href = url
-  a.download = m ? m[1] : fallback
-  a.click()
-  URL.revokeObjectURL(url)
+  await downloadResponse(res, fallback)
 }
 
 // Смена пароля: возвращает новый токен (старые инвалидируются на бэкенде).
@@ -234,15 +227,7 @@ export async function exportServer(
     const err = await res.json().catch(() => null)
     throw new ApiError(errorDetail(err, res.status), res.status)
   }
-  const cd = res.headers.get('Content-Disposition') || ''
-  const m = cd.match(/filename="?([^"]+)"?/)
-  const blob = await res.blob()
-  const url = URL.createObjectURL(blob)
-  const a = document.createElement('a')
-  a.href = url
-  a.download = m ? m[1] : 'server.acontrol-server.json'
-  a.click()
-  URL.revokeObjectURL(url)
+  await downloadResponse(res, 'server.acontrol-server.json')
 }
 
 export async function importServerFile(file: File | Blob): Promise<ServerImportResult> {

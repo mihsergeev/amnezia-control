@@ -8,9 +8,43 @@ import base64
 import json
 import struct
 import zlib
+from contextlib import asynccontextmanager
 
 from app.awg import build_fullaccess_awg_object
 from app.fullaccess import _canonical, build_full_access_link
+from app.models import Server
+
+
+async def test_unsupported_fullaccess_explains_conflict_without_installing_key(
+    client, auth_headers, session_factory, monkeypatch, caplog,
+):
+    from app.api import fullaccess as api
+
+    async with session_factory() as session:
+        server = Server(name="private-display-name", host="192.0.2.20")
+        session.add(server)
+        await session.commit()
+        sid = server.id
+
+    @asynccontextmanager
+    async def connect(server):
+        yield object()
+
+    async def detect(conn):
+        return ["amnezia-awg3"]
+
+    def generate():
+        raise AssertionError("unsupported export must not generate a key")
+
+    monkeypatch.setattr(api, "_connect", connect)
+    monkeypatch.setattr(api.fullaccess, "detect_containers", detect)
+    monkeypatch.setattr(api.fullaccess, "generate_keypair", generate)
+    response = await client.post(f"/api/servers/{sid}/fullaccess", headers=auth_headers,
+                                 json={"password": "testpass"})
+    assert response.status_code == 409
+    assert "Клиенты" in response.json()["detail"]
+    assert "reason=fullaccess_unsupported_protocols" in caplog.text
+    assert "private-display-name" not in caplog.text and "192.0.2.20" not in caplog.text
 
 # серверный awg0.conf в формате панели/приложения: H1-H4 диапазонами (маркер 2.0),
 # I1 закомментирован (CPS раздаётся клиентам, но awg-quick его не применяет)
