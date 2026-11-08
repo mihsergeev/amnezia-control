@@ -64,11 +64,24 @@ jobs:
           load: true
           tags: smoke-test:latest
 
-      - name: Smoke test (backend image imports)
+      - name: Smoke test (backend imports and release version)
         if: matrix.name == 'backend'
         run: |
+          expected_version=
+          if [[ "$GITHUB_EVENT_NAME" == release ]]; then
+            expected_version="${GITHUB_REF_NAME#v}"
+          fi
           docker run --rm --entrypoint python smoke-test:latest \
-            -c "import app.main; from app.config import Settings; print('образ стартует')"
+            -c '
+          import sys
+          import app.main
+          from app.config import Settings
+
+          expected = sys.argv[1]
+          actual = Settings().version
+          if expected and actual != expected:
+              raise SystemExit(f"Backend version {actual} does not match release version {expected}")
+          ' "$expected_version"
 
       - name: Build and push
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0

@@ -4,6 +4,10 @@ All notable changes to Amnezia Control are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.84.19] - 2026-11-08
+
+- Report the correct panel version and reject backend images with a version that differs from the release tag.
+
 ## [0.84.18] - 2026-11-08
 
 - In cascade checks and the setup wizard, confirm direct routing only when the test site sees the entry address and the exit has a different address.
