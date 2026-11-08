@@ -392,18 +392,21 @@ WantedBy=timers.target
 
 
 def remove(cascade_id: int, *, scoped_exit: bool = False) -> str:
+    from app import cascade
+
     paths = resources(cascade_id if scoped_exit else None)
     BASE, SCRIPT, UNIT, TIMER = (paths[k] for k in ("base", "script", "unit", "timer"))
     # A failed first install may have no device yet. Ownership remains mandatory.
     return ((preflight_command(cascade_id, scoped_exit=True) if scoped_exit else foreign_guard()) + f'''
+{cascade.stop_units(TIMER, paths['heal'], UNIT)}
 if sudo test -f {BASE}/node.env; then
   sudo grep -qx 'CID={int(cascade_id)}' {BASE}/node.env || exit 73
-  sudo systemctl disable --now {TIMER} {paths['heal']} {UNIT} >/dev/null 2>&1 || true
   sudo {SCRIPT} down || exit 73
-  sudo rm -rf {BASE} || exit 73
-  sudo rm -f {SCRIPT} /etc/systemd/system/{UNIT} /etc/systemd/system/{TIMER} /etc/systemd/system/{paths['heal']} || exit 73
-  sudo systemctl daemon-reload
 fi
+sudo rm -f /etc/systemd/system/{UNIT} /etc/systemd/system/{TIMER} /etc/systemd/system/{paths['heal']} || exit 73
+sudo rm -rf {BASE} || exit 73
+sudo rm -f {SCRIPT} || exit 73
+sudo systemctl daemon-reload || exit 73
 ''')
 
 

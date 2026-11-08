@@ -229,15 +229,18 @@ def install(cid: int, transport: str, peer: str, params: dict) -> list[str]:
 
 
 def remove(cid: int, transport: str, params: dict) -> str:
+    from app import cascade
+
+    guard = preflight(cid, transport, params)
+    if transport == "awg":
+        return guard + cascade_awg.remove(cid, scoped_exit=True) + "echo CASCADE_REMOVED=yes\n"
+
     p = paths(cid)
     script = p["base"] + "/exit.sh"
-    cleanup = cascade_awg.remove(cid, scoped_exit=True) if transport == "awg" else (
-        f"if sudo test -f {p['base']}/exit.env; then sudo {script} down || exit 73; fi\n")
-    return preflight(cid, transport, params) + f'''
-sudo systemctl disable --now {p['timer']} {p['heal']} {p['unit']} >/dev/null 2>&1 || true
-{cleanup}
-sudo rm -rf {p['base']} || exit 73
+    return guard + cascade.stop_units(p["timer"], p["heal"], p["unit"]) + f'''
+if sudo test -f {p['base']}/exit.env; then sudo {script} down || exit 73; fi
 sudo rm -f /etc/systemd/system/{p['timer']} /etc/systemd/system/{p['heal']} /etc/systemd/system/{p['unit']} || exit 73
-sudo systemctl daemon-reload
+sudo rm -rf {p['base']} || exit 73
+sudo systemctl daemon-reload || exit 73
 echo CASCADE_REMOVED=yes
 '''

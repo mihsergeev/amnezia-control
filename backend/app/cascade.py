@@ -993,19 +993,54 @@ def leaks(res: dict[str, str]) -> bool:
     return client == res["direct"] if res.get("direct") else True
 
 
+def stop_units(*units: str) -> str:
+    names = " ".join(map(shlex.quote, units))
+    return (
+        f"for ac_unit in {names}; do\n"
+        '  ac_load=$(sudo systemctl show -p LoadState --value "$ac_unit") || exit 73\n'
+        '  [ "$ac_load" = not-found ] && continue\n'
+        '  sudo systemctl disable --now "$ac_unit" >/dev/null 2>&1 || exit 73\n'
+        'done\n'
+    )
+
+
+def _remove_container(name: str) -> str:
+    return (
+        "if command -v docker >/dev/null; then\n"
+        "  ac_containers=$(sudo docker container ls -a --format '{{.Names}}') || exit 73\n"
+        f"  if printf '%s\\n' \"$ac_containers\" | grep -Fxq {shlex.quote(name)}; then\n"
+        f"    sudo docker rm -f {shlex.quote(name)} >/dev/null || exit 73\n"
+        "  fi\n"
+        "fi\n"
+    )
+
+
+def _remove_tproxy() -> str:
+    return (
+        f"if sudo test -x {DIR}/cascade-tproxy.sh; then sudo {DIR}/cascade-tproxy.sh down || exit 73; fi\n"
+        "if command -v iptables >/dev/null; then\n"
+        "  ac_rules=$(sudo iptables -w -t mangle -S) || exit 73\n"
+        "  if printf '%s\\n' \"$ac_rules\" | grep -Eq '^-N ACONTROL_CASCADE$| -[jg] ACONTROL_CASCADE( |$)'; then exit 73; fi\n"
+        "fi\n"
+        "ac_rules=$(sudo ip -N -4 rule show) || exit 73\n"
+        f"if printf '%s\\n' \"$ac_rules\" | grep -Eq 'fwmark {TPROXY_MARK}(/[^ ]+)? lookup {TPROXY_TABLE}([[:space:]]|$)'; then exit 73; fi\n"
+    )
+
+
 def build_remove_entry(transport: str = "gre", cascade_id: int = 0, params: dict | None = None) -> str:
-    units = ("acontrol-cascade-heal.service acontrol-cascade-tproxy.service "
-             "acontrol-cascade-geo.timer")
+    units = ("acontrol-cascade-geo.timer", "acontrol-cascade-heal.service",
+             "acontrol-cascade-tproxy.service")
     if transport != "awg":
-        units += " acontrol-gre.service"
+        units += ("acontrol-gre.service",)
     return "\n".join([
         cascade_exit.entry_preflight(cascade_id, transport, params) if cascade_exit.scoped(params or {}) else "",
         cascade_awg.foreign_guard(),
         cascade_awg.preflight_command(cascade_id) if transport == "awg" else "",
-        f"sudo systemctl disable --now {units} >/dev/null 2>&1",
-        f"sudo docker rm -f {GATEWAY} >/dev/null 2>&1",
+        stop_units(*units),
+        _remove_tproxy(),
+        _remove_container(GATEWAY),
         cascade_awg.remove(cascade_id) if transport == "awg" else "",
-        "sudo rm -rf /etc/systemd/system/acontrol-cascade-tproxy.service.d/awg.conf",
+        "sudo rm -f /etc/systemd/system/acontrol-cascade-tproxy.service.d/awg.conf || exit 73",
         _remove_common(),
     ]) + "\n"
 
@@ -1019,10 +1054,9 @@ def build_remove_exit(transport: str = "gre", cascade_id: int = 0, params: dict 
     return "\n".join([
         cascade_awg.foreign_guard(),
         cascade_awg.preflight_command(cascade_id) if transport == "awg" else "",
-        "sudo systemctl disable --now acontrol-gre.service >/dev/null 2>&1",
-        f"sudo docker rm -f {EXIT_CONTAINER} >/dev/null 2>&1",
-        f"sudo rm -rf {EXIT_DIR}",
-        cascade_awg.remove(cascade_id) if transport == "awg" else "",
+        stop_units("acontrol-gre.service"),
+        _remove_container(EXIT_CONTAINER),
+        f"sudo rm -rf {EXIT_DIR} || exit 73",
         _remove_common(),
     ]) + "\n"
 
@@ -1031,8 +1065,9 @@ def _remove_common() -> str:
     # правила ufw по адресу соседа снимает панель отдельно (адрес известен ей)
     files = " ".join(f"/etc/systemd/system/{u}" for u in _UNITS)
     return (
-        f"sudo rm -rf {DIR} {GRE_DEFAULTS} {files}\n"
-        "sudo systemctl daemon-reload\n"
+        f"sudo rm -f {GRE_DEFAULTS} {files} || exit 73\n"
+        f"sudo rm -rf {DIR} || exit 73\n"
+        "sudo systemctl daemon-reload || exit 73\n"
         "echo CASCADE_REMOVED=yes"
     )
 

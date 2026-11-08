@@ -40,6 +40,47 @@ def test_scripts_are_valid_shell(transport) -> None:
         _bash_ok(cascade._fill(text))
 
 
+@pytest.mark.skipif(shutil.which("bash") is None, reason="нужен bash")
+@pytest.mark.parametrize("transport", ["awg", "gre", "vless"])
+@pytest.mark.parametrize("fault", ["service", "tproxy", "rule", "container", "absent"])
+def test_remove_entry_only_reports_confirmed_cleanup(transport, fault) -> None:
+    commands = r'''
+fault=$1
+ip() { return 1; }
+iptables() { return 1; }
+docker() { return 1; }
+sudo() {
+  case "$1 $2" in
+    'systemctl show')
+      if [ "$fault" = absent ]; then echo not-found; else echo loaded; fi
+      ;;
+    'systemctl disable') [ "$fault" != service ] ;;
+    'systemctl daemon-reload'|'rm -rf'|'rm -f') return 0 ;;
+    'iptables -w')
+      if [ "$fault" = tproxy ]; then echo '-N ACONTROL_CASCADE'; fi
+      ;;
+    'ip -N')
+      if [ "$fault" = rule ]; then echo '100: from all fwmark 0x100 lookup 241'; fi
+      ;;
+    'docker container')
+      [ "$3" = ls ] || return 1
+      if [ "$fault" != absent ]; then echo acontrol-cascade; fi
+      ;;
+    'docker rm') echo docker_remove_attempt >&2; [ "$fault" != container ] ;;
+    *) return 1 ;;
+  esac
+}
+'''
+    result = subprocess.run(
+        [shutil.which("bash"), "-s", "--", fault],
+        input=commands + cascade.build_remove_entry(transport, 3),
+        capture_output=True, text=True, timeout=10,
+    )
+    assert result.returncode == (0 if fault == "absent" else 73), result.stderr
+    assert ("CASCADE_REMOVED=yes" in result.stdout) == (fault == "absent")
+    assert ("docker_remove_attempt" in result.stderr) == (fault == "container")
+
+
 def test_mptcp_optout_covers_gateway_exit_and_geo_check() -> None:
     scripts = [
         cascade.gateway_run(f"{cascade.DIR}/config"),

@@ -4,6 +4,10 @@ All notable changes to Amnezia Control are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.84.17] - 2026-11-08
+
+- Keep the cascade record and leave the exit intact if teardown cannot confirm that traffic interception on the entry has stopped.
+
 ## [0.84.16] - 2026-11-08
 
 - Fix server export with non-ASCII names and preserve the Unicode filename in downloads.
