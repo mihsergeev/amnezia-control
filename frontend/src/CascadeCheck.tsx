@@ -39,7 +39,8 @@ export function CascadeCheckModal({ cascade, entry, exit, onClose, onChecked, on
   const gre = cascade.transport === 'gre'
   const awg = cascade.transport === 'awg'
   const tunnelled = gre || awg
-  const ru = (entry?.country || '').toUpperCase() === 'RU'
+  const entryCountry = cascade.entry_country || entry?.country || ''
+  const ru = entryCountry.toUpperCase() === 'RU'
 
   useEffect(() => {
     let alive = true
@@ -193,7 +194,7 @@ export function CascadeCheckModal({ cascade, entry, exit, onClose, onChecked, on
           <div className="cc-node cc-node-plain">{t('Клиенты')}</div>
           <div className={`cc-link cc-link-${toEntry}`} />
           {node(
-            countryFlag(entry?.country || ''),
+            countryFlag(entryCountry),
             entry?.host || cascade.entry_ip,
             entry?.name || t('вход'),
             toEntry === 'bad' ? 'bad' : toEntry === 'ok' ? 'ok' : 'idle',

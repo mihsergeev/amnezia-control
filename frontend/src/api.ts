@@ -1027,6 +1027,7 @@ export type Cascade = {
   phase: '' | 'exit' | 'entry'
   log: string
   entry_ip: string
+  entry_country?: string
   exit_ip: string
   probe: Partial<Omit<CascadeProbe, 'gre'>> & {
     checked_at?: string
@@ -1035,6 +1036,7 @@ export type Cascade = {
     vless?: CascadeTransportProbe
   }
   result: {
+    error_code?: string
     egress?: string
     ru?: string
     direct?: string
@@ -1135,10 +1137,14 @@ export function createCascade(
   exitId: number,
   transport: CascadeTransport,
   ports?: { entry_port: number | null; exit_port: number | null },
+  entryCountry?: string,
 ): Promise<Cascade> {
   return api<Cascade>('/api/cascades', {
     method: 'POST',
-    body: JSON.stringify({ entry_id: entryId, exit_id: exitId, transport, ...(transport === 'awg' ? ports : {}) }),
+    body: JSON.stringify({
+      entry_id: entryId, exit_id: exitId, transport, ...(transport === 'awg' ? ports : {}),
+      ...(entryCountry ? { entry_country: entryCountry } : {}),
+    }),
   })
 }
 
@@ -1149,8 +1155,11 @@ export function updateCascadeRoutes(id: number, routes: CascadeRoute[]): Promise
   })
 }
 
-export function reinstallCascade(id: number): Promise<Cascade> {
-  return api<Cascade>(`/api/cascades/${id}/install`, { method: 'POST' })
+export function reinstallCascade(id: number, entryCountry?: string): Promise<Cascade> {
+  return api<Cascade>(`/api/cascades/${id}/install`, {
+    method: 'POST',
+    ...(entryCountry ? { body: JSON.stringify({ entry_country: entryCountry }) } : {}),
+  })
 }
 
 export type EgressCheck = {

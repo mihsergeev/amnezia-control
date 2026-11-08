@@ -1,4 +1,5 @@
 import asyncio
+import base64
 import json
 import os
 import shutil
@@ -265,15 +266,25 @@ async def test_install_wait_includes_unresponsive_ssh_poll(monkeypatch):
     assert result == "error" and "не дождался конца установки" in log
 
 
-@pytest.mark.parametrize("cached_country", ["", "RU"])
-async def test_install_uses_entry_country_before_collector_runs(session_factory, monkeypatch, cached_country):
+@pytest.mark.parametrize(("cached_country", "explicit_country", "entry_ip", "lookup_ip"), [
+    ("", "", VLESS["entry_ip"], "entry.example.com"),
+    ("", "", "1.1.1.1", "1.1.1.1"),
+    ("RU", "", VLESS["entry_ip"], ""),
+    ("FI", "ru", VLESS["entry_ip"], ""),
+])
+async def test_install_uses_entry_country_before_collector_runs(
+    session_factory, monkeypatch, cached_country, explicit_country, entry_ip, lookup_ip,
+):
     entry_id, exit_id, _ = await _servers(session_factory)
     async with session_factory() as session:
         entry = await session.get(Server, entry_id)
         entry.country = cached_country
-        host = entry.host
+        entry.host = "entry.example.com"
+        params = {**VLESS, "entry_ip": entry_ip}
+        if explicit_country:
+            params["entry_country"] = explicit_country
         row = Cascade(entry_server_id=entry_id, exit_server_id=exit_id, transport="vless",
-                      params=json.dumps(VLESS), status="installing")
+                      params=json.dumps(params), status="installing")
         session.add(row)
         await session.commit()
         cascade_id = row.id
@@ -288,16 +299,130 @@ async def test_install_uses_entry_country_before_collector_runs(session_factory,
     async def side(_cid, phase, _server, script, *_args, **_kwargs):
         if phase == "entry":
             entry_scripts.append(script)
-            return "error", "DEPLOY_ERROR: simulated"
         return "done", "DEPLOY_DONE"
+
+    async def run_check(*_args):
+        pass
 
     monkeypatch.setattr(cascadejob.geo, "country_code", country_code)
     monkeypatch.setattr(cascadejob, "_side", side)
+    monkeypatch.setattr(cascadejob.server_ops, "run_check", run_check)
     monkeypatch.setattr(cascadejob, "_progress", {})
     await cascadejob._run_locked(cascade_id, session_factory, None)
-    assert lookups == ([] if cached_country else [host])
+    assert lookups == ([lookup_ip] if lookup_ip else [])
     assert len(entry_scripts) == 1
+    config_line = next(line for line in entry_scripts[0].splitlines()
+                       if line.endswith(f"|| fail 'write {cascade.DIR}/config/config.json'"))
+    config = json.loads(base64.b64decode(config_line.split()[1]))
+    assert {"ip": ["geoip:ru"], "outboundTag": "direct"} in config["routing"]["rules"]
     assert "ip.nic.ru" in entry_scripts[0] and "CASCADE_DIRECT=" in entry_scripts[0]
+    async with session_factory() as session:
+        row = await session.get(Cascade, cascade_id)
+        assert row.status == "ready"
+        assert json.loads(row.params)["entry_country"] == "RU"
+
+
+@pytest.mark.parametrize("lookup_result", [None, "R1"], ids=["timeout", "malformed-code"])
+async def test_install_requires_country_before_remote_changes(session_factory, monkeypatch, lookup_result):
+    entry_id, exit_id, _ = await _servers(session_factory)
+    async with session_factory() as session:
+        entry = await session.get(Server, entry_id)
+        entry.host = "entry.example.com"
+        row = Cascade(entry_server_id=entry_id, exit_server_id=exit_id, transport="vless",
+                      params=json.dumps(VLESS), status="installing")
+        session.add(row)
+        await session.commit()
+        cascade_id = row.id
+
+    phases = []
+    lookups = []
+
+    async def geo_response(request):
+        lookups.append(request.url.path)
+        if lookup_result is None:
+            raise httpx.ReadTimeout("simulated geolocation timeout", request=request)
+        return httpx.Response(200, json={"success": True, "country_code": lookup_result})
+
+    async def side(_cid, phase, *_args, **_kwargs):
+        phases.append(phase)
+        return "done", "DEPLOY_DONE"
+
+    async def run_check(*_args):
+        pass
+
+    async_client = httpx.AsyncClient
+    monkeypatch.setattr(cascadejob.geo.httpx, "AsyncClient", lambda **kwargs: async_client(
+        **kwargs, transport=httpx.MockTransport(geo_response),
+    ))
+    monkeypatch.setattr(cascadejob, "_side", side)
+    monkeypatch.setattr(cascadejob.server_ops, "run_check", run_check)
+    monkeypatch.setattr(cascadejob, "_progress", {})
+    await cascadejob._run_locked(cascade_id, session_factory, None)
+    async with session_factory() as session:
+        row = await session.get(Cascade, cascade_id)
+        assert row.status == "error"
+        assert row.error
+        result = json.loads(row.result)
+        assert result["error_code"] == "cascade_entry_country_unknown"
+        assert not result.get("failed_phase")
+    assert phases == []
+    assert lookups == ["/entry.example.com"]
+
+
+async def test_cascade_entry_country_api_preserves_override_for_retry_and_check(
+    client, auth_headers, session_factory, monkeypatch,
+):
+    from app.api import cascades as api
+
+    entry_id, exit_id, _ = await _servers(session_factory)
+    spawned = []
+    checks = []
+
+    @asynccontextmanager
+    async def locked(_server):
+        yield object()
+
+    async def addresses(*_args):
+        return VLESS["entry_ip"], VLESS["exit_ip"]
+
+    async def available(*_args):
+        pass
+
+    async def run_check(_conn, country):
+        checks.append(country)
+        return ""
+
+    monkeypatch.setattr(api, "_locked", locked)
+    monkeypatch.setattr(api, "_addresses", addresses)
+    monkeypatch.setattr(api, "_external_preflight", available)
+    monkeypatch.setattr(api, "_operation_available", available)
+    monkeypatch.setattr(cascadejob, "spawn", lambda _app, cid: spawned.append(cid))
+    monkeypatch.setattr(cascade, "run_check", run_check)
+    r = await client.post("/api/cascades", headers=auth_headers, json={
+        "entry_id": entry_id, "exit_id": exit_id, "transport": "gre", "entry_country": "fi",
+    })
+    assert r.status_code == 202, r.text
+    assert r.json()["entry_country"] == "FI"
+    cid = r.json()["id"]
+    async with session_factory() as session:
+        row = await session.get(Cascade, cid)
+        assert json.loads(row.params)["entry_country"] == "FI"
+        (await session.get(Server, entry_id)).country = "DE"
+        await session.commit()
+
+    retry_path = f"/api/cascades/{cid}/install"
+    invalid = await client.post(retry_path, headers=auth_headers, json={"entry_country": "R1"})
+    assert invalid.status_code == 422, invalid.text
+    assert spawned == [cid]
+    retry = await client.post(retry_path, headers=auth_headers, json={"entry_country": "ru"})
+    assert retry.status_code == 202, retry.text
+    legacy = await client.post(retry_path, headers=auth_headers)
+    assert legacy.status_code == 202, legacy.text
+    assert legacy.json()["entry_country"] == "RU"
+    checked = await client.post(f"/api/cascades/{cid}/check", headers=auth_headers)
+    assert checked.status_code == 200, checked.text
+    assert checks == ["RU"]
+    assert spawned == [cid, cid, cid]
 
 
 async def test_delete_dismantles_entry_first(

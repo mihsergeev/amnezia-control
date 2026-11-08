@@ -22,6 +22,7 @@ from app.models import Cascade, Server
 from app.schemas import (
     CascadeCheckOut,
     CascadeCreate,
+    CascadeInstall,
     CascadeOut,
     CascadePair,
     CascadeProbeOut,
@@ -123,6 +124,7 @@ def _out(c: Cascade, entry: Server | None = None) -> CascadeOut:
         phase=phase,
         log=prog.get("log", ""),
         entry_ip=params.get("entry_ip", ""),
+        entry_country=params.get("entry_country", ""),
         exit_ip=params.get("exit_ip", ""),
         routes=params.get("routes", []),
         entry_port=params.get("entry_port"),
@@ -405,6 +407,8 @@ async def create(
             params: dict = {"entry_ip": entry_ip, "exit_ip": exit_ip,
                             "runtime_layout": 2, "runtime_owner": secrets.token_hex(16),
                             "inner_net": _inner_reservation(siblings)}
+            if body.entry_country:
+                params["entry_country"] = body.entry_country.upper()
             if body.transport == "vless":
                 params |= cascade.new_vless_params()
                 params["port"] = await _vless_port(xc, _reserved_ports(siblings, "vless"))
@@ -489,7 +493,8 @@ async def update_routes(
              status_code=status.HTTP_202_ACCEPTED)
 @_pair_operation
 async def reinstall(
-    cascade_id: int, request: Request, user: CurrentUser, session: SessionDep
+    cascade_id: int, request: Request, user: CurrentUser, session: SessionDep,
+    body: CascadeInstall | None = None,
 ) -> CascadeOut:
     c = await _get_or_404(cascade_id, session)
     _check_local_install(c.id)
@@ -500,18 +505,22 @@ async def reinstall(
     try:
         async with _locked_pair(entry, exit_) as (ec, xc):
             _check_local_install(c.id)
-            if cascade_exit.scoped(json.loads(c.params or "{}")):
-                owner = json.loads(c.params)["runtime_owner"]
+            params = json.loads(c.params or "{}")
+            scoped = cascade_exit.scoped(params)
+            if scoped:
+                owner = params["runtime_owner"]
                 await _operation_available(ec, c.id, owner, "entry")
                 await _operation_available(xc, c.id, owner, "exit")
             if c.transport == "awg":
                 await _awg_preflight(ec, c.id)
-                if not cascade_exit.scoped(json.loads(c.params or "{}")):
+                if not scoped:
                     await _awg_preflight(xc, c.id)
             else:
                 await _external_preflight(ec)
-                if not cascade_exit.scoped(json.loads(c.params or "{}")):
+                if not scoped:
                     await _external_preflight(xc)
+            if body and body.entry_country:
+                c.params = json.dumps(params | {"entry_country": body.entry_country.upper()})
             c.status = "installing"
             c.error = ""
             await session.commit()
@@ -530,9 +539,10 @@ async def check(cascade_id: int, _: CurrentUser, session: SessionDep) -> Cascade
     entry = await session.get(Server, c.entry_server_id)
     if entry is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Сервер не найден")
+    country = json.loads(c.params or "{}").get("entry_country") or entry.country
     try:
         async with _locked(entry) as conn:
-            out = await cascade.run_check(conn, entry.country)
+            out = await cascade.run_check(conn, country)
     except Exception as exc:  # noqa: BLE001
         raise _ssh_error(exc) from exc
     kv = cascade.parse_kv(out)

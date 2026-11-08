@@ -7,8 +7,10 @@
 """
 
 import asyncio
+import ipaddress
 import json
 import logging
+import re
 import secrets
 from datetime import datetime, timezone
 
@@ -133,8 +135,20 @@ async def _run_locked(cid: int, factory, settings) -> None:
         params = json.loads(c.params or "{}")
     if entry is None or exit_ is None:
         return
-    # The collector may not have looked up a newly added entry yet.
-    country = entry.country or await geo.country_code(entry.host)
+    country = await _entry_country(entry, params)
+    if not country:
+        await _finish(factory, cid, "error",
+                      "Не удалось определить страну входа. Укажите ее вручную и повторите установку.",
+                      "", {"error_code": "cascade_entry_country_unknown"})
+        return
+    if params.get("entry_country") != country:
+        params["entry_country"] = country
+        async with factory() as session:
+            c = await session.get(Cascade, cid)
+            if c is None:
+                return
+            c.params = json.dumps(params)
+            await session.commit()
     steps = [
         ("exit", exit_, cascade.build_exit_script(transport, params["entry_ip"], cid, params)),
         ("entry", entry, cascade.build_entry_script(transport, params["exit_ip"], cid, params,
@@ -183,6 +197,26 @@ async def _run_locked(cid: int, factory, settings) -> None:
             desc = await server_ops.describe_egress(server.host, result["egress"])
             server_ops.apply_egress(server, desc, datetime.now(timezone.utc))
             await session.commit()
+
+
+def _country_code(value: str | None) -> str:
+    return value.upper() if isinstance(value, str) and re.fullmatch(r"[A-Za-z]{2}", value) else ""
+
+
+async def _entry_country(entry: Server, params: dict) -> str:
+    country = _country_code(params.get("entry_country")) or _country_code(entry.country)
+    if country:
+        return country
+    # The collector may not have looked up a newly added entry yet. Prefer its
+    # public address when known, rather than leaving DNS resolution to the geoservice.
+    host = entry.host
+    try:
+        address = ipaddress.ip_address(params.get("entry_ip", ""))
+        if address.is_global:
+            host = str(address)
+    except ValueError:
+        pass
+    return _country_code(await geo.country_code(host))
 
 
 async def _finish(factory, cid: int, status: str, error: str, text: str, result: dict) -> None:

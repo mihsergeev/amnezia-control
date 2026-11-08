@@ -4,6 +4,11 @@ All notable changes to Amnezia Control are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.84.20] - 2026-11-08
+
+- Stop cascade setup before installing either side if the entry country cannot be determined.
+- Let administrators enter the country in the setup wizard or retry with it, and use the saved country for route checks.
+
 ## [0.84.19] - 2026-11-08
 
 - Report the correct panel version and reject backend images with a version that differs from the release tag.

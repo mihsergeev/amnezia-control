@@ -120,6 +120,7 @@ export function CascadeWizard({
     resume ? (resume.status === 'ready' ? 'done' : 'install') : 'entry',
   )
   const [entryId, setEntryId] = useState<number | null>(resume?.entry_server_id ?? null)
+  const [entryCountry, setEntryCountry] = useState('')
   const [exitId, setExitId] = useState<number | null>(resume?.exit_server_id ?? null)
   const [tab, setTab] = useState<'panel' | 'new'>('panel')
   const [error, setError] = useState<string | null>(null)
@@ -149,6 +150,8 @@ export function CascadeWizard({
   const byId = (id: number | null) => all.find((s) => s.id === id) ?? null
   const entry = byId(entryId)
   const exit = byId(exitId)
+  const countryError = cascade?.status === 'error' && cascade.result.error_code === 'cascade_entry_country_unknown'
+  const invalidCountry = entryCountry !== '' && !/^[A-Z]{2}$/.test(entryCountry)
   const localRoute = cascade ? cascadeLocalRoute(cascade.result) : 'unknown'
 
   const handleError = useCallback(
@@ -315,7 +318,7 @@ export function CascadeWizard({
       if (tab === 'new') {
         picked = script ? await scriptDone() : await addServer(step === 'exit' ? entry?.group_name ?? '' : '')
         if (!picked) return
-        if (step === 'entry') setEntryId(picked.id)
+        if (step === 'entry') pickEntry(picked.id)
         else setExitId(picked.id)
       }
       if (!picked) return
@@ -330,7 +333,7 @@ export function CascadeWizard({
   }
 
   async function build() {
-    if (entryId == null || exitId == null) return
+    if (entryId == null || exitId == null || invalidCountry) return
     const ports = { entry_port: cascadePort(entryPort), exit_port: cascadePort(exitPort) }
     if (transport === 'awg' && (ports.entry_port === undefined || ports.exit_port === undefined)) {
       setError(t('UDP-порт должен быть целым числом от 1 до 65535 или пустым для автовыбора.'))
@@ -339,8 +342,10 @@ export function CascadeWizard({
     setBusy(true)
     setError(null)
     try {
-      const c = await createCascade(entryId, exitId, transport, transport === 'awg'
-        ? testedAwgPorts({ entry_port: ports.entry_port ?? null, exit_port: ports.exit_port ?? null }, probeRows.awg.result) : undefined)
+      const awgPorts = transport === 'awg'
+        ? testedAwgPorts({ entry_port: ports.entry_port ?? null, exit_port: ports.exit_port ?? null }, probeRows.awg.result)
+        : undefined
+      const c = await createCascade(entryId, exitId, transport, awgPorts, entryCountry)
       setCascade(c)
       setStep('install')
       onChanged()
@@ -352,16 +357,43 @@ export function CascadeWizard({
   }
 
   async function retry() {
-    if (!cascade) return
+    if (!cascade || (countryError && invalidCountry)) return
     setBusy(true)
     setError(null)
     try {
-      setCascade(await reinstallCascade(cascade.id))
+      setCascade(await reinstallCascade(cascade.id, countryError ? entryCountry : undefined))
     } catch (err) {
       handleError(err)
     } finally {
       setBusy(false)
     }
+  }
+
+  function pickEntry(id: number) {
+    if (id !== entryId) setEntryCountry('')
+    setEntryId(id)
+  }
+
+  function countryInput() {
+    return (
+      <label>
+        {t('Страна входа')}
+        <input
+          className="mono"
+          value={entryCountry}
+          maxLength={2}
+          autoCapitalize="characters"
+          spellCheck={false}
+          aria-invalid={invalidCountry}
+          disabled={busy}
+          placeholder={t('Автоматически')}
+          onChange={event => setEntryCountry(event.target.value.toUpperCase())}
+        />
+        <span className={`small ${invalidCountry ? 'err-text' : 'muted'}`}>
+          {t('Две латинские буквы, например RU. Код определяет, какие сайты пойдут через вход.')}
+        </span>
+      </label>
+    )
   }
 
   const stepIdx = STEPS.findIndex((s) => s.key === step)
@@ -408,7 +440,7 @@ export function CascadeWizard({
             <span className="srv-route-arrow">→</span>
           </>
         )}
-        {hop(entry, cascade?.entry_ip || probe?.entry_ip || '', named(entry, 'вход'))}
+        {hop(entry, cascade?.entry_ip || probe?.entry_ip || '', named(entry, 'вход'), false, cascade?.entry_country)}
         {step === 'link' ? (
           <div
             className={`cc-link cas-link ${
@@ -437,7 +469,7 @@ export function CascadeWizard({
   function picker(kind: 'entry' | 'exit') {
     const list = candidates(kind === 'exit' ? entryId : exitId, kind)
     const value = kind === 'entry' ? entryId : exitId
-    const set = kind === 'entry' ? setEntryId : setExitId
+    const set = kind === 'entry' ? pickEntry : setExitId
     return (
       <>
         <div className="tabs">
@@ -618,6 +650,7 @@ export function CascadeWizard({
             {head(t('Новый каскад'))}
             {steps}
             {route(false)}
+            {(!entry?.country || entryCountry) && countryInput()}
             <p className="muted small">{t('Короткие проверки каждого транспорта. Скорость ориентировочная.')}</p>
             <div className="cas-opts">
               {PROBE_TRANSPORTS.map(k => {
@@ -691,7 +724,9 @@ export function CascadeWizard({
                 </div>
               ))}
             </div>
-            {cascade.error && <p className="small err-text">{cascade.error}</p>}
+            {cascade.error && <p className="small err-text">{countryError
+              ? t('Не удалось определить страну входа. Укажите ее вручную и повторите установку.') : cascade.error}</p>}
+            {countryError && countryInput()}
             {cascade.log && <pre className="script-box deploy-log">{cascade.log}</pre>}
             {cascade.status === 'installing' && (
               <p className="muted small">
@@ -714,7 +749,7 @@ export function CascadeWizard({
                   {t('Остальные сайты открываются с {ip}', { ip: cascade.result.egress })}
                 </div>
               )}
-              {(entry?.country.toUpperCase() === 'RU' || cascade.result.ru) && (
+              {((cascade.entry_country || entry?.country || '').toUpperCase() === 'RU' || cascade.result.ru) && (
                 <div>
                   {localRoute === 'entry' && <><span className="ok-text">✓</span>{' '}</>}
                   {localRoute === 'entry'
@@ -777,7 +812,7 @@ export function CascadeWizard({
               </button>
             )}
             {step === 'link' && (
-              <button disabled={busy} onClick={build}>
+              <button disabled={busy || invalidCountry} onClick={build}>
                 {t('Собрать каскад')}
               </button>
             )}
@@ -786,7 +821,7 @@ export function CascadeWizard({
                 <button className="ghost" disabled={busy} onClick={() => onRemove(cascade)}>
                   {t('Разобрать каскад…')}
                 </button>
-                <button disabled={busy} onClick={retry}>
+                <button disabled={busy || (countryError && invalidCountry)} onClick={retry}>
                   {t('Запустить еще раз')}
                 </button>
               </>

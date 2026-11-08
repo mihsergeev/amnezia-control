@@ -136,6 +136,11 @@ const EN: Record<string, string> = {
   'UDP-порт входа': 'Entry UDP port',
   'UDP-порт выхода': 'Exit UDP port',
   'UDP-порты межсерверного канала': 'Inter-server UDP ports',
+  'Страна входа': 'Entry country',
+  'Две латинские буквы, например RU. Код определяет, какие сайты пойдут через вход.':
+    'Use two letters, such as RU. This code determines which sites are reached through the entry server.',
+  'Не удалось определить страну входа. Укажите ее вручную и повторите установку.':
+    'Could not detect the entry country. Enter it manually and retry installation.',
   'Автоматически': 'Automatic',
   'UDP-порт должен быть целым числом от 1 до 65535 или пустым для автовыбора.': 'UDP ports must be integers from 1 to 65535, or blank for automatic selection.',
   'Пустые поля — автоматический выбор. Порты входа и выхода могут отличаться; проверка TCP/GRE не подтверждает канал AWG.': 'Blank fields enable automatic selection. Entry and exit ports may differ; the TCP/GRE probe does not verify the AWG path.',

@@ -1,4 +1,5 @@
 import json
+from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -155,6 +156,31 @@ async def test_not_ready_cascade_is_not_checked(factory, sent) -> None:
 
     await cascadewatch.watch_once(factory, config.get_settings(), now=NOW, check=check)
     assert calls == []
+
+
+@pytest.mark.parametrize(("installed_country", "expected_country"), [("RU", "RU"), ("", "FI")])
+async def test_watch_checks_the_installed_entry_country(factory, monkeypatch, installed_country, expected_country):
+    async with factory() as session:
+        row = await session.get(Cascade, 1)
+        row.params = json.dumps({"entry_country": installed_country} if installed_country else {})
+        (await session.get(Server, 1)).country = "FI"
+        await session.commit()
+
+    @asynccontextmanager
+    async def connect(*_args):
+        yield object()
+
+    countries = []
+
+    async def run_check(_conn, country, **_kwargs):
+        countries.append(country)
+        return OK
+
+    monkeypatch.setattr(cascadewatch.cascadejob, "connect", connect)
+    monkeypatch.setattr(cascade, "run_check", run_check)
+    await cascadewatch.watch_once(factory, config.get_settings(), now=NOW)
+    assert countries == [expected_country]
+    assert (await _health(factory))["ok"] is True
 
 
 async def test_missing_crypto_proof_is_cleared_even_when_egress_fails(factory, sent) -> None:

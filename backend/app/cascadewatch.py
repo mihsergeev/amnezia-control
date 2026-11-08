@@ -30,9 +30,9 @@ CHECK_EVERY = 120
 START_DELAY = 60
 
 
-async def _ssh_check(entry: Server, settings: Settings) -> str:
+async def _ssh_check(entry: Server, country: str, settings: Settings) -> str:
     async with nodelock.connect("cascade", entry.id, cascadejob.connect(entry, settings)) as conn:
-        return await cascade.run_check(conn, entry.country, timeout=90)
+        return await cascade.run_check(conn, country, timeout=90)
 
 
 def _since(health: dict, now: datetime) -> datetime:
@@ -77,7 +77,6 @@ async def _send(session, settings: Settings, entry: str, exit_: str, event: str,
 async def watch_once(session_factory, settings: Settings, *, now: datetime | None = None,
                      check=None) -> None:
     """Одна проверка всех готовых каскадов. check(entry) -> вывод проверки (для тестов)."""
-    check = check or (lambda entry: _ssh_check(entry, settings))
     grace = timedelta(minutes=max(0, settings.cascade_down_minutes))
     async with session_factory() as session:
         rows = list(await session.scalars(select(Cascade).where(Cascade.status == "ready")))
@@ -94,7 +93,8 @@ async def watch_once(session_factory, settings: Settings, *, now: datetime | Non
         if entry is None or cascadejob.running(c.id):
             continue
         try:
-            out = await check(entry)
+            country = json.loads(c.params or "{}").get("entry_country") or entry.country
+            out = await check(entry) if check else await _ssh_check(entry, country, settings)
         except Exception as exc:  # noqa: BLE001 - вход недоступен: скажет алерт о сервере
             log.info("каскад %s: вход не проверить: %s", c.id, exc)
             continue

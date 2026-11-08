@@ -722,7 +722,11 @@ class CascadePair(BaseModel):
     exit_id: int
 
 
-class CascadeCreate(CascadePair):
+class CascadeInstall(BaseModel):
+    entry_country: str | None = Field(default=None, pattern=r"^[A-Za-z]{2}$")
+
+
+class CascadeCreate(CascadePair, CascadeInstall):
     transport: Literal["vless", "gre", "awg"]
     entry_port: int | None = Field(default=None, ge=1, le=65535)
     exit_port: int | None = Field(default=None, ge=1, le=65535)
@@ -801,6 +805,7 @@ class CascadeOut(BaseModel):
     phase: str = ""  # exit | entry, пока идет установка
     log: str = ""
     entry_ip: str = ""
+    entry_country: str = ""
     exit_ip: str = ""
     entry_port: int | None = None
     exit_port: int | None = None
