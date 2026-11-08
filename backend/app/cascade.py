@@ -686,24 +686,27 @@ def entry_gateway_config(transport: str, exit_ip: str, params: dict, bootstrap: 
 # сервис адреса в зоне страны входа: шлюз обязан выпустить его напрямую.
 # Для других стран такого сервиса не держим, местный адрес не проверяется
 _LOCAL_IP_URL = {"ru": "https://ip.nic.ru"}
-_DIRECT_IP_CHECK = 'echo "CASCADE_DIRECT=$(curl -4 -fsS -m 10 https://api.ipify.org 2>/dev/null)"'
+_DIRECT_IP_CHECK = 'echo "CASCADE_DIRECT=$(curl -4 -fsS -m 10 --noproxy \'*\' https://api.ipify.org 2>/dev/null)"'
+_IP_FROM_HTML = "grep -oE '([0-9]{1,3}[.]){3}[0-9]{1,3}' | head -1"
+_GATEWAY_CURL = f"curl -4 -fsS --noproxy '' --socks5-hostname 127.0.0.1:{SOCKS_PORT}"
 
 
-def _check_lines(country: str = "") -> list[str]:
-    """Адрес выхода и местный адрес через шлюз (socks-вход check).
-    CASCADE_RU - исторически так, это адрес, с которого идут сайты страны входа."""
-    lines = [
-        f"EG=$(curl -4 -fsS -m 20 --socks5-hostname 127.0.0.1:{SOCKS_PORT} https://api.ipify.org 2>/dev/null "
-        f"|| curl -4 -fsS -m 20 --socks5-hostname 127.0.0.1:{SOCKS_PORT} https://ipv4.icanhazip.com 2>/dev/null)",
-        'RU=""',
-    ]
+def _gateway_egress() -> str:
+    return (
+        f"EG=$({_GATEWAY_CURL} -m 20 https://api.ipify.org 2>/dev/null "
+        f"|| {_GATEWAY_CURL} -m 20 https://ipv4.icanhazip.com 2>/dev/null)"
+    )
+
+
+def _gateway_install_checks(country: str) -> list[str]:
+    """Check the gateway before enabling client interception."""
+    lines = [_gateway_egress(), 'echo "CASCADE_EGRESS=$EG"', 'RU=""']
     url = _LOCAL_IP_URL.get((country or "").lower())
     if url:
         lines.append(
-            f"RU=$(curl -4 -fsS -m 15 --socks5-hostname 127.0.0.1:{SOCKS_PORT} {url} 2>/dev/null "
-            "| grep -oE '([0-9]{1,3}[.]){3}[0-9]{1,3}' | head -1)"
+            f"RU=$({_GATEWAY_CURL} -m 15 {url} 2>/dev/null | {_IP_FROM_HTML})"
         )
-    return lines + ['echo "CASCADE_EGRESS=$EG"', 'echo "CASCADE_RU=$RU"']
+    return lines + ['echo "CASCADE_RU=$RU"']
 
 
 def gateway_run(confdir: str, owner: str = "") -> str:
@@ -783,7 +786,7 @@ def build_entry_script(transport: str, exit_ip: str, cascade_id: int, params: di
         f"sudo docker ps --format '{{{{.Names}}}}' | grep -qx {GATEWAY} "
         f"|| fail \"xray: $(sudo docker logs --tail 3 {GATEWAY} 2>&1 | tr '\\n' ' ')\"",
         'log "[5/5] проверка через шлюз"',
-        *_check_lines(country),
+        *_gateway_install_checks(country),
         *([_DIRECT_IP_CHECK] if (country or "").lower() in _LOCAL_IP_URL else []),
         '[ -n "$EG" ] || fail "через выход интернет не открывается"',
         (f"sudo {cascade_awg.SCRIPT} status | grep -q '^CASCADE_AWG=yes$' "
@@ -813,10 +816,34 @@ def _client_container_select() -> list[str]:
 
 
 def build_check_command(country: str = "") -> str:
-    """Разовая проверка каскада на входе: службы, шлюз, адреса через шлюз.
-    CASCADE_CLIENT - адрес изнутри VPN-контейнера, путем трафика клиентов: socks
-    шлюза его не показывает, он идет в шлюз мимо tproxy и ip rule."""
+    """Check the gateway, the host and both client routes from the VPN network."""
+    local_url = _LOCAL_IP_URL.get((country or "").lower())
     return "\n".join([
+        # Run independent checks together so a slow public IP service cannot
+        # consume the SSH deadline before client and transport checks run.
+        "{",
+        _gateway_egress(),
+        'echo "CASCADE_EGRESS=$EG"',
+        "} &",
+        f"{{ {_DIRECT_IP_CHECK}; }} &",
+        "{",
+        *_client_container_select(),
+        'CL=""; RU=""',
+        'P=""; [ -z "$C" ] || P=$(sudo docker container inspect -f \'{{.State.Pid}}\' "$C" 2>/dev/null)',
+        'client_https() {',
+        '  HOST=$1',
+        "  ADDR=$(timeout 3s getent ahostsv4 \"$HOST\" | awk 'NR == 1 {print $1}')",
+        '  [ -n "$ADDR" ] || return 1',
+        '  sudo -n nsenter -t "$P" -n curl -4 -fsS -m 10 --noproxy \'*\' '
+        '--resolve "$HOST:443:$ADDR" "https://$HOST"',
+        '}',
+        'if [ -n "$P" ] && [ "$P" != 0 ]; then',
+        '  CL=$(client_https api.ipify.org 2>/dev/null)',
+        *([f'  RU=$(client_https {local_url.removeprefix("https://")} 2>/dev/null | {_IP_FROM_HTML})'] if local_url else []),
+        'fi',
+        'echo "CASCADE_CLIENT=$CL"',
+        'echo "CASCADE_RU=$RU"',
+        "} &",
         cascade_awg.check_command(),
         CASCADE_PROBE_COMMAND,
         _reality_encryption_command(),
@@ -833,18 +860,7 @@ def build_check_command(country: str = "") -> str:
         # скрипт без строки rev - ставили до ревизий, это 0
         f"if [ -f {DIR}/cascade-tproxy.sh ]; then REV=$(sed -n 's/^# rev //p' {DIR}/cascade-tproxy.sh); "
         'echo "CASCADE_REV=${REV:-0}"; fi',
-        *_check_lines(country),
-        # адрес самого входа: свой трафик хоста в шлюз не заворачивается
-        _DIRECT_IP_CHECK,
-        # curl хоста в сети VPN-контейнера (см. egresscheck): свой curl в
-        # контейнере не нужен и зомби там не остаются. DNS резолвит хост
-        *_client_container_select(),
-        'CL=""',
-        'P=""; [ -z "$C" ] || P=$(sudo docker container inspect -f \'{{.State.Pid}}\' "$C" 2>/dev/null)',
-        "A=$(getent ahostsv4 api.ipify.org | awk 'NR == 1 {print $1}')",
-        'if [ -n "$P" ] && [ "$P" != 0 ] && [ -n "$A" ]; then CL=$(sudo -n nsenter -t "$P" -n '
-        'curl -4 -fsS -m 15 --resolve "api.ipify.org:443:$A" https://api.ipify.org 2>/dev/null); fi',
-        'echo "CASCADE_CLIENT=$CL"',
+        'wait',
     ]) + "\n"
 
 
@@ -984,15 +1000,9 @@ def health(transport: str, kv: dict[str, str], res: dict[str, str]) -> tuple[boo
 
 
 def leaks(res: dict[str, str]) -> bool:
-    """Клиенты выходят в интернет мимо выхода: адрес из VPN-контейнера не адрес
-    выхода, а свой адрес входа. Просто другой адрес (у выхода их несколько,
-    сайт адреса отвечает с разных серверов) обходом не считаем. Адрес входа
-    узнать не вышло - судим по несовпадению с выходом. Контейнер не ответил -
-    не судим совсем."""
-    client = res.get("client")
-    if not client or not res.get("egress") or client == res["egress"]:
-        return False
-    return client == res["direct"] if res.get("direct") else True
+    """Confirm a bypass only when the client uses the distinct entry address."""
+    client, direct, egress = res.get("client"), res.get("direct"), res.get("egress")
+    return bool(direct and egress and client == direct and client != egress)
 
 
 def stop_units(*units: str) -> str:

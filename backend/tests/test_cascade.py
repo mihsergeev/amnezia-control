@@ -271,6 +271,8 @@ async def test_install_wait_includes_unresponsive_ssh_poll(monkeypatch):
     ("", "", "1.1.1.1", "1.1.1.1"),
     ("RU", "", VLESS["entry_ip"], ""),
     ("FI", "ru", VLESS["entry_ip"], ""),
+    ("ru", "ZZ", VLESS["entry_ip"], ""),
+    ("QX", "ZZ", VLESS["entry_ip"], "entry.example.com"),
 ])
 async def test_install_uses_entry_country_before_collector_runs(
     session_factory, monkeypatch, cached_country, explicit_country, entry_ip, lookup_ip,
@@ -322,14 +324,24 @@ async def test_install_uses_entry_country_before_collector_runs(
         assert json.loads(row.params)["entry_country"] == "RU"
 
 
-@pytest.mark.parametrize("lookup_result", [None, "R1"], ids=["timeout", "malformed-code"])
+@pytest.mark.parametrize(("log", "detail"), [
+    ("DEPLOY_ERROR: geo download (github.com)\nDEPLOY_ERROR: cascade operation failed", "geo download (github.com)"),
+    ("DEPLOY_ERROR: cascade operation failed", "cascade operation failed"),
+    ("DEPLOY_ERROR:   ", "ошибка установки"),
+])
+def test_install_error_prefers_specific_failure_over_wrapper_fallback(log, detail):
+    assert cascadejob._error_line(log) == detail
+
+
+@pytest.mark.parametrize("lookup_result", [None, "R1", "ZZ"], ids=["timeout", "malformed-code", "unassigned-code"])
 async def test_install_requires_country_before_remote_changes(session_factory, monkeypatch, lookup_result):
     entry_id, exit_id, _ = await _servers(session_factory)
     async with session_factory() as session:
         entry = await session.get(Server, entry_id)
         entry.host = "entry.example.com"
+        entry.country = "QX"
         row = Cascade(entry_server_id=entry_id, exit_server_id=exit_id, transport="vless",
-                      params=json.dumps(VLESS), status="installing")
+                      params=json.dumps({**VLESS, "entry_country": "ZZ"}), status="installing")
         session.add(row)
         await session.commit()
         cascade_id = row.id
@@ -398,8 +410,12 @@ async def test_cascade_entry_country_api_preserves_override_for_retry_and_check(
     monkeypatch.setattr(api, "_operation_available", available)
     monkeypatch.setattr(cascadejob, "spawn", lambda _app, cid: spawned.append(cid))
     monkeypatch.setattr(cascade, "run_check", run_check)
+    create = {"entry_id": entry_id, "exit_id": exit_id, "transport": "gre"}
+    invalid_create = await client.post("/api/cascades", headers=auth_headers, json=create | {"entry_country": "ZZ"})
+    assert invalid_create.status_code == 422, invalid_create.text
+    assert spawned == []
     r = await client.post("/api/cascades", headers=auth_headers, json={
-        "entry_id": entry_id, "exit_id": exit_id, "transport": "gre", "entry_country": "fi",
+        **create, "entry_country": "fi",
     })
     assert r.status_code == 202, r.text
     assert r.json()["entry_country"] == "FI"
@@ -411,9 +427,13 @@ async def test_cascade_entry_country_api_preserves_override_for_retry_and_check(
         await session.commit()
 
     retry_path = f"/api/cascades/{cid}/install"
-    invalid = await client.post(retry_path, headers=auth_headers, json={"entry_country": "R1"})
-    assert invalid.status_code == 422, invalid.text
+    for invalid_country in ("R1", "qx", "ZZ"):
+        invalid = await client.post(retry_path, headers=auth_headers, json={"entry_country": invalid_country})
+        assert invalid.status_code == 422, invalid.text
     assert spawned == [cid]
+    supported = await client.post(retry_path, headers=auth_headers, json={"entry_country": "xk"})
+    assert supported.status_code == 202, supported.text
+    assert supported.json()["entry_country"] == "XK"
     retry = await client.post(retry_path, headers=auth_headers, json={"entry_country": "ru"})
     assert retry.status_code == 202, retry.text
     legacy = await client.post(retry_path, headers=auth_headers)
@@ -422,7 +442,7 @@ async def test_cascade_entry_country_api_preserves_override_for_retry_and_check(
     checked = await client.post(f"/api/cascades/{cid}/check", headers=auth_headers)
     assert checked.status_code == 200, checked.text
     assert checks == ["RU"]
-    assert spawned == [cid, cid, cid]
+    assert spawned == [cid, cid, cid, cid]
 
 
 async def test_delete_dismantles_entry_first(
@@ -589,11 +609,16 @@ def test_local_rules_follow_entry_country() -> None:
 
 
 def test_local_ip_check_only_where_known() -> None:
-    assert "ip.nic.ru" in cascade.build_check_command("RU")
+    ru = cascade.build_check_command("RU")
+    _bash_ok(ru)
+    assert "RU=$(client_https ip.nic.ru " in ru
+    assert not any("ip.nic.ru" in line and "--socks5" in line for line in ru.splitlines())
     kz = cascade.build_check_command("KZ")
     assert "ip.nic.ru" not in kz and 'RU=""' in kz and "CASCADE_RU=$RU" in kz
     script = cascade.build_entry_script("gre", "198.51.100.20", 3, VLESS, "KZ")
     assert "ip.nic.ru" not in script
+    install_ru = cascade.build_entry_script("gre", "198.51.100.20", 3, VLESS, "RU")
+    assert any("ip.nic.ru" in line and "--socks5" in line for line in install_ru.splitlines())
 
 
 def test_tproxy_catches_amnezia_dns_net() -> None:
@@ -641,12 +666,12 @@ def test_health_catches_a_leak() -> None:
     assert health(base + "CASCADE_CLIENT=198.51.100.20\n") == (True, "")
     # из контейнера спросить нечем - не судим
     assert health(base + "CASCADE_CLIENT=\n") == (True, "")
-    assert health(base + "CASCADE_CLIENT=203.0.113.10\n") == (
-        False, "клиенты выходят в интернет мимо выхода")
+    assert health(base + "CASCADE_CLIENT=203.0.113.10\n") == (True, "")
     # адрес входа известен: обход - только если клиенты выходят именно с него
     assert health(base + "CASCADE_DIRECT=203.0.113.10\nCASCADE_CLIENT=203.0.113.10\n") == (
         False, "клиенты выходят в интернет мимо выхода")
     assert health(base + "CASCADE_DIRECT=203.0.113.10\nCASCADE_CLIENT=198.51.100.99\n") == (True, "")
+    assert health(base + "CASCADE_DIRECT=198.51.100.20\nCASCADE_CLIENT=198.51.100.20\n") == (True, "")
     no_rule = base.replace("CASCADE_RULE=yes", "CASCADE_RULE=no")
     assert health(no_rule)[1] == "пропало правило маршрутизации в шлюз"
     no_gre_rule = base.replace("CASCADE_GRERULE=yes", "CASCADE_GRERULE=no")

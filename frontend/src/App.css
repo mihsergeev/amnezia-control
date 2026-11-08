@@ -3313,6 +3313,10 @@ tr.row-link:hover td {
   background: #22c55e;
 }
 
+.cc-progress-warn > div {
+  background: #f59e0b;
+}
+
 .cc-progress-bad > div {
   background: #ff7b6e;
 }
@@ -3453,6 +3457,10 @@ tr.row-link:hover td {
   color: #22c55e;
 }
 
+.cc-verdict-warn {
+  color: #f59e0b;
+}
+
 .cc-verdict-bad {
   color: #ff7b6e;
 }
@@ -3512,6 +3520,10 @@ tr.row-link:hover td {
 :root[data-theme='light'] .srv-kpi.res-crit .srv-kpi-value,
 :root[data-theme='light'] .cc-verdict-bad {
   color: #c0392b;
+}
+
+:root[data-theme='light'] .cc-verdict-warn {
+  color: #92400e;
 }
 
 /* Configurations can contain long inline certificates; keep their controls visible. */

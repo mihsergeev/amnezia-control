@@ -3,6 +3,7 @@
 import shlex
 
 BASE = "/lib65/scripts/acontrol-cascade-operation-locks"
+OPERATION_FAILED = "cascade operation failed"
 
 
 def _program(cascade_id: int, *, mode: str = "check", owner: str = "",
@@ -36,7 +37,13 @@ if path.exists() or path.is_symlink():
  meta=path.stat()
  if not stat.S_ISREG(meta.st_mode) or meta.st_uid!=os.geteuid() or meta.st_mode & 0o077 or meta.st_size>4096:sys.exit(73)
  state=json.loads(path.read_text())
- if owner and state.get('owner')!=owner and not (mode=='arm' and state.get('revoked') is True):sys.exit(73)
+ if owner and state.get('owner')!=owner:
+  if state.get('revoked') is not True:sys.exit(73)
+  # SQLite can reuse an ID. A different owner has not armed this node yet.
+  # Leave the old tombstone and any foreign runtime alone on removal.
+  if mode=='remove':
+   print('CASCADE_REMOVED=yes',flush=True);sys.exit(0)
+  if mode not in ('check','arm'):sys.exit(73)
 def save(value):
  temporary=path.with_suffix('.tmp')
  out=os.open(temporary,os.O_WRONLY|os.O_CREAT|os.O_TRUNC|os.O_NOFOLLOW,0o600)
@@ -78,5 +85,5 @@ def wrap(cascade_id: int, script: str, owner: str, *, generation: str = "", remo
             "CASCADE_RC=$?\n"
             'if [ "$CASCADE_RC" -eq 75 ]; then echo CASCADE_OPERATION_BUSY; '
             'echo "DEPLOY_ERROR: cascade operation is still running on the node"; '
-            'elif [ "$CASCADE_RC" -ne 0 ]; then echo "DEPLOY_ERROR: cascade operation failed"; fi\n'
+            f'elif [ "$CASCADE_RC" -ne 0 ]; then echo "DEPLOY_ERROR: {OPERATION_FAILED}"; fi\n'
             'exit "$CASCADE_RC"\n')

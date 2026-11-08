@@ -209,6 +209,34 @@ def test_process_lock_and_generation_prevent_restart_delete_orphans(tmp_path):
     assert run('check').returncode==0
 
 
+@pytest.mark.skipif(sys.platform == 'win32', reason='real fcntl/exec integration requires Linux')
+def test_reused_id_can_retry_or_remove_without_touching_foreign_runtime(tmp_path):
+    base = tmp_path / 'locks'
+    old_owner, new_owner, generation = 'a' * 32, 'b' * 32, 'c' * 32
+
+    def run(mode, owner, payload=''):
+        program = cascade_lock._program(1, mode=mode, owner=owner, generation=generation, base=str(base))
+        return subprocess.run([sys.executable, '-c', program], input=payload, text=True,
+                              capture_output=True, timeout=10)
+
+    assert run('arm', old_owner).returncode == 0
+    for mode in ('check', 'arm', 'remove'):
+        assert run(mode, new_owner).returncode == 73
+    # A failed teardown still leaves a revocation marker to block late workers.
+    assert run('remove', old_owner, 'exit 1\n').returncode == 1
+    tombstone = (base / '1.json').read_bytes()
+
+    assert run('check', new_owner).stdout.strip() == 'CASCADE_OPERATION_FREE'
+    removed = run('remove', new_owner, 'echo UNEXPECTED_PAYLOAD\nexit 1\n')
+    assert removed.returncode == 0 and removed.stdout.strip() == 'CASCADE_REMOVED=yes'
+    assert (base / '1.json').read_bytes() == tombstone
+    assert run('run', old_owner, 'echo UNEXPECTED_PAYLOAD\n').returncode == 73
+    assert run('edit', new_owner, 'echo UNEXPECTED_PAYLOAD\n').returncode == 73
+    assert run('arm', new_owner).returncode == 0
+    assert run('run', old_owner).returncode == 73
+    assert run('run', new_owner, 'echo INSTALLED\n').stdout.strip() == 'INSTALLED'
+
+
 async def setup_nodes(factory, count=4):
     async with factory() as session:
         rows = [Server(name=f"node-{i}", host=f"192.0.2.{10+i}", last_check_ok=True) for i in range(count)]

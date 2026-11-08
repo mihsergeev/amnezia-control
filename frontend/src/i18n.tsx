@@ -214,6 +214,8 @@ const EN: Record<string, string> = {
   'клиенты идут мимо шлюза': 'clients bypass the gateway',
   'пропало правило маршрутизации в шлюз': 'the routing rule into the gateway is gone',
   'Клиенты выходят с адреса выхода': 'Clients go out from the exit address',
+  'Клиенты выходят в интернет мимо выхода': 'Clients reach the internet bypassing the exit',
+  'Выход клиентов через каскад не подтвержден': 'Client egress through the cascade could not be verified',
   'клиенты выходят в интернет мимо выхода': 'clients reach the internet bypassing the exit',
   'из контейнера спросить нечем': 'nothing to ask with inside the container',
   'GRE-туннель до выхода поднят': 'GRE tunnel to the exit is up',
@@ -223,6 +225,7 @@ const EN: Record<string, string> = {
   'Проверочный сайт страны входа идет через выход': "The entry country's test site is reached through the exit",
   'Прямой маршрут для сайта страны входа не подтвержден': "Direct routing to the entry country's test site could not be verified",
   'Связь через выход работает': 'Connectivity through the exit is working',
+  'Шлюз отвечает, выход клиентов через каскад не подтвержден': 'The gateway responds, but client egress through the cascade could not be verified',
   'адрес {ip}': 'address {ip}',
   'GRE-туннель выключен': 'GRE tunnel is down',
   'Каскад работает': 'Cascade works',
@@ -1033,7 +1036,9 @@ const EN: Record<string, string> = {
   'Окно можно закрыть, установка продолжится. Ход виден в карточке входа.':
     'You can close the window, the install goes on. Progress is in the entry\'s card.',
   'Каскад собран': 'Cascade is ready',
-  'Остальные сайты открываются с {ip}': 'Other sites open from {ip}',
+  'Проверка шлюза через выход показала адрес {ip}': 'The gateway check through the exit returned address {ip}',
+  'Шлюз открыл проверочный сайт страны входа напрямую': "The gateway reached the entry country's test site directly",
+  'Шлюз открыл проверочный сайт страны входа через выход': "The gateway reached the entry country's test site through the exit",
   'Канал вход -> выход: ~{mbps} Мбит/с': 'Entry -> exit link: ~{mbps} Mbit/s',
   'Перезагрузку обоих серверов переживает: туннель и шлюз - службы systemd':
     'Survives a reboot of both servers: the tunnel and the gateway are systemd services',

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { cascadeLocalRoute, cascadePort, cascadeSecurityState, DEFAULT_CASCADE_TRANSPORT } from '../src/cascadeUi.ts'
+import { cascadeClientExitConfirmed, cascadeLocalRoute, cascadePort, cascadeSecurityState, DEFAULT_CASCADE_TRANSPORT } from '../src/cascadeUi.ts'
 
 test('the new default is AWG, not an unencrypted transport recommendation', () => {
   assert.equal(DEFAULT_CASCADE_TRANSPORT, 'awg')
@@ -34,4 +34,14 @@ test('a responding local site only confirms a direct route if the entry and exit
   assert.equal(cascadeLocalRoute({ ru: direct, direct }), 'unknown')
   assert.equal(cascadeLocalRoute({ ru: egress, egress }), 'unknown')
   assert.equal(cascadeLocalRoute({ direct, egress }), 'unknown')
+})
+
+test('client egress needs a matching exit address distinct from the entry', () => {
+  const direct = '192.0.2.10'
+  const egress = '198.51.100.20'
+  assert.equal(cascadeClientExitConfirmed({ client: egress, direct, egress }), true)
+  assert.equal(cascadeClientExitConfirmed({ client: direct, direct, egress }), false)
+  assert.equal(cascadeClientExitConfirmed({ client: direct, direct, egress: direct }), false)
+  assert.equal(cascadeClientExitConfirmed({ client: egress, egress }), false)
+  assert.equal(cascadeClientExitConfirmed({ direct, egress }), false)
 })

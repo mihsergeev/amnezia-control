@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { ApiError, checkCascade, type Cascade, type CascadeCheck, type Server } from './api'
 import { countryFlag } from './format'
-import { cascadeLocalRoute, cascadeTransportLabel } from './cascadeUi'
+import { cascadeClientExitConfirmed, cascadeLocalRoute, cascadeTransportLabel } from './cascadeUi'
 import { CascadeSecurity } from './CascadeSecurity'
 import { greLinkLabel } from './serverList'
 import { useI18n } from './i18n'
@@ -113,25 +113,24 @@ export function CascadeCheckModal({ cascade, entry, exit, onClose, onChecked, on
   // путь клиентов целиком: адрес изнутри VPN-контейнера на входе. Шлюз выше
   // проверяется напрямую и не заметит, если клиенты идут в интернет мимо него
   const clientIdx = steps.length
+  const clientConfirmed = result ? cascadeClientExitConfirmed(result) : false
   steps.push({
-    label: t('Клиенты выходят с адреса выхода'),
+    label: result?.leak
+      ? t('Клиенты выходят в интернет мимо выхода')
+      : !result || clientConfirmed
+        ? t('Клиенты выходят с адреса выхода')
+        : t('Выход клиентов через каскад не подтвержден'),
     fail: t('клиенты выходят в интернет мимо выхода'),
     detail: result
       ? result.client
         ? t('адрес {ip}', { ip: result.client })
         : t('из контейнера спросить нечем')
       : undefined,
-    // контейнер не ответил - не судим. Другой адрес, но не адрес входа
-    // (у выхода их несколько) - не поломка, только предупреждение
     state: !result
       ? 'wait'
-      : !result.client
-        ? 'warn'
-        : result.leak
-          ? 'bad'
-          : !result.egress || result.client === result.egress
-            ? st(!!result.egress)
-            : 'warn',
+      : result.leak
+        ? 'bad'
+        : clientConfirmed ? 'ok' : 'warn',
   })
   const localRoute = result ? cascadeLocalRoute(result) : 'unknown'
   const checksLocalRoute = ru || Boolean(result?.ru)
@@ -162,13 +161,14 @@ export function CascadeCheckModal({ cascade, entry, exit, onClose, onChecked, on
   // участок пути готов, когда проявились все его шаги
   const link = (states: StepState[]): 'run' | 'ok' | 'bad' | 'idle' => {
     if (states.some((s) => s === 'bad')) return 'bad'
-    if (states.every((s) => s === 'ok' || s === 'warn')) return 'ok'
+    if (states.every((s) => s === 'ok')) return 'ok'
     return running ? 'run' : 'idle'
   }
   const toEntry = link([view(0), view(1)])
   const toExit = link(tunnelled ? [view(2)] : [view(egressIdx)])
   const toNet = link([view(egressIdx), view(clientIdx)])
   const done = !running && !!result && shown >= steps.length
+  const verdictTone = !result?.ok ? 'bad' : !clientConfirmed || localRouteWarning ? 'warn' : 'ok'
 
   const reason = (() => {
     if (!result || result.ok) return ''
@@ -217,7 +217,7 @@ export function CascadeCheckModal({ cascade, entry, exit, onClose, onChecked, on
         <CascadeSecurity encrypted={(result ?? cascade).encrypted} encryption={(result ?? cascade).encryption} />
 
         <div
-          className={`cc-progress ${done ? (result?.ok ? 'cc-progress-ok' : 'cc-progress-bad') : error ? 'cc-progress-bad' : ''}`}
+          className={`cc-progress ${done ? `cc-progress-${verdictTone}` : error ? 'cc-progress-bad' : ''}`}
         >
           <div style={{ width: `${progress}%` }} />
         </div>
@@ -240,9 +240,11 @@ export function CascadeCheckModal({ cascade, entry, exit, onClose, onChecked, on
         </ul>
 
         {done && result && (
-          <p className={result.ok ? 'cc-verdict cc-verdict-ok' : 'cc-verdict cc-verdict-bad'}>
+          <p className={`cc-verdict cc-verdict-${verdictTone}`}>
             {result.ok
-              ? (localRouteWarning ? t('Связь через выход работает') : t('Каскад работает'))
+              ? !clientConfirmed
+                ? t('Шлюз отвечает, выход клиентов через каскад не подтвержден')
+                : localRouteWarning ? t('Связь через выход работает') : t('Каскад работает')
               : reason
                 ? t('Каскад не работает: {reason}', { reason })
                 : t('Каскад не работает')}

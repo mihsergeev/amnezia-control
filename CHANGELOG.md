@@ -4,6 +4,14 @@ All notable changes to Amnezia Control are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.84.21] - 2026-11-08
+
+- Reject unsupported entry country codes and require a code before retrying when automatic detection fails.
+- Check the local route from the VPN network and show a warning when client egress cannot be confirmed.
+- Run the independent cascade checks concurrently so a slow IP lookup cannot hold up the other checks.
+- Allow safe retry and removal when a new cascade reuses the ID of a deleted cascade.
+- Show the specific cascade setup failure when the operation also reports a generic error.
+
 ## [0.84.20] - 2026-11-08
 
 - Stop cascade setup before installing either side if the entry country cannot be determined.

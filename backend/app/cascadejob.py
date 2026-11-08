@@ -10,7 +10,6 @@ import asyncio
 import ipaddress
 import json
 import logging
-import re
 import secrets
 from datetime import datetime, timezone
 
@@ -99,10 +98,15 @@ async def _side(
 
 
 def _error_line(text: str) -> str:
+    fallback = "ошибка установки"
     for line in reversed(text.splitlines()):
         if "DEPLOY_ERROR:" in line:
-            return line.split("DEPLOY_ERROR:", 1)[1].strip()
-    return "ошибка установки"
+            detail = line.split("DEPLOY_ERROR:", 1)[1].strip()
+            if detail == cascade_lock.OPERATION_FAILED:
+                fallback = detail
+            elif detail:
+                return detail
+    return fallback
 
 
 async def _run(cid: int, factory, settings) -> None:
@@ -199,12 +203,10 @@ async def _run_locked(cid: int, factory, settings) -> None:
             await session.commit()
 
 
-def _country_code(value: str | None) -> str:
-    return value.upper() if isinstance(value, str) and re.fullmatch(r"[A-Za-z]{2}", value) else ""
-
-
 async def _entry_country(entry: Server, params: dict) -> str:
-    country = _country_code(params.get("entry_country")) or _country_code(entry.country)
+    country = (
+        geo.normalize_country_code(params.get("entry_country")) or geo.normalize_country_code(entry.country)
+    )
     if country:
         return country
     # The collector may not have looked up a newly added entry yet. Prefer its
@@ -216,7 +218,7 @@ async def _entry_country(entry: Server, params: dict) -> str:
             host = str(address)
     except ValueError:
         pass
-    return _country_code(await geo.country_code(host))
+    return geo.normalize_country_code(await geo.country_code(host))
 
 
 async def _finish(factory, cid: int, status: str, error: str, text: str, result: dict) -> None:

@@ -151,7 +151,9 @@ export function CascadeWizard({
   const entry = byId(entryId)
   const exit = byId(exitId)
   const countryError = cascade?.status === 'error' && cascade.result.error_code === 'cascade_entry_country_unknown'
-  const invalidCountry = entryCountry !== '' && !/^[A-Z]{2}$/.test(entryCountry)
+  const validCountry = /^[A-Z]{2}$/.test(entryCountry)
+  const invalidCountry = entryCountry !== '' && !validCountry
+  const retryNeedsCountry = countryError && !validCountry
   const localRoute = cascade ? cascadeLocalRoute(cascade.result) : 'unknown'
 
   const handleError = useCallback(
@@ -357,7 +359,7 @@ export function CascadeWizard({
   }
 
   async function retry() {
-    if (!cascade || (countryError && invalidCountry)) return
+    if (!cascade || retryNeedsCountry) return
     setBusy(true)
     setError(null)
     try {
@@ -386,7 +388,8 @@ export function CascadeWizard({
           spellCheck={false}
           aria-invalid={invalidCountry}
           disabled={busy}
-          placeholder={t('Автоматически')}
+          required={countryError}
+          placeholder={countryError ? undefined : t('Автоматически')}
           onChange={event => setEntryCountry(event.target.value.toUpperCase())}
         />
         <span className={`small ${invalidCountry ? 'err-text' : 'muted'}`}>
@@ -746,16 +749,16 @@ export function CascadeWizard({
               {cascade.result.egress && (
                 <div>
                   <span className="ok-text">✓</span>{' '}
-                  {t('Остальные сайты открываются с {ip}', { ip: cascade.result.egress })}
+                  {t('Проверка шлюза через выход показала адрес {ip}', { ip: cascade.result.egress })}
                 </div>
               )}
               {((cascade.entry_country || entry?.country || '').toUpperCase() === 'RU' || cascade.result.ru) && (
                 <div>
                   {localRoute === 'entry' && <><span className="ok-text">✓</span>{' '}</>}
                   {localRoute === 'entry'
-                    ? t('Проверочный сайт страны входа открыт напрямую')
+                    ? t('Шлюз открыл проверочный сайт страны входа напрямую')
                     : localRoute === 'exit'
-                      ? t('Проверочный сайт страны входа идет через выход')
+                      ? t('Шлюз открыл проверочный сайт страны входа через выход')
                       : t('Прямой маршрут для сайта страны входа не подтвержден')}
                   {cascade.result.ru && <span className="muted"> · {t('адрес {ip}', { ip: cascade.result.ru })}</span>}
                 </div>
@@ -821,7 +824,7 @@ export function CascadeWizard({
                 <button className="ghost" disabled={busy} onClick={() => onRemove(cascade)}>
                   {t('Разобрать каскад…')}
                 </button>
-                <button disabled={busy || (countryError && invalidCountry)} onClick={retry}>
+                <button disabled={busy || retryNeedsCountry} onClick={retry}>
                   {t('Запустить еще раз')}
                 </button>
               </>

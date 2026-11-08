@@ -1,10 +1,11 @@
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, computed_field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, computed_field, field_validator, model_validator
 
 
 from app.cascade_routes import Route
+from app.geo import normalize_country_code
 
 
 class LoginRequest(BaseModel):
@@ -724,6 +725,16 @@ class CascadePair(BaseModel):
 
 class CascadeInstall(BaseModel):
     entry_country: str | None = Field(default=None, pattern=r"^[A-Za-z]{2}$")
+
+    @field_validator("entry_country")
+    @classmethod
+    def validate_entry_country(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        country = normalize_country_code(value)
+        if not country:
+            raise ValueError("Expected a supported two-letter country code")
+        return country
 
 
 class CascadeCreate(CascadePair, CascadeInstall):

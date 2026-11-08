@@ -23,6 +23,10 @@ export function cascadeLocalRoute(result: { ru?: string; direct?: string; egress
   return ru === egress ? 'exit' : 'unknown'
 }
 
+export function cascadeClientExitConfirmed({ client, direct, egress }: { client?: string; direct?: string; egress?: string }): boolean {
+  return Boolean(direct && egress && direct !== egress && client === egress)
+}
+
 export function cascadeTransportLabel(transport: CascadeTransport): string {
   return transport === 'awg' ? 'AWG 3.1' : transport === 'gre' ? 'GRE' : 'VLESS'
 }
