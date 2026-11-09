@@ -239,31 +239,31 @@ bridges() {
 
 up() {
   modprobe xt_TPROXY 2>/dev/null || true
-  ip rule show | grep -q "fwmark $MARK lookup $TABLE" || ip rule add fwmark $MARK lookup $TABLE
-  ip route replace local 0.0.0.0/0 dev lo table $TABLE
-  chain
+  ip rule show | grep -q "fwmark $MARK lookup $TABLE" || ip rule add fwmark $MARK lookup $TABLE || return 1
+  ip route replace local 0.0.0.0/0 dev lo table $TABLE || return 1
+  chain || return 1
   jumps
 }
 
 # цепочка с нуля (-F): из up, а из heal - только если ее содержимого нет
 chain() {
-  iptables -t mangle -N $CHAIN 2>/dev/null || iptables -t mangle -F $CHAIN
+  iptables -t mangle -N $CHAIN 2>/dev/null || iptables -t mangle -F $CHAIN || return 1
   OWN=$(ip -4 -o addr show scope global | awk '{print $4}' | cut -d/ -f1)
   for net in $SKIP $OWN; do
-    iptables -t mangle -A $CHAIN -d "$net" -j RETURN
+    iptables -t mangle -A $CHAIN -d "$net" -j RETURN || return 1
   done
   # ответы контейнеров на входящие к опубликованным портам
-  iptables -t mangle -A $CHAIN -m conntrack --ctstate DNAT -j RETURN
-  iptables -t mangle -A $CHAIN -p tcp -j TPROXY --on-ip 127.0.0.1 --on-port $PORT --tproxy-mark $MARK/$MARK
+  iptables -t mangle -A $CHAIN -m conntrack --ctstate DNAT -j RETURN || return 1
+  iptables -t mangle -A $CHAIN -p tcp -j TPROXY --on-ip 127.0.0.1 --on-port $PORT --tproxy-mark $MARK/$MARK || return 1
   iptables -t mangle -A $CHAIN -p udp -j TPROXY --on-ip 127.0.0.1 --on-port $PORT --tproxy-mark $MARK/$MARK
 }
 
 # переходы в цепочку с мостов: только недостающие (-C || -A/-I)
 jumps() {
   for IF in $(bridges); do
-    iptables -t mangle -C PREROUTING -i $IF -j $CHAIN 2>/dev/null || iptables -t mangle -A PREROUTING -i $IF -j $CHAIN
+    iptables -t mangle -C PREROUTING -i $IF -j $CHAIN 2>/dev/null || iptables -t mangle -A PREROUTING -i $IF -j $CHAIN || return 1
     # INPUT бывает по умолчанию DROP (ufw): пропускаем то, что завернули в шлюз
-    iptables -C INPUT -i $IF -m mark --mark $MARK/$MARK -j ACCEPT 2>/dev/null || iptables -I INPUT 1 -i $IF -m mark --mark $MARK/$MARK -j ACCEPT
+    iptables -C INPUT -i $IF -m mark --mark $MARK/$MARK -j ACCEPT 2>/dev/null || iptables -I INPUT 1 -i $IF -m mark --mark $MARK/$MARK -j ACCEPT || return 1
   done
 }
 
@@ -275,20 +275,20 @@ heal() {
   ok=1
   # ставим только недостающее и без -F: up сбрасывал цепочку и заполнял ее по
   # правилу, и в это окно клиенты выходили мимо выхода каскада
-  ip rule show | grep -q "fwmark $MARK lookup $TABLE" || { ok=0; ip rule add fwmark $MARK lookup $TABLE; }
-  ip route show table $TABLE | grep -q "^local default" || { ok=0; ip route replace local 0.0.0.0/0 dev lo table $TABLE; }
+  ip rule show | grep -q "fwmark $MARK lookup $TABLE" || { ok=0; ip rule add fwmark $MARK lookup $TABLE || return 1; }
+  ip route show table $TABLE | grep -q "^local default" || { ok=0; ip route replace local 0.0.0.0/0 dev lo table $TABLE || return 1; }
   # цепочку собираем заново, только если в ней нет заворота в шлюз (пропала или
   # чужой iptables-restore): тогда и переходов через нее в шлюз уже нет
   if [ "$(iptables -t mangle -S $CHAIN 2>/dev/null | grep -c -- '-j TPROXY')" != 2 ]; then
     ok=0
-    chain
+    chain || return 1
   fi
   for IF in $(bridges); do
     iptables -t mangle -C PREROUTING -i $IF -j $CHAIN 2>/dev/null || ok=0
     iptables -C INPUT -i $IF -m mark --mark $MARK/$MARK -j ACCEPT 2>/dev/null || ok=0
   done
   [ $ok = 1 ] && return 0
-  jumps
+  jumps || return 1
   logger -t acontrol-cascade "tproxy rules restored"
 }
 
@@ -820,6 +820,7 @@ def build_entry_script(transport: str, exit_ip: str, cascade_id: int, params: di
         'sudo touch "$GW_TX/new-tproxy" || fail "gateway transaction state"; fi',
         "sudo systemctl enable --now acontrol-cascade-tproxy.service >/dev/null 2>&1 "
         "|| fail 'tproxy'",
+        f"sudo {DIR}/cascade-tproxy.sh heal || fail 'tproxy rules'",
         'if ! sudo systemctl is-active --quiet acontrol-cascade-heal.service; then '
         'sudo touch "$GW_TX/new-heal" || fail "gateway transaction state"; fi',
         "sudo systemctl enable --now acontrol-cascade-heal.service >/dev/null 2>&1 || fail 'heal'",

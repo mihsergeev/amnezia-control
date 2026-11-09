@@ -90,15 +90,16 @@ import json, os, pathlib, socket, stat, subprocess, sys, tempfile, time
 directory, gateway, owner, port, prefix, rules = json.loads(sys.argv[1])
 directory = pathlib.Path(directory)
 path = directory / 'config.json'
+pending = directory / '.routes-pending'
 mount = '/usr/local/etc/xray'
 docker = ['docker']
 def run(args, timeout=30):
     return subprocess.run(docker + args, capture_output=True, check=True, timeout=timeout).stdout
 
 container, = json.loads(run(['inspect', '--type=container', gateway]))
+container_id = container['Id']
 labels = container['Config'].get('Labels') or {}
-if (not container['State']['Running']
-    or labels.get('org.amnezia.control.owner', '') != owner
+if (labels.get('org.amnezia.control.owner', '') != owner
     or not any(item['Source'] == str(directory) and item['Destination'] == mount
                for item in container['Mounts'])):
     sys.exit(73)
@@ -106,17 +107,6 @@ if (not container['State']['Running']
 meta = path.lstat()
 if not stat.S_ISREG(meta.st_mode) or meta.st_uid != 0 or meta.st_size > 1024 * 1024:
     sys.exit(73)
-original = path.read_bytes()
-config = json.loads(original)
-current = config['routing']['rules']
-if not current or current[0].get('outboundTag') != 'block' or 'geoip:private' not in current[0].get('ip', []):
-    sys.exit(73)
-base = [rule for rule in current if not rule.get('ruleTag', '').startswith(prefix)]
-updated = base[:1] + rules + base[1:]
-if current == updated:
-    sys.exit(0)
-config['routing']['rules'] = updated
-
 def temporary(data, parent=directory):
     fd, name = tempfile.mkstemp(prefix='.routes-', suffix='.json' if parent != directory else '', dir=parent)
     with os.fdopen(fd, 'wb') as stream:
@@ -135,21 +125,54 @@ def restart():
             time.sleep(0.2)
     raise RuntimeError('Gateway did not start')
 
+
+def recover(original):
+    os.replace(temporary(original), path)
+    try:
+        restart()
+    except Exception:
+        sys.exit(74)
+    pending.unlink()
+
+
+# The route lock is held across this script. If the previous process exited
+# before confirming the reload, restore the last known configuration first.
+if pending.exists():
+    previous_id, _, previous_config = pending.read_bytes().partition(b'\n')
+    if previous_id == container_id.encode():
+        recover(previous_config)
+    else:
+        # A completed reinstall owns the new config and must not be undone.
+        pending.unlink()
+        if not container['State']['Running']:
+            sys.exit(73)
+elif not container['State']['Running']:
+    sys.exit(73)
+
+original = path.read_bytes()
+config = json.loads(original)
+current = config['routing']['rules']
+if not current or current[0].get('outboundTag') != 'block' or 'geoip:private' not in current[0].get('ip', []):
+    sys.exit(73)
+base = [rule for rule in current if not rule.get('ruleTag', '').startswith(prefix)]
+updated = base[:1] + rules + base[1:]
+if current == updated:
+    sys.exit(0)
+config['routing']['rules'] = updated
+
 with tempfile.TemporaryDirectory(prefix='.routes-test-', dir=directory) as staging:
     candidate = temporary(json.dumps(config, indent=2).encode(), staging)
     candidate_path = mount + '/' + str(candidate.relative_to(directory))
     run(['exec', gateway, 'xray', 'run', '-test', '-config', candidate_path])
     os.replace(temporary(original), directory / '.routes-previous')
+    os.replace(temporary(container_id.encode() + b'\n' + original), pending)
     os.replace(candidate, path)
     try:
         restart()
     except Exception:
-        os.replace(temporary(original), path)
-        try:
-            restart()
-        except Exception:
-            sys.exit(74)
+        recover(original)
         sys.exit(75)
+    pending.unlink()
 """
 
 

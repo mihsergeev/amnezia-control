@@ -899,9 +899,7 @@ async def restore_snapshot(
     spec = _SNAP_SPECS[tag]
     default = spec["container"]
     reload_cmd = spec["reload"].replace("%C", '"$C"')
-    # РАСПАКОВКА проверяется по коду возврата tar — раньше RESTORE_OK печатался
-    # безусловно, и битый/оборванный (ENOSPC) снимок «восстанавливался» с ошибкой,
-    # а API рапортовал успех. Теперь reload и RESTORE_OK — только если tar прошёл.
+    # A restore succeeds only when both extraction and reload succeed.
     # Контейнер берем из .c рядом со снимком (старые снимки без него - штатный).
     # Если того контейнера уже нет, не откатываем в чужой: это сломало бы его.
     # Не штатный контейнер (Legacy, OpenVPN без Cloak) просто перезапускаем,
@@ -911,13 +909,13 @@ async def restore_snapshot(
         f'[ -f "$F" ] || {{ echo NO_SNAP; exit 0; }}; '
         f'C=$(head -n1 "${{F%.tar.gz}}.c" 2>/dev/null); C=${{C:-{default}}}; '
         f'sudo docker ps --format "{{{{.Names}}}}" | grep -qxF -- "$C" || {{ echo NO_CONT; exit 0; }}; '
-        f'if cat "$F" | sudo docker exec -i "$C" tar -xzf - -C /; then '
+        f'if ! sudo docker exec -i "$C" tar -xzf - -C / < "$F"; then echo RESTORE_FAIL; exit 0; fi; '
         f'if [ "$C" = "{default}" ]; then {reload_cmd} >/dev/null 2>&1; '
-        f'else sudo docker restart "$C" >/dev/null 2>&1; fi; echo RESTORE_OK; '
-        f'else echo RESTORE_FAIL; fi'
+        f'else sudo docker restart "$C" >/dev/null 2>&1; fi '
+        f'&& echo RESTORE_OK || echo RESTORE_FAIL'
     )
     out = await conn.run(cmd, check=False)
-    return "RESTORE_OK" in (out.stdout or "")
+    return (out.stdout or "").splitlines()[-1:] == ["RESTORE_OK"]
 
 
 async def launch(
@@ -1191,22 +1189,6 @@ async def awg_adoptable(
     )
     result = await conn.run(cmd, check=False)
     return "YES" in (result.stdout or "")
-
-
-async def detect_openvpn_container(
-    conn: asyncssh.SSHClientConnection,
-) -> str | None:
-    """Имя запущенного openvpn/cloak-контейнера (панельного amnezia-openvpn-cloak
-    или родного Amnezia с иным именем), если есть — чтобы снять с него снимок
-    перед перезаписью PKI."""
-    cmd = (
-        'D=$({ [ -w /var/run/docker.sock ] || [ -w /run/docker.sock ]; } && echo docker || echo "sudo -n docker"); '
-        '$D ps --format "{{.Names}}" | grep -iE "openvpn|cloak" '
-        '| grep -vx "acontrol-openvpn-native" | head -1 || true'
-    )
-    result = await conn.run(cmd, check=False)
-    name = (result.stdout or "").strip()
-    return name or None
 
 
 async def read_status(

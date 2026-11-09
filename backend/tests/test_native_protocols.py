@@ -314,12 +314,25 @@ async def test_native_node_snapshot_is_private_before_writing_archive():
     assert await deploy.snapshot_config(Connection(), "wireguard") == "20261102-150000"
 
 
-def test_legacy_openvpn_deployment_never_adopts_native_pki():
+@pytest.mark.parametrize("stock_installed", [False, True])
+def test_legacy_openvpn_deployment_never_adopts_native_pki(stock_installed):
     script = openvpn.build_deploy_script(443, "example.invalid", "203.0.113.10")
-    source = next(line for line in script.splitlines() if line.startswith("SRC=$("))
-    mock = "sudo(){ printf '%s\\n' acontrol-openvpn-native amnezia-openvpn-cloak; }; "
-    result = subprocess.run(["bash"], input=(mock + source + '; printf "%s" "$SRC"').encode(), capture_output=True)
-    assert result.returncode == 0 and result.stdout == b"amnezia-openvpn-cloak"
+    source = script[script.index("NAMES=$("):script.index('\nlog "[2/6]')]
+    names = "acontrol-openvpn-native amnezia-openvpn-cloak-copy"
+    if stock_installed:
+        names += " amnezia-openvpn-cloak"
+    mock = f'''C=amnezia-openvpn-cloak
+fail() {{ exit 1; }}
+sudo() {{
+    case "$2" in
+        ps) printf '%s\\n' {names};;
+        inspect) printf '%s\\n' true;;
+    esac
+}}
+'''
+    result = subprocess.run(["bash", "-s"], input=(mock + source + '\nprintf "%s" "$SRC"\n').encode(),
+                            capture_output=True, check=True)
+    assert result.stdout == (b"amnezia-openvpn-cloak" if stock_installed else b"")
 
 
 async def test_native_collector_and_torrent_keep_protocol_identity(monkeypatch):

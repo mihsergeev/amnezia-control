@@ -96,6 +96,17 @@ def test_remove_peer_keeps_others_and_interface() -> None:
     assert result.count("[Peer]") == 1
 
 
+def test_remove_imported_peer_keeps_other_peer_with_key_in_comment() -> None:
+    target = "5Ai5cnecffo3Le2OesbVH26DrKBd1zJSDZLOadGmGwo="
+    other = "RXEZrMcQn5mGHzIGggBDO6VGfwiUxCAEbgGVXV2DHUc="
+    conf = SAMPLE_CONF.replace(
+        f"[Peer]\nPublicKey = {target}", f"[peer] # imported\npublickey = {target}"
+    ).replace(f"PublicKey = {other}", f"PublicKey = {other} # previous key: {target}")
+    interface, peers = awg.parse_conf(awg.remove_peer_from_conf(conf, target))
+    assert interface["ListenPort"] == "47180"
+    assert [peer["PublicKey"] for peer in peers] == [other]
+
+
 def test_build_client_config_mirrors_awg_params() -> None:
     interface, _ = awg.parse_conf(SAMPLE_CONF)
     params = {k: interface[k] for k in awg.AWG_PARAM_KEYS if k in interface}

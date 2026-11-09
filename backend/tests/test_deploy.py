@@ -1,8 +1,43 @@
 import base64
 import re
+import shlex
+import shutil
+import subprocess
+from types import SimpleNamespace
+
+import pytest
 
 from app import deploy
 
+
+@pytest.mark.skipif(shutil.which("bash") is None, reason="requires bash")
+@pytest.mark.parametrize("failure", ["", "exec", "restart"])
+async def test_snapshot_restore_requires_extract_and_restart(tmp_path, monkeypatch, failure):
+    monkeypatch.setattr(deploy, "SNAP_ROOT", shlex.quote(tmp_path.as_posix()))
+    directory = tmp_path / "xray"
+    directory.mkdir()
+    (directory / "20260710-023528.tar.gz").touch()
+    commands = r'''
+export PATH="/usr/bin:/bin:$PATH"
+sudo() {
+  case "$2" in
+    ps) echo amnezia-xray ;;
+    exec|restart) [ "$FAULT" != "$2" ] ;;
+    *) return 1 ;;
+  esac
+}
+'''
+
+    class Conn:
+        async def run(self, command, check):
+            result = subprocess.run(
+                [shutil.which("bash"), "-s"],
+                input=f"FAULT={failure}\n" + commands + command,
+                capture_output=True, text=True,
+            )
+            return SimpleNamespace(stdout=result.stdout)
+
+    assert await deploy.restore_snapshot(Conn(), "xray", "20260710-023528") == (not failure)
 
 def test_awg_params_constraints() -> None:
     for _ in range(200):

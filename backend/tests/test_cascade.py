@@ -629,6 +629,30 @@ def test_tproxy_catches_amnezia_dns_net() -> None:
     assert "iptables -t mangle -S PREROUTING | sed -n" in tp
 
 
+@pytest.mark.skipif(shutil.which("bash") is None, reason="requires bash")
+@pytest.mark.parametrize("action", ["up", "heal"])
+@pytest.mark.parametrize("fails", [False, True])
+def test_tproxy_reports_failure_to_install_tcp_rule(action, fails) -> None:
+    commands = r'''
+export PATH="/usr/bin:/bin:$PATH"
+modprobe() { return 0; }
+docker() { return 1; }
+ip() { return 0; }
+logger() { return 0; }
+iptables() {
+  case "$*" in
+    *"-p tcp -j TPROXY"*) [ "$FAULT" != tcp ] ;;
+    *) return 0 ;;
+  esac
+}
+'''
+    result = subprocess.run(
+        [shutil.which("bash"), "-s", "--", action],
+        input=f"FAULT={'tcp' if fails else 'none'}\n" + commands + cascade._fill(cascade._TPROXY_SH),
+        capture_output=True, text=True,
+    )
+    assert result.returncode == int(fails), result.stderr
+
 def test_lost_gre_rule_drops_instead_of_leaking() -> None:
     tp = cascade._fill(cascade._TPROXY_SH)
     gre = cascade._GRE_TUN_SH

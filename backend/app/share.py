@@ -74,6 +74,7 @@ async def create_link(
                 r = await http.post(
                     f"{base}/secret",
                     files={"msg": (None, text), "ttl": (None, f"{TTL_DAYS * 24}h")},
+                    follow_redirects=False,
                 )
                 r.raise_for_status()
                 token = r.json().get("token")
@@ -88,6 +89,7 @@ async def create_link(
                         "expire_after_days": TTL_DAYS,
                         "expire_after_views": 1,
                     }},
+                    follow_redirects=False,
                 )
                 r.raise_for_status()
                 data = r.json()

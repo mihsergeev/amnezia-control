@@ -426,9 +426,16 @@ async def restore_backup(
     old_versions = dict(
         (await session.execute(select(User.username, User.token_version))).all()
     )
-    revoked_prefixes = set(
-        await session.scalars(select(ApiKey.prefix).where(ApiKey.revoked.is_(True)))
-    )
+    revoked_keys = {}
+    if ApiKey in present:
+        revoked = await session.scalars(select(ApiKey).where(ApiKey.revoked.is_(True)))
+        revoked_keys = {
+            key.prefix: {
+                column.name: getattr(key, column.name)
+                for column in ApiKey.__table__.columns if not column.primary_key
+            }
+            for key in revoked
+        }
     restored: dict[str, int] = {}
     for model in reversed(present):  # чистим в обратном порядке (FK нет)
         await session.execute(delete(model))
@@ -447,9 +454,9 @@ async def restore_backup(
                     token_version=max(old_versions.get(name, 0), ver or 0) + 1
                 )
             )
-    if ApiKey in present and revoked_prefixes:
+    if revoked_keys:
         await session.execute(
-            update(ApiKey).where(ApiKey.prefix.in_(revoked_prefixes)).values(revoked=True)
+            update(ApiKey).where(ApiKey.prefix.in_(revoked_keys)).values(revoked=True)
         )
 
     # Postgres: строки вставлены с явными id, но identity-sequence не сдвинулась →
@@ -472,6 +479,13 @@ async def restore_backup(
                         f"(SELECT COUNT(*) FROM {tbl}) > 0)"
                     )
                 )
+    if revoked_keys:
+        # Сохраняем отзыв и при восстановлении архива, снятого до создания ключа.
+        # Иначе следующий архив, в котором ключ еще активен, оживит его.
+        archived_prefixes = {row["prefix"] for row in prepared[ApiKey.__tablename__]}
+        for prefix, row in revoked_keys.items():
+            if prefix not in archived_prefixes:
+                await session.execute(insert(ApiKey).values(**row))
     await session.commit()
 
     # восстановление data/ (ssh-ключ и пр.), без postgres

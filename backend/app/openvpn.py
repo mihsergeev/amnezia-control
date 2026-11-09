@@ -378,9 +378,12 @@ async def revoke_client(
     pki_env = f"EASYRSA_PKI={PKI} EASYRSA_BATCH=1"
     inner = (
         f"cd {EASYRSA} && "
-        f"{pki_env} ./easyrsa revoke {cid} >/dev/null 2>&1; "
+        f"STATUS=$(ACONTROL_CN={cid} awk -F '\\t' "
+        f"'$NF == \"/CN=\" ENVIRON[\"ACONTROL_CN\"] {{status=$1}} END {{print status}}' {PKI}/index.txt) && "
+        f'{{ [ "$STATUS" = R ] || {pki_env} ./easyrsa revoke {cid} >/dev/null 2>&1; }} && '
         f"{pki_env} ./easyrsa gen-crl >/dev/null 2>&1 && "
-        f"cp {PKI}/crl.pem {OVPN_DIR}/crl.pem && "
+        f"cp {PKI}/crl.pem {OVPN_DIR}/crl.pem.new && "
+        f"mv -f {OVPN_DIR}/crl.pem.new {OVPN_DIR}/crl.pem && "
         f"rm -f {PKI}/issued/{cid}.crt {PKI}/reqs/{cid}.req "
         f"{OVPN_DIR}/clients/{cid}.req && echo REVOKED_OK"
     )
@@ -562,7 +565,7 @@ def _b64(text: str) -> str:
     return base64.b64encode(text.encode()).decode()
 
 
-def build_deploy_script(port: int, site: str, server_ip: str = "") -> str:
+def build_deploy_script(port: int, site: str, server_ip: str = "", *, update: bool = False) -> str:
     """Скрипт build-on-target для OpenVPN/Cloak: собирает образ, генерит PKI +
     Cloak + shadowsocks, поднимает контейнер. Запускается от ssh_user через sudo,
     файлы в /opt пишутся через `base64 -d | sudo tee`. Маркеры DEPLOY_DONE /
@@ -589,13 +592,21 @@ def build_deploy_script(port: int, site: str, server_ip: str = "") -> str:
         "case \"$SRVIP\" in \"\"|*[!0-9.]*) "
         "SRVIP=$(ip route get 1.1.1.1 2>/dev/null | sed -n 's/.*src \\([0-9.]*\\).*/\\1/p' | head -1) ;; esac",
         "IMG=amnezia-openvpn-cloak",
-        "C=amnezia-openvpn-cloak",
+        f"C={CONTAINER_NAME}",
         "BUILD=/opt/amnezia-build/ovpn",
         "D=/opt/amnezia",
         "",
         'log "[1/6] docker"',
         "command -v docker >/dev/null 2>&1 || "
         '{ curl -fsSL https://get.docker.com | sudo sh >/dev/null || fail "docker install"; }',
+        'NAMES=$(sudo docker ps -a --format "{{.Names}}") || fail "docker inventory"',
+        'SRC=""',
+        'if printf "%s\\n" "$NAMES" | grep -Fxq "$C"; then',
+        '  [ "$(sudo docker inspect --format "{{.State.Running}}" "$C")" = true ] '
+        '|| fail "existing Cloak container is stopped"',
+        '  SRC="$C"',
+        'fi',
+        *(['[ -n "$SRC" ] || fail "Cloak container not found"'] if update else []),
         "",
         'log "[2/6] Dockerfile + gen.sh"',
         'sudo mkdir -p "$BUILD" "$D" || fail mkdir',
@@ -610,17 +621,17 @@ def build_deploy_script(port: int, site: str, server_ip: str = "") -> str:
         "",
         'log "[4/6] конфиг (PKI + Cloak + shadowsocks)"',
         # КРИТИЧНО: вытащить PKI/конфиг из ЖИВОГО контейнера на хост ДО guard.
-        # У родного Amnezia-openvpn конфиг лежит ВНУТРИ контейнера (не на хост-
-        # маунте) — иначе guard ниже сгенерил бы НОВЫЙ CA и все клиентские
-        # сертификаты стали бы невалидны (тот же класс, что инцидент de-hz).
-        'SRC=$(sudo docker ps --format "{{.Names}}" | grep -v -Fx acontrol-openvpn-native | grep -iE "openvpn|cloak" | head -1 || true)',
+        # У родного Amnezia OpenVPN/Cloak конфиг лежит ВНУТРИ контейнера (не на хост-
+        # маунте) — иначе guard ниже сгенерил бы новый CA и существующие
+        # клиентские сертификаты стали бы невалидны.
         'if [ -n "$SRC" ]; then',
         '  if ! sudo test -f "$D/openvpn/ca.crt"; then',
-        '    sudo docker exec "$SRC" tar -czf - -C / opt/amnezia/openvpn '
+        '    (set -o pipefail; sudo docker exec "$SRC" tar -czf - -C / opt/amnezia/openvpn '
         'opt/amnezia/cloak opt/amnezia/shadowsocks 2>/dev/null '
-        '| sudo tar -xzf - -C / 2>/dev/null '
-        '&& log "конфиг перечитан из контейнера $SRC" || true;',
+        '| sudo tar -xzf - -C / 2>/dev/null) || fail "copy existing Cloak configuration"',
+        '    log "конфиг перечитан из контейнера $SRC"',
         '  fi',
+        '  sudo test -s "$D/openvpn/ca.crt" || fail "existing Cloak CA not found"',
         # порт клиента может отличаться от переданного — берём опубликованный порт
         # живого контейнера, иначе у клиентов (endpoint зашит) отвалится коннект
         '  DPORT=$(sudo docker inspect "$SRC" --format '
@@ -673,15 +684,15 @@ def build_deploy_script(port: int, site: str, server_ip: str = "") -> str:
         'sudo firewall-cmd --reload >/dev/null 2>&1 || true; fi',
         "",
         'log "[6/6] контейнер"',
-        # сносим ЛЮБОЙ openvpn/cloak-контейнер (включая родной), иначе останется
-        # параллельный, а панель поднимет новый на том же порту (конфликт/дубль)
-        'OLD=$(sudo docker ps -aq --filter "name=openvpn" --filter "name=cloak" 2>/dev/null | sort -u); '
-        '[ -n "$OLD" ] && sudo docker rm -f $OLD >/dev/null 2>&1 || true',
-        'sudo docker rm -f "$C" >/dev/null 2>&1 || true',
-        'sudo docker run -d --name "$C" --restart always --privileged --cap-add=NET_ADMIN \\',
+        'RUN_DIR=$(mktemp -d) || fail "mktemp"',
+        'trap \'rm -f -- "$RUN_DIR/container.id"; rmdir -- "$RUN_DIR"\' EXIT',
+        'if [ -n "$SRC" ]; then sudo docker rm -f "$SRC" >/dev/null || fail "remove existing Cloak"; fi',
+        'sudo docker run -d --name "$C" --cidfile "$RUN_DIR/container.id" '
+        '--restart always --privileged --cap-add=NET_ADMIN \\',
         '  -p "${PORT}":443/tcp -v "$D":/opt/amnezia "$IMG" >/dev/null '
         # не запустился - убираем созданный контейнер, чтобы не висел в "created"
-        '|| { sudo docker rm -f "$C" >/dev/null 2>&1; fail run; }',
+        '|| { if [ -s "$RUN_DIR/container.id" ]; then '
+        'sudo docker rm -f "$(cat "$RUN_DIR/container.id")" >/dev/null 2>&1; fi; fail run; }',
         "sleep 6",
         "sudo docker ps --format '{{.Names}}' | grep -Fx \"$C\" >/dev/null || "
         '{ sudo docker logs "$C" 2>&1 | tail -20; fail notrunning; }',

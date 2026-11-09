@@ -374,11 +374,7 @@ async def deploy_openvpn(
                     status.HTTP_409_CONFLICT,
                     deploy.port_busy_detail(body.port, "tcp", owner, "OpenVPN/Cloak"),
                 )
-            # снимок конфига ДО (пере)развёртывания — для отката. Снимаем именно
-            # тот контейнер, что реально запущен (в т.ч. родной, с другим именем),
-            # иначе перед перезаписью PKI снимка бы не было.
-            src = await deploy.detect_openvpn_container(conn)
-            await deploy.snapshot_config(conn, "openvpn", container=src)
+            await deploy.snapshot_config(conn, "openvpn")
             await deploy.launch(conn, script, tag="openvpn")
     except HTTPException:
         raise
@@ -401,12 +397,11 @@ async def update_openvpn(
     server = await _get_or_404(server_id, session)
     # порт/сайт тут неважны: конфиг существует → gen пропускается, порт
     # детектится из живого контейнера
-    script = openvpn.build_deploy_script(8443, "tile.openstreetmap.org", server.host)
+    script = openvpn.build_deploy_script(8443, "tile.openstreetmap.org", server.host, update=True)
     try:
         async with _connect(server) as conn:
             await deploy.ensure_idle(conn, tag="openvpn")
-            src = await deploy.detect_openvpn_container(conn)
-            await deploy.snapshot_config(conn, "openvpn", container=src)
+            await deploy.snapshot_config(conn, "openvpn")
             await deploy.launch(conn, script, tag="openvpn")
     except Exception as exc:  # noqa: BLE001
         raise _ovpn_error(exc) from exc

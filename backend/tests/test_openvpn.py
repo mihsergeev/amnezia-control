@@ -1,3 +1,9 @@
+import shutil
+import subprocess
+from unittest.mock import AsyncMock
+
+import pytest
+
 from app import openvpn
 
 TABLE = """[
@@ -61,8 +67,8 @@ def test_deploy_script_preserves_live_pki_before_guard() -> None:
     s = openvpn.build_deploy_script(8443, "tile.openstreetmap.org", "203.0.113.9")
     assert "-s 10.8.0.0/24 ! -o tun0 -j MASQUERADE" in s
     assert "-s 10.8.0.0/24 -o eth0 -j MASQUERADE" not in s
-    # источник — любой openvpn/cloak-контейнер (в т.ч. родной с иным именем)
-    assert 'grep -iE "openvpn|cloak"' in s
+    assert 'grep -Fxq "$C"' in s
+    assert 'SRC="$C"' in s
     # перенос конфига из контейнера на хост
     assert 'docker exec "$SRC" tar -czf -' in s
     assert "opt/amnezia/openvpn" in s and "opt/amnezia/cloak" in s
@@ -71,5 +77,66 @@ def test_deploy_script_preserves_live_pki_before_guard() -> None:
     # порт берётся из живого контейнера (клиентский endpoint зашит на старый порт)
     assert "DPORT=$(sudo docker inspect" in s
     assert '[ -n "$DPORT" ] && PORT=$DPORT' in s
-    # сносится ЛЮБОЙ openvpn/cloak-контейнер (не только панельный $C)
-    assert 'docker ps -aq --filter "name=openvpn" --filter "name=cloak"' in s
+    # A native or unrelated OpenVPN container must never be removed.
+    removals = [line for line in s.splitlines() if "docker rm" in line]
+    assert len(removals) == 2
+    assert 'docker rm -f "$SRC"' in removals[0]
+    assert 'docker rm -f "$(cat "$RUN_DIR/container.id")"' in removals[1]
+
+
+def test_cloak_update_needs_a_running_cloak_container() -> None:
+    script = openvpn.build_deploy_script(8443, "vpn.example.org", update=True)
+    assert script.index('fail "existing Cloak container is stopped"') < script.index("docker build -t")
+    assert script.index('fail "Cloak container not found"') < script.index("docker build -t")
+
+
+@pytest.mark.skipif(shutil.which("bash") is None, reason="requires bash")
+@pytest.mark.parametrize("already_revoked", [False, True])
+async def test_revoke_requires_success_or_an_already_revoked_certificate(tmp_path, monkeypatch, already_revoked):
+    pki = tmp_path / "pki"
+    (pki / "issued").mkdir(parents=True)
+    cert = pki / "issued" / "fixture.crt"
+    cert.touch()
+    (pki / "index.txt").write_text(
+        f'{"R" if already_revoked else "V"}\tfixture-expiration\t\t01\tunknown\t/CN=fixture\n',
+        encoding="utf-8", newline="\n",
+    )
+    (tmp_path / "easyrsa").write_text(
+        '#!/bin/sh\n[ "$1" = gen-crl ] && echo updated > "$EASYRSA_PKI/crl.pem"\n',
+        encoding="utf-8", newline="\n",
+    )
+    (tmp_path / "easyrsa").chmod(0o700)
+    monkeypatch.setattr(openvpn, "EASYRSA", tmp_path.as_posix())
+    monkeypatch.setattr(openvpn, "PKI", pki.as_posix())
+    monkeypatch.setattr(openvpn, "OVPN_DIR", tmp_path.as_posix())
+    monkeypatch.setattr(openvpn, "_docker_exec", lambda _container, command: command)
+
+    async def run(_conn, command):
+        result = subprocess.run(
+            [shutil.which("bash"), "-s"],
+            input='export PATH="/usr/bin:/bin:$PATH"\n' + command,
+            capture_output=True, text=True,
+        )
+        if already_revoked:
+            assert result.returncode == 0, result.stderr
+        return result.stdout
+
+    monkeypatch.setattr(openvpn, "_run", run)
+    monkeypatch.setattr(openvpn, "_read_table", AsyncMock(return_value=[{"clientId": "fixture"}]))
+    write_table = AsyncMock()
+    monkeypatch.setattr(openvpn, "_write_table", write_table)
+    monkeypatch.setattr(openvpn, "read_status_map", AsyncMock(return_value={}))
+    active_crl = tmp_path / "crl.pem"
+    active_crl.write_text("old", encoding="utf-8")
+
+    if already_revoked:
+        await openvpn.revoke_client(None, "fixture", "fixture")
+        write_table.assert_awaited_once_with(None, "fixture", [])
+        assert active_crl.read_text(encoding="utf-8").strip() == "updated"
+        assert not cert.exists()
+    else:
+        with pytest.raises(openvpn.OpenVpnError):
+            await openvpn.revoke_client(None, "fixture", "fixture")
+        write_table.assert_not_awaited()
+        assert active_crl.read_text(encoding="utf-8") == "old"
+        assert cert.exists()

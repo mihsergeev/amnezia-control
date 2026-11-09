@@ -83,7 +83,10 @@ sudo() {
         *) return 99;;
       esac
       ;;
-    */cascade-tproxy.sh) echo tproxy-down >> "$STATE/calls";;
+    */cascade-tproxy.sh)
+      echo "tproxy-$2" >> "$STATE/calls"
+      [ "$2" != heal ] || [ "$FAULT" != tproxy-rules ]
+      ;;
     ip|iptables) return 0;;
     *) command "$@";;
   esac
@@ -100,7 +103,7 @@ curl() {
 
 
 @pytest.mark.skipif(shutil.which("bash") is None, reason="Bash is required")
-@pytest.mark.parametrize("fault", ["pull", "invalid-config", "create", "start", "egress", "promote", "heal",
+@pytest.mark.parametrize("fault", ["pull", "invalid-config", "create", "start", "egress", "promote", "tproxy-rules", "heal",
                                     "interrupted", "first-heal", "none"])
 def test_gateway_reinstall_keeps_previous_container_config_and_rules(tmp_path, monkeypatch, fault):
     state = tmp_path / "state"

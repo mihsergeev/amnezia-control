@@ -260,6 +260,10 @@ async def read_awg_conf(
     )
 
 
+def _conf_header(line: str) -> str:
+    return line.partition("#")[0].partition(";")[0].strip().lower()
+
+
 def parse_conf(text: str) -> tuple[dict[str, str], list[dict[str, str]]]:
     interface: dict[str, str] = {}
     peers: list[dict[str, str]] = []
@@ -267,7 +271,7 @@ def parse_conf(text: str) -> tuple[dict[str, str], list[dict[str, str]]]:
     cur: dict[str, str] = {}
     for line in text.splitlines():
         s = line.strip()
-        header = s.partition("#")[0].partition(";")[0].strip().lower()
+        header = _conf_header(s)
         if header == "[interface]":
             section = "iface"
             continue
@@ -326,7 +330,7 @@ def _split_sections(text: str) -> list[list[str]]:
     sections: list[list[str]] = []
     cur: list[str] = []
     for line in text.splitlines():
-        if line.strip() in ("[Interface]", "[Peer]"):
+        if _conf_header(line) in ("[interface]", "[peer]"):
             if cur:
                 sections.append(cur)
             cur = [line]
@@ -340,12 +344,11 @@ def _split_sections(text: str) -> list[list[str]]:
 def remove_peer_from_conf(conf_text: str, public_key: str) -> str:
     kept = []
     for section in _split_sections(conf_text):
-        head = section[0].strip()
-        is_target_peer = head == "[Peer]" and any(
-            ln.strip().startswith("PublicKey") and public_key in ln for ln in section
-        )
-        if not is_target_peer:
-            kept.append(section)
+        if _conf_header(section[0]) == "[peer]":
+            _, peers = parse_conf("\n".join(section))
+            if any(peer.get("PublicKey") == public_key for peer in peers):
+                continue
+        kept.append(section)
     lines = [ln for section in kept for ln in section]
     return "\n".join(lines).rstrip("\n") + "\n"
 

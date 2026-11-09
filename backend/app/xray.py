@@ -6,8 +6,8 @@
 UUID (xray_uuid.key) из пользовательского списка исключаётся. Ключи REALITY:
 xray_public.key, xray_short_id.key. Выдача/отзыв — правка server.json + docker restart.
 
-Дополнительные VLESS-входы (например, XHTTP за fallback основного на том же 443)
-получают тот же набор клиентов: панель держит их списки в зеркале основного.
+Панель обновляет запись указанного клиента на дополнительных VLESS-входах,
+например XHTTP за fallback основного на том же 443.
 """
 
 import asyncio
@@ -155,11 +155,29 @@ async def _default_uuid(conn, container) -> str:
     return out.strip()
 
 
-def _client_list(server: dict) -> list:
+def _vless_clients(settings: dict, *, create: bool = False) -> list:
+    # Xray gives a non-null clients array precedence, even when it is empty.
+    key = "users" if settings.get("clients") is None and "users" in settings else "clients"
+    clients = settings.get(key)
+    if clients is None:
+        clients = []
+        if create:
+            settings[key] = clients
+    if not isinstance(clients, list):
+        raise XrayError("некорректный список клиентов в server.json")
+    return clients
+
+
+def _client_list(server: dict, *, create: bool = False) -> list:
     try:
-        return server["inbounds"][0]["settings"]["clients"]
+        settings = server["inbounds"][0]["settings"]
     except (KeyError, IndexError, TypeError):
+        if create:
+            raise XrayError("некорректный server.json") from None
         return []
+    if not isinstance(settings, dict):
+        raise XrayError("некорректный server.json")
+    return _vless_clients(settings, create=create)
 
 
 def _extra_vless(server: dict) -> list[dict]:
@@ -182,16 +200,16 @@ def _update_extra_client(server: dict, client_id: str, client: dict | None = Non
     """Меняет только указанный UUID, сохраняя независимые списки VLESS-входов."""
     for inbound in _extra_vless(server):
         settings = inbound.setdefault("settings", {})
-        clients = settings.get("clients") or []
+        clients = _vless_clients(settings, create=client is not None)
         others = [c for c in clients if not (isinstance(c, dict) and c.get("id") == client_id)]
         if client is None:
             if len(others) != len(clients):
-                settings["clients"] = others
+                clients[:] = others
         elif len(others) == len(clients):
             entry = {**client, "email": client.get("email") or client_id}
             if not _uses_flow(inbound):
                 entry.pop("flow", None)
-            settings["clients"] = [*clients, entry]
+            clients.append(entry)
 
 
 def xhttp_fallback_path(server: dict) -> str | None:
@@ -290,7 +308,7 @@ def ensure_stats_config(server: dict) -> bool:
         changed = True
     clients = list(_client_list(server) or [])
     for inbound in _extra_vless(server):
-        clients.extend((inbound.get("settings") or {}).get("clients") or [])
+        clients.extend(_vless_clients(inbound.get("settings") or {}))
     clients = [c for c in clients if isinstance(c, dict) and c.get("id")]
     policy = server["policy"] = server.get("policy") or {}
     levels = policy["levels"] = policy.get("levels") or {}
@@ -675,7 +693,7 @@ async def issue_client(
     cid = str(uuid.uuid4())
     server = await _read_server(conn, container)
     entry = {"id": cid, "flow": FLOW, "email": cid}
-    _client_list(server).append(entry)
+    _client_list(server, create=True).append(entry)
     _update_extra_client(server, cid, entry)
     ensure_stats_config(server)  # самолечение: включаем статистику, если ещё нет
     await _write_server(conn, container, server)
@@ -706,15 +724,16 @@ async def pause_client(
     if not client_id:
         raise XrayError("некорректный clientId")
     server = await _read_server(conn, container)
+    clients = _client_list(server)
     entry = next(
-        (c for c in _client_list(server)
+        (c for c in clients
          if isinstance(c, dict) and c.get("id") == client_id),
         None,
     )
     if entry is None:
         raise XrayError("Клиент не найден")
-    server["inbounds"][0]["settings"]["clients"] = [
-        c for c in _client_list(server)
+    clients[:] = [
+        c for c in clients
         if not (isinstance(c, dict) and c.get("id") == client_id)
     ]
     _update_extra_client(server, client_id)
@@ -743,10 +762,9 @@ async def resume_client(
         if k in ("id", "flow", "email", "level") and isinstance(v, (str, int))
     }
     server = await _read_server(conn, container)
-    if not any(
-        isinstance(c, dict) and c.get("id") == cid for c in _client_list(server)
-    ):
-        _client_list(server).append(client_entry)
+    clients = _client_list(server, create=True)
+    if not any(isinstance(c, dict) and c.get("id") == cid for c in clients):
+        clients.append(client_entry)
     _update_extra_client(server, cid, client_entry)
     ensure_stats_config(server)
     await _write_server(conn, container, server)
@@ -767,11 +785,8 @@ async def revoke_client(
     if not client_id:
         raise XrayError("некорректный clientId")
     server = await _read_server(conn, container)
-    try:
-        clients = server["inbounds"][0]["settings"]["clients"]
-    except (KeyError, IndexError, TypeError) as exc:
-        raise XrayError("некорректный server.json") from exc
-    server["inbounds"][0]["settings"]["clients"] = [
+    clients = _client_list(server, create=True)
+    clients[:] = [
         c for c in clients if not (isinstance(c, dict) and c.get("id") == client_id)
     ]
     _update_extra_client(server, client_id)

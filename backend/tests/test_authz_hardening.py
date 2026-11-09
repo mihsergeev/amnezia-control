@@ -254,7 +254,14 @@ async def test_password_change_revokes_cached_api_keys(client, auth_headers, sen
 
 # --- 8. restore не оживляет старые токены и отозванные ключи ------------------
 
-async def test_restore_bumps_token_version_and_keeps_revoked(client, auth_headers, sent):
+@pytest.mark.parametrize("restore_older_first", [False, True])
+async def test_restore_bumps_token_version_and_keeps_revoked(
+    client, auth_headers, sent, restore_older_first
+):
+    if restore_older_first:
+        older_archive = (await client.post(
+            "/api/backup/download", headers=auth_headers, json={"password": PW}
+        )).content
     r = await client.post("/api/apikeys", json={"name": "k", "password": PW}, headers=auth_headers)
     kid, key = r.json()["id"], r.json()["key"]
     stolen = dict(auth_headers)
@@ -268,6 +275,16 @@ async def test_restore_bumps_token_version_and_keeps_revoked(client, auth_header
     login = await client.post("/api/auth/login", json={"username": "admin", "password": PW})
     h = {"Authorization": f"Bearer {login.json()['access_token']}"}
     assert (await client.delete(f"/api/apikeys/{kid}", headers=h)).status_code == 204
+
+    if restore_older_first:
+        older = await client.post(
+            "/api/backup/restore", content=older_archive,
+            headers={**h, "X-Confirm-Password": PW},
+        )
+        assert older.status_code == 200, older.text
+        h = {"Authorization": f"Bearer {older.json()['access_token']}"}
+        keys = (await client.get("/api/apikeys", headers=h)).json()
+        assert len(keys) == 1 and keys[0]["revoked"] is True
 
     r = await client.post(
         "/api/backup/restore", content=archive, headers={**h, "X-Confirm-Password": PW}

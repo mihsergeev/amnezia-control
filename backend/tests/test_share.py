@@ -76,6 +76,20 @@ async def test_service_error_is_share_error() -> None:
         await share.create_link("pwpush", BASE, "x", _client(handler))
 
 
+@pytest.mark.parametrize("engine", share.ENGINES)
+async def test_secret_post_does_not_follow_redirect(engine: str) -> None:
+    seen = []
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        seen.append(req.url.host)
+        return httpx.Response(307, headers={"Location": "http://other.example.org/redirect"})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler), follow_redirects=True) as client:
+        with pytest.raises(share.ShareError, match="307"):
+            await share.create_link(engine, BASE, "vpn://fixture", client)
+    assert seen == ["secret.example.com"]
+
+
 async def test_api_add_share_and_audit(client: httpx.AsyncClient, auth_headers, monkeypatch) -> None:
     async def fake_detect(base, client=None):
         return "pwpush"

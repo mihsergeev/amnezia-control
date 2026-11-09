@@ -5,6 +5,8 @@ import zlib
 from unittest.mock import AsyncMock
 from urllib.parse import parse_qs, unquote, urlsplit
 
+import pytest
+
 from app import xray
 
 
@@ -52,11 +54,16 @@ def _last_config(link: str) -> dict:
     return json.loads(top["containers"][0]["xray"]["last_config"])
 
 
-async def test_xhttp_client_lifecycle_preserves_independent_clients(monkeypatch):
+@pytest.mark.parametrize(("primary_key", "extra_key"), [
+    ("clients", "clients"), ("clients", "users"), ("users", "clients"),
+])
+async def test_xhttp_client_lifecycle_preserves_independent_clients(monkeypatch, primary_key, extra_key):
     server = _server_with_xhttp()
+    primary = server["inbounds"][0]["settings"]
     extra = server["inbounds"][2]["settings"]
-    existing = [*extra["clients"], {"id": "UID-B", "email": "fallback-user", "level": 7}]
-    extra["clients"] = existing.copy()
+    primary[primary_key] = primary.pop("clients")
+    existing = [*extra.pop("clients"), {"id": "UID-B", "email": "fallback-user", "level": 7}]
+    extra[extra_key] = existing.copy()
     for name, result in {
         "_read_server": server, "_read_table": [], "_write_table": None,
         "_write_server": None, "_restart": None, "_run": "date", "read_server_bits": BITS,
@@ -67,19 +74,31 @@ async def test_xhttp_client_lifecycle_preserves_independent_clients(monkeypatch)
     client, configs = await xray.issue_client(conn, container, "test", "vpn.example", "Test", "", "")
     assert [config["key"] for config in configs] == ["vision", "xhttp"]
     cid = client.client_id
-    assert extra["clients"] == [*existing, {"id": cid, "email": cid}]
+    assert extra[extra_key] == [*existing, {"id": cid, "email": cid}]
+    assert set(extra) & {"users", "clients"} == {extra_key}
+    assert set(primary) & {"users", "clients"} == {primary_key}
 
     paused = await xray.pause_client(conn, container, cid)
-    assert extra["clients"] == existing
-    assert cid not in {entry["id"] for entry in server["inbounds"][0]["settings"]["clients"]}
+    assert extra[extra_key] == existing
+    assert cid not in {entry["id"] for entry in primary[primary_key]}
     for _ in range(2):
         await xray.resume_client(conn, container, paused, "test")
-    assert extra["clients"] == [*existing, {"id": cid, "email": cid}]
-    assert [entry for entry in server["inbounds"][0]["settings"]["clients"] if entry["id"] == cid] == [paused]
+    assert extra[extra_key] == [*existing, {"id": cid, "email": cid}]
+    assert [entry for entry in primary[primary_key] if entry["id"] == cid] == [paused]
 
     await xray.revoke_client(conn, container, cid)
-    assert extra["clients"] == existing
-    assert cid not in {entry["id"] for entry in server["inbounds"][0]["settings"]["clients"]}
+    assert extra[extra_key] == existing
+    assert cid not in {entry["id"] for entry in primary[primary_key]}
+
+
+def test_vless_client_alias_precedence_matches_core():
+    server = _server_with_xhttp()
+    settings = server["inbounds"][0]["settings"]
+    settings["users"] = [{"id": "legacy"}]
+    settings["clients"] = []
+    assert xray._client_list(server) is settings["clients"]
+    settings["clients"] = None
+    assert xray._client_list(server) is settings["users"]
 
 
 def test_client_changes_ignore_api_on_single_inbound_servers():
