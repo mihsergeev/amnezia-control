@@ -13,6 +13,7 @@ xray_public.key, xray_short_id.key. Выдача/отзыв — правка ser
 import asyncio
 import base64
 import hashlib
+import ipaddress
 import json
 import re
 import shlex
@@ -98,11 +99,13 @@ async def _write_file(conn, container: str, path: str, payload: str) -> None:
 
 async def detect_container(conn: asyncssh.SSHClientConnection) -> str:
     # || true: без контейнера grep отдает 1, и наружу уходило голое "код 1"
-    cmd = _DOCKER + "$DOCKER ps --format '{{.Names}}' | grep -m1 amnezia-xray || true"
-    out = (await _run(conn, cmd)).strip()
-    if not out:
+    cmd = _DOCKER + "$DOCKER ps --format '{{.Names}}' | grep amnezia-xray || true"
+    matches = (await _run(conn, cmd)).split()
+    if CONTAINER_NAME in matches:
+        return CONTAINER_NAME
+    if not matches:
         raise XrayNotDeployed("XRay на сервере не развернут - сначала разверните его.")
-    return out.splitlines()[0].strip()
+    return matches[0]
 
 
 async def deployment_bind_ip(conn: asyncssh.SSHClientConnection, port: int) -> str | None:
@@ -175,28 +178,20 @@ def _uses_flow(inbound: dict) -> bool:
     )
 
 
-def sync_extra_inbounds(server: dict) -> bool:
-    """Делает списки клиентов дополнительных VLESS-входов зеркалом основного.
-
-    Без этого клиент, выданный панелью, работал бы только через основной вход.
-    Возвращает True, если конфиг изменился."""
-    changed = False
-    primary = [c for c in _client_list(server) if isinstance(c, dict) and c.get("id")]
+def _update_extra_client(server: dict, client_id: str, client: dict | None = None) -> None:
+    """Меняет только указанный UUID, сохраняя независимые списки VLESS-входов."""
     for inbound in _extra_vless(server):
-        flow = _uses_flow(inbound)
-        want = []
-        for c in primary:
-            entry = {"id": c["id"], "email": c.get("email") or c["id"]}
-            if "level" in c:
-                entry["level"] = c["level"]
-            if flow and c.get("flow"):
-                entry["flow"] = c["flow"]
-            want.append(entry)
         settings = inbound.setdefault("settings", {})
-        if settings.get("clients") != want:
-            settings["clients"] = want
-            changed = True
-    return changed
+        clients = settings.get("clients") or []
+        others = [c for c in clients if not (isinstance(c, dict) and c.get("id") == client_id)]
+        if client is None:
+            if len(others) != len(clients):
+                settings["clients"] = others
+        elif len(others) == len(clients):
+            entry = {**client, "email": client.get("email") or client_id}
+            if not _uses_flow(inbound):
+                entry.pop("flow", None)
+            settings["clients"] = [*clients, entry]
 
 
 def xhttp_fallback_path(server: dict) -> str | None:
@@ -225,6 +220,56 @@ def xhttp_fallback_path(server: dict) -> str | None:
     return None
 
 
+def _local_api_address(host: str, port: int | str | None) -> str | None:
+    try:
+        address = ipaddress.ip_address("127.0.0.1" if host in {"", "localhost"} else host.strip("[]"))
+        number = int(port)
+    except (ValueError, TypeError):
+        return None
+    if address.is_unspecified:
+        address = ipaddress.ip_address("::1" if address.version == 6 else "127.0.0.1")
+    if address.is_loopback and 1 <= number <= 65535:
+        return f"[{address}]:{number}" if address.version == 6 else f"{address}:{number}"
+    return None
+
+
+def _stats_api_address(server: dict) -> str | None:
+    api = server.get("api") or {}
+    if isinstance(listen := api.get("listen"), str) and listen:
+        if listen.startswith("/"):
+            return f"unix:{listen}"
+        if listen.startswith("@"):
+            return f"unix-abstract:{listen[1:]}"
+        host, _, port = listen.rpartition(":")
+        return _local_api_address(host, port)
+    if not api.get("tag"):
+        return None
+    rules = (server.get("routing") or {}).get("rules") or []
+    tags = {
+        tag for rule in rules if isinstance(rule, dict) and rule.get("outboundTag") == api["tag"]
+        for tag in (rule.get("inboundTag") or [])
+    }
+    for inbound in server.get("inbounds") or []:
+        if (isinstance(inbound, dict) and inbound.get("tag") in tags
+                and inbound.get("protocol") in {"dokodemo-door", "tunnel"}):
+            if address := _local_api_address(inbound.get("listen") or "", inbound.get("port")):
+                return address
+    return None
+
+
+def _free_stats_port(inbounds: list) -> int:
+    used: set[int] = set()
+    for inbound in inbounds:
+        for port_range in str(inbound.get("port", "")).split(","):
+            first, _, last = port_range.strip().partition("-")
+            if first.isdecimal() and (last or first).isdecimal():
+                used.update(range(max(1, int(first)), min(65535, int(last or first)) + 1))
+    for port in range(STATS_API_PORT, 65536):
+        if port not in used:
+            return port
+    raise XrayError("Нет свободного порта для локальной статистики Xray.")
+
+
 def ensure_stats_config(server: dict) -> bool:
     """Идемпотентно включает StatsService + пер-юзер статистику в server.json.
 
@@ -243,7 +288,10 @@ def ensure_stats_config(server: dict) -> bool:
     if "StatsService" not in services:
         api["services"] = [*services, "StatsService"]
         changed = True
-    clients = [c for c in _client_list(server) if isinstance(c, dict) and c.get("id")]
+    clients = list(_client_list(server) or [])
+    for inbound in _extra_vless(server):
+        clients.extend((inbound.get("settings") or {}).get("clients") or [])
+    clients = [c for c in clients if isinstance(c, dict) and c.get("id")]
     policy = server["policy"] = server.get("policy") or {}
     levels = policy["levels"] = policy.get("levels") or {}
     for level in {"0", *(str(c.get("level", 0)) for c in clients)}:
@@ -257,33 +305,32 @@ def ensure_stats_config(server: dict) -> bool:
         if system.get(flag) is not True:
             system[flag] = True
             changed = True
-    inbounds = server.setdefault("inbounds", [])
-    if not any(isinstance(i, dict) and i.get("tag") == "api" for i in inbounds):
+    if not api.get("listen") and _stats_api_address(server) is None:
+        inbounds = server.setdefault("inbounds", [])
+        tags = {i.get("tag") for i in inbounds if isinstance(i, dict)}
+        tag = "api"
+        suffix = 0
+        while tag in tags:
+            suffix += 1
+            tag = f"acontrol-stats-{suffix}"
         inbounds.append({
             "listen": "127.0.0.1",
-            "port": STATS_API_PORT,
+            "port": _free_stats_port(inbounds),
             "protocol": "dokodemo-door",
             "settings": {"address": "127.0.0.1"},
-            "tag": "api",
+            "tag": tag,
         })
-        changed = True
-    routing = server["routing"] = server.get("routing") or {}
-    rules = routing["rules"] = routing.get("rules") or []
-    if not any(
-        isinstance(r, dict) and "api" in (r.get("inboundTag") or [])
-        and r.get("outboundTag") == api["tag"] for r in rules
-    ):
+        routing = server["routing"] = server.get("routing") or {}
+        rules = routing["rules"] = routing.get("rules") or []
         rules.insert(
             0,
-            {"type": "field", "inboundTag": ["api"], "outboundTag": api["tag"]},
+            {"type": "field", "inboundTag": [tag], "outboundTag": api["tag"]},
         )
         changed = True
     for c in clients:
         if not c.get("email"):
             c["email"] = c["id"]
             changed = True
-    if sync_extra_inbounds(server):
-        changed = True
     return changed
 
 
@@ -315,12 +362,14 @@ async def discard_staged_stats(conn, name: str) -> None:
         await conn.run(f'rm -f -- "$HOME/.acontrol/xray/"{shlex.quote(name)}', check=False)
 
 
-async def read_client_stats(conn, container) -> dict[str, dict] | None:
+async def read_client_stats(conn, container, server: dict) -> dict[str, dict] | None:
     """Счетчики StatsService. None — статистика недоступна, {} — счетчиков пока нет."""
-    inner = (
-        f'xray api statsquery --server=127.0.0.1:{STATS_API_PORT} '
-        f'-pattern "user>>>" 2>/dev/null'
-    )
+    if "StatsService" not in ((server.get("api") or {}).get("services") or []):
+        return None
+    address = _stats_api_address(server)
+    if address is None:
+        return None
+    inner = f'xray api statsquery --server={shlex.quote(address)} -pattern "user>>>" 2>/dev/null'
     try:
         async with asyncio.timeout(STATS_QUERY_TIMEOUT):
             out = await _run(conn, _docker_exec(container, inner))
@@ -379,6 +428,15 @@ async def read_clients(
 ) -> list[XrayClient]:
     container = container or await detect_container(conn)
     server, default, table = await _read_all(conn, container)
+    return _clients_from_config(server, default, table)
+
+
+async def read_clients_and_stats(conn, container: str) -> tuple[list[XrayClient], dict[str, dict] | None]:
+    server, default, table = await _read_all(conn, container)
+    return _clients_from_config(server, default, table), await read_client_stats(conn, container, server)
+
+
+def _clients_from_config(server: dict, default: str, table: list) -> list[XrayClient]:
     names = {
         e.get("clientId"): e.get("userData", {})
         for e in table
@@ -616,7 +674,9 @@ async def issue_client(
     (см. client_configs; первый вариант Vision, его vpn:// и есть прежний config_amnezia)."""
     cid = str(uuid.uuid4())
     server = await _read_server(conn, container)
-    _client_list(server).append({"id": cid, "flow": FLOW, "email": cid})
+    entry = {"id": cid, "flow": FLOW, "email": cid}
+    _client_list(server).append(entry)
+    _update_extra_client(server, cid, entry)
     ensure_stats_config(server)  # самолечение: включаем статистику, если ещё нет
     await _write_server(conn, container, server)
 
@@ -657,6 +717,7 @@ async def pause_client(
         c for c in _client_list(server)
         if not (isinstance(c, dict) and c.get("id") == client_id)
     ]
+    _update_extra_client(server, client_id)
     ensure_stats_config(server)
     await _write_server(conn, container, server)
     table = await _read_table(conn, container)
@@ -686,6 +747,7 @@ async def resume_client(
         isinstance(c, dict) and c.get("id") == cid for c in _client_list(server)
     ):
         _client_list(server).append(client_entry)
+    _update_extra_client(server, cid, client_entry)
     ensure_stats_config(server)
     await _write_server(conn, container, server)
     date = (await _run(conn, 'date "+%a %b %e %H:%M:%S %Y"')).strip()
@@ -712,6 +774,7 @@ async def revoke_client(
     server["inbounds"][0]["settings"]["clients"] = [
         c for c in clients if not (isinstance(c, dict) and c.get("id") == client_id)
     ]
+    _update_extra_client(server, client_id)
     ensure_stats_config(server)  # самолечение статистики при любой правке клиентов
     await _write_server(conn, container, server)
 
@@ -831,7 +894,19 @@ trap 'fail "Xray deployment interrupted"' HUP INT TERM
 # ни порт VLESS внутри, ни адрес привязки.
 BIND=
 EXISTING=$(sudo docker inspect -f '{{{{.State.Running}}}}' "$C" 2>/dev/null) || EXISTING=
+if [ {int(preserve_port)} -eq 1 ] && [ -z "$EXISTING" ]; then
+  fail "Xray container changed during update. Retry the update."
+fi
 if [ -n "$EXISTING" ]; then
+  NETWORK_MODE=$(sudo docker inspect -f '{{{{.HostConfig.NetworkMode}}}}' "$C") || fail "could not read existing network mode"
+  NETWORKS=$(sudo docker inspect -f '{{{{range $name, $_ := .NetworkSettings.Networks}}}}{{{{println $name}}}}{{{{end}}}}' "$C") || fail "could not read existing networks"
+  case "$NETWORK_MODE" in
+    default|bridge) ;;
+    *) fail "Unsupported Xray network mode. The existing container was kept." ;;
+  esac
+  [ -z "$NETWORKS" ] || [ "$NETWORKS" = bridge ] || fail "Unsupported Xray networks. The existing container was kept."
+  MOUNT=$(sudo docker inspect -f '{{{{range .Mounts}}}}{{{{println .Source .Destination .Type .RW}}}}{{{{end}}}}' "$C") || fail "could not read existing mounts"
+  [ -z "$MOUNT" ] || [ "$MOUNT" = "$D $D bind true" ] || fail "Unsupported Xray mounts. The existing container was kept."
   BINDING=$(sudo docker inspect -f {shlex.quote(_BINDINGS_FORMAT)} "$C") || fail "could not read existing port bindings"
   [[ "$BINDING" =~ ^([0-9]+)/tcp\\|([^\\|[:space:]]*)\\|([0-9]+)$ ]] || fail "Unsupported Xray port bindings. The existing container was kept."
   INBOUND_PORT=${{BASH_REMATCH[1]}}
@@ -868,8 +943,7 @@ WORK=$(mktemp -d) || fail "could not create Xray working directory"
 
 CONFIG_DIR=$D
 if [ -n "$EXISTING" ]; then
-  MOUNT=$(sudo docker inspect -f '{{{{range .Mounts}}}}{{{{println .Source .Destination}}}}{{{{end}}}}' "$C") || fail "could not read existing mounts"
-  if ! grep -Fxq "$D $D" <<< "$MOUNT"; then
+  if [ -z "$MOUNT" ]; then
     CONFIG_DIR=$WORK/config
     mkdir "$CONFIG_DIR" || fail "could not stage Xray configuration"
     sudo docker cp "$C:$D/." "$CONFIG_DIR/" || fail "could not copy existing Xray configuration"
@@ -954,10 +1028,6 @@ sudo docker run --rm -v "$D":/opt/amnezia/xray:ro --entrypoint xray "$IMG" \\
   run -test -config "/opt/amnezia/xray/$CHECK_CONFIG" >/dev/null \\
   || fail "Xray rejected the configuration."
 
-log "фаервол: открываю $XRAY_SERVER_PORT/tcp наружу (Docker публикует, но ufw/firewalld могут блочить)"
-if command -v ufw >/dev/null 2>&1; then sudo ufw allow $XRAY_SERVER_PORT/tcp >/dev/null 2>&1 || true; sudo ufw route allow proto tcp from any to any port $XRAY_SERVER_PORT >/dev/null 2>&1 || true; fi
-if command -v firewall-cmd >/dev/null 2>&1; then sudo firewall-cmd --permanent --add-port=$XRAY_SERVER_PORT/tcp >/dev/null 2>&1 && sudo firewall-cmd --reload >/dev/null 2>&1 || true; fi
-
 log "[5/5] контейнер"
 # В bridge-сети свой netns: host sysctl не заменяет его настройку. На ядрах
 # без CONFIG_MPTCP этого sysctl нет, и Docker с ним отказался бы запускаться.
@@ -992,6 +1062,11 @@ if [ "$STATE" != 'running|0' ] || [ -z "$CONTAINER_IP" ] \\
   fail "Xray did not start listening on its published port."
 fi
 DEPLOYED=1
+if [ -n "$NEW_CONFIG" ]; then
+  log "фаервол: открываю $XRAY_SERVER_PORT/tcp наружу (Docker публикует, но ufw/firewalld могут блочить)"
+  if command -v ufw >/dev/null 2>&1; then sudo ufw allow $XRAY_SERVER_PORT/tcp >/dev/null 2>&1 || true; sudo ufw route allow proto tcp from any to any port $XRAY_SERVER_PORT >/dev/null 2>&1 || true; fi
+  if command -v firewall-cmd >/dev/null 2>&1; then sudo firewall-cmd --permanent --add-port=$XRAY_SERVER_PORT/tcp >/dev/null 2>&1 && sudo firewall-cmd --reload >/dev/null 2>&1 || true; fi
+fi
 if [ -n "$OLD" ]; then sudo docker rm "$OLD" >/dev/null || log "Could not remove previous Xray container."; fi
 OLD=
 NEW_CONFIG=

@@ -4,6 +4,11 @@ All notable changes to Amnezia Control are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.84.28] - 2026-11-09
+
+- Preserve separate VLESS client lists when enabling Xray statistics or managing a client. Read counters from the configured local API and avoid using a port reserved by another inbound.
+- Refuse Xray updates that would drop custom Docker networks or mounts. Keep existing firewall rules when replacing the container.
+
 ## [0.84.27] - 2026-11-09
 
 - Count Xray clients with custom statistics identifiers and expire stale activity after interrupted polls.

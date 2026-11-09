@@ -70,11 +70,8 @@ async def get_xray(server_id: int, _: CurrentUser, session: SessionDep) -> XrayS
     try:
         async with _connect(server) as conn:
             container = await xray.detect_container(conn)
-            clients = await xray.read_clients(conn, container)
-            try:
-                stats = xray.client_stats_by_id(clients, await xray.read_client_stats(conn, container))
-            except Exception:  # noqa: BLE001 — статистика не критична
-                stats = {}
+            clients, counters = await xray.read_clients_and_stats(conn, container)
+            stats = xray.client_stats_by_id(clients, counters)
     except Exception as exc:  # noqa: BLE001
         raise _xray_error(exc) from exc
     lim = await limits.limits_map(session, server_id, "xray")
@@ -428,6 +425,8 @@ async def update_xray(
         async with _connect(server) as conn:
             await deploy.ensure_idle(conn, tag="xray")
             container = await xray.detect_container(conn)
+            if container != xray.CONTAINER_NAME:
+                raise HTTPException(status.HTTP_409_CONFLICT, "Обновление требует контейнер с именем amnezia-xray.")
             bits = await xray.read_server_bits(conn, container)
             await deploy.snapshot_config(conn, "xray")
             staged_stats = await xray.stage_update_stats(conn, container)

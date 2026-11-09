@@ -181,6 +181,18 @@ async def test_update_installs_pinned(client, auth_headers, node) -> None:
     assert f"XRAY_RELEASE={xray.XRAY_RELEASE}" in node[0]
 
 
+async def test_update_does_not_launch_for_an_alternate_container(client, auth_headers, node, monkeypatch):
+    async def container(conn):
+        return "amnezia-xray-custom"
+
+    monkeypatch.setattr(xray, "detect_container", container)
+    sid = await _server(client, auth_headers)
+    r = await client.post(f"/api/servers/{sid}/xray/update", headers=auth_headers)
+    assert r.status_code == 409
+    assert "amnezia-xray" in r.json()["detail"]
+    assert node == []
+
+
 @pytest.mark.parametrize("current,offer", [
     ("25.8.3", True),     # старее закрепленной - предлагаем обновить
     (PINNED, False),      # уже на ней

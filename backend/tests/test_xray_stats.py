@@ -2,8 +2,12 @@ import asyncio
 import json
 
 import asyncssh
+import pytest
 
 from app import xray
+
+
+STATS_CONFIG = {"api": {"listen": "127.0.0.1:10085", "services": ["StatsService"]}}
 
 
 def test_ensure_stats_config_idempotent_and_backfills_email():
@@ -94,6 +98,60 @@ def test_client_stats_ignore_duplicate_keys():
     assert xray.client_stats_by_id(clients, counters) == {"id-c": counters["distinct"]}
 
 
+def test_enabling_stats_preserves_independent_vless_clients():
+    primary = {"id": "UID-A", "flow": "xtls-rprx-vision"}
+    secondary = {"id": "UID-B", "email": "fallback-user", "level": 7}
+    server = {"inbounds": [
+        {"protocol": "vless", "settings": {"clients": [primary]}},
+        {"protocol": "vless", "settings": {"clients": [secondary.copy()]}},
+    ]}
+
+    assert xray.ensure_stats_config(server) is True
+    assert xray.ensure_stats_config(server) is False
+    assert primary == {"id": "UID-A", "flow": "xtls-rprx-vision", "email": "UID-A"}
+    assert server["inbounds"][1]["settings"]["clients"] == [secondary]
+    assert server["policy"]["levels"]["7"]["statsUserDownlink"] is True
+
+
+@pytest.mark.parametrize("native", [True, False])
+async def test_stats_use_existing_api_address_without_adding_an_inbound(native):
+    server = {"api": {"tag": "management", "services": ["HandlerService"]}, "inbounds": []}
+    if native:
+        server["api"]["listen"] = "127.0.0.1:10085"
+        address = "127.0.0.1:10085"
+    else:
+        server["inbounds"].append({
+            "tag": "admin-in", "protocol": "dokodemo-door", "listen": "::1", "port": 10855,
+        })
+        server["routing"] = {"rules": [
+            {"type": "field", "inboundTag": ["admin-in"], "outboundTag": "management"},
+        ]}
+        address = "[::1]:10855"
+    inbounds = server["inbounds"].copy()
+    routing = server.get("routing")
+
+    assert xray.ensure_stats_config(server) is True
+    assert xray.ensure_stats_config(server) is False
+    assert server["inbounds"] == inbounds
+    assert server.get("routing") == routing
+    assert server["api"]["services"] == ["HandlerService", "StatsService"]
+
+    class Conn:
+        async def run(self, command, *, check):
+            assert "--server=" in command and address in command
+            return type("Result", (), {"exit_status": 0, "stdout": "{}"})
+
+    assert await xray.read_client_stats(Conn(), "amnezia-xray", server) == {}
+
+
+def test_stats_listener_does_not_take_existing_vless_ports():
+    server = {"inbounds": [{"tag": "api", "protocol": "vless", "port": "443,10084-10086"}]}
+    assert xray.ensure_stats_config(server) is True
+    assert xray._stats_api_address(server) == "127.0.0.1:10087"
+    assert xray.ensure_stats_config(server) is False
+    assert server["inbounds"][0]["port"] == "443,10084-10086"
+
+
 async def test_default_profile_traffic_is_not_attributed_to_an_imported_client(monkeypatch):
     async def read_all(_conn, _container):
         return {"inbounds": [{"settings": {"clients": [
@@ -123,15 +181,15 @@ async def test_read_client_stats_parses_statsquery():
         {"name": "user>>>UID-B>>>traffic>>>downlink", "value": "7"},
         {"name": "inbound>>>api>>>traffic>>>downlink", "value": "9"},  # не user
     ]})
-    stats = await xray.read_client_stats(C(payload), "amnezia-xray")
+    stats = await xray.read_client_stats(C(payload), "amnezia-xray", STATS_CONFIG)
     assert stats["UID-A"] == {"up": 100, "down": 2500}
     assert stats["UID-B"] == {"up": 0, "down": 7}
     assert "api" not in stats  # inbound-статистика не попадает в клиентов
 
-    assert await xray.read_client_stats(C("{}"), "amnezia-xray") == {}
-    assert await xray.read_client_stats(C("", code=1), "amnezia-xray") is None
+    assert await xray.read_client_stats(C("{}"), "amnezia-xray", STATS_CONFIG) == {}
+    assert await xray.read_client_stats(C("", code=1), "amnezia-xray", STATS_CONFIG) is None
     for invalid in ("not json", "[]", '{"stat":{}}', '{"stat":[42]}'):
-        assert await xray.read_client_stats(C(invalid), "amnezia-xray") is None
+        assert await xray.read_client_stats(C(invalid), "amnezia-xray", STATS_CONFIG) is None
 
 
 async def test_optional_statsquery_survives_ssh_channel_failure_and_timeout(monkeypatch):
@@ -143,6 +201,6 @@ async def test_optional_statsquery_survives_ssh_channel_failure_and_timeout(monk
         async def run(self, cmd, check=False):
             await asyncio.sleep(1)
 
-    assert await xray.read_client_stats(Refused(), "amnezia-xray") is None
+    assert await xray.read_client_stats(Refused(), "amnezia-xray", STATS_CONFIG) is None
     monkeypatch.setattr(xray, "STATS_QUERY_TIMEOUT", 0.01)
-    assert await xray.read_client_stats(Slow(), "amnezia-xray") is None
+    assert await xray.read_client_stats(Slow(), "amnezia-xray", STATS_CONFIG) is None

@@ -2,6 +2,7 @@ import base64
 import json
 import struct
 import zlib
+from unittest.mock import AsyncMock
 from urllib.parse import parse_qs, unquote, urlsplit
 
 from app import xray
@@ -51,35 +52,44 @@ def _last_config(link: str) -> dict:
     return json.loads(top["containers"][0]["xray"]["last_config"])
 
 
-def test_sync_mirrors_primary_clients_without_flow_on_xhttp():
+async def test_xhttp_client_lifecycle_preserves_independent_clients(monkeypatch):
     server = _server_with_xhttp()
-    assert xray.sync_extra_inbounds(server) is True
-    xh = server["inbounds"][2]["settings"]["clients"]
-    assert xh == [{"id": "DEF", "email": "DEF"}, {"id": "UID-A", "email": "UID-A"}]
-    # повторная синхронизация ничего не меняет
-    assert xray.sync_extra_inbounds(server) is False
+    extra = server["inbounds"][2]["settings"]
+    existing = [*extra["clients"], {"id": "UID-B", "email": "fallback-user", "level": 7}]
+    extra["clients"] = existing.copy()
+    for name, result in {
+        "_read_server": server, "_read_table": [], "_write_table": None,
+        "_write_server": None, "_restart": None, "_run": "date", "read_server_bits": BITS,
+    }.items():
+        monkeypatch.setattr(xray, name, AsyncMock(return_value=result))
+
+    conn, container = None, "amnezia-xray"
+    client, configs = await xray.issue_client(conn, container, "test", "vpn.example", "Test", "", "")
+    assert [config["key"] for config in configs] == ["vision", "xhttp"]
+    cid = client.client_id
+    assert extra["clients"] == [*existing, {"id": cid, "email": cid}]
+
+    paused = await xray.pause_client(conn, container, cid)
+    assert extra["clients"] == existing
+    assert cid not in {entry["id"] for entry in server["inbounds"][0]["settings"]["clients"]}
+    for _ in range(2):
+        await xray.resume_client(conn, container, paused, "test")
+    assert extra["clients"] == [*existing, {"id": cid, "email": cid}]
+    assert [entry for entry in server["inbounds"][0]["settings"]["clients"] if entry["id"] == cid] == [paused]
+
+    await xray.revoke_client(conn, container, cid)
+    assert extra["clients"] == existing
+    assert cid not in {entry["id"] for entry in server["inbounds"][0]["settings"]["clients"]}
 
 
-def test_revoke_style_removal_propagates_to_extra_inbound():
-    server = _server_with_xhttp()
-    xray.sync_extra_inbounds(server)
-    server["inbounds"][0]["settings"]["clients"] = [
-        c for c in server["inbounds"][0]["settings"]["clients"] if c["id"] != "UID-A"
-    ]
-    # ensure_stats_config вызывается при любой правке клиентов и синхронизирует
-    xray.ensure_stats_config(server)
-    ids = [c["id"] for c in server["inbounds"][2]["settings"]["clients"]]
-    assert ids == ["DEF"]
-
-
-def test_sync_ignores_api_and_keeps_single_inbound_servers_untouched():
+def test_client_changes_ignore_api_on_single_inbound_servers():
     server = {"inbounds": [
         {"port": 443, "protocol": "vless",
          "settings": {"clients": [{"id": "A", "flow": xray.FLOW}]}},
         {"listen": "127.0.0.1", "port": 10085, "protocol": "dokodemo-door",
          "tag": "api", "settings": {"address": "127.0.0.1"}},
     ]}
-    assert xray.sync_extra_inbounds(server) is False
+    xray._update_extra_client(server, "A", {"id": "A", "flow": xray.FLOW})
     assert "clients" not in server["inbounds"][1]["settings"]
     assert xray.xhttp_fallback_path(server) is None
 

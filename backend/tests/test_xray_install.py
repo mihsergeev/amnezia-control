@@ -11,18 +11,27 @@ from app import xray
 
 FAKE_DOCKER = r'''
 sudo() {
-  if [ "$1" = docker ]; then shift; docker "$@"; else command "$@"; fi
+  case "$1" in
+    docker|ufw|firewall-cmd) "$@" ;;
+    *) command "$@" ;;
+  esac
 }
+ufw() { echo firewall-change >> "$TEST_DIR/calls"; }
+firewall-cmd() { echo firewall-change >> "$TEST_DIR/calls"; }
 docker() {
   printf 'docker %s\n' "$*" >> "$TEST_DIR/calls"
   case "$1 $2" in
     'inspect -f')
       case "$3" in
-        *'.State.Running'*) echo true;;
+        *'.State.Running'*) [ "$FAULT" != missing ] && echo true;;
+        *'.HostConfig.NetworkMode'*) if [ "$FAULT" = network ]; then echo custom; else echo default; fi;;
         *'.HostConfig.PortBindings'*) echo '19443/tcp|192.0.2.2|18443';;
-        *'.Mounts'*) echo "$D $D";;
+        *'.Mounts'*)
+          echo "$D $D bind true"
+          if [ "$FAULT" = mounts ]; then echo '/lab/tls /certs bind false'; fi;;
         *'.State.Status'*) echo 'running|0';;
-        *'.NetworkSettings.Networks'*) echo '172.17.0.2';;
+        *'with index .NetworkSettings.Networks'*) echo '172.17.0.2';;
+        *'.NetworkSettings.Networks'*) echo bridge;;
         *) return 99;;
       esac;;
     'ps --filter') :;;
@@ -64,7 +73,9 @@ def _bash_path(path):
 
 
 @pytest.mark.skipif(shutil.which("bash") is None, reason="Bash is required")
-@pytest.mark.parametrize("fault", ["build", "config-test", "stale", "run", "listen", "interrupted", "none"])
+@pytest.mark.parametrize("fault", [
+    "missing", "network", "mounts", "build", "config-test", "stale", "run", "listen", "interrupted", "none",
+])
 def test_xray_upgrade_keeps_original_config_until_replacement_is_ready(tmp_path, fault):
     config_dir = tmp_path / "config"
     config_dir.mkdir()
@@ -92,6 +103,11 @@ def test_xray_upgrade_keeps_original_config_until_replacement_is_ready(tmp_path,
     result = subprocess.run([shutil.which("bash"), "-s"], input=(prefix + "\n" + FAKE_DOCKER + script).encode(),
                             capture_output=True, timeout=25)
     output = result.stdout.decode(errors="replace")
+    calls = (tmp_path / "calls").read_text()
+    assert "firewall-change" not in calls
+    if fault in {"missing", "network", "mounts"}:
+        assert "docker build" not in calls
+        assert "docker rename" not in calls
     assert not staged.exists(), (output, result.stderr)
     assert not list(config_dir.glob(".server-*"))
     if fault == "none":
@@ -108,7 +124,7 @@ def test_xray_upgrade_keeps_original_config_until_replacement_is_ready(tmp_path,
         assert (tmp_path / "old-running").is_file()
         assert not (tmp_path / "next").exists()
         if fault == "listen":
-            assert "host-probe" not in (tmp_path / "calls").read_text()
+            assert "host-probe" not in calls
 
 
 async def test_stats_stage_uploads_without_writing_to_container():

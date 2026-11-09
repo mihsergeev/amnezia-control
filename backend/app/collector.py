@@ -191,8 +191,7 @@ async def _openvpn_part(conn, host) -> tuple[dict, list[dict]]:
 async def _xray_part(conn, host) -> tuple[dict, list[dict]]:
     # трафик по клиентам — из xray StatsService (если включён на сервере)
     container = await xray.detect_container(conn)
-    clients = await xray.read_clients(conn, container)
-    stats = await xray.read_client_stats(conn, container)
+    clients, stats = await xray.read_clients_and_stats(conn, container)
     names = {c.client_id: c.name for c in clients}
     rows: list[dict] = []
     rx = tx = 0
