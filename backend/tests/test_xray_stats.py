@@ -47,7 +47,7 @@ def test_deploy_script_server_json_valid_with_stats():
     m = re.search(r'server\.json" >/dev/null <<EOF[^\n]*\n(.*?)\nEOF', s, re.S)
     block = m.group(1)
     for k, v in {
-        "$XRAY_SERVER_PORT": "443", "$XRAY_SITE_NAME": '"ex.com"', "$XRAY_DEST": '"ex.com:443"',
+        "$INBOUND_PORT": "443", "$XRAY_SITE_NAME": '"ex.com"', "$XRAY_DEST": '"ex.com:443"',
         "$UUID": "11111111-1111-1111-1111-111111111111",
         "$PRIV": "P", "$SID": "ab",
     }.items():
@@ -57,6 +57,54 @@ def test_deploy_script_server_json_valid_with_stats():
     assert cfg["inbounds"][0]["settings"]["clients"][0]["email"]
     assert any(i.get("tag") == "api" for i in cfg["inbounds"])
     assert cfg["routing"]["rules"][0]["outboundTag"] == "api"
+
+
+def test_enable_stats_preserves_custom_policy_api_and_client_email():
+    client = {"id": "UID-A", "email": "operator-label", "level": 7}
+    server = {
+        "api": {"tag": "management", "services": ["HandlerService"]},
+        "policy": {
+            "levels": {"0": {"connIdle": 90}, "7": {"handshake": 6}},
+            "system": {"statsOutboundUplink": True},
+        },
+        "inbounds": [
+            {"protocol": "vless", "settings": {"clients": [client]}},
+            {"protocol": "vless", "settings": {"clients": [client.copy()]}},
+        ],
+    }
+    assert xray.ensure_stats_config(server) is True
+    assert xray.ensure_stats_config(server) is False
+    assert server["api"] == {"tag": "management", "services": ["HandlerService", "StatsService"]}
+    assert server["policy"]["levels"]["0"]["connIdle"] == 90
+    assert server["policy"]["levels"]["7"]["handshake"] == 6
+    assert server["policy"]["levels"]["7"]["statsUserDownlink"] is True
+    assert server["policy"]["system"]["statsOutboundUplink"] is True
+    assert server["routing"]["rules"][0]["outboundTag"] == "management"
+    assert server["inbounds"][0]["settings"]["clients"][0]["email"] == "operator-label"
+    assert server["inbounds"][1]["settings"]["clients"] == [client]
+
+
+def test_client_stats_ignore_duplicate_keys():
+    clients = [
+        xray.XrayClient("id-a", "A", "", "shared"),
+        xray.XrayClient("id-b", "B", "", "shared"),
+        xray.XrayClient("id-c", "C", "", "distinct"),
+    ]
+    counters = {"shared": {"up": 10, "down": 20}, "distinct": {"up": 3, "down": 4}}
+    assert xray.client_stats_by_id(clients, counters) == {"id-c": counters["distinct"]}
+
+
+async def test_default_profile_traffic_is_not_attributed_to_an_imported_client(monkeypatch):
+    async def read_all(_conn, _container):
+        return {"inbounds": [{"settings": {"clients": [
+            {"id": "default", "email": "shared"},
+            {"id": "imported", "email": "shared"},
+        ]}}]}, "default", []
+
+    monkeypatch.setattr(xray, "_read_all", read_all)
+    clients = await xray.read_clients(None, "amnezia-xray")
+    assert [client.client_id for client in clients] == ["imported"]
+    assert xray.client_stats_by_id(clients, {"shared": {"up": 1, "down": 1}}) == {}
 
 
 async def test_read_client_stats_parses_statsquery():

@@ -2,7 +2,6 @@
 docker ps — чтобы удалённый извне протокол пропадал без ручной «Проверки»."""
 
 import json
-from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
@@ -79,9 +78,13 @@ async def _info(factory, sid: int) -> dict:
 async def test_xray_online_counts_recent_traffic_not_cumulative_totals(factory, monkeypatch):
     sid = await _seed(factory, ["amnezia-xray", "amnezia-awg"])
     monkeypatch.setattr(collector, "_last_xray_counters", {})
-    clients = [SimpleNamespace(client_id=f"client-{i}", name=f"Client {i}") for i in range(7)]
+    clients = [
+        {"id": f"client-{i}", "email": f"stats-{i}"} for i in range(7)
+    ]
+    clients.append({"id": "default", "email": "default-stats"})
+    server = {"inbounds": [{"settings": {"clients": clients}}]}
     monkeypatch.setattr(collector.xray, "detect_container", AsyncMock(return_value="amnezia-xray"))
-    monkeypatch.setattr(collector.xray, "read_clients", AsyncMock(return_value=clients))
+    monkeypatch.setattr(collector.xray, "_read_all", AsyncMock(return_value=(server, "default", [])))
     read_stats = AsyncMock()
     monkeypatch.setattr(collector.xray, "read_client_stats", read_stats)
 
@@ -100,18 +103,20 @@ async def test_xray_online_counts_recent_traffic_not_cumulative_totals(factory, 
         assert (last.clients_online, last.clients_total) == (expected_online, 8)
 
     await sample({}, 1)
-    active = {"client-0": {"up": 15, "down": 100}, "client-1": {"up": 0, "down": 20},
+    active = {"stats-0": {"up": 15, "down": 100}, "stats-1": {"up": 0, "down": 20},
+              "client-2": {"up": 10, "down": 10}, "default-stats": {"up": 50, "down": 50},
               "revoked": {"up": 50, "down": 50}}
     await sample(active, 3)
     await sample(active, 1)
-    await sample(active | {"client-0": {"up": 2, "down": 0},
-                           "client-1": {"up": 0, "down": 0}}, 2)
+    await sample(active | {"stats-0": {"up": 2, "down": 0},
+                           "stats-1": {"up": 0, "down": 0}}, 2)
     await sample(None, 1)
     await sample(active, 1)  # the first good poll after a failure only sets the baseline
-    await sample(active | {"client-0": {"up": 15, "down": 101}}, 2)
+    await sample(active | {"stats-0": {"up": 15, "down": 101}}, 2)
 
 
-async def test_xray_activity_survives_skipped_aggregate(factory, monkeypatch):
+@pytest.mark.parametrize("extra_flaps, carried", [(False, 1), (True, 0)])
+async def test_xray_activity_survives_skipped_aggregate(factory, monkeypatch, extra_flaps, carried):
     sid = await _seed(factory, ["amnezia-xray", "amnezia-awg"])
     for name in ("_last_parts", "_last_clients", "_pending", "_last_xray_counters", "_pending_xray_active"):
         monkeypatch.setattr(collector, name, {})
@@ -128,11 +133,14 @@ async def test_xray_activity_survives_skipped_aggregate(factory, monkeypatch):
     await sample(True, 100)
     await sample(False, 200)
     await sample(True, 200, ("active",))
+    if extra_flaps:
+        await sample(False, 200, ("active",))
+        await sample(True, 200, ("active",))
     await sample(True, 200, ("active",))
     await sample(True, 200, ("active",))
     async with factory() as session:
         rows = await session.scalars(select(TrafficSample).order_by(TrafficSample.id))
-        assert [(row.clients_online, row.clients_total) for row in rows] == [(0, 3), (1, 2), (0, 2)]
+        assert [(row.clients_online, row.clients_total) for row in rows] == [(0, 3), (carried, 2), (0, 2)]
 
 
 async def test_removed_container_drops_protocol(factory, monkeypatch):

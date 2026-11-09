@@ -52,8 +52,8 @@ _pending: dict[int, tuple[int, int]] = {}
 # Для онлайна Xray нужны два подряд успешных опроса. Историю трафика
 # (_last_clients) храним дольше, поэтому она для этого не подходит.
 _last_xray_counters: dict[int, dict[str, tuple[int, int]]] = {}
-# Activity from complete Xray polls while another protocol blocks the aggregate.
-_pending_xray_active: dict[int, set[str]] = {}
+# Activity from the last two polls while another protocol blocks the aggregate.
+_pending_xray_active: dict[int, tuple[set[str], set[str]]] = {}
 
 
 def _xray_active(server_id: int, counters: dict[str, tuple[int, int]] | None) -> set[str]:
@@ -196,14 +196,12 @@ async def _xray_part(conn, host) -> tuple[dict, list[dict]]:
     names = {c.client_id: c.name for c in clients}
     rows: list[dict] = []
     rx = tx = 0
-    for uid, st in (stats or {}).items():
-        if uid not in names:  # дефолтный UUID / уже отозванные — пропускаем
-            continue
+    for uid, st in xray.client_stats_by_id(clients, stats).items():
         rx += st["up"]
         tx += st["down"]
         rows.append(
             {"protocol": "xray", "client_id": uid,
-             "rx": st["up"], "tx": st["down"], "name": names.get(uid, "")}
+             "rx": st["up"], "tx": st["down"], "name": names[uid]}
         )
     counters = {c["client_id"]: (c["rx"], c["tx"]) for c in rows} if stats is not None else None
     return {"rx": rx, "tx": tx, "total": len(clients), "online": 0, "xray_counters": counters,
@@ -380,20 +378,21 @@ async def collect_once(
         parts = s.get("parts", frozenset())
         _last_parts[sid] = parts
         xray_active = _xray_active(sid, s.get("xray_counters"))
-        pending_xray = _pending_xray_active.pop(sid, None)
-        if pending_xray:
-            xray_active.update(cid for protocol, cid in s["known"]
-                               if protocol == "xray" and cid in pending_xray)
+        recent_xray, older_xray = _pending_xray_active.pop(sid, (set(), set()))
+        if recent_xray or older_xray:
+            known_xray = {cid for protocol, cid in s["known"] if protocol == "xray"}
+            recent_xray &= known_xray
+            older_xray &= known_xray
         if prev is None or prev == parts:
             pend = _pending.pop(sid, None)
             if delta is not None and pend:
                 delta = (delta[0] + pend[0], delta[1] + pend[1])
             s["delta"] = delta
-            s["clients_online"] += len(xray_active)
+            s["clients_online"] += len(xray_active | recent_xray | older_xray)
             stable.append(s)
         else:
-            if xray_active:
-                _pending_xray_active[sid] = xray_active
+            if xray_active or recent_xray:
+                _pending_xray_active[sid] = (xray_active, recent_xray)
             if delta is not None:
                 # снимок не пишем, но прирост не теряем - уйдет в следующий
                 pend = _pending.get(sid, (0, 0))

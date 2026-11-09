@@ -1,5 +1,3 @@
-import re
-
 import asyncssh
 import httpx
 from fastapi import APIRouter, HTTPException, Request, status
@@ -153,10 +151,10 @@ def link_version_from_conf(conf_text: str) -> str:
     без них дают «3», которую приложение не знает и пометит устаревшей (что и
     верно: такую ноду надо пересобрать).
     """
-    if all(re.search(rf"^{k} = ", conf_text, re.M)
-           for k in ("RandomTrailers", "DisableCookies")):
+    interface, _ = awg.parse_conf(conf_text)
+    if all(interface.get(key) for key in ("RandomTrailers", "DisableCookies")):
         return deploy.AWG3_PROTOCOL_VERSION
-    if re.search(r"^HeaderProtectionKey = ", conf_text, re.M):
+    if interface.get("HeaderProtectionKey"):
         return "3"
     return "2"
 

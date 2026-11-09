@@ -137,7 +137,7 @@ async def test_xray_deploy_on_busy_port_is_refused_before_anything(
     }, headers=auth_headers)
     sid = r.json()["id"]
 
-    async def fake_owner(conn, port, proto, own=""):
+    async def fake_owner(conn, port, proto, own="", *, bind_ip=None):
         return "контейнер «caddy-proxy-caddy-1»"
 
     async def must_not_run(*a, **kw):
@@ -152,6 +152,7 @@ async def test_xray_deploy_on_busy_port_is_refused_before_anything(
         return None
 
     monkeypatch.setattr(deploy, "ensure_idle", idle)
+    monkeypatch.setattr(xray, "deployment_bind_ip", lambda *a: idle(None, tag="xray"))
 
     r = await client.post(
         f"/api/servers/{sid}/xray/deploy", json={"port": 443}, headers=auth_headers
@@ -173,6 +174,21 @@ async def test_neighbour_on_other_address_is_not_a_conflict() -> None:
     assert await deploy.port_owner(conn, 443, "tcp", own="amnezia-xray") is None
     # docker-proxy соседа в ss - не повод считать порт занятым
     assert not any("ss " in c for c in conn.commands)
+
+
+@pytest.mark.parametrize("host_listener,owner", [
+    ('LISTEN 0 4096 203.0.113.6:443 0.0.0.0:* users:(("docker-proxy",pid=9,fd=7))', None),
+    ('LISTEN 0 4096 203.0.113.3:443 0.0.0.0:* users:(("nginx",pid=9,fd=7))', "процесс «nginx»"),
+])
+async def test_stopped_xray_keeps_its_bind_ip_for_the_conflict_check(host_listener, owner) -> None:
+    conn = _Conn({
+        ".HostConfig.PortBindings": "19443/tcp|203.0.113.3|443\n",
+        "publish=443/tcp": f"{_CADDY_ON_6}\n",
+        "-lntpH": host_listener,
+    })
+    bind_ip = await xray.deployment_bind_ip(conn, 443)
+    assert bind_ip == "203.0.113.3"
+    assert await deploy.port_owner(conn, 443, "tcp", own=xray.CONTAINER_NAME, bind_ip=bind_ip) == owner
 
 
 @pytest.mark.parametrize("rows", [
@@ -206,5 +222,5 @@ def test_bound_ips_parsing() -> None:
 def test_xray_script_keeps_bind_address() -> None:
     s = xray.build_deploy_script(443, "www.example.com")
     # адрес читается со старого контейнера до проверки порта и сноса
-    assert s.index("BINDING=$(") < s.index('publish=$XRAY_SERVER_PORT/tcp') < s.index("docker rename")
+    assert s.index("BINDING=$(") < s.index('publish=$XRAY_SERVER_PORT/tcp') < s.index('docker rename "$C"')
     assert '-p "${BIND:+$BIND:}$XRAY_SERVER_PORT:$INBOUND_PORT/tcp"' in s

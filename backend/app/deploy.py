@@ -1031,12 +1031,14 @@ async def _publishers(
     return rows
 
 
-def _conflict(rows: list[tuple[str, set[str]]], own: str) -> str | None:
+def _conflict(rows: list[tuple[str, set[str]]], own: str, bind_ip: str | None = None) -> str | None:
     """Кто из публикующих порт мешает контейнеру `own`. Свой контейнер,
     привязанный к одному адресу, не мешает соседу на другом адресе того же
     порта (так на ноде со вторым адресом рядом с XRay живет сама панель):
     при пересборке скрипты сохраняют адрес публикации."""
-    mine = next((ips for name, ips in rows if name == own), None) if own else None
+    mine = {bind_ip} if bind_ip is not None else next(
+        (ips for name, ips in rows if name == own), None,
+    )
     for name, ips in rows:
         if name == own:
             continue
@@ -1060,7 +1062,8 @@ async def container_on_port(
 
 
 async def port_owner(
-    conn: asyncssh.SSHClientConnection, port: int, proto: str, own: str = ""
+    conn: asyncssh.SSHClientConnection, port: int, proto: str, own: str = "",
+    *, bind_ip: str | None = None,
 ) -> str | None:
     """Кто держит порт на ноде: контейнер или обычный процесс хоста. None - порт
     свободен или его держит наш же контейнер `own` (переустановка поверх себя).
@@ -1073,10 +1076,10 @@ async def port_owner(
     """
     p = int(port)
     rows = await _publishers(conn, p, proto)
-    name = _conflict(rows, own)
+    name = _conflict(rows, own, bind_ip)
     if name:
         return f"контейнер «{name}»"
-    if rows:
+    if rows and (bind_ip is None or any(name == own for name, _ in rows)):
         # порт публикует наш контейнер, а соседи на других адресах не мешают;
         # их docker-proxy в ss ниже был бы ложной находкой
         return None
@@ -1085,11 +1088,17 @@ async def port_owner(
         f"sudo -n ss {flag} 'sport = :{p}' 2>/dev/null || ss {flag} 'sport = :{p}'",
         check=False,
     )
-    out = (res.stdout or "").strip()
-    if not out:
-        return None
-    m = re.search(r'users:\(\("([^"]+)"', out)
-    return f"процесс «{m.group(1)}»" if m else "другой процесс"
+    for line in (res.stdout or "").splitlines():
+        fields = line.split()
+        if not fields:
+            continue
+        if bind_ip and bind_ip not in _ANY_IP and len(fields) > 3:
+            local_ip = fields[3].rpartition(":")[0].strip("[]").split("%", 1)[0]
+            if local_ip not in {bind_ip, "*", *_ANY_IP}:
+                continue
+        m = re.search(r'users:\(\("([^"]+)"', line)
+        return f"процесс «{m.group(1)}»" if m else "другой процесс"
+    return None
 
 
 def port_busy_detail(port: int, proto: str, owner: str, what: str) -> str:

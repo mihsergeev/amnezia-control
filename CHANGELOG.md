@@ -4,6 +4,13 @@ All notable changes to Amnezia Control are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.84.27] - 2026-11-09
+
+- Count Xray clients with custom statistics identifiers and expire stale activity after interrupted polls.
+- Preserve existing Xray statistics settings, keys, client configurations and port bindings during updates. Restore the previous container and configuration if the replacement fails to listen.
+- Check TLS 1.3 and HTTP/2 for custom REALITY targets, avoid conflicts with the internal Xray statistics port, and verify the pinned Xray download.
+- Preserve DNS, routes, MTU, keepalive and obfuscation when exporting saved AmneziaWG and WireGuard profiles with a Client Endpoint.
+
 ## [0.84.26] - 2026-11-09
 
 - Keep Xray activity visible on mixed-protocol servers when another protocol temporarily fails to report. Keep the Xray client total when its statistics API is unavailable.

@@ -10,7 +10,10 @@ from fastapi import HTTPException
 INVALID = "Укажите домен или IP VPN-сервера без порта."
 UNRESOLVED = "Домен Client Endpoint не разрешается в IP. Проверьте DNS и повторите попытку."
 _SECTION = re.compile(r"^[ \t]*\[([^\]\r\n]+)\]", re.MULTILINE)
-_PEER_ENDPOINT = re.compile(r"^([ \t]*Endpoint[ \t]*=[ \t]*)[^ \t\r\n#;]+(:[0-9]+)(?=[ \t\r\n#;]|$)", re.MULTILINE | re.IGNORECASE)
+_PEER_ENDPOINT = re.compile(
+    r"^([ \t]*Endpoint[ \t]*=[ \t]*)[^ \t\r\n#;]+([ \t]*:[ \t]*[0-9]+)(?=[ \t\r\n#;]|$)",
+    re.MULTILINE | re.IGNORECASE,
+)
 
 
 def normalize(value: str) -> str:

@@ -70,9 +70,9 @@ async def get_xray(server_id: int, _: CurrentUser, session: SessionDep) -> XrayS
     try:
         async with _connect(server) as conn:
             container = await xray.detect_container(conn)
-            clients = await xray.read_clients(conn)
+            clients = await xray.read_clients(conn, container)
             try:
-                stats = await xray.read_client_stats(conn, container) or {}
+                stats = xray.client_stats_by_id(clients, await xray.read_client_stats(conn, container))
             except Exception:  # noqa: BLE001 — статистика не критична
                 stats = {}
     except Exception as exc:  # noqa: BLE001
@@ -81,7 +81,10 @@ async def get_xray(server_id: int, _: CurrentUser, session: SessionDep) -> XrayS
     note_map = await notes.notes_map(session, server_id, "xray")
     paused = await pausestore.list_paused(session, server_id, "xray")
     out = [
-        c.__dict__ | {
+        {
+            "client_id": c.client_id,
+            "name": c.name,
+            "creation_date": c.creation_date,
             "expires_at": lim.get(c.client_id),
             "note": note_map.get(c.client_id, ""),
             "rx_bytes": stats.get(c.client_id, {}).get("up", 0),
@@ -316,8 +319,9 @@ async def deploy_xray(
             # упиралась в него только на docker run: на ноде с панелью 443 держит
             # caddy, и XRay падал с "port is already allocated", оставляя мертвый
             # контейнер.
+            bind_ip = await xray.deployment_bind_ip(conn, body.port)
             owner = await deploy.port_owner(
-                conn, body.port, "tcp", own=xray.CONTAINER_NAME
+                conn, body.port, "tcp", own=xray.CONTAINER_NAME, bind_ip=bind_ip,
             )
             if owner:
                 raise HTTPException(
@@ -425,13 +429,18 @@ async def update_xray(
             await deploy.ensure_idle(conn, tag="xray")
             container = await xray.detect_container(conn)
             bits = await xray.read_server_bits(conn, container)
-            script = xray.build_deploy_script(bits["port"], bits["site"], release, preserve_port=True)
-            # включаем статистику в живом конфиге ДО пересборки — иначе rebuild
-            # сохранил бы старый конфиг без stats (на существующих серверах)
-            await xray.enable_stats(conn, container)
-            # снимок конфига ДО пересборки — для отката
             await deploy.snapshot_config(conn, "xray")
-            await deploy.launch(conn, script, tag="xray")
+            staged_stats = await xray.stage_update_stats(conn, container)
+            try:
+                script = xray.build_deploy_script(
+                    bits["port"], bits["site"], release, preserve_port=True,
+                    staged_stats=staged_stats,
+                )
+                await deploy.launch(conn, script, tag="xray")
+            except Exception:
+                if staged_stats is not None:
+                    await xray.discard_staged_stats(conn, staged_stats[0])
+                raise
     except Exception as exc:  # noqa: BLE001
         raise _xray_error(exc) from exc
     deploywatch.spawn(request.app, server, "xray")

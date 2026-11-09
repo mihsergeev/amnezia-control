@@ -50,11 +50,9 @@ def node(monkeypatch):
     async def bits(conn, container):
         return {"port": 443, "site": "www.example.com"}
 
-    async def stats(conn, container):
-        return True
-
     monkeypatch.setattr(xray_api, "_connect", lambda server: _DummyConn())
     monkeypatch.setattr(deploy, "port_owner", nothing)
+    monkeypatch.setattr(xray, "deployment_bind_ip", nothing)
     monkeypatch.setattr(deploy, "snapshot_all", nothing)
     monkeypatch.setattr(deploy, "snapshot_config", nothing)
     monkeypatch.setattr(deploy, "launch", fake_launch)
@@ -62,7 +60,7 @@ def node(monkeypatch):
     monkeypatch.setattr(deploywatch, "spawn", lambda *a, **kw: None)
     monkeypatch.setattr(xray, "detect_container", container)
     monkeypatch.setattr(xray, "read_server_bits", bits)
-    monkeypatch.setattr(xray, "enable_stats", stats)
+    monkeypatch.setattr(xray, "stage_update_stats", nothing)
     return launched
 
 
@@ -79,6 +77,7 @@ def test_mptcp_security_release_preserves_issued_fingerprint() -> None:
     assert dockerfile is not None
     dockerfile_text = base64.b64decode(dockerfile[1]).decode()
     assert f'ARG XRAY_RELEASE="{xray.XRAY_RELEASE}"' in dockerfile_text
+    assert 'sha256sum -c -' in dockerfile_text
     assert "ENV GODEBUG=multipathtcp=0" in dockerfile_text
     run = re.search(r'sudo docker run -d.*?\n.*?\n.*?\n.*?\n.*?\n', script)
     assert run is not None
@@ -93,6 +92,11 @@ def test_version_tuple() -> None:
     assert xray.version_tuple("v26.3.27") == (26, 3, 27)
     assert xray.version_tuple("26.10.21") > xray.version_tuple("v26.3.27")
     assert xray.version_tuple("") == ()
+
+
+def test_explicit_xray_version_is_accepted_with_or_without_prefix() -> None:
+    assert "XRAY_RELEASE=v26.10.21" in xray.build_deploy_script(443, "www.example.com", "26.10.21")
+    assert "XRAY_RELEASE=v26.10.21" in xray.build_deploy_script(443, "www.example.com", "v26.10.21")
 
 
 async def test_deploy_installs_pinned(client, auth_headers, node) -> None:
@@ -110,6 +114,7 @@ async def test_deploy_installs_pinned(client, auth_headers, node) -> None:
     ({"dest": "BÜCHER.example:8443"}, "xn--bcher-kva.example", "xn--bcher-kva.example:8443"),
     ({"site": "www.example.com", "dest": "192.0.2.1:8443"}, "www.example.com", "192.0.2.1:8443"),
     ({"site": "www.example.com", "dest": "[2001:db8::1]"}, "www.example.com", "[2001:db8::1]:443"),
+    ({"port": xray.STATS_API_PORT}, xray.DEFAULT_REALITY_SITE, f"{xray.DEFAULT_REALITY_SITE}:443"),
 ])
 async def test_deploy_renders_reality_settings(client, auth_headers, node, settings, sni, target) -> None:
     sid = await _server(client, auth_headers)
@@ -118,15 +123,18 @@ async def test_deploy_renders_reality_settings(client, auth_headers, node, setti
     )
     assert r.status_code == 202
     script, = node
-    assignments = re.findall(r"^XRAY_(?:SITE_NAME|DEST|SERVER_PORT)=.*$", script, re.M)
+    assignments = re.findall(r"^(?:XRAY_(?:SITE_NAME|DEST|SERVER_PORT)|INBOUND_PORT)=.*$", script, re.M)
+    remap = re.search(r'^ +if \[ "\$INBOUND_PORT" = .*INBOUND_PORT=443; fi$', script, re.M)
+    assert remap is not None
     block = re.search(r'server\.json" >/dev/null <<EOF[^\n]*\n(.*?)\nEOF', script, re.S)
     assert block is not None
     rendered = subprocess.run(
-        ["bash", "-s"], input="\n".join([*assignments, "cat <<EOF", block[1], "EOF", ""]).encode(),
+        ["bash", "-s"], input="\n".join([*assignments, remap[0], "cat <<EOF", block[1], "EOF", ""]).encode(),
         capture_output=True, check=True,
     ).stdout
-    inbound = json.loads(rendered)["inbounds"][0]
-    assert inbound["port"] == 9443
+    inbound, stats = json.loads(rendered)["inbounds"]
+    assert inbound["port"] == (443 if settings.get("port") == xray.STATS_API_PORT else 9443)
+    assert stats["port"] == xray.STATS_API_PORT
     reality = inbound["streamSettings"]["realitySettings"]
     assert reality["serverNames"] == [sni]
     assert reality["dest"] == target

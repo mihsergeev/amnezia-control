@@ -12,12 +12,15 @@ xray_public.key, xray_short_id.key. Выдача/отзыв — правка ser
 
 import asyncio
 import base64
+import hashlib
 import json
 import re
 import shlex
 import struct
 import uuid
 import zlib
+from collections import Counter
+from contextlib import suppress
 from dataclasses import dataclass
 from urllib.parse import quote
 
@@ -43,6 +46,7 @@ CONTAINER_NAME = "amnezia-xray"
 STATS_API_PORT = 10085  # локальный gRPC-API xray (127.0.0.1) для чтения статистики
 STATS_QUERY_TIMEOUT = 5
 _DOCKER = 'DOCKER=$({ [ -w /var/run/docker.sock ] || [ -w /run/docker.sock ]; } && echo docker || echo "sudo -n docker"); '
+_BINDINGS_FORMAT = r'{{range $k, $v := .HostConfig.PortBindings}}{{range $v}}{{printf "%s|%s|%s\n" $k .HostIp .HostPort}}{{end}}{{end}}'
 
 
 class XrayError(Exception):
@@ -58,6 +62,7 @@ class XrayClient:
     client_id: str  # UUID
     name: str
     creation_date: str
+    stats_key: str = ""
 
 
 async def _run(conn: asyncssh.SSHClientConnection, cmd: str) -> str:
@@ -98,6 +103,19 @@ async def detect_container(conn: asyncssh.SSHClientConnection) -> str:
     if not out:
         raise XrayNotDeployed("XRay на сервере не развернут - сначала разверните его.")
     return out.splitlines()[0].strip()
+
+
+async def deployment_bind_ip(conn: asyncssh.SSHClientConnection, port: int) -> str | None:
+    """Адрес переустановки, в том числе когда контейнер остановлен."""
+    result = await conn.run(
+        _DOCKER + f"$DOCKER container inspect -f {shlex.quote(_BINDINGS_FORMAT)} {CONTAINER_NAME}",
+        check=False,
+    )
+    if result.exit_status == 0:
+        binding = re.fullmatch(r"[0-9]+/tcp\|([^|\s]*)\|([0-9]+)", (result.stdout or "").strip())
+        if binding and int(binding[2]) == port:
+            return binding[1]
+    return None
 
 
 async def _read_server(conn, container) -> dict:
@@ -169,6 +187,8 @@ def sync_extra_inbounds(server: dict) -> bool:
         want = []
         for c in primary:
             entry = {"id": c["id"], "email": c.get("email") or c["id"]}
+            if "level" in c:
+                entry["level"] = c["level"]
             if flow and c.get("flow"):
                 entry["flow"] = c["flow"]
             want.append(entry)
@@ -208,22 +228,35 @@ def xhttp_fallback_path(server: dict) -> str | None:
 def ensure_stats_config(server: dict) -> bool:
     """Идемпотентно включает StatsService + пер-юзер статистику в server.json.
 
-    Ключ статистики xray — email клиента, поэтому проставляем email = UUID всем
-    клиентам. Возвращает True, если конфиг изменился (нужен рестарт xray)."""
+    Ключ статистики Xray — email клиента. UUID заполняет пустое поле.
+    Возвращает True, если конфиг изменился (нужен рестарт Xray)."""
     changed = False
-    if "stats" not in server:
+    if server.get("stats") is None:
         server["stats"] = {}
         changed = True
-    if (server.get("api") or {}).get("tag") != "api":
-        server["api"] = {"tag": "api", "services": ["StatsService"]}
+    api = server.get("api") or {}
+    if not api.get("tag"):
+        api["tag"] = "api"
         changed = True
-    want_pol = {
-        "levels": {"0": {"statsUserUplink": True, "statsUserDownlink": True}},
-        "system": {"statsInboundUplink": True, "statsInboundDownlink": True},
-    }
-    if server.get("policy") != want_pol:
-        server["policy"] = want_pol
+    server["api"] = api
+    services = api.get("services") or []
+    if "StatsService" not in services:
+        api["services"] = [*services, "StatsService"]
         changed = True
+    clients = [c for c in _client_list(server) if isinstance(c, dict) and c.get("id")]
+    policy = server["policy"] = server.get("policy") or {}
+    levels = policy["levels"] = policy.get("levels") or {}
+    for level in {"0", *(str(c.get("level", 0)) for c in clients)}:
+        settings = levels.setdefault(level, {})
+        for flag in ("statsUserUplink", "statsUserDownlink"):
+            if settings.get(flag) is not True:
+                settings[flag] = True
+                changed = True
+    system = policy["system"] = policy.get("system") or {}
+    for flag in ("statsInboundUplink", "statsInboundDownlink"):
+        if system.get(flag) is not True:
+            system[flag] = True
+            changed = True
     inbounds = server.setdefault("inbounds", [])
     if not any(isinstance(i, dict) and i.get("tag") == "api" for i in inbounds):
         inbounds.append({
@@ -234,20 +267,19 @@ def ensure_stats_config(server: dict) -> bool:
             "tag": "api",
         })
         changed = True
-    routing = server.setdefault("routing", {})
-    rules = routing.setdefault("rules", [])
+    routing = server["routing"] = server.get("routing") or {}
+    rules = routing["rules"] = routing.get("rules") or []
     if not any(
-        isinstance(r, dict) and "api" in (r.get("inboundTag") or []) for r in rules
+        isinstance(r, dict) and "api" in (r.get("inboundTag") or [])
+        and r.get("outboundTag") == api["tag"] for r in rules
     ):
         rules.insert(
             0,
-            {"type": "field", "inboundTag": ["api"], "outboundTag": "api"},
+            {"type": "field", "inboundTag": ["api"], "outboundTag": api["tag"]},
         )
         changed = True
-    # email = UUID у всех клиентов: ключ статистики xray — email, так маппинг
-    # stat→клиент детерминирован (Amnezia своих email не ставит)
-    for c in _client_list(server):
-        if isinstance(c, dict) and c.get("id") and c.get("email") != c["id"]:
+    for c in clients:
+        if not c.get("email"):
             c["email"] = c["id"]
             changed = True
     if sync_extra_inbounds(server):
@@ -255,15 +287,32 @@ def ensure_stats_config(server: dict) -> bool:
     return changed
 
 
-async def enable_stats(conn, container) -> bool:
-    """Дописывает stats-конфиг в ЖИВОЙ server.json (без рестарта — вызывающий
-    пересоберёт/перезапустит). Нужно, чтобы «Обновить ядро» включало статистику
-    на уже существующих серверах (пересборка сохраняет конфиг как есть)."""
-    server = await _read_server(conn, container)
-    if ensure_stats_config(server):
-        await _write_server(conn, container, server)
-        return True
-    return False
+async def stage_update_stats(conn, container) -> tuple[str, str] | None:
+    """Готовит новый конфиг отдельно; действующий файл и скрипт его не содержат."""
+    raw = await _run(conn, _docker_exec(container, f"cat {SERVER_JSON}"))
+    try:
+        server = json.loads(raw)
+    except ValueError as exc:
+        raise XrayError("не удалось прочитать server.json") from exc
+    if not isinstance(server, dict):
+        raise XrayError("некорректный server.json")
+    if not ensure_stats_config(server):
+        return None
+    result = await conn.run(
+        'umask 077; D="$HOME/.acontrol/xray"; mkdir -p "$D" && chmod 700 "$D" '
+        '&& F=$(mktemp "$D/stats.XXXXXXXX") || exit 1; '
+        'if cat > "$F"; then basename "$F"; else rm -f -- "$F"; exit 1; fi',
+        input=json.dumps(server, indent=4, ensure_ascii=False) + "\n", check=False,
+    )
+    name = (result.stdout or "").strip()
+    if result.exit_status != 0 or not re.fullmatch(r"stats\.[a-zA-Z0-9]{8}", name):
+        raise XrayError("не удалось подготовить новый server.json для обновления")
+    return name, hashlib.sha256(raw.encode()).hexdigest()
+
+
+async def discard_staged_stats(conn, name: str) -> None:
+    with suppress(asyncssh.Error, OSError):
+        await conn.run(f'rm -f -- "$HOME/.acontrol/xray/"{shlex.quote(name)}', check=False)
 
 
 async def read_client_stats(conn, container) -> dict[str, dict] | None:
@@ -335,20 +384,36 @@ async def read_clients(
         for e in table
         if isinstance(e, dict)
     }
+    configured = [c for c in _client_list(server) if isinstance(c, dict)]
+    default_stats_key = next((c.get("email") for c in configured if c.get("id") == default), None)
     clients: list[XrayClient] = []
-    for c in _client_list(server):
-        uid = c.get("id") if isinstance(c, dict) else None
+    for c in configured:
+        uid = c.get("id")
         if not uid or uid == default:
             continue
         ud = names.get(uid, {})
+        stats_key = c.get("email") or ""
         clients.append(
             XrayClient(
                 client_id=uid,
                 name=ud.get("clientName", "—") or "—",
                 creation_date=ud.get("creationDate", ""),
+                stats_key="" if stats_key == default_stats_key else stats_key,
             )
         )
     return clients
+
+
+def client_stats_by_id(clients: list[XrayClient], stats: dict[str, dict] | None) -> dict[str, dict]:
+    """StatsService indexes traffic by the configured email, not by UUID."""
+    if not stats:
+        return {}
+    counts = Counter(c.stats_key for c in clients if c.stats_key)
+    return {
+        c.client_id: stats[c.stats_key]
+        for c in clients
+        if c.stats_key in stats and counts[c.stats_key] == 1
+    }
 
 
 async def read_server_bits(conn, container) -> dict:
@@ -663,9 +728,15 @@ ARG XRAY_RELEASE="v26.10.31"
 RUN apk add --no-cache curl unzip bash openssl netcat-openbsd dumb-init rng-tools xz jq
 RUN apk --update upgrade --no-cache
 RUN mkdir -p /opt/amnezia/xray
-RUN curl -L https://github.com/XTLS/Xray-core/releases/download/${XRAY_RELEASE}/Xray-linux-64.zip > /root/xray.zip; \\
-  unzip /root/xray.zip -d /usr/bin/; \\
-  chmod a+x /usr/bin/xray;
+RUN curl -fsSL --retry 3 --connect-timeout 15 --max-time 180 \\
+  https://github.com/XTLS/Xray-core/releases/download/${XRAY_RELEASE}/Xray-linux-64.zip -o /root/xray.zip \\
+  && if [ "$XRAY_RELEASE" = "v26.10.31" ]; then \\
+    echo 'e4bd9119f50ae7c41658b1abd0679ae06f98bd864a2907ff33f2f2cf7081b214  /root/xray.zip' | sha256sum -c -; \\
+  fi \\
+  && unzip -q /root/xray.zip -d /usr/bin/ \\
+  && chmod a+x /usr/bin/xray \\
+  && /usr/bin/xray version \\
+  && rm -f /root/xray.zip
 ENV TZ=Asia/Shanghai
 ENV GODEBUG=multipathtcp=0
 ENTRYPOINT ["dumb-init","tail","-f","/dev/null"]
@@ -675,6 +746,7 @@ ENTRYPOINT ["dumb-init","tail","-f","/dev/null"]
 def build_deploy_script(
     port: int, site: str, xray_release: str = XRAY_RELEASE, *,
     dest: str = "", require_fresh: bool = False, preserve_port: bool = False,
+    staged_stats: tuple[str, str] | None = None,
 ) -> str:
     """Скрипт build-on-target: ставит docker, собирает amnezia-xray, конфигурит, запускает.
 
@@ -687,7 +759,11 @@ def build_deploy_script(
     dest = dest or f"{site}:443"
     if not re.fullmatch(r"v?\d+\.\d+\.\d+", xray_release or ""):
         xray_release = XRAY_RELEASE
+    elif not xray_release.startswith("v"):
+        xray_release = f"v{xray_release}"
     port = int(port)
+    stats_name, stats_hash = staged_stats or ("", "")
+    stats_file = f'"$HOME/.acontrol/xray/"{shlex.quote(stats_name)}' if stats_name else ""
     dockerfile_b64 = base64.b64encode(_XRAY_DOCKERFILE.encode()).decode()
     fresh_guard = """\
 if sudo test -f "$D/server.json" || sudo docker container inspect "$C" >/dev/null 2>&1; then
@@ -695,11 +771,12 @@ if sudo test -f "$D/server.json" || sudo docker container inspect "$C" >/dev/nul
 fi
 """ if require_fresh else ""
     tls_check = f"""\
-log "проверка TLS 1.3 на Dest"
-sudo docker run --rm --entrypoint timeout "$IMG" 10 openssl s_client -brief -tls1_3 \\
+log "проверка TLS 1.3 и HTTP/2 на Dest"
+TLS_RESULT=$(sudo docker run --rm -e LC_ALL=C --entrypoint timeout "$IMG" 10 openssl s_client -tls1_3 -alpn h2 \\
   -connect {shlex.quote(dest)} -servername {shlex.quote(site)} \\
-  -verify_hostname {shlex.quote(site)} -verify_return_error </dev/null >/dev/null 2>&1 \\
-  || fail "Could not complete a TLS 1.3 handshake with the REALITY Dest using the configured SNI."
+  -verify_hostname {shlex.quote(site)} -verify_return_error </dev/null 2>&1) \\
+  && grep -Fxq 'ALPN protocol: h2' <<< "$TLS_RESULT" \\
+  || fail "The REALITY Dest did not negotiate TLS 1.3 and HTTP/2 using the configured SNI."
 """ if require_fresh else ""
     return f"""set +e
 fail() {{ echo "DEPLOY_ERROR: $1"; exit 1; }}
@@ -712,6 +789,42 @@ IMG=amnezia-xray
 C=amnezia-xray
 BUILD=/opt/amnezia-build/xray
 D=/opt/amnezia/xray
+STATS_FILE={stats_file}
+STATS_DIR=
+STATS_NEXT=
+STATS_BACKUP=
+STATS_APPLIED=
+WORK=
+OLD=
+NEW_CONFIG=
+DEPLOYED=
+cleanup() {{
+  if [ -z "$DEPLOYED" ] && [ -n "$WORK" ] && sudo test -s "$WORK/container-id"; then
+    NEW_ID=$(sudo cat "$WORK/container-id")
+    sudo docker rm -f "$NEW_ID" >/dev/null 2>&1 || true
+  fi
+  if [ -n "$STATS_APPLIED" ] && [ -z "$DEPLOYED" ]; then
+    if ! sudo mv -f -- "$STATS_BACKUP" "$D/server.json"; then
+      log "Could not restore previous Xray configuration. Kept backup at $STATS_BACKUP."
+      STATS_BACKUP=
+    fi
+  fi
+  if [ -n "$OLD" ] && [ -z "$DEPLOYED" ]; then
+    if ! sudo docker rename "$OLD" "$C"; then
+      log "Could not restore previous Xray container name. Kept container $OLD."
+    elif [ "$EXISTING" = true ]; then
+      sudo docker start "$C" >/dev/null || log "Could not restart previous Xray container."
+    fi
+  fi
+  if [ -n "$NEW_CONFIG" ] && [ -z "$DEPLOYED" ]; then sudo rm -f "$D/server.json"; fi
+  if [ -n "$STATS_FILE" ]; then rm -f -- "$STATS_FILE"; fi
+  if [ -n "$STATS_NEXT" ]; then sudo rm -f -- "$STATS_NEXT"; fi
+  if [ -n "$STATS_DIR" ]; then sudo rmdir -- "$STATS_DIR"; fi
+  if [ -n "$STATS_BACKUP" ]; then sudo rm -f -- "$STATS_BACKUP"; fi
+  if [ -n "$WORK" ]; then sudo rm -rf -- "$WORK"; fi
+}}
+trap cleanup EXIT
+trap 'fail "Xray deployment interrupted"' HUP INT TERM
 
 {fresh_guard}
 # У контейнера с нестандартной публикацией не меняем ни внешний порт,
@@ -719,7 +832,7 @@ D=/opt/amnezia/xray
 BIND=
 EXISTING=$(sudo docker inspect -f '{{{{.State.Running}}}}' "$C" 2>/dev/null) || EXISTING=
 if [ -n "$EXISTING" ]; then
-  BINDING=$(sudo docker inspect -f '{{{{range $k, $v := .HostConfig.PortBindings}}}}{{{{range $v}}}}{{{{printf "%s|%s|%s\\n" $k .HostIp .HostPort}}}}{{{{end}}}}{{{{end}}}}' "$C") || fail "could not read existing port bindings"
+  BINDING=$(sudo docker inspect -f {shlex.quote(_BINDINGS_FORMAT)} "$C") || fail "could not read existing port bindings"
   [[ "$BINDING" =~ ^([0-9]+)/tcp\\|([^\\|[:space:]]*)\\|([0-9]+)$ ]] || fail "Unsupported Xray port bindings. The existing container was kept."
   INBOUND_PORT=${{BASH_REMATCH[1]}}
   BIND=${{BASH_REMATCH[2]}}
@@ -752,25 +865,6 @@ sudo docker build --build-arg XRAY_RELEASE={xray_release} -t "$IMG" "$BUILD" 2>&
 
 log "[4/5] конфиг"
 WORK=$(mktemp -d) || fail "could not create Xray working directory"
-OLD=
-NEW_CONFIG=
-DEPLOYED=
-cleanup() {{
-  if [ -z "$DEPLOYED" ] && sudo test -s "$WORK/container-id"; then
-    NEW_ID=$(sudo cat "$WORK/container-id")
-    sudo docker rm -f "$NEW_ID" >/dev/null 2>&1 || true
-  fi
-  if [ -n "$OLD" ]; then
-    if ! sudo docker rename "$OLD" "$C"; then
-      log "Could not restore previous Xray container name. Kept container $OLD."
-    elif [ "$EXISTING" = true ]; then
-      sudo docker start "$C" >/dev/null || log "Could not restart previous Xray container."
-    fi
-  fi
-  if [ -n "$NEW_CONFIG" ]; then sudo rm -f "$D/server.json"; fi
-  sudo rm -rf -- "$WORK"
-}}
-trap cleanup EXIT
 
 CONFIG_DIR=$D
 if [ -n "$EXISTING" ]; then
@@ -793,6 +887,8 @@ if sudo test -f "$CONFIG_DIR/server.json"; then
   log "конфиг уже есть — сохранён, клиенты не тронуты"
 else
   {tls_check}  NEW_CONFIG=1
+  # Внешний порт может совпадать с внутренним портом StatsService.
+  if [ "$INBOUND_PORT" = {STATS_API_PORT} ]; then INBOUND_PORT=443; fi
   log "генерация ключей + server.json (новый сервер)"
   sudo docker run --rm -v "$D":/opt/amnezia/xray --entrypoint sh "$IMG" -c 'cd /opt/amnezia/xray; xray uuid > xray_uuid.key; openssl rand -hex 8 > xray_short_id.key; xray x25519 > xray_x25519.raw 2>&1' || fail keys
   UUID=$(sudo cat "$D/xray_uuid.key" | tr -d " \\r\\n")
@@ -810,7 +906,7 @@ else
     "policy": {{ "levels": {{ "0": {{ "statsUserUplink": true, "statsUserDownlink": true }} }}, "system": {{ "statsInboundUplink": true, "statsInboundDownlink": true }} }},
     "inbounds": [
         {{
-            "port": $XRAY_SERVER_PORT,
+            "port": $INBOUND_PORT,
             "protocol": "vless",
             "settings": {{
                 "clients": [ {{ "id": "$UUID", "flow": "{FLOW}", "email": "$UUID" }} ],
@@ -842,6 +938,22 @@ EOF
   sudo test -f "$D/clientsTable" || echo "[]" | sudo tee "$D/clientsTable" >/dev/null
 fi
 
+CHECK_CONFIG=server.json
+if [ -n "$STATS_FILE" ]; then
+  [ -n "$EXISTING" ] || fail "Xray container changed during update. Retry the update."
+  CONFIG_HASH=$(sudo sha256sum "$D/server.json") || fail "could not check existing Xray configuration"
+  [ "${{CONFIG_HASH%% *}}" = {shlex.quote(stats_hash)} ] || fail "Xray configuration changed during update. Retry the update."
+  STATS_DIR=$(sudo mktemp -d "$D/.server-next.XXXXXXXX") || fail "could not stage Xray statistics configuration"
+  STATS_NEXT=$STATS_DIR/server.json
+  sudo install -m 600 -- "$STATS_FILE" "$STATS_NEXT" || fail "could not stage Xray statistics configuration"
+  STATS_BACKUP=$(sudo mktemp "$D/.server-previous.XXXXXXXX") || fail "could not keep previous Xray configuration"
+  sudo cp -a -- "$D/server.json" "$STATS_BACKUP" || fail "could not keep previous Xray configuration"
+  CHECK_CONFIG=${{STATS_DIR##*/}}/server.json
+fi
+sudo docker run --rm -v "$D":/opt/amnezia/xray:ro --entrypoint xray "$IMG" \\
+  run -test -config "/opt/amnezia/xray/$CHECK_CONFIG" >/dev/null \\
+  || fail "Xray rejected the configuration."
+
 log "фаервол: открываю $XRAY_SERVER_PORT/tcp наружу (Docker публикует, но ufw/firewalld могут блочить)"
 if command -v ufw >/dev/null 2>&1; then sudo ufw allow $XRAY_SERVER_PORT/tcp >/dev/null 2>&1 || true; sudo ufw route allow proto tcp from any to any port $XRAY_SERVER_PORT >/dev/null 2>&1 || true; fi
 if command -v firewall-cmd >/dev/null 2>&1; then sudo firewall-cmd --permanent --add-port=$XRAY_SERVER_PORT/tcp >/dev/null 2>&1 && sudo firewall-cmd --reload >/dev/null 2>&1 || true; fi
@@ -856,6 +968,10 @@ if [ -n "$EXISTING" ]; then
   OLD="$C-previous-$$"
   if [ "$EXISTING" = true ]; then sudo docker stop "$OLD" >/dev/null || fail "could not stop previous Xray container"; fi
 fi
+if [ -n "$STATS_NEXT" ]; then
+  STATS_APPLIED=1
+  sudo mv -f -- "$STATS_NEXT" "$D/server.json" || fail "could not activate Xray statistics configuration"
+fi
 PROBE_HOST=$BIND
 case "$PROBE_HOST" in ''|0.0.0.0) PROBE_HOST=127.0.0.1 ;; ::) PROBE_HOST=::1 ;; esac
 case "$BIND" in *:*) BIND="[$BIND]" ;; esac
@@ -867,7 +983,11 @@ sudo docker run -d --name "$C" --cidfile "$WORK/container-id" --restart always -
   || fail run
 sleep 4
 STATE=$(sudo docker inspect -f '{{{{.State.Status}}}}|{{{{.RestartCount}}}}' "$C")
-if [ "$STATE" != 'running|0' ] || ! timeout 3 bash -c 'exec 3<>"/dev/tcp/$1/$2"' _ "$PROBE_HOST" "$XRAY_SERVER_PORT"; then
+CONTAINER_IP=$(sudo docker inspect -f '{{{{with index .NetworkSettings.Networks "bridge"}}}}{{{{.IPAddress}}}}{{{{end}}}}' "$C")
+# Сокет docker-proxy на хосте принимает TCP, даже если за ним никто не слушает.
+if [ "$STATE" != 'running|0' ] || [ -z "$CONTAINER_IP" ] \\
+  || ! sudo docker exec "$C" timeout 3 nc -z "$CONTAINER_IP" "$INBOUND_PORT" \\
+  || ! timeout 3 bash -c 'exec 3<>"/dev/tcp/$1/$2"' _ "$PROBE_HOST" "$XRAY_SERVER_PORT"; then
   sudo docker logs "$C" 2>&1 | tail
   fail "Xray did not start listening on its published port."
 fi

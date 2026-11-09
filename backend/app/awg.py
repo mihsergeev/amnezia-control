@@ -109,8 +109,8 @@ _AMNEZIA_PARAM_KEYS = [
 _AMNEZIA_PARAM_KEYS_V3 = _AMNEZIA_PARAM_KEYS + AWG3_PARAM_KEYS
 _CONF_KEYS = {
     key.lower(): key
-    for key in (*AWG_PARAM_KEYS, "PrivateKey", "Address", "ListenPort", "Endpoint",
-                "PublicKey", "PresharedKey", "AllowedIPs")
+    for key in (*AWG_PARAM_KEYS, "PrivateKey", "Address", "DNS", "MTU", "ListenPort",
+                "Endpoint", "PublicKey", "PresharedKey", "AllowedIPs", "PersistentKeepalive")
 }
 
 
@@ -141,14 +141,15 @@ def build_amnezia_link(
     peer = peers[0] if peers else {}
     client_priv = interface.get("PrivateKey", "")
     client_pub = derive_public_key(client_priv) if client_priv else ""
-    client_ip = interface.get("Address", "").split("/")[0]
+    client_ip = interface.get("Address", "").partition(",")[0].partition("/")[0].strip()
     subnet = (
         str(ipaddress.ip_network(f"{client_ip}/24", strict=False).network_address)
         if client_ip
         else ""
     )
-    endpoint = peer.get("Endpoint", "").partition("#")[0].partition(";")[0].strip()
+    endpoint = peer.get("Endpoint", "").partition(";")[0]
     endpoint_host, _, endpoint_port = endpoint.rpartition(":")
+    endpoint_host, endpoint_port = endpoint_host.strip(), endpoint_port.strip()
     port = int(endpoint_port) if endpoint_host and endpoint_port.isdecimal() else 0
     if port:
         host = endpoint_host.removeprefix("[").removesuffix("]")
@@ -157,22 +158,35 @@ def build_amnezia_link(
     keys = _AMNEZIA_PARAM_KEYS if protocol_version == "2" else _AMNEZIA_PARAM_KEYS_V3
     params = {k: interface.get(k, "") for k in keys}
 
-    # DNS в конфиге шаблонизируем, как делает Amnezia
+    # Подстановки Amnezia вмещают два адреса. Остальные варианты DNS
+    # сохраняем дословно, включая дополнительные серверы и домены поиска.
+    profile_dns = []
+    for value in interface.get("DNS", "").split(","):
+        value = value.strip()
+        try:
+            ipaddress.ip_address(value)
+        except ValueError:
+            continue
+        profile_dns.append(value)
+    if profile_dns:
+        dns1, dns2 = dns_pair(",".join(profile_dns))
     config_str = re.sub(
-        r"^DNS = .*$", "DNS = $PRIMARY_DNS, $SECONDARY_DNS", conf_text, flags=re.M
+        rf"^DNS = {re.escape(f'{dns1}, {dns2}')}(?=\r?$)",
+        "DNS = $PRIMARY_DNS, $SECONDARY_DNS", conf_text, flags=re.M,
     )
 
+    allowed_ips = peer.get("AllowedIPs", "0.0.0.0/0, ::/0").split(",")
     last_config = {
         **params,
-        "allowed_ips": ["0.0.0.0/0", "::/0"],
+        "allowed_ips": [ip.strip() for ip in allowed_ips if ip.strip()],
         "clientId": client_pub,
         "client_ip": client_ip,
         "client_priv_key": client_priv,
         "client_pub_key": client_pub,
         "config": config_str,
         "hostName": host,
-        "mtu": "1376",
-        "persistent_keep_alive": "25",
+        "mtu": interface.get("MTU") or "1376",
+        "persistent_keep_alive": peer.get("PersistentKeepalive") or "25",
         "port": port,
         "psk_key": peer.get("PresharedKey", ""),
         "server_pub_key": peer.get("PublicKey", ""),
@@ -278,7 +292,9 @@ def parse_conf(text: str) -> tuple[dict[str, str], list[dict[str, str]]]:
             continue
         key, _, value = s.partition("=")
         key, value = key.strip(), value.strip()
-        key = _CONF_KEYS.get(key.lower(), key)
+        if canonical := _CONF_KEYS.get(key.lower()):
+            key = canonical
+            value = value.partition("#")[0].rstrip()
         if section == "iface":
             interface[key] = value
         elif section == "peer":
