@@ -1,3 +1,16 @@
+from pathlib import Path
+import re
+
+from app.config import Settings
+
+
+def test_packaged_version_matches_changelog() -> None:
+    changelog = Path(__file__).resolve().parents[2] / "CHANGELOG.md"
+    latest_release = re.search(r"^## \[(\d+\.\d+\.\d+)\]", changelog.read_text(encoding="utf-8"), re.MULTILINE)
+    assert latest_release is not None
+    assert Settings.model_fields["version"].default == latest_release.group(1)
+
+
 async def test_health_returns_ok(client) -> None:
     response = await client.get("/api/health")
 

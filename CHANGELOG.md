@@ -4,13 +4,14 @@ All notable changes to Amnezia Control are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
-## [0.84.29] - 2026-11-09
+## [0.84.30] - 2026-11-09
 
 - Persist AmneziaWG and WireGuard peer removal across restarts. Honor the `users` alias when managing or counting clients on Xray VLESS inbounds.
 - Limit Cloak replacement to its own container and verify the OpenVPN PKI. Report revocation failures and replace the certificate revocation list atomically.
 - Surface failed configuration snapshot restores. Verify cascade packet rules before committing gateway changes, and recover interrupted route updates against the original container.
 - Keep revoked API keys revoked across successive backup restores, including restores from before a key was created.
 - Refuse redirects when sending configurations to a one-time link service.
+- Fix the packaged backend version and check it against the changelog in CI.
 
 ## [0.84.28] - 2026-11-09
 
