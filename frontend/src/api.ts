@@ -246,6 +246,7 @@ export type Server = {
   id: number
   name: string
   host: string
+  client_endpoint?: string
   ssh_port: number
   ssh_user: string
   note: string
@@ -308,6 +309,7 @@ export function reorderServers(
 export type ServerForm = {
   name: string
   host: string
+  client_endpoint: string
   ssh_port: number
   ssh_user: string
   note: string

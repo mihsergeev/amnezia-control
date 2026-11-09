@@ -16,7 +16,7 @@ API-ключ в заголовке `X-API-Key` (см. app/apikeys.py), НЕ по
 from fastapi import APIRouter, HTTPException, Query, status
 from sqlalchemy import delete, select
 
-from app import audit, awg, limits, nodelock, pausestore
+from app import audit, awg, client_endpoint, limits, nodelock, pausestore
 from app.api.awg import (
     _amnezia_link,
     _connect,
@@ -103,6 +103,7 @@ async def issue_client(
     `config_amnezia` — ссылка `vpn://` для приложения AmneziaVPN. Конфиг
     сохраняется в панели, поэтому его можно забрать повторно."""
     server = await _server(client, server_id, session)
+    await client_endpoint.require_resolvable(server.client_endpoint)
     dns = body.dns or get_settings().awg_client_dns
     reserved = await pausestore.paused_ips(session, server_id, "awg")
     try:
@@ -121,6 +122,7 @@ async def issue_client(
             session, server_id, "awg", created.public_key, created.name, body.expires_at
         )
     await audit.record(session, _actor(client), "awg_issue", server.name, body.name)
+    config = client_endpoint.peer_config(config, server.client_endpoint)
     return CreateClientResponse(
         client=created.__dict__
         | {"has_config": True, "note": body.note, "expires_at": body.expires_at},
@@ -154,9 +156,11 @@ async def get_config(
             status.HTTP_404_NOT_FOUND,
             "Конфиг не сохранён в панели (клиент создан не через неё) — перевыпустите",
         )
+    await client_endpoint.require_resolvable(server.client_endpoint)
+    config = client_endpoint.peer_config(row.config, server.client_endpoint)
     return ConfigTextResponse(
-        config=row.config,
-        config_amnezia=_amnezia_link(row.config, server),
+        config=config,
+        config_amnezia=_amnezia_link(config, server),
         name=row.name,
     )
 

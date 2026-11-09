@@ -41,6 +41,7 @@ class Server(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     name: Mapped[str] = mapped_column(String(128))
     host: Mapped[str] = mapped_column(String(255))
+    client_endpoint: Mapped[str] = mapped_column(String(255), default="", server_default="")
     ssh_port: Mapped[int] = mapped_column(Integer, default=22)
     ssh_user: Mapped[str] = mapped_column(String(64), default="root")
     note: Mapped[str] = mapped_column(Text, default="")

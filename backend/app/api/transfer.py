@@ -27,7 +27,7 @@ from fastapi import APIRouter, HTTPException, Request, status
 from fastapi.responses import Response
 from sqlalchemy import DateTime, func, insert, select
 
-from app import alerts, audit, native_snapshots, sshops, stepup
+from app import alerts, audit, client_endpoint, native_snapshots, sshops, stepup
 from app.clientip import client_ip
 from app.config import get_settings
 from app.db import Base
@@ -53,7 +53,7 @@ _HISTORY_TABLES = {"traffic_samples", "client_traffic_samples"}
 
 # поля сервера, которые имеет смысл переносить: адрес, доступ и то, как карточка
 # выглядит. id/position/результаты последней проверки — местные, их не берём
-_SERVER_FIELDS = ("name", "host", "ssh_port", "ssh_user", "note", "group_name",
+_SERVER_FIELDS = ("name", "host", "client_endpoint", "ssh_port", "ssh_user", "note", "group_name",
                   "country", "torrent_block", "torrent_autopause", "alerts_enabled")
 
 _MAX_IMPORT_BYTES = 200 * 1024 * 1024
@@ -216,6 +216,13 @@ async def import_server_file(
             status.HTTP_400_BAD_REQUEST,
             f"недопустимое имя SSH-пользователя в файле: {ssh_user!r}",
         )
+    endpoint = spec.get("client_endpoint", "")
+    try:
+        if not isinstance(endpoint, str) or len(endpoint) > 255:
+            raise ValueError(client_endpoint.INVALID)
+        endpoint = client_endpoint.normalize(endpoint)
+    except ValueError as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from None
     ssh_port = int(spec.get("ssh_port") or 22)
     # тот же адрес и порт = тот же сервер. Молча заводить дубль нельзя: две
     # карточки начали бы независимо править один и тот же конфиг на ноде
@@ -233,6 +240,7 @@ async def import_server_file(
     server = Server(
         name=name[:128],
         host=host[:255],
+        client_endpoint=endpoint,
         ssh_port=ssh_port,
         ssh_user=ssh_user,
         note=spec.get("note") or "",

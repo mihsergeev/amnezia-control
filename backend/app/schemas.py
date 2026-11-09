@@ -1,14 +1,15 @@
 import re
 from datetime import datetime
 from ipaddress import IPv4Address, IPv6Address
-from typing import Literal
+from typing import Annotated, Literal
 from uuid import UUID
 
 import idna
-from pydantic import BaseModel, ConfigDict, Field, computed_field, field_validator, model_validator
+from pydantic import AfterValidator, BaseModel, ConfigDict, Field, computed_field, field_validator, model_validator
 
 
 from app.cascade_routes import Route
+from app.client_endpoint import normalize as normalize_client_endpoint
 from app.geo import normalize_country_code
 
 
@@ -60,9 +61,13 @@ class UserOut(BaseModel):
     username: str
 
 
+ClientEndpoint = Annotated[str, Field(max_length=255), AfterValidator(normalize_client_endpoint)]
+
+
 class ServerCreate(BaseModel):
     name: str = Field(min_length=1, max_length=128)
     host: str = Field(min_length=1, max_length=255)
+    client_endpoint: ClientEndpoint = ""
     ssh_port: int = Field(default=22, ge=1, le=65535)
     # только безопасный набор символов для имени пользователя (без shell-метасимволов)
     ssh_user: str = Field(
@@ -76,6 +81,7 @@ class ServerCreate(BaseModel):
 class ServerUpdate(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=128)
     host: str | None = Field(default=None, min_length=1, max_length=255)
+    client_endpoint: ClientEndpoint = ""
     ssh_port: int | None = Field(default=None, ge=1, le=65535)
     ssh_user: str | None = Field(
         default=None, min_length=1, max_length=64,
@@ -106,6 +112,7 @@ class ServerOut(BaseModel):
     id: int
     name: str
     host: str
+    client_endpoint: str = ""
     ssh_port: int
     ssh_user: str
     note: str

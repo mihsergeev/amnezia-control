@@ -4,6 +4,11 @@ All notable changes to Amnezia Control are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.84.25] - 2026-11-09
+
+- Add an optional Client Endpoint for AmneziaWG and WireGuard profiles. Use a domain or IP for client connections while keeping the existing SSH host.
+- Download saved profiles with the new endpoint without recreating clients or changing their keys, port, or obfuscation settings. Report DNS lookup failures before returning a profile.
+
 ## [0.84.24] - 2026-11-09
 
 - Set an optional SNI and REALITY target (Dest) when installing Xray. New client profiles use the configured SNI.

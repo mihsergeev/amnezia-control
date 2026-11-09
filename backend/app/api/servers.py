@@ -5,7 +5,7 @@ from fastapi import APIRouter, HTTPException, Response, status
 from sqlalchemy import delete as sa_delete
 from sqlalchemy import func, select, update as sa_update
 
-from app import audit, cascade_alias, cascadejob, egresscheck, geo, limits, native_snapshots, nodelock, server_ops, sshops, torrent
+from app import audit, cascade_alias, cascadejob, client_endpoint, egresscheck, geo, limits, native_snapshots, nodelock, server_ops, sshops, torrent
 from app.config import get_settings
 from app.db import Base
 from app.deps import CurrentUser, SessionDep
@@ -63,6 +63,7 @@ async def create_server(
     body: ServerCreate, response: Response, user: CurrentUser, session: SessionDep,
     reuse_ssh_endpoint: bool = False,
 ) -> Server:
+    await client_endpoint.require_resolvable(body.client_endpoint)
     async with nodelock.hold("server-registration", 0):
         if reuse_ssh_endpoint:
             matches = list(await session.scalars(select(Server).where(
@@ -112,6 +113,8 @@ async def update_server(
 ) -> Server:
     server = await _get_or_404(server_id, session)
     changes = body.model_dump(exclude_unset=True)
+    if "client_endpoint" in changes and changes["client_endpoint"] != server.client_endpoint:
+        await client_endpoint.require_resolvable(changes["client_endpoint"])
     host_changed = "host" in changes and changes["host"] != server.host
     manual_exit_name = changes.pop("manual_exit_name", None)
     if manual_exit_name is not None:

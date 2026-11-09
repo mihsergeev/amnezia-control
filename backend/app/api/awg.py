@@ -5,7 +5,7 @@ import httpx
 from fastapi import APIRouter, HTTPException, Request, status
 from sqlalchemy import delete, select, update
 
-from app import audit, awg, deploy, deploywatch, limits, nodelock, notes, pausestore, sshops
+from app import audit, awg, client_endpoint, deploy, deploywatch, limits, nodelock, notes, pausestore, sshops
 from app.config import get_settings
 from app.deps import CurrentUser, SessionDep
 from app.models import AwgConfig, AwgNote, ClientLimit, ClientName, Server
@@ -166,7 +166,7 @@ def _amnezia_link(
 ) -> str:
     dns1, dns2 = awg.dns_pair(get_settings().awg_client_dns)
     return awg.build_amnezia_link(
-        config, server.host, server.name, dns1, dns2,
+        config, server.client_endpoint or server.host, server.name, dns1, dns2,
         protocol_version=protocol_version or link_version_from_conf(config),
     )
 
@@ -264,6 +264,7 @@ async def create_client(
     session: SessionDep,
 ) -> CreateClientResponse:
     server = await _get_or_404(server_id, session)
+    await client_endpoint.require_resolvable(server.client_endpoint)
     dns = body.dns or get_settings().awg_client_dns
     try:
         async with _connect(server) as conn:
@@ -284,6 +285,7 @@ async def create_client(
             session, server_id, "awg", client.public_key, client.name, body.expires_at
         )
     await audit.record(session, user.username, "awg_issue", server.name, body.name)
+    config = client_endpoint.peer_config(config, server.client_endpoint)
     return CreateClientResponse(
         client=client.__dict__
         | {"has_config": True, "note": body.note, "expires_at": body.expires_at},
@@ -323,9 +325,11 @@ async def get_stored_config(
             status.HTTP_404_NOT_FOUND,
             "Конфиг не сохранён в панели (клиент создан не через неё) — перевыпустите",
         )
+    await client_endpoint.require_resolvable(server.client_endpoint)
+    config = client_endpoint.peer_config(row.config, server.client_endpoint)
     return ConfigTextResponse(
-        config=row.config,
-        config_amnezia=_amnezia_link(row.config, server),
+        config=config,
+        config_amnezia=_amnezia_link(config, server),
         name=row.name,
     )
 
@@ -339,6 +343,7 @@ async def reissue_client(
     session: SessionDep,
 ) -> CreateClientResponse:
     server = await _get_or_404(server_id, session)
+    await client_endpoint.require_resolvable(server.client_endpoint)
     dns = get_settings().awg_client_dns
     old_note = (await _notes_map(session, server_id)).get(body.public_key, "")
     old_exp = (await limits.limits_map(session, server_id, "awg")).get(body.public_key)
@@ -353,6 +358,7 @@ async def reissue_client(
     except Exception as exc:  # noqa: BLE001
         raise _ssh_error(exc) from exc
     await audit.record(session, user.username, "awg_reissue", server.name, client.name)
+    config = client_endpoint.peer_config(config, server.client_endpoint)
     return CreateClientResponse(
         client=client.__dict__
         | {"has_config": True, "note": old_note, "expires_at": old_exp},

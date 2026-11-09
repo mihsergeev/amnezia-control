@@ -7,7 +7,7 @@ from contextlib import asynccontextmanager
 from fastapi import APIRouter, HTTPException, Request, status
 from sqlalchemy import delete, select
 
-from app import audit, deploy, deploywatch, expiry, limits, native_deploy, native_snapshots, native_vpn, nodelock, notes, pausestore, sshops
+from app import audit, client_endpoint, deploy, deploywatch, expiry, limits, native_deploy, native_snapshots, native_vpn, nodelock, notes, pausestore, sshops
 from app.config import get_settings
 from app.deps import CurrentUser, SessionDep
 from app.models import NativeVpnConfig, Server
@@ -129,6 +129,8 @@ def build_router(protocol: str) -> APIRouter:
     @nodelock.operation(protocol)
     async def create(server_id: int, body: NativeCreateRequest, user: CurrentUser, session: SessionDep):
         server = await server_or_404(session, server_id)
+        endpoint = server.client_endpoint if protocol == "wireguard" else ""
+        await client_endpoint.require_resolvable(endpoint)
         try:
             async with connection(server, protocol) as conn:
                 await deploy.ensure_idle(conn, tag=protocol)
@@ -145,19 +147,22 @@ def build_router(protocol: str) -> APIRouter:
             await limits.set_limit(session, server_id, protocol, cid, body.name, body.expires_at)
         await session.commit()
         await audit.record(session, user.username, f"{protocol}_issue", server.name, body.name)
+        config = client_endpoint.peer_config(config, endpoint)
         return export(protocol, body.name, config, cid) | {"client": client | {
             "has_config": True, "note": body.note, "expires_at": body.expires_at, "paused": False}}
 
     @router.post("/config", response_model=NativeConfigResponse)
     async def config(server_id: int, body: NativeClientRequest, _: CurrentUser, session: SessionDep):
-        await server_or_404(session, server_id)
+        server = await server_or_404(session, server_id)
         cid = identifier(protocol, body)
         row = await session.scalar(select(NativeVpnConfig).where(
             NativeVpnConfig.server_id == server_id, NativeVpnConfig.protocol == protocol,
             NativeVpnConfig.client_id == cid))
         if row is None:
             raise HTTPException(404, "Профиль не сохранен в панели; перевыпустите клиента")
-        return export(protocol, row.name, row.config, cid)
+        endpoint = server.client_endpoint if protocol == "wireguard" else ""
+        await client_endpoint.require_resolvable(endpoint)
+        return export(protocol, row.name, client_endpoint.peer_config(row.config, endpoint), cid)
 
     @router.post("/note", status_code=204)
     async def note(server_id: int, body: NativeNoteRequest, _: CurrentUser, session: SessionDep):
@@ -223,6 +228,8 @@ def build_router(protocol: str) -> APIRouter:
     @nodelock.operation(protocol)
     async def reissue(server_id: int, body: NativeClientRequest, user: CurrentUser, session: SessionDep):
         server = await server_or_404(session, server_id)
+        endpoint = server.client_endpoint if protocol == "wireguard" else ""
+        await client_endpoint.require_resolvable(endpoint)
         cid = identifier(protocol, body)
         if cid in await pausestore.list_paused(session, server_id, protocol):
             raise HTTPException(409, "Сначала возобновите клиента или отзовите его")
@@ -252,6 +259,7 @@ def build_router(protocol: str) -> APIRouter:
             await limits.set_limit(session, server_id, protocol, new_id, target["name"], old_limit)
         await session.commit()
         await audit.record(session, user.username, f"{protocol}_reissue", server.name, target["name"])
+        text = client_endpoint.peer_config(text, endpoint)
         return export(protocol, target["name"], text, new_id) | {"client": client | {
             "has_config": True, "note": old_note, "expires_at": old_limit, "paused": False}}
 

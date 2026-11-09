@@ -65,6 +65,7 @@ function emptyForm(defaultUser: string): ServerForm {
   return {
     name: '',
     host: '',
+    client_endpoint: '',
     ssh_port: 22,
     ssh_user: defaultUser,
     note: '',
@@ -608,6 +609,7 @@ export function ServersPage({ onUnauthorized }: Props) {
   const [form, setForm] = useState<ServerForm>(emptyForm(FALLBACK_USER))
   const [editingId, setEditingId] = useState<number | null>(null)
   const [formOpen, setFormOpen] = useState(false)
+  const [formError, setFormError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   // храним ключ, а не перевод: подпись должна меняться вместе с языком
   const [busyLabel, setBusyLabel] = useState('Сохранить')
@@ -732,6 +734,7 @@ export function ServersPage({ onUnauthorized }: Props) {
 
   function resetForm(defaultUser: string) {
     setForm(emptyForm(defaultUser))
+    setFormError(null)
     setPassword('')
     setSudoPassword('')
     setShowAdvanced(false)
@@ -745,9 +748,11 @@ export function ServersPage({ onUnauthorized }: Props) {
   }
 
   function openEdit(server: Server) {
+    setFormError(null)
     setForm({
       name: server.name,
       host: server.host,
+      client_endpoint: server.client_endpoint ?? '',
       ssh_port: server.ssh_port,
       ssh_user: server.ssh_user,
       note: server.note,
@@ -815,6 +820,7 @@ export function ServersPage({ onUnauthorized }: Props) {
   async function submit(e: FormEvent) {
     e.preventDefault()
     setBusy(true)
+    setFormError(null)
     setNotice(null)
     try {
       if (editingId !== null) {
@@ -871,7 +877,8 @@ export function ServersPage({ onUnauthorized }: Props) {
         await openScript(created)
       }
     } catch (err) {
-      handleError(err)
+      if (err instanceof ApiError && err.status === 401) onUnauthorized()
+      else setFormError(err instanceof Error ? err.message : t('Неизвестная ошибка'))
     } finally {
       setBusy(false)
       setBusyLabel('Сохранить')
@@ -1511,6 +1518,21 @@ export function ServersPage({ onUnauthorized }: Props) {
               </label>
             </div>
             <label>
+              {t('Адрес VPN для клиентов (Client Endpoint)')}
+              <input
+                value={form.client_endpoint}
+                onChange={(e) => setForm({ ...form, client_endpoint: e.target.value })}
+                placeholder="vpn.example.com"
+                maxLength={255}
+                autoComplete="off"
+                spellCheck={false}
+                aria-describedby="server-client-endpoint-help"
+              />
+              <small className="muted" id="server-client-endpoint-help">
+                {t('Домен или IP без порта для профилей AmneziaWG и WireGuard. Если поле пустое, используется хост SSH.')}
+              </small>
+            </label>
+            <label>
               {t('Заметка')}
               <input
                 value={form.note}
@@ -1684,6 +1706,7 @@ export function ServersPage({ onUnauthorized }: Props) {
               </div>
             )}
 
+            {formError && <p className="error" role="alert">{t(formError)}</p>}
             <div className="modal-actions">
               <button type="button" className="ghost" onClick={() => setFormOpen(false)}>
                 {t('Отмена')}

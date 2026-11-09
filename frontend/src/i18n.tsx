@@ -876,6 +876,11 @@ const EN: Record<string, string> = {
     ', allows the SSH port only for the panel IP (ufw / firewalld / hosts.allow; nothing extra is exposed) and responds with',
   '. После этого нажмите «Проверить».': '. Then click “Check”.',
   'SSH-порт': 'SSH port',
+  'Адрес VPN для клиентов (Client Endpoint)': 'Client VPN address (Client Endpoint)',
+  'Домен или IP без порта для профилей AmneziaWG и WireGuard. Если поле пустое, используется хост SSH.':
+    'Domain or IP without a port for AmneziaWG and WireGuard profiles. Leave blank to use the SSH host.',
+  'Домен Client Endpoint не разрешается в IP. Проверьте DNS и повторите попытку.':
+    'The Client Endpoint domain does not resolve to an IP address. Check DNS and try again.',
   'SSH-пользователь': 'SSH user',
   'SSH-пароль пользователя {user}': 'SSH password for {user}',
   'Отдельный пароль для sudo?': 'Separate sudo password?',

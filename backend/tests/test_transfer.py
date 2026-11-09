@@ -146,8 +146,14 @@ async def test_import_restores_server_with_its_data(
     client: httpx.AsyncClient, auth_headers, session_factory
 ) -> None:
     sid = await _make_server(client, auth_headers)
+    endpoint = "192.0.2.9"
+    response = await client.patch(
+        f"/api/servers/{sid}", json={"client_endpoint": endpoint}, headers=auth_headers
+    )
+    assert response.status_code == 200, response.text
     await _seed(session_factory, sid)
     dump = (await client.get(f"/api/servers/{sid}/export", headers=_pw(auth_headers))).json()
+    assert dump["server"]["client_endpoint"] == endpoint
     dump["server"]["alerts_enabled"] = True
 
     # эмулируем другую панель: исходного сервера тут нет
@@ -164,6 +170,7 @@ async def test_import_restores_server_with_its_data(
     new_id = res["server_id"]
     server = (await client.get(f"/api/servers/{new_id}", headers=auth_headers)).json()
     assert server["alerts_enabled"] is False
+    assert server["client_endpoint"] == endpoint
 
     # строки перепривязаны к НОВОМУ id, а не тащат старый
     async with session_factory() as session:
