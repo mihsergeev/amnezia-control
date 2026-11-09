@@ -4,6 +4,10 @@ All notable changes to Amnezia Control are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.84.35] - 2026-11-10
+
+- Include a looping GIF for each multi-frame AmneziaVPN import QR in client ZIP exports. Keep the individual PNG frames and all configuration files available.
+
 ## [0.84.34] - 2026-11-10
 
 - Keep unfinished bulk issuance requests on the panel that created them. Server transfers still include saved client profiles, and imports skip unfinished requests from older archives.

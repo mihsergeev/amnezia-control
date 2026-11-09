@@ -9,6 +9,8 @@ import uuid
 import zipfile
 from contextlib import asynccontextmanager
 
+import pytest
+from PIL import Image
 from sqlalchemy import select
 
 from app import awg, bulk_archive, bulk_issue_state, pausestore, wg_bulk, xray_bulk
@@ -256,3 +258,39 @@ def test_amnezia_qr_frames_use_app_import_wire_format():
         (1984, 2, 0, 850), (1984, 2, 1, 50),
     ]
     assert b"".join(data[8:] for data in contents) == source
+
+
+@pytest.mark.parametrize(("protocol", "label"), [
+    ("awg3", "amnezia-qr"), ("xray", "standard-amnezia-qr"),
+])
+def test_bulk_archive_includes_looping_gif_with_original_qr_frames(protocol, label):
+    source = b"a" * 850 + b"b" * 850 + b"c" * 50
+    link = "vpn://" + base64.urlsafe_b64encode(source).decode().rstrip("=")
+    single_link = "vpn://YQ"
+    profiles = {
+        "multi": bulk_archive.Profile("multi", {"amnezia.txt": link}, {label: (link, True)}),
+        "single": bulk_archive.Profile("single", {"amnezia.txt": single_link}, {label: (single_link, True)}),
+    }
+    data, exported = bulk_archive.build(protocol, list(profiles), profiles)
+
+    assert exported == 2
+    with zipfile.ZipFile(io.BytesIO(data)) as archive:
+        gif_path = f"0001-multi/{label}.gif"
+        png_paths = [f"0001-multi/{label}-{i:02}.png" for i in range(1, 4)]
+        manifest = json.loads(archive.read("manifest.json"))
+        assert manifest["items"][0]["files"] == ["0001-multi/amnezia.txt", *png_paths, gif_path]
+        assert manifest["items"][0]["warnings"] == []
+        assert manifest["items"][1]["files"] == ["0002-single/amnezia.txt", f"0002-single/{label}.png"]
+        assert archive.read("0001-multi/amnezia.txt").decode() == link
+        with Image.open(io.BytesIO(archive.read(gif_path))) as gif:
+            assert gif.n_frames == len(png_paths)
+            assert gif.info["loop"] == 0
+            for index, png_path in enumerate(png_paths):
+                gif.seek(index)
+                assert gif.info["duration"] == 500
+                with Image.open(io.BytesIO(archive.read(png_path))) as png:
+                    assert gif.width >= png.width
+                    offset = (gif.width - png.width) // 2
+                    expected = Image.new("L", gif.size, 255)
+                    expected.paste(png.convert("L"), (offset, offset))
+                assert gif.convert("L").tobytes() == expected.tobytes()

@@ -24,6 +24,7 @@ dependencies = [
     "httpx>=0.27,<1",
     "idna>=3,<4",
     "segno>=1.6,<2",
+    "pillow>=13,<14",
 ]
 
 [project.optional-dependencies]

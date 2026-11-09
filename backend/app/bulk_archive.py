@@ -10,6 +10,7 @@ import zlib
 from dataclasses import dataclass, field
 
 import segno
+from PIL import Image
 
 _MAX_ZIP = 48 * 1024 * 1024
 _MAX_PROFILE = 128 * 1024
@@ -62,6 +63,28 @@ def _qr_png(data: str | bytes) -> bytes:
     return result.getvalue()
 
 
+def _qr_gif(png_frames: list[bytes]) -> bytes:
+    frames = []
+    for png in png_frames:
+        with Image.open(io.BytesIO(png)) as image:
+            frames.append(image.convert("L"))
+
+    # Keep QR modules at their original size and the quiet zone white.
+    # The final chunk can produce a smaller QR than the preceding chunks.
+    size = max(frame.width for frame in frames)
+    canvases = []
+    for frame in frames:
+        offset = (size - frame.width) // 2
+        canvas = Image.new("L", (size, size), 255)
+        canvas.paste(frame, (offset, offset))
+        canvases.append(canvas)
+
+    result = io.BytesIO()
+    canvases[0].save(result, format="GIF", save_all=True, append_images=canvases[1:],
+                     duration=500, loop=0, optimize=False)
+    return result.getvalue()
+
+
 def build(protocol: str, ids: list[str], profiles: dict[str, Profile]) -> tuple[bytes, int]:
     output = io.BytesIO()
     manifest = {"protocol": protocol, "items": []}
@@ -98,6 +121,10 @@ def build(protocol: str, ids: list[str], profiles: dict[str, Profile]) -> tuple[
                         suffix = f"-{index:02}" if len(rendered) > 1 else ""
                         path = f"{folder}/{label}{suffix}.png"
                         archive.writestr(path, png)
+                        paths.append(path)
+                    if len(rendered) > 1:
+                        path = f"{folder}/{label}.gif"
+                        archive.writestr(path, _qr_gif(rendered))
                         paths.append(path)
             manifest["items"].append({
                 "client_id": cid, "name": profile.name, "status": "exported" if paths else "profile_invalid",
