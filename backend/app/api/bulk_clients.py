@@ -69,6 +69,8 @@ async def _reality_bits(conn, container):
 def _match_request(operation, user_id, server_id, protocol, body):
     if operation is None:
         return
+    if operation.complete and not operation.items:
+        raise HTTPException(409, "Эту выдачу нельзя повторить после восстановления панели. Начните новую выдачу.")
     if (operation.owner_id, operation.server_id, operation.protocol, operation.prefix, operation.count) \
             != (user_id, server_id, protocol, body.prefix, body.count):
         raise HTTPException(409, "Идентификатор уже использован для другой групповой выдачи")
@@ -93,6 +95,7 @@ async def pending_issue(server_id: int, protocol: IssueProtocol, user: CurrentUs
 
 
 @router.post("/issue", response_model=IssueResult)
+@bulk_issue_state.guard()
 @nodelock.operation()
 async def issue(server_id: int, protocol: IssueProtocol, body: IssueRequest,
                 user: CurrentUser, session: SessionDep, response: Response) -> IssueResult:
@@ -284,6 +287,8 @@ async def export(server_id: int, protocol: ExportProtocol, body: ExportRequest,
             if protocol == "xray":
                 profiles = await _xray_profiles(server, body.client_ids)
             else:
+                if protocol in ("awg", "awg3", "awglegacy", "wireguard"):
+                    await client_endpoint.require_resolvable(server.client_endpoint)
                 profiles = await _stored_profiles(server, protocol, session, body.client_ids)
             content, exported = await asyncio.to_thread(bulk_archive.build, protocol, body.client_ids, profiles)
     except HTTPException:

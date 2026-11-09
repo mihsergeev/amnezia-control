@@ -4,13 +4,14 @@ import io
 import json
 import os
 import tarfile
+import uuid
 from datetime import date, datetime, timezone
 
 from fastapi import APIRouter, HTTPException, Request, status
 from fastapi.responses import Response
 from sqlalchemy import DateTime, delete, insert, select, text, update
 
-from app import alerts, audit, sshops, stepup
+from app import alerts, audit, bulk_issue_state, sshops, stepup
 from app.clientip import client_ip
 from app.config import get_settings
 from app.deps import CurrentUser, SessionDep
@@ -77,7 +78,7 @@ _TRAFFIC_MODELS = (TrafficSample, ClientTrafficSample)
 
 _RESTORE = """# Восстановление Amnezia Control
 
-Архив содержит полное состояние панели на момент бэкапа.
+Архив содержит состояние панели на момент бэкапа.
 
 ## Что внутри
 - `db.json` - все таблицы БД (пользователи, серверы, каскады, выданные конфиги,
@@ -89,6 +90,8 @@ _RESTORE = """# Восстановление Amnezia Control
   потеряет доступ ко всем нодам - ключ критичен. Сертификаты TLS (`caddy/`) и
   файл пульса (`heartbeat`) в архив не входят: Caddy выпустит сертификат заново,
   пульс панель перепишет сама.
+- Архив не содержит планы групповой выдачи. Завершите или отмените текущую
+  выдачу перед восстановлением. Старые запросы не запускаются повторно.
 
 ## Как восстановить
 1. Разверните панель той же или более новой версии (docker compose up) и
@@ -115,6 +118,11 @@ def _to_jsonable(value):
 
 def _dump_row(row) -> dict:
     return {c.name: _to_jsonable(getattr(row, c.name)) for c in row.__table__.columns}
+
+
+def _retired_issue(request_id: str) -> dict:
+    return {"request_id": request_id, "server_id": 0, "owner_id": 0, "protocol": "",
+            "prefix": "", "count": 0, "items": [], "complete": True}
 
 
 def _add_bytes(tar: tarfile.TarFile, name: str, data: bytes) -> None:
@@ -187,8 +195,12 @@ async def _build_archive(
         # лёгкий бэкап: историю трафика (сотни МБ) не тащим — она некритична
         if model in _TRAFFIC_MODELS and not include_traffic:
             continue
-        rows = (await session.scalars(select(model))).all()
-        dump[model.__tablename__] = [_dump_row(r) for r in rows]
+        if model is BulkClientIssue:
+            ids = await session.scalars(select(BulkClientIssue.request_id))
+            dump[model.__tablename__] = [_retired_issue(request_id) for request_id in ids]
+        else:
+            rows = (await session.scalars(select(model))).all()
+            dump[model.__tablename__] = [_dump_row(r) for r in rows]
 
     manifest = {
         "app": "Amnezia Control",
@@ -348,6 +360,7 @@ async def download_saved_backup(
 
 
 @router.post("/restore")
+@bulk_issue_state.guard(restore=True)
 async def restore_backup(
     request: Request, user: CurrentUser, session: SessionDep
 ) -> dict:
@@ -422,6 +435,25 @@ async def restore_backup(
                 f"в архиве недопустимое имя SSH-пользователя: {row.get('ssh_user')!r}",
             )
     present = [m for m in _MODELS if m.__tablename__ in dump]
+    # Panel backups do not roll back VPN nodes. Replaying an archived plan can
+    # re-enable a revoked credential; IDs can also map to different users and
+    # nodes after restore. Keep only retired request IDs, including IDs newer
+    # than the backup. Live pending plans must be reconciled on the node first.
+    live_issues = (await session.execute(select(
+        BulkClientIssue.request_id, BulkClientIssue.complete,
+    ))).all()
+    if any(not complete for _, complete in live_issues):
+        raise HTTPException(409, "Завершите или отмените незавершенную групповую выдачу перед восстановлением панели")
+    journal = BulkClientIssue.__tablename__
+    ids = {request_id for request_id, _ in live_issues}
+    try:
+        ids.update(str(uuid.UUID(row["request_id"])) for row in prepared.get(journal, []))
+    except (KeyError, ValueError, TypeError, AttributeError) as exc:
+        raise HTTPException(400, "В архиве неверный идентификатор групповой выдачи") from exc
+    if ids:
+        prepared[journal] = [_retired_issue(request_id) for request_id in sorted(ids)]
+        if BulkClientIssue not in present:
+            present.append(BulkClientIssue)
     # версии токенов и отозванные ключи до замены: старый архив не должен
     # оживлять украденные JWT (версия из архива меньше текущей) и ключи,
     # отозванные после бэкапа

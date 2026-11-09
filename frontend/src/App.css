@@ -2232,7 +2232,39 @@ button.linklike.srv-filter-only:hover {
   margin: 0.6rem 0;
 }
 
-.client-batch-head,
+.modal.client-batch {
+  width: min(42rem, 100%);
+  max-height: calc(100dvh - 2rem);
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+
+.client-batch > * {
+  flex-shrink: 0;
+}
+
+.client-batch p {
+  margin: 0;
+}
+
+.client-batch-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 0.75rem;
+}
+
+.client-batch-heading {
+  display: grid;
+  min-width: 0;
+  gap: 0.25rem;
+  overflow-wrap: anywhere;
+}
+
+.client-batch-head button {
+  flex-shrink: 0;
+}
+
 .client-batch-buttons {
   display: flex;
   flex-wrap: wrap;
@@ -2248,35 +2280,137 @@ button.linklike.srv-filter-only:hover {
 
 .client-batch-fields {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(min(100%, 12rem), 1fr));
+  grid-template-columns: minmax(0, 2fr) minmax(0, 1fr);
   gap: 0.7rem;
 }
 
-.client-batch input,
-.client-batch select {
+.client-batch-field {
   min-width: 0;
 }
 
+.client-batch-protocol {
+  max-width: 18rem;
+}
+
+.client-batch-field input,
+.client-batch-select select {
+  width: 100%;
+  min-width: 0;
+  height: 2.35rem;
+  box-sizing: border-box;
+}
+
+.client-batch-select {
+  position: relative;
+  min-width: 0;
+}
+
+.client-batch-select::after {
+  content: "";
+  position: absolute;
+  inset-inline-end: 0.85rem;
+  inset-block-start: calc(50% - 0.2rem);
+  width: 0.42rem;
+  height: 0.42rem;
+  border: solid currentColor;
+  border-width: 0 1.5px 1.5px 0;
+  transform: rotate(45deg);
+  pointer-events: none;
+}
+
+.client-batch-select select {
+  appearance: none;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0 2rem 0 0.7rem;
+  font: inherit;
+  font-size: 0.95rem;
+  text-overflow: ellipsis;
+}
+
+.client-batch-tabs {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.25rem;
+  padding: 0.25rem;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg);
+}
+
+.client-batch-tabs button {
+  padding: 0.4rem 0.2rem;
+  background: transparent;
+  border: 1px solid transparent;
+  box-shadow: none;
+  color: var(--text-muted);
+  font-size: 0.875rem;
+}
+
+.client-batch-tabs button[aria-pressed="true"] {
+  background: var(--bg-card);
+  border-color: var(--border);
+  color: var(--text);
+}
+
+.client-batch-tabs button:hover:not(:disabled),
 .client-batch-buttons button[aria-pressed="true"] {
   border-color: #3563e9;
 }
 
-.client-batch-list {
-  max-height: min(38vh, 22rem);
-  overflow: auto;
+.client-batch-panel {
+  overflow: hidden;
   border: 1px solid var(--border);
   border-radius: 8px;
 }
 
-.client-batch-list > p,
-.client-batch-row {
-  padding: 0.55rem 0.75rem;
+.client-batch-toolbar {
+  justify-content: space-between;
+  padding: 0.35rem 0.5rem;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg);
+}
+
+.client-batch-toolbar button {
+  padding: 0.25rem 0.4rem;
+  font-size: 0.8rem;
+  border-color: transparent;
+  box-shadow: none;
+}
+
+.client-batch-list {
+  max-height: min(36dvh, 17rem);
+  overflow: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+}
+
+.client-batch-list > p {
+  padding: 0.85rem;
 }
 
 .client-batch-row {
-  display: flex;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: center;
-  gap: 0.6rem;
+  gap: 0.65rem;
+  min-height: 2.25rem;
+  box-sizing: border-box;
+  padding: 0.35rem 0.75rem;
+  color: var(--text);
+  cursor: pointer;
+}
+
+.client-batch-row input[type="checkbox"] {
+  margin: 0;
+}
+
+.client-batch-row:hover,
+.client-batch-row:focus-within,
+.client-batch-row:has(input:checked) {
+  background: rgba(53, 99, 233, 0.12);
 }
 
 .client-batch-row + .client-batch-row {
@@ -2284,7 +2418,65 @@ button.linklike.srv-filter-only:hover {
 }
 
 .client-batch-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+}
+
+.client-batch-state {
+  color: var(--text-muted);
+  white-space: nowrap;
+  font-size: 0.75rem;
+}
+
+.client-batch-state-paused {
+  border-radius: 4px;
+  padding: 0.08rem 0.35rem;
+  background: rgba(150, 150, 160, 0.16);
+}
+
+.client-batch-footer {
+  justify-content: space-between;
+}
+
+.client-batch-count {
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.client-batch-result {
+  padding: 0.6rem 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+  font-size: 0.85rem;
+}
+
+.client-batch-result,
+.client-batch .form-error {
   overflow-wrap: anywhere;
+}
+
+.client-batch-result .client-batch-buttons {
+  justify-content: flex-end;
+  margin-top: 0.5rem;
+}
+
+@media (max-width: 420px) {
+  .modal.client-batch {
+    padding: 0.85rem;
+    gap: 0.7rem;
+  }
+
+  .client-batch-fields {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0.5rem;
+  }
+
+  .client-batch-protocol {
+    max-width: none;
+  }
 }
 
 /* ---------- страница серверов: список слева, выбранный сервер справа ---------- */

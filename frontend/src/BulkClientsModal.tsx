@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react'
 import {
-  api, ApiError, downloadClientBatch, issueClientBatch, pendingClientBatch, revokeClientBatch,
+  api, ApiError, downloadClientBatch, getToken, issueClientBatch, pendingClientBatch, revokeClientBatch,
   type AwgState, type BulkIssueRequest, type BulkIssueResult, type ClientProtocol,
   type OvpnState, type Protocol, type RevokeBulkResult, type XrayState,
 } from './api'
@@ -13,12 +13,27 @@ type Mode = 'issue' | 'export' | 'revoke'
 type Status = 'all' | 'active' | 'paused'
 type Client = { id: string; name: string; paused: boolean }
 type ExportResult = Awaited<ReturnType<typeof downloadClientBatch>>
+type RevokeRetry = { ids: string[]; names: Record<string, string> }
 
 const ISSUE_PROTOCOLS: readonly ClientProtocol[] = ['awg3', 'wireguard', 'xray']
 const LIMIT = { issue: 100, export: 1000, revoke: 100 }
 const PRESETS = [10, 25, 50, 100]
 
-function savedRequest(key: string): BulkIssueRequest | null {
+function issueStorageKey(serverId: number, protocol: ClientProtocol): string | null {
+  try {
+    // Use the subject only to separate browser retry drafts. The API authenticates every request.
+    const payload = getToken()?.split('.')[1]
+    if (!payload) return null
+    const decoded = Uint8Array.from(atob(payload.replace(/-/g, '+').replace(/_/g, '/')), (char) => char.charCodeAt(0))
+    const { sub } = JSON.parse(new TextDecoder().decode(decoded))
+    return typeof sub === 'string' && sub ? `acontrol_bulk_issue:v2:${JSON.stringify([sub, serverId, protocol])}` : null
+  } catch {
+    return null
+  }
+}
+
+function savedRequest(key: string | null): BulkIssueRequest | null {
+  if (!key) return null
   try {
     const value = JSON.parse(sessionStorage.getItem(key) ?? 'null') as BulkIssueRequest | null
     return value && typeof value.request_id === 'string' && typeof value.prefix === 'string'
@@ -29,7 +44,8 @@ function savedRequest(key: string): BulkIssueRequest | null {
   }
 }
 
-function saveRequest(key: string, request: BulkIssueRequest | null) {
+function saveRequest(key: string | null, request: BulkIssueRequest | null) {
+  if (!key) return
   try {
     if (request) sessionStorage.setItem(key, JSON.stringify(request))
     else sessionStorage.removeItem(key)
@@ -64,31 +80,64 @@ export function BulkClientsModal({
   const { t } = useI18n()
   const [protocol, setProtocol] = useState(initialProtocol)
   const [mode, setMode] = useState<Mode>(ISSUE_PROTOCOLS.includes(initialProtocol) ? 'issue' : 'export')
+  const [retries, setRetries] = useState<Partial<Record<ClientProtocol, RevokeRetry>>>({})
+  const [busy, setBusy] = useState(false)
   const working = useRef(false)
-  const dismiss = useModalDismiss(() => { if (!working.current) onClose() })
+  function close() {
+    if (working.current) return
+    if (Object.values(retries).some(Boolean)
+      && !window.confirm(t('Есть неподтвержденные отзывы. При закрытии окна возможность повтора пропадет. Закрыть окно?'))) return
+    onClose()
+  }
+  const dismiss = useModalDismiss(close)
   const label = protocols.find(({ key }) => key === protocol)?.label ?? protocol
 
   return (
     <div className="modal-backdrop" onClick={dismiss}>
       <div className="card modal modal-wide client-batch" role="dialog" aria-modal="true" aria-labelledby="client-batch-title">
+        <div className="client-batch-head">
+          <div className="client-batch-heading">
+            <h3 id="client-batch-title">{t('Массовые операции с клиентами')}</h3>
+            <p className="muted small">{serverName}</p>
+          </div>
+          <button className="ghost" onClick={close} disabled={busy}>{t('Закрыть')}</button>
+        </div>
+        <label className="client-batch-field client-batch-protocol">
+          {t('Протокол')}
+          <span className="client-batch-select">
+            <select value={protocol} onChange={(event) => {
+              const next = event.target.value as ClientProtocol
+              if (mode !== 'export' && !ISSUE_PROTOCOLS.includes(next)) setMode('export')
+              setProtocol(next)
+            }} disabled={busy}>
+              {protocols.map(({ key, label: option }) => <option key={key} value={key}>{option}</option>)}
+            </select>
+          </span>
+        </label>
+        <div className="client-batch-tabs">
+          {([
+            ['issue', t('Выдача')],
+            ['export', t('Экспорт')],
+            ['revoke', t('Отзыв')],
+          ] as const).map(([key, name]) => (
+            <button key={key} aria-pressed={mode === key} onClick={() => setMode(key)}
+              disabled={busy || (key !== 'export' && !ISSUE_PROTOCOLS.includes(protocol))}>{name}</button>
+          ))}
+        </div>
         <ClientBatchForm
           key={`${protocol}:${mode}`}
           serverId={serverId}
           serverName={serverName}
-          protocols={protocols}
           protocol={protocol}
           label={label}
           mode={mode}
-          onMode={setMode}
-          onProtocol={(next) => {
-            if (mode !== 'export' && !ISSUE_PROTOCOLS.includes(next)) setMode('export')
-            setProtocol(next)
-          }}
+          retry={retries[protocol]}
+          onRetry={(retry) => setRetries((previous) => ({ ...previous, [protocol]: retry }))}
           working={working}
+          busy={busy}
+          setBusy={setBusy}
           onChanged={onChanged}
-          onClose={onClose}
           onUnauthorized={onUnauthorized}
-          title={t('Массовые операции с клиентами')}
         />
       </div>
     </div>
@@ -96,19 +145,20 @@ export function BulkClientsModal({
 }
 
 function ClientBatchForm({
-  serverId, serverName, protocols, protocol, label, mode, onMode, onProtocol, working,
-  onChanged, onClose, onUnauthorized, title,
-}: Omit<Props, 'initialProtocol'> & {
+  serverId, serverName, protocol, label, mode, working, busy, setBusy,
+  onChanged, onUnauthorized, retry, onRetry,
+}: Pick<Props, 'serverId' | 'serverName' | 'onChanged' | 'onUnauthorized'> & {
   protocol: ClientProtocol
   label: string
   mode: Mode
-  onMode: (mode: Mode) => void
-  onProtocol: (protocol: ClientProtocol) => void
+  retry?: RevokeRetry
+  onRetry: (retry: RevokeRetry | undefined) => void
   working: { current: boolean }
-  title: string
+  busy: boolean
+  setBusy: (busy: boolean) => void
 }) {
   const { t } = useI18n()
-  const storageKey = `acontrol_bulk_issue:${serverId}:${protocol}`
+  const storageKey = issueStorageKey(serverId, protocol)
   const [pending, setPending] = useState(() => savedRequest(storageKey))
   const [pendingIds, setPendingIds] = useState<string[]>([])
   const [pendingChecked, setPendingChecked] = useState(false)
@@ -119,7 +169,6 @@ function ClientBatchForm({
   const [reload, setReload] = useState(0)
   const [query, setQuery] = useState('')
   const [status, setStatus] = useState<Status>('all')
-  const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [issued, setIssued] = useState<BulkIssueResult | null>(null)
   const [exported, setExported] = useState<ExportResult | null>(null)
@@ -133,7 +182,9 @@ function ClientBatchForm({
       && client.name.toLowerCase().includes(term),
     )
   }, [clients, query, status])
-  const selection = useSelection(useMemo(() => visible.map(({ id }) => id), [visible]))
+  const xrayExport = mode === 'export' && protocol === 'xray'
+  const selectable = useMemo(() => visible.filter((row) => !xrayExport || !row.paused).map(({ id }) => id), [visible, xrayExport])
+  const selection = useSelection(selectable)
 
   function showError(err: unknown) {
     if (err instanceof ApiError && err.status === 401) onUnauthorized()
@@ -244,20 +295,24 @@ function ClientBatchForm({
     void run(async () => setExported(await downloadClientBatch(serverId, protocol, ids)))
   }
 
-  function revoke() {
-    if (!picked.length || maxExceeded || working.current) return
-    const details = { count: picked.length, protocol: label, server: serverName }
+  function revoke(batch: RevokeRetry) {
+    if (!batch.ids.length || batch.ids.length > LIMIT.revoke || working.current) return
+    const details = { count: batch.ids.length, protocol: label, server: serverName }
     const message = protocol === 'xray'
       ? t('Отозвать {count} профилей {protocol} на сервере «{server}»? Новые подключения будут запрещены.', details)
       : t('Отозвать {count} профилей {protocol} на сервере «{server}»? Они потеряют доступ к VPN.', details)
     if (!window.confirm(message)) return
-    const names = Object.fromEntries(visible.map((client) => [client.id, client.name]))
     setRevoked(null)
+    // Keep exact IDs until both the node and the panel confirm the revoke.
+    // A removed peer can already be absent from the refreshed list.
+    onRetry(batch)
     void run(async () => {
-      const result = await revokeClientBatch(serverId, protocol, picked)
-      setRevokeNames(names)
+      const result = await revokeClientBatch(serverId, protocol, batch.ids)
+      setRevokeNames(batch.names)
       setRevoked(result)
       const succeeded = new Set(result.items.filter((item) => item.ok).map((item) => item.client_id))
+      const remaining = batch.ids.filter((id) => !succeeded.has(id))
+      onRetry(remaining.length ? { ids: remaining, names: batch.names } : undefined)
       setClients((rows) => rows.filter((row) => !succeeded.has(row.id)))
       setReload((value) => value + 1)
       onChanged()
@@ -266,31 +321,6 @@ function ClientBatchForm({
 
   return (
     <>
-      <div className="clients-head client-batch-head">
-        <h3 id="client-batch-title">{title}</h3>
-        <button className="ghost" onClick={onClose} disabled={busy}>{t('Закрыть')}</button>
-      </div>
-      <label className="client-batch-field">
-        {t('Протокол')}
-        <select aria-label={t('Протокол')} value={protocol} onChange={(event) => onProtocol(event.target.value as ClientProtocol)} disabled={busy}>
-          {protocols.map(({ key, label: option }) => <option key={key} value={key}>{option}</option>)}
-        </select>
-      </label>
-      <div className="tabs client-batch-tabs">
-        {([
-          ['issue', t('Выдача')],
-          ['export', t('Экспорт')],
-          ['revoke', t('Отзыв')],
-        ] as const).map(([key, name]) => (
-          <button
-            key={key}
-            className={mode === key ? 'tab tab-active' : 'tab'}
-            aria-pressed={mode === key}
-            onClick={() => onMode(key)}
-            disabled={busy || (key !== 'export' && !ISSUE_PROTOCOLS.includes(protocol))}
-          >{name}</button>
-        ))}
-      </div>
       {mode === 'issue' ? (
         <form className="client-batch-form" onSubmit={issue}>
           <div className="client-batch-fields">
@@ -342,42 +372,62 @@ function ClientBatchForm({
             </label>
             <label className="client-batch-field">
               {t('Статус')}
-              <select aria-label={t('Статус')} value={status} onChange={(event) => { selection.clear(); setStatus(event.target.value as Status) }} disabled={busy}>
-                <option value="all">{t('Все')}</option>
-                <option value="active">{t('Активные')}</option>
-                <option value="paused">{t('На паузе')}</option>
-              </select>
+              <span className="client-batch-select">
+                <select value={status} onChange={(event) => { selection.clear(); setStatus(event.target.value as Status) }} disabled={busy}>
+                  <option value="all">{t('Все')}</option>
+                  <option value="active">{t('Активные')}</option>
+                  <option value="paused">{t('На паузе')}</option>
+                </select>
+              </span>
             </label>
           </div>
-          <div className="client-batch-buttons">
-            <button className="ghost" disabled={busy || loading || !visible.length} onClick={selection.toggleAll}>
-              {selection.all ? t('Снять все') : t('Выбрать всех в списке')}
-            </button>
-            <button className="ghost" disabled={busy || loading} onClick={() => { setError(''); setReload((value) => value + 1) }}>
-              {t('Обновить список')}
-            </button>
-            <span className="muted small">{t('выбрано: {n}', { n: picked.length })}</span>
-          </div>
-          <div className="client-batch-list" aria-busy={loading}>
-            {visible.map(({ id, name, paused }) => (
-              <label key={id} className="client-batch-row">
-                <input type="checkbox" checked={selection.has(id)} onChange={() => selection.toggle(id)} disabled={busy || loading} />
-                <span className="client-batch-name" title={name}>{name}</span>
-                {paused && <span className="pause-badge">{t('На паузе')}</span>}
-              </label>
-            ))}
-            {!visible.length && <p className="muted small">{loading ? t('Загрузка…') : t('Ничего не найдено.')}</p>}
+          <div className="client-batch-panel">
+            <div className="client-batch-toolbar client-batch-buttons">
+              <button className="ghost" disabled={busy || loading || !selectable.length} onClick={selection.toggleAll}>
+                {selection.all ? t('Снять все') : t('Выбрать всех в списке')}
+              </button>
+              <button className="ghost" disabled={busy || loading} onClick={() => { setError(''); setReload((value) => value + 1) }}>
+                {t('Обновить список')}
+              </button>
+            </div>
+            <div className="client-batch-list" aria-busy={loading}>
+              {visible.map(({ id, name, paused }) => (
+                <label key={id} className="client-batch-row">
+                  <input type="checkbox" aria-label={name} checked={selection.has(id)} onChange={() => selection.toggle(id)} disabled={busy || loading || (xrayExport && paused)} />
+                  <span className="client-batch-name" title={name}>{name}</span>
+                  <span className={paused ? 'client-batch-state client-batch-state-paused' : 'client-batch-state'}>
+                    {paused ? t('На паузе') : t('Активен')}
+                  </span>
+                </label>
+              ))}
+              {!visible.length && <p className="muted small">{loading ? t('Загрузка…') : t('Ничего не найдено.')}</p>}
+            </div>
           </div>
           {maxExceeded && <p className="form-error">{t('За одну операцию можно выбрать до {limit} профилей.', { limit })}</p>}
-          {protocol === 'xray' && mode === 'export' && <p className="muted small">{t('Профили Xray собираются по текущим настройкам сервера.')}</p>}
+          {xrayExport && <p className="muted small">{t('Профили Xray собираются по текущим настройкам сервера. Клиенты на паузе недоступны для экспорта.')}</p>}
           {protocol === 'xray' && mode === 'revoke' && <p className="muted small">{t('Отзыв Xray запрещает новые подключения. Открытые соединения работают до закрытия.')}</p>}
-          <div className="modal-actions client-batch-buttons">
+          {mode === 'revoke' && retry && !busy && (
+            <div className="client-batch-result">
+              <p>{t('Отзыв не подтвержден: {count}. Его можно повторить, даже если профилей уже нет в списке.', { count: retry.ids.length })}</p>
+              <div className="client-batch-buttons">
+                <button className="ghost" onClick={() => onRetry(undefined)}>{t('Сбросить повтор')}</button>
+                <button className="danger-solid" onClick={() => revoke(retry)}>{t('Повторить отзыв')}</button>
+              </div>
+            </div>
+          )}
+          <div className="client-batch-footer client-batch-buttons">
+            <span className="client-batch-count small" aria-live="polite">
+              {t('Выбрано {count} из {total}', { count: picked.length, total: selectable.length })}
+            </span>
             {mode === 'export' ? (
               <button disabled={busy || loading || maxExceeded || !picked.length} onClick={() => {
                 if (window.confirm(t('Скачать ZIP с конфигурациями {count} клиентов?', { count: picked.length }))) download(picked)
               }}>{t('Скачать ZIP')}</button>
             ) : (
-              <button className="danger-solid" disabled={busy || loading || maxExceeded || !picked.length} onClick={revoke}>{t('Отозвать выбранные')}</button>
+              <button className="danger-solid" disabled={busy || loading || maxExceeded || !picked.length || !!retry} onClick={() => revoke({
+                ids: picked,
+                names: Object.fromEntries(visible.filter(({ id }) => selection.has(id)).map(({ id, name }) => [id, name])),
+              })}>{t('Отозвать выбранные')}</button>
             )}
           </div>
         </>
@@ -385,12 +435,12 @@ function ClientBatchForm({
       {busy && <p className="muted small" role="status">{t('Операция выполняется…')}</p>}
       {error && <p className="form-error" role="alert">{error}</p>}
       {exported && (
-        <p role="status">{t('В ZIP {count} профилей. Пропущено {missing}. Подробности в manifest.json.', {
+        <p className="client-batch-result" role="status">{t('В ZIP {count} профилей. Пропущено {missing}. Подробности в manifest.json.', {
           count: exported.exported, missing: exported.missing,
         })}</p>
       )}
       {revoked && (
-        <div role="status">
+        <div className="client-batch-result" role="status">
           <p>{t('Отозвано {count}. Ошибок {failed}.', { count: revoked.revoked, failed: revoked.failed })}</p>
           {revoked.failed > 0 && <ul className="small">
             {revoked.items.filter((item) => !item.ok).map((item) => (

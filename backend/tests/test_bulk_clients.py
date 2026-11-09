@@ -1,16 +1,19 @@
+import asyncio
 import base64
 import io
 import json
+import socket
 import struct
+import tarfile
 import uuid
 import zipfile
 from contextlib import asynccontextmanager
 
 from sqlalchemy import select
 
-from app import awg, bulk_archive, pausestore, wg_bulk
+from app import awg, bulk_archive, bulk_issue_state, pausestore, wg_bulk
 from app.api import bulk_clients
-from app.models import AuditLog, BulkClientIssue, NativeVpnConfig
+from app.models import AuditLog, BulkClientIssue, NativeVpnConfig, Server
 
 
 async def _server(client, auth):
@@ -129,6 +132,72 @@ async def test_saved_wireguard_archive_uses_exact_config_and_safe_names(client, 
             "client_id": "unavailable", "status": "profile_missing",
         }
         assert all(".." not in path and "\\" not in path for path in archive.namelist())
+
+
+async def test_wireguard_zip_rejects_unresolved_client_endpoint(client, auth_headers, session_factory, monkeypatch):
+    sid = await _server(client, auth_headers)
+    async with session_factory() as session:
+        server = await session.get(Server, sid)
+        server.client_endpoint = "missing.example"
+        await session.commit()
+
+    async def nxdomain(host, *args, **kwargs):
+        assert host == "missing.example"
+        raise socket.gaierror(socket.EAI_NONAME)
+
+    monkeypatch.setattr(asyncio.get_running_loop(), "getaddrinfo", nxdomain)
+    response = await client.post(f"/api/servers/{sid}/bulk-clients/wireguard/export",
+                                 headers=auth_headers, json={"client_ids": ["peer"]})
+    assert response.status_code == 422
+    assert "DNS" in response.json()["detail"]
+
+
+async def test_restore_never_replays_archived_pending_issue(client, auth_headers, session_factory):
+    sid = await _server(client, auth_headers)
+    request_id = str(uuid.uuid4())
+    archived = {"request_id": request_id, "server_id": sid, "owner_id": 1, "protocol": "xray",
+                "prefix": "Lab", "count": 1, "complete": False,
+                "items": [{"client_id": str(uuid.uuid4()), "name": "Lab-001"}]}
+    data = json.dumps({"bulk_client_issues": [archived]}).encode()
+    archive = io.BytesIO()
+    with tarfile.open(fileobj=archive, mode="w:gz") as tar:
+        entry = tarfile.TarInfo("db.json")
+        entry.size = len(data)
+        tar.addfile(entry, io.BytesIO(data))
+
+    async with session_factory() as session:
+        session.add(BulkClientIssue(**archived))
+        await session.commit()
+
+    downloaded = await client.post("/api/backup/download", headers=auth_headers, json={"password": "testpass"})
+    assert downloaded.status_code == 200
+    with tarfile.open(fileobj=io.BytesIO(downloaded.content)) as tar:
+        saved = json.load(tar.extractfile("db.json"))["bulk_client_issues"]
+        assert len(saved) == 1 and saved[0]["complete"] and saved[0]["items"] == []
+
+    async def restore():
+        return await client.post("/api/backup/restore", content=archive.getvalue(),
+                                 headers=auth_headers | {"X-Confirm-Password": "testpass"})
+
+    assert (await restore()).status_code == 409
+    async with session_factory() as session:
+        await bulk_issue_state.request_cancel(session, sid, "xray", [archived["items"][0]["client_id"].upper()])
+        operation = await session.get(BulkClientIssue, request_id)
+        assert operation.items[0]["revoke_pending"]
+        await bulk_issue_state.cancel_clients(session, sid, "xray", [archived["items"][0]["client_id"].upper()])
+        assert operation.complete and operation.items[0]["cancelled"]
+        await session.commit()
+
+    result = await restore()
+    assert result.status_code == 200, result.text
+    auth_headers = {"Authorization": f"Bearer {result.json()['access_token']}"}
+    response = await client.post(f"/api/servers/{sid}/bulk-clients/xray/issue", headers=auth_headers,
+                                 json={"request_id": request_id, "prefix": "Lab", "count": 1, "confirmed": True})
+    assert response.status_code == 409
+    assert "восстановления" in response.json()["detail"]
+    async with session_factory() as session:
+        operation = await session.get(BulkClientIssue, request_id)
+        assert operation.complete and operation.items == []
 
 
 def test_amnezia_qr_frames_use_app_import_wire_format():

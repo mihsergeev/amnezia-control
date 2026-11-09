@@ -1,8 +1,47 @@
 """Database journal shared by issue retries and existing revoke paths."""
 
+import uuid
+from functools import wraps
+
+from fastapi import HTTPException
 from sqlalchemy import select
 
 from app.models import BulkClientIssue
+
+_issuing = 0
+_restoring = False
+
+
+def guard(*, restore: bool = False):
+    """Exclude restores and issuance, without serializing unrelated nodes."""
+    def decorate(handler):
+        @wraps(handler)
+        async def wrapped(*args, **kwargs):
+            global _issuing, _restoring
+            if _restoring or (restore and _issuing):
+                raise HTTPException(409, "Дождитесь завершения групповой выдачи или восстановления панели")
+            if restore:
+                _restoring = True
+            else:
+                _issuing += 1
+            try:
+                return await handler(*args, **kwargs)
+            finally:
+                if restore:
+                    _restoring = False
+                else:
+                    _issuing -= 1
+        return wrapped
+    return decorate
+
+
+def _identity(protocol: str, client_id: str) -> str:
+    if protocol == "xray":
+        try:
+            return str(uuid.UUID(client_id))
+        except ValueError:
+            pass
+    return client_id
 
 
 async def pending(session, server_id, protocol):
@@ -24,12 +63,12 @@ async def request_cancel(session, server_id, protocol, client_ids) -> None:
     """Persist the intent before a revoke can change the node without an ACK."""
     if protocol not in ("awg3", "wireguard", "xray"):
         return
-    selected = set(client_ids)
+    selected = {_identity(protocol, cid) for cid in client_ids}
     changed = False
     for row in await pending(session, server_id, protocol):
         items = [
             item | {"revoke_pending": True}
-            if item["client_id"] in selected and not item.get("cancelled") else item
+            if _identity(protocol, item["client_id"]) in selected and not item.get("cancelled") else item
             for item in row.items
         ]
         if items != row.items:
@@ -42,12 +81,12 @@ async def request_cancel(session, server_id, protocol, client_ids) -> None:
 async def cancel_clients(session, server_id, protocol, client_ids) -> None:
     if protocol not in ("awg3", "wireguard", "xray"):
         return
-    selected = set(client_ids)
+    selected = {_identity(protocol, cid) for cid in client_ids}
     for row in await pending(session, server_id, protocol):
-        if any(item["client_id"] in selected for item in row.items):
+        if any(_identity(protocol, item["client_id"]) in selected for item in row.items):
             row.items = [
                 {"client_id": item["client_id"], "name": item["name"], "cancelled": True}
-                if item["client_id"] in selected else item
+                if _identity(protocol, item["client_id"]) in selected else item
                 for item in row.items
             ]
             row.complete = all(item.get("cancelled") for item in row.items)

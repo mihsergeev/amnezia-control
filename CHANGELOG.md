@@ -4,6 +4,13 @@ All notable changes to Amnezia Control are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.84.32] - 2026-11-09
+
+- Make bulk client actions easier to scan on desktop and mobile, with compact client rows, themed controls, and a selection count next to the main action.
+- Keep retries for unconfirmed bulk revocations available even if the profiles are gone from the list, and scope issuance drafts to the signed-in account.
+- Check Client Endpoint DNS before exporting AmneziaWG and WireGuard ZIP archives. Show why paused Xray profiles cannot be selected for export.
+- Prevent restored batch requests or alternate spellings of an Xray UUID from reactivating revoked profiles.
+
 ## [0.84.31] - 2026-11-09
 
 - Inspect live Xray REALITY settings and edit SNI and the TLS target after validation. Preserve existing client IDs, keys, and accepted server names, and restore the previous configuration if activation fails.
