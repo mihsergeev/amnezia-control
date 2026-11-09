@@ -34,6 +34,24 @@ def test_endpoint_normalizes_idn_and_edits_only_peer_address():
     )
 
 
+def test_endpoint_updates_imported_wireguard_profiles():
+    config = "[peer]\nendpoint = old.example:1234\nENDPOINT = old.example:4567\n"
+    assert client_endpoint.peer_config(config, "new.example") == config.replace("old.example", "new.example")
+
+
+def test_imported_awg_link_uses_effective_endpoint_of_first_peer():
+    config = (
+        "[peer] # VPN server\nendpoint = old.example:1234\nENDPOINT = old.example:4567 # effective\n"
+        "[Peer]\nEndpoint = other.example:7890\n"
+    )
+    rendered = client_endpoint.peer_config(config, "vpn.example")
+    top, inner = decode_link(awg.build_amnezia_link(rendered, "ssh.example", "VPN", "", ""))
+    assert top["hostName"] == inner["hostName"] == "vpn.example"
+    assert inner["port"] == 4567
+    assert inner["config"] == rendered
+    assert "Endpoint = other.example:7890" in rendered
+
+
 async def test_saved_profiles_use_endpoint_without_changing_credentials(client, auth_headers, session_factory, monkeypatch):
     lookups = []
 
@@ -118,12 +136,15 @@ async def test_saved_profiles_use_endpoint_without_changing_credentials(client, 
     response = await client.get(path, headers=auth_headers)
     assert response.json()["client_endpoint"] == "vpn.example.com"
 
-    response = await client.patch(path, headers=auth_headers, json={"client_endpoint": ""})
+    response = await client.patch(path, headers=auth_headers, json={"host": "192.0.2.8", "client_endpoint": ""})
     assert response.status_code == 200 and response.json()["client_endpoint"] == ""
+    assert response.json()["host"] == "192.0.2.8"
     key, original = profiles["awg3"]
     response = await client.post(path + "/awg3/config", headers=auth_headers, json={"public_key": key})
     assert response.status_code == 200 and response.json()["config"] == original
-    assert decode_link(response.json()["config_amnezia"])[0]["hostName"] == "192.0.2.5"
+    top, inner = decode_link(response.json()["config_amnezia"])
+    assert top["hostName"] == inner["hostName"] == "192.0.2.5"
+    assert "Endpoint = 192.0.2.5:51820" in inner["config"]
 
 
 async def test_dns_failure_stops_download_and_issuance_before_ssh(client, auth_headers, session_factory, monkeypatch):

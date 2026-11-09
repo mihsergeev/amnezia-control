@@ -95,7 +95,6 @@ def test_awg_scripts_remove_only_udp_holders(build) -> None:
 @pytest.mark.parametrize("script", [
     lambda: deploy.build_script("deploy", 47180, deploy.generate_server_config(47180)),
     lambda: deploy.build_script_v3("deploy", 47300, deploy.generate_server_config_v3(47300)),
-    lambda: xray.build_deploy_script(8443, "www.example.com"),
     lambda: openvpn.build_deploy_script(8443, "www.example.com", "203.0.113.5"),
 ])
 def test_failed_run_removes_the_container(script) -> None:
@@ -106,6 +105,14 @@ def test_failed_run_removes_the_container(script) -> None:
     tail = s[run_at:run_at + 600]
     assert "docker rm -f" in tail
     assert tail.index("docker rm -f") > tail.index("docker run -d")
+
+
+def test_xray_keeps_previous_container_until_replacement_is_ready() -> None:
+    script = xray.build_deploy_script(8443, "www.example.com")
+    assert 'trap cleanup EXIT' in script
+    assert '--cidfile "$WORK/container-id"' in script
+    assert 'docker rm -f "$NEW_ID"' in script
+    assert script.index("if [ \"$STATE\"") < script.index('docker rm "$OLD"')
 
 
 def test_xray_script_checks_port_before_building() -> None:
@@ -199,5 +206,5 @@ def test_bound_ips_parsing() -> None:
 def test_xray_script_keeps_bind_address() -> None:
     s = xray.build_deploy_script(443, "www.example.com")
     # адрес читается со старого контейнера до проверки порта и сноса
-    assert s.index("BIND=$(") < s.index('publish=$XRAY_SERVER_PORT/tcp') < s.index("docker rm -f")
-    assert "-p ${BIND:+$BIND:}${XRAY_SERVER_PORT}:${XRAY_SERVER_PORT}/tcp" in s
+    assert s.index("BINDING=$(") < s.index('publish=$XRAY_SERVER_PORT/tcp') < s.index("docker rename")
+    assert '-p "${BIND:+$BIND:}$XRAY_SERVER_PORT:$INBOUND_PORT/tcp"' in s

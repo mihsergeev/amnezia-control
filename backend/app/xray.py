@@ -10,6 +10,7 @@ xray_public.key, xray_short_id.key. Выдача/отзыв — правка ser
 получают тот же набор клиентов: панель держит их списки в зеркале основного.
 """
 
+import asyncio
 import base64
 import json
 import re
@@ -40,6 +41,7 @@ FLOW = "xtls-rprx-vision"
 FINGERPRINT = "firefox"
 CONTAINER_NAME = "amnezia-xray"
 STATS_API_PORT = 10085  # локальный gRPC-API xray (127.0.0.1) для чтения статистики
+STATS_QUERY_TIMEOUT = 5
 _DOCKER = 'DOCKER=$({ [ -w /var/run/docker.sock ] || [ -w /run/docker.sock ]; } && echo docker || echo "sudo -n docker"); '
 
 
@@ -271,9 +273,10 @@ async def read_client_stats(conn, container) -> dict[str, dict] | None:
         f'-pattern "user>>>" 2>/dev/null'
     )
     try:
-        out = await _run(conn, _docker_exec(container, inner))
+        async with asyncio.timeout(STATS_QUERY_TIMEOUT):
+            out = await _run(conn, _docker_exec(container, inner))
         data = json.loads(out)
-    except (XrayError, ValueError):
+    except (XrayError, ValueError, asyncssh.Error, OSError):
         return None
     if not isinstance(data, dict):
         return None
@@ -354,7 +357,12 @@ async def read_server_bits(conn, container) -> dict:
         f"echo ===PUB===; cat {XRAY_DIR}/xray_public.key 2>/dev/null; "
         f"echo ===SID===; cat {XRAY_DIR}/xray_short_id.key 2>/dev/null; echo ===END==="
     )
-    bundle = await _run(conn, _docker_exec(container, inner))
+    binding_format = "{{json .HostConfig.PortBindings}}"
+    inspect = f"$DOCKER inspect -f {shlex.quote(binding_format)} {shlex.quote(container)}"
+    bundle = await _run(
+        conn, _docker_exec(container, inner)
+        + f" && ({_DOCKER}echo ===BINDINGS===; {inspect} 2>/dev/null || true)",
+    )
 
     def _sec(name):
         m = f"==={name}==="
@@ -368,6 +376,15 @@ async def read_server_bits(conn, container) -> dict:
     server = await _read_server(conn, container)
     inbound = (server.get("inbounds") or [{}])[0]
     port = inbound.get("port", 443)
+    port = int(port) if str(port).isdigit() else 443
+    raw_bindings = _sec("BINDINGS")
+    if raw_bindings:
+        bindings = json.loads(raw_bindings) or {}
+        host_ports = {item.get("HostPort", "") for item in bindings.get(f"{port}/tcp", []) or []}
+        if len(host_ports) == 1:
+            published, = host_ports
+            if published.isdecimal() and 1 <= int(published) <= 65535:
+                port = int(published)
     reality = (inbound.get("streamSettings") or {}).get("realitySettings", {})
     site = (reality.get("serverNames") or [DEFAULT_REALITY_SITE])[0]
     clients = _client_list(server)
@@ -376,7 +393,7 @@ async def read_server_bits(conn, container) -> dict:
         "pub": _sec("PUB"),
         "short": _sec("SID"),
         "site": site,
-        "port": int(port) if str(port).isdigit() else 443,
+        "port": port,
         "flow": flow or FLOW,
         "xhttp_path": xhttp_fallback_path(server),
     }
@@ -643,7 +660,7 @@ async def revoke_client(
 _XRAY_DOCKERFILE = """FROM alpine:3.15
 LABEL maintainer="AmneziaVPN"
 ARG XRAY_RELEASE="v26.10.31"
-RUN apk add --no-cache curl unzip bash openssl netcat-openbsd dumb-init rng-tools xz
+RUN apk add --no-cache curl unzip bash openssl netcat-openbsd dumb-init rng-tools xz jq
 RUN apk --update upgrade --no-cache
 RUN mkdir -p /opt/amnezia/xray
 RUN curl -L https://github.com/XTLS/Xray-core/releases/download/${XRAY_RELEASE}/Xray-linux-64.zip > /root/xray.zip; \\
@@ -657,7 +674,7 @@ ENTRYPOINT ["dumb-init","tail","-f","/dev/null"]
 
 def build_deploy_script(
     port: int, site: str, xray_release: str = XRAY_RELEASE, *,
-    dest: str = "", require_fresh: bool = False,
+    dest: str = "", require_fresh: bool = False, preserve_port: bool = False,
 ) -> str:
     """Скрипт build-on-target: ставит docker, собирает amnezia-xray, конфигурит, запускает.
 
@@ -677,10 +694,18 @@ if sudo test -f "$D/server.json" || sudo docker container inspect "$C" >/dev/nul
   fail "Xray already has a configuration or container. Leave SNI and Dest blank to reuse the existing configuration."
 fi
 """ if require_fresh else ""
+    tls_check = f"""\
+log "проверка TLS 1.3 на Dest"
+sudo docker run --rm --entrypoint timeout "$IMG" 10 openssl s_client -brief -tls1_3 \\
+  -connect {shlex.quote(dest)} -servername {shlex.quote(site)} \\
+  -verify_hostname {shlex.quote(site)} -verify_return_error </dev/null >/dev/null 2>&1 \\
+  || fail "Could not complete a TLS 1.3 handshake with the REALITY Dest using the configured SNI."
+""" if require_fresh else ""
     return f"""set +e
 fail() {{ echo "DEPLOY_ERROR: $1"; exit 1; }}
 log(){{ echo "[$(date +%H:%M:%S)] $*"; }}
 XRAY_SERVER_PORT={port}
+INBOUND_PORT=$XRAY_SERVER_PORT
 XRAY_SITE_NAME={shlex.quote(json.dumps(site))}
 XRAY_DEST={shlex.quote(json.dumps(dest))}
 IMG=amnezia-xray
@@ -689,10 +714,21 @@ BUILD=/opt/amnezia-build/xray
 D=/opt/amnezia/xray
 
 {fresh_guard}
-# Адрес, на котором XRay уже опубликован, при пересборке сохраняем: на ноде со
-# вторым адресом рядом на том же порту может жить другой сервис (сама панель)
-BIND=$(sudo docker inspect -f '{{{{range $k, $v := .HostConfig.PortBindings}}}}{{{{range $v}}}}{{{{.HostIp}}}} {{{{end}}}}{{{{end}}}}' "$C" 2>/dev/null | awk '{{print $1}}')
-case "$BIND" in 0.0.0.0|::) BIND= ;; esac
+# У контейнера с нестандартной публикацией не меняем ни внешний порт,
+# ни порт VLESS внутри, ни адрес привязки.
+BIND=
+EXISTING=$(sudo docker inspect -f '{{{{.State.Running}}}}' "$C" 2>/dev/null) || EXISTING=
+if [ -n "$EXISTING" ]; then
+  BINDING=$(sudo docker inspect -f '{{{{range $k, $v := .HostConfig.PortBindings}}}}{{{{range $v}}}}{{{{printf "%s|%s|%s\\n" $k .HostIp .HostPort}}}}{{{{end}}}}{{{{end}}}}' "$C") || fail "could not read existing port bindings"
+  [[ "$BINDING" =~ ^([0-9]+)/tcp\\|([^\\|[:space:]]*)\\|([0-9]+)$ ]] || fail "Unsupported Xray port bindings. The existing container was kept."
+  INBOUND_PORT=${{BASH_REMATCH[1]}}
+  BIND=${{BASH_REMATCH[2]}}
+  PUBLISHED_PORT=${{BASH_REMATCH[3]}}
+  if [ {int(preserve_port)} -eq 0 ] && [ "$PUBLISHED_PORT" != "$XRAY_SERVER_PORT" ]; then
+    fail "Xray already uses external port $PUBLISHED_PORT. Retry with this port to keep existing profiles working."
+  fi
+  XRAY_SERVER_PORT=$PUBLISHED_PORT
+fi
 
 # Порт должен быть свободен ДО сборки и генерации ключей. Панель проверяет это
 # сама; здесь страховка на случай вызова в обход окна установки. Сосед на
@@ -715,15 +751,48 @@ sudo docker build --build-arg XRAY_RELEASE={xray_release} -t "$IMG" "$BUILD" 2>&
 [ ${{PIPESTATUS[0]}} -eq 0 ] || fail build
 
 log "[4/5] конфиг"
-# перед пересборкой вытаскиваем конфиг из ЖИВОГО контейнера на хост-маунт
-# (конфиг мог лежать ВНУТРИ контейнера) — иначе guard сгенерит пустой и потеряет клиентов
-if sudo docker ps --format '{{{{.Names}}}}' | grep -qx "$C"; then
-  for f in server.json clientsTable xray_uuid.key xray_public.key xray_private.key xray_short_id.key; do
-    B=$(sudo docker exec "$C" cat "/opt/amnezia/xray/$f" 2>/dev/null | base64 -w0 2>/dev/null || true)
-    [ -n "$B" ] && echo "$B" | base64 -d | sudo tee "$D/$f" >/dev/null || true
-  done
+WORK=$(mktemp -d) || fail "could not create Xray working directory"
+OLD=
+NEW_CONFIG=
+DEPLOYED=
+cleanup() {{
+  if [ -z "$DEPLOYED" ] && sudo test -s "$WORK/container-id"; then
+    NEW_ID=$(sudo cat "$WORK/container-id")
+    sudo docker rm -f "$NEW_ID" >/dev/null 2>&1 || true
+  fi
+  if [ -n "$OLD" ]; then
+    if ! sudo docker rename "$OLD" "$C"; then
+      log "Could not restore previous Xray container name. Kept container $OLD."
+    elif [ "$EXISTING" = true ]; then
+      sudo docker start "$C" >/dev/null || log "Could not restart previous Xray container."
+    fi
+  fi
+  if [ -n "$NEW_CONFIG" ]; then sudo rm -f "$D/server.json"; fi
+  sudo rm -rf -- "$WORK"
+}}
+trap cleanup EXIT
+
+CONFIG_DIR=$D
+if [ -n "$EXISTING" ]; then
+  MOUNT=$(sudo docker inspect -f '{{{{range .Mounts}}}}{{{{println .Source .Destination}}}}{{{{end}}}}' "$C") || fail "could not read existing mounts"
+  if ! grep -Fxq "$D $D" <<< "$MOUNT"; then
+    CONFIG_DIR=$WORK/config
+    mkdir "$CONFIG_DIR" || fail "could not stage Xray configuration"
+    sudo docker cp "$C:$D/." "$CONFIG_DIR/" || fail "could not copy existing Xray configuration"
+  fi
+  sudo test -s "$CONFIG_DIR/server.json" || fail "missing existing Xray configuration"
 fi
-if ! sudo test -f "$D/server.json"; then
+if sudo test -f "$CONFIG_DIR/server.json"; then
+  CONFIG_PORT=$(sudo docker run --rm -v "$CONFIG_DIR":/config:ro --entrypoint jq "$IMG" \\
+    -er '.inbounds[0] | select(.protocol == "vless") | .port | tostring | select(test("^[0-9]+$"))' /config/server.json) \\
+    || fail "could not read the existing VLESS inbound port"
+  [ "$CONFIG_PORT" = "$INBOUND_PORT" ] || fail "The existing VLESS inbound uses port $CONFIG_PORT. Its configuration was kept."
+  if [ "$CONFIG_DIR" != "$D" ]; then
+    sudo cp -a "$CONFIG_DIR/." "$D/" || fail "could not save existing Xray configuration"
+  fi
+  log "конфиг уже есть — сохранён, клиенты не тронуты"
+else
+  {tls_check}  NEW_CONFIG=1
   log "генерация ключей + server.json (новый сервер)"
   sudo docker run --rm -v "$D":/opt/amnezia/xray --entrypoint sh "$IMG" -c 'cd /opt/amnezia/xray; xray uuid > xray_uuid.key; openssl rand -hex 8 > xray_short_id.key; xray x25519 > xray_x25519.raw 2>&1' || fail keys
   UUID=$(sudo cat "$D/xray_uuid.key" | tr -d " \\r\\n")
@@ -733,7 +802,7 @@ if ! sudo test -f "$D/server.json"; then
   echo "$PRIV" | sudo tee "$D/xray_private.key" >/dev/null
   echo "$PUB" | sudo tee "$D/xray_public.key" >/dev/null
   [ -n "$UUID" ] && [ -n "$PRIV" ] && [ -n "$PUB" ] || fail emptykeys
-  sudo tee "$D/server.json" >/dev/null <<EOF
+  sudo tee "$D/server.json" >/dev/null <<EOF || fail "could not write Xray configuration"
 {{
     "log": {{ "loglevel": "error" }},
     "stats": {{}},
@@ -771,8 +840,6 @@ if ! sudo test -f "$D/server.json"; then
 }}
 EOF
   sudo test -f "$D/clientsTable" || echo "[]" | sudo tee "$D/clientsTable" >/dev/null
-else
-  log "конфиг уже есть — сохранён, клиенты не тронуты"
 fi
 
 log "фаервол: открываю $XRAY_SERVER_PORT/tcp наружу (Docker публикует, но ufw/firewalld могут блочить)"
@@ -784,15 +851,30 @@ log "[5/5] контейнер"
 # без CONFIG_MPTCP этого sysctl нет, и Docker с ним отказался бы запускаться.
 MPTCP_OPT=""
 if [ -e /proc/sys/net/mptcp/enabled ]; then MPTCP_OPT="--sysctl net.mptcp.enabled=0"; fi
-sudo docker rm -f "$C" >/dev/null 2>&1 || true
-sudo docker run -d --name "$C" --restart always --privileged --cap-add=NET_ADMIN $MPTCP_OPT \\
+if [ -n "$EXISTING" ]; then
+  sudo docker rename "$C" "$C-previous-$$" || fail "could not keep the previous Xray container"
+  OLD="$C-previous-$$"
+  if [ "$EXISTING" = true ]; then sudo docker stop "$OLD" >/dev/null || fail "could not stop previous Xray container"; fi
+fi
+PROBE_HOST=$BIND
+case "$PROBE_HOST" in ''|0.0.0.0) PROBE_HOST=127.0.0.1 ;; ::) PROBE_HOST=::1 ;; esac
+case "$BIND" in *:*) BIND="[$BIND]" ;; esac
+sudo docker run -d --name "$C" --cidfile "$WORK/container-id" --restart always --privileged --cap-add=NET_ADMIN $MPTCP_OPT \\
   -e GODEBUG=multipathtcp=0 \\
-  -p ${{BIND:+$BIND:}}${{XRAY_SERVER_PORT}}:${{XRAY_SERVER_PORT}}/tcp \\
+  -p "${{BIND:+$BIND:}}$XRAY_SERVER_PORT:$INBOUND_PORT/tcp" \\
   -v "$D":/opt/amnezia/xray \\
   --entrypoint sh "$IMG" -c "xray -config /opt/amnezia/xray/server.json" >/dev/null \\
-  || {{ sudo docker rm -f "$C" >/dev/null 2>&1; fail run; }}
+  || fail run
 sleep 4
-sudo docker ps --format '{{{{.Names}}}}' | grep -Fx "$C" >/dev/null || {{ sudo docker logs "$C" 2>&1 | tail; fail notrunning; }}
+STATE=$(sudo docker inspect -f '{{{{.State.Status}}}}|{{{{.RestartCount}}}}' "$C")
+if [ "$STATE" != 'running|0' ] || ! timeout 3 bash -c 'exec 3<>"/dev/tcp/$1/$2"' _ "$PROBE_HOST" "$XRAY_SERVER_PORT"; then
+  sudo docker logs "$C" 2>&1 | tail
+  fail "Xray did not start listening on its published port."
+fi
+DEPLOYED=1
+if [ -n "$OLD" ]; then sudo docker rm "$OLD" >/dev/null || log "Could not remove previous Xray container."; fi
+OLD=
+NEW_CONFIG=
 log "xray запущен на порту ${{BIND:+$BIND:}}$XRAY_SERVER_PORT"
 echo "DEPLOY_DONE"
 """

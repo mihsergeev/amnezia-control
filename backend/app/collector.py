@@ -52,22 +52,26 @@ _pending: dict[int, tuple[int, int]] = {}
 # Для онлайна Xray нужны два подряд успешных опроса. Историю трафика
 # (_last_clients) храним дольше, поэтому она для этого не подходит.
 _last_xray_counters: dict[int, dict[str, tuple[int, int]]] = {}
+# Activity from complete Xray polls while another protocol blocks the aggregate.
+_pending_xray_active: dict[int, set[str]] = {}
 
 
-def _xray_online(server_id: int, counters: dict[str, tuple[int, int]] | None) -> int:
+def _xray_active(server_id: int, counters: dict[str, tuple[int, int]] | None) -> set[str]:
     previous = _last_xray_counters.pop(server_id, None)
     if counters is None:
-        return 0
+        _pending_xray_active.pop(server_id, None)
+        return set()
     _last_xray_counters[server_id] = counters
     if previous is None:
-        return 0
-    online = 0
+        return set()
+    active = set()
     for uid, (rx, tx) in counters.items():
         old_rx, old_tx = previous.get(uid, (0, 0))
         # После рестарта счетчик может уменьшиться: ненулевые байты после
         # сброса тоже означают трафик, а сам сброс до нуля — нет.
-        online += int((rx > 0 and rx != old_rx) or (tx > 0 and tx != old_tx))
-    return online
+        if (rx > 0 and rx != old_rx) or (tx > 0 and tx != old_tx):
+            active.add(uid)
+    return active
 
 
 def _client_delta(sample: dict) -> tuple[int, int] | None:
@@ -357,7 +361,7 @@ async def collect_once(
     servers = [s for s, _r in kept]
     results = [r for _s, r in kept]
     hostkey_changed &= alive
-    for state in (_last_parts, _last_clients, _pending, _last_xray_counters):
+    for state in (_last_parts, _last_clients, _pending, _last_xray_counters, _pending_xray_active):
         for sid in [k for k in state if k not in alive]:
             del state[sid]
     names = {s.id: s.name for s in servers}
@@ -365,9 +369,8 @@ async def collect_once(
     samples = []
     for server, sample in zip(servers, results):
         if sample is None:
-            _last_xray_counters.pop(server.id, None)
+            _xray_active(server.id, None)
             continue
-        sample["clients_online"] += _xray_online(server.id, sample.get("xray_counters"))
         samples.append(sample)
     stable = []
     for s in samples:
@@ -376,16 +379,25 @@ async def collect_once(
         prev = _last_parts.get(sid)
         parts = s.get("parts", frozenset())
         _last_parts[sid] = parts
+        xray_active = _xray_active(sid, s.get("xray_counters"))
+        pending_xray = _pending_xray_active.pop(sid, None)
+        if pending_xray:
+            xray_active.update(cid for protocol, cid in s["known"]
+                               if protocol == "xray" and cid in pending_xray)
         if prev is None or prev == parts:
             pend = _pending.pop(sid, None)
             if delta is not None and pend:
                 delta = (delta[0] + pend[0], delta[1] + pend[1])
             s["delta"] = delta
+            s["clients_online"] += len(xray_active)
             stable.append(s)
-        elif delta is not None:
-            # снимок не пишем, но прирост не теряем - уйдет в следующий
-            pend = _pending.get(sid, (0, 0))
-            _pending[sid] = (pend[0] + delta[0], pend[1] + delta[1])
+        else:
+            if xray_active:
+                _pending_xray_active[sid] = xray_active
+            if delta is not None:
+                # снимок не пишем, но прирост не теряем - уйдет в следующий
+                pend = _pending.get(sid, (0, 0))
+                _pending[sid] = (pend[0] + delta[0], pend[1] + delta[1])
     if samples:
         if stable:
             async with session_factory() as session:

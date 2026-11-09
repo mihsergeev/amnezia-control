@@ -119,7 +119,7 @@ async def test_deploy_renders_reality_settings(client, auth_headers, node, setti
     assert r.status_code == 202
     script, = node
     assignments = re.findall(r"^XRAY_(?:SITE_NAME|DEST|SERVER_PORT)=.*$", script, re.M)
-    block = re.search(r'server\.json" >/dev/null <<EOF\n(.*?)\nEOF', script, re.S)
+    block = re.search(r'server\.json" >/dev/null <<EOF[^\n]*\n(.*?)\nEOF', script, re.S)
     assert block is not None
     rendered = subprocess.run(
         ["bash", "-s"], input="\n".join([*assignments, "cat <<EOF", block[1], "EOF", ""]).encode(),
@@ -142,12 +142,28 @@ async def test_deploy_renders_reality_settings(client, auth_headers, node, setti
     {"dest": "www.example.com;id"},
     {"dest": "www.example.com:65536"},
     {"dest": "[2001:db8::1]:443"},
+    {"site": "www.example.com", "dest": f"127.0.0.1:{xray.STATS_API_PORT}"},
+    {"dest": f"loopback.example.com:{xray.STATS_API_PORT}"},
 ])
 async def test_deploy_rejects_invalid_reality_settings(client, auth_headers, node, settings) -> None:
     sid = await _server(client, auth_headers)
     r = await client.post(f"/api/servers/{sid}/xray/deploy", json=settings, headers=auth_headers)
     assert r.status_code == 422
     assert not node
+
+
+async def test_read_server_bits_uses_published_port(monkeypatch) -> None:
+    async def run(conn, command):
+        assert "HostConfig.PortBindings" in command
+        return '===BINDINGS===\n{"19443/tcp":[{"HostIp":"192.0.2.2","HostPort":"18443"}]}'
+
+    async def config(conn, container):
+        return {"inbounds": [{"port": 19443}]}
+
+    monkeypatch.setattr(xray, "_run", run)
+    monkeypatch.setattr(xray, "_read_server", config)
+    bits = await xray.read_server_bits(_DummyConn(), xray.CONTAINER_NAME)
+    assert bits["port"] == 18443
 
 
 async def test_update_installs_pinned(client, auth_headers, node) -> None:

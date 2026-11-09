@@ -1529,7 +1529,7 @@ export function ServersPage({ onUnauthorized }: Props) {
                 aria-describedby="server-client-endpoint-help"
               />
               <small className="muted" id="server-client-endpoint-help">
-                {t('Домен или IP без порта для профилей AmneziaWG и WireGuard. Если поле пустое, используется хост SSH.')}
+                {t('Домен или IP без порта для AmneziaWG и WireGuard. Если поле пустое, новые профили используют хост SSH, а у сохраненных остается исходный адрес.')}
               </small>
             </label>
             <label>

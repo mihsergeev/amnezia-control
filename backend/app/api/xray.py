@@ -425,7 +425,7 @@ async def update_xray(
             await deploy.ensure_idle(conn, tag="xray")
             container = await xray.detect_container(conn)
             bits = await xray.read_server_bits(conn, container)
-            script = xray.build_deploy_script(bits["port"], bits["site"], release)
+            script = xray.build_deploy_script(bits["port"], bits["site"], release, preserve_port=True)
             # включаем статистику в живом конфиге ДО пересборки — иначе rebuild
             # сохранил бы старый конфиг без stats (на существующих серверах)
             await xray.enable_stats(conn, container)

@@ -10,7 +10,7 @@ from fastapi import HTTPException
 INVALID = "Укажите домен или IP VPN-сервера без порта."
 UNRESOLVED = "Домен Client Endpoint не разрешается в IP. Проверьте DNS и повторите попытку."
 _SECTION = re.compile(r"^[ \t]*\[([^\]\r\n]+)\]", re.MULTILINE)
-_PEER_ENDPOINT = re.compile(r"^([ \t]*Endpoint[ \t]*=[ \t]*)[^ \t\r\n#;]+(:[0-9]+)(?=[ \t\r\n#;]|$)", re.MULTILINE)
+_PEER_ENDPOINT = re.compile(r"^([ \t]*Endpoint[ \t]*=[ \t]*)[^ \t\r\n#;]+(:[0-9]+)(?=[ \t\r\n#;]|$)", re.MULTILINE | re.IGNORECASE)
 
 
 def normalize(value: str) -> str:
@@ -57,11 +57,11 @@ def peer_config(config: str, host: str) -> str:
         return config
     sections = list(_SECTION.finditer(config))
     for index, section in enumerate(sections):
-        if section[1] != "Peer":
+        if section[1].lower() != "peer":
             continue
         end = sections[index + 1].start() if index + 1 < len(sections) else len(config)
         peer = config[section.end():end]
         address = f"[{host}]" if ":" in host else host
-        rendered = _PEER_ENDPOINT.sub(lambda match: f"{match[1]}{address}{match[2]}", peer, count=1)
+        rendered = _PEER_ENDPOINT.sub(lambda match: f"{match[1]}{address}{match[2]}", peer)
         return config[:section.end()] + rendered + config[end:]
     return config

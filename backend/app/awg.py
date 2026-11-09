@@ -107,6 +107,11 @@ _AMNEZIA_PARAM_KEYS = [
 # ключи 3.0 в vpn://-ссылке называются так же, как в .conf (сверено с
 # configKeys.h клиента 5.0.0.5): HeaderProtectionKey, ContentPaddingAddition, …
 _AMNEZIA_PARAM_KEYS_V3 = _AMNEZIA_PARAM_KEYS + AWG3_PARAM_KEYS
+_CONF_KEYS = {
+    key.lower(): key
+    for key in (*AWG_PARAM_KEYS, "PrivateKey", "Address", "ListenPort", "Endpoint",
+                "PublicKey", "PresharedKey", "AllowedIPs")
+}
 
 
 def dns_pair(dns: str) -> tuple[str, str]:
@@ -142,8 +147,11 @@ def build_amnezia_link(
         if client_ip
         else ""
     )
-    endpoint = peer.get("Endpoint", f"{host}:0")
-    port = int(endpoint.rsplit(":", 1)[-1]) if ":" in endpoint else 0
+    endpoint = peer.get("Endpoint", "").partition("#")[0].partition(";")[0].strip()
+    endpoint_host, _, endpoint_port = endpoint.rpartition(":")
+    port = int(endpoint_port) if endpoint_host and endpoint_port.isdecimal() else 0
+    if port:
+        host = endpoint_host.removeprefix("[").removesuffix("]")
     # набор ключей зависит от версии; пустые значения СОХРАНЯЕМ (у 2.0 приложение
     # всегда пишет I1–I5, в том числе пустые — от этого зависит совместимость)
     keys = _AMNEZIA_PARAM_KEYS if protocol_version == "2" else _AMNEZIA_PARAM_KEYS_V3
@@ -245,10 +253,11 @@ def parse_conf(text: str) -> tuple[dict[str, str], list[dict[str, str]]]:
     cur: dict[str, str] = {}
     for line in text.splitlines():
         s = line.strip()
-        if s == "[Interface]":
+        header = s.partition("#")[0].partition(";")[0].strip().lower()
+        if header == "[interface]":
             section = "iface"
             continue
-        if s == "[Peer]":
+        if header == "[peer]":
             if cur:
                 peers.append(cur)
             cur = {}
@@ -269,6 +278,7 @@ def parse_conf(text: str) -> tuple[dict[str, str], list[dict[str, str]]]:
             continue
         key, _, value = s.partition("=")
         key, value = key.strip(), value.strip()
+        key = _CONF_KEYS.get(key.lower(), key)
         if section == "iface":
             interface[key] = value
         elif section == "peer":

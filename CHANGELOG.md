@@ -4,6 +4,13 @@ All notable changes to Amnezia Control are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.84.26] - 2026-11-09
+
+- Keep Xray activity visible on mixed-protocol servers when another protocol temporarily fails to report. Keep the Xray client total when its statistics API is unavailable.
+- Validate the TLS certificate and SNI of custom REALITY targets before installation. Block targets on the internal Xray statistics port.
+- Preserve existing Xray configurations, keys and published ports when replacing a container. Restore the previous container when its replacement fails to start listening.
+- Keep the endpoint and port consistent across saved AmneziaWG configuration files and `vpn://` links, including imported profiles and after changes to the SSH host.
+
 ## [0.84.25] - 2026-11-09
 
 - Add an optional Client Endpoint for AmneziaWG and WireGuard profiles. Use a domain or IP for client connections while keeping the existing SSH host.

@@ -1,4 +1,7 @@
+import asyncio
 import json
+
+import asyncssh
 
 from app import xray
 
@@ -41,7 +44,7 @@ def test_deploy_script_server_json_valid_with_stats():
     import re
 
     s = xray.build_deploy_script(443, "www.googletagmanager.com", "v26.3.27")
-    m = re.search(r'server\.json" >/dev/null <<EOF\n(.*?)\nEOF', s, re.S)
+    m = re.search(r'server\.json" >/dev/null <<EOF[^\n]*\n(.*?)\nEOF', s, re.S)
     block = m.group(1)
     for k, v in {
         "$XRAY_SERVER_PORT": "443", "$XRAY_SITE_NAME": '"ex.com"', "$XRAY_DEST": '"ex.com:443"',
@@ -81,3 +84,17 @@ async def test_read_client_stats_parses_statsquery():
     assert await xray.read_client_stats(C("", code=1), "amnezia-xray") is None
     for invalid in ("not json", "[]", '{"stat":{}}', '{"stat":[42]}'):
         assert await xray.read_client_stats(C(invalid), "amnezia-xray") is None
+
+
+async def test_optional_statsquery_survives_ssh_channel_failure_and_timeout(monkeypatch):
+    class Refused:
+        async def run(self, cmd, check=False):
+            raise asyncssh.ChannelOpenError(asyncssh.OPEN_RESOURCE_SHORTAGE, "test channel limit")
+
+    class Slow:
+        async def run(self, cmd, check=False):
+            await asyncio.sleep(1)
+
+    assert await xray.read_client_stats(Refused(), "amnezia-xray") is None
+    monkeypatch.setattr(xray, "STATS_QUERY_TIMEOUT", 0.01)
+    assert await xray.read_client_stats(Slow(), "amnezia-xray") is None

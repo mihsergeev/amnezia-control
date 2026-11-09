@@ -111,6 +111,30 @@ async def test_xray_online_counts_recent_traffic_not_cumulative_totals(factory, 
     await sample(active | {"client-0": {"up": 15, "down": 101}}, 2)
 
 
+async def test_xray_activity_survives_skipped_aggregate(factory, monkeypatch):
+    sid = await _seed(factory, ["amnezia-xray", "amnezia-awg"])
+    for name in ("_last_parts", "_last_clients", "_pending", "_last_xray_counters", "_pending_xray_active"):
+        monkeypatch.setattr(collector, name, {})
+
+    async def sample(awg_available, rx, client_ids=("active", "revoked")):
+        parts = {"xray", "awg"} if awg_available else {"xray"}
+        await _run(factory, monkeypatch, _sample(sid, None) | {
+            "parts": frozenset(parts),
+            "clients_total": int(awg_available) + len(client_ids),
+            "known": [("xray", cid) for cid in client_ids],
+            "xray_counters": {cid: (rx, 0) for cid in client_ids},
+        })
+
+    await sample(True, 100)
+    await sample(False, 200)
+    await sample(True, 200, ("active",))
+    await sample(True, 200, ("active",))
+    await sample(True, 200, ("active",))
+    async with factory() as session:
+        rows = await session.scalars(select(TrafficSample).order_by(TrafficSample.id))
+        assert [(row.clients_online, row.clients_total) for row in rows] == [(0, 3), (1, 2), (0, 2)]
+
+
 async def test_removed_container_drops_protocol(factory, monkeypatch):
     sid = await _seed(factory, ["amnezia-awg2", "3x-ui"])
     # контейнер удалён извне: docker ответил, amnezia-контейнеров больше нет

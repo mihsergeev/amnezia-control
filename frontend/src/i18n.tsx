@@ -877,8 +877,8 @@ const EN: Record<string, string> = {
   '. После этого нажмите «Проверить».': '. Then click “Check”.',
   'SSH-порт': 'SSH port',
   'Адрес VPN для клиентов (Client Endpoint)': 'Client VPN address (Client Endpoint)',
-  'Домен или IP без порта для профилей AmneziaWG и WireGuard. Если поле пустое, используется хост SSH.':
-    'Domain or IP without a port for AmneziaWG and WireGuard profiles. Leave blank to use the SSH host.',
+  'Домен или IP без порта для AmneziaWG и WireGuard. Если поле пустое, новые профили используют хост SSH, а у сохраненных остается исходный адрес.':
+    'Domain or IP without a port for AmneziaWG and WireGuard. If blank, new profiles use the SSH host and saved profiles keep their original address.',
   'Домен Client Endpoint не разрешается в IP. Проверьте DNS и повторите попытку.':
     'The Client Endpoint domain does not resolve to an IP address. Check DNS and try again.',
   'SSH-пользователь': 'SSH user',

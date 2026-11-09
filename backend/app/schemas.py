@@ -11,6 +11,7 @@ from pydantic import AfterValidator, BaseModel, ConfigDict, Field, computed_fiel
 from app.cascade_routes import Route
 from app.client_endpoint import normalize as normalize_client_endpoint
 from app.geo import normalize_country_code
+from app.xray import STATS_API_PORT
 
 
 class LoginRequest(BaseModel):
@@ -554,6 +555,8 @@ class XrayDeployRequest(BaseModel):
         port = int(port) if port else 443
         if not 1 <= port <= 65535:
             raise ValueError(error)
+        if port == STATS_API_PORT:
+            raise ValueError("Dest cannot use the port reserved for Xray statistics")
         try:
             if host.startswith("["):
                 host = f"[{IPv6Address(host[1:-1])}]"
