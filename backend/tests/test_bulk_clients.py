@@ -11,9 +11,9 @@ from contextlib import asynccontextmanager
 
 from sqlalchemy import select
 
-from app import awg, bulk_archive, bulk_issue_state, pausestore, wg_bulk
+from app import awg, bulk_archive, bulk_issue_state, pausestore, wg_bulk, xray_bulk
 from app.api import bulk_clients
-from app.models import AuditLog, BulkClientIssue, NativeVpnConfig, Server
+from app.models import AuditLog, AwgNote, BulkClientIssue, ClientLimit, ClientName, NativeVpnConfig, Server
 
 
 async def _server(client, auth):
@@ -150,6 +150,53 @@ async def test_wireguard_zip_rejects_unresolved_client_endpoint(client, auth_hea
                                  headers=auth_headers, json={"client_ids": ["peer"]})
     assert response.status_code == 422
     assert "DNS" in response.json()["detail"]
+
+
+async def test_xray_revoke_removes_paused_client_and_metadata_for_uuid_alias(
+    client, auth_headers, session_factory, monkeypatch,
+):
+    sid = await _server(client, auth_headers)
+    selected, kept = uuid.uuid4(), str(uuid.uuid4())
+    async with session_factory() as session:
+        await pausestore.add(session, sid, "xray", str(selected), "Paused", {"entry": {"id": str(selected)}})
+        for cid in (str(selected), kept):
+            session.add_all([
+                AwgNote(server_id=sid, protocol="xray", public_key=cid, note="test"),
+                ClientLimit(server_id=sid, protocol="xray", client_id=cid),
+                ClientName(server_id=sid, protocol="xray", client_id=cid),
+            ])
+        await session.commit()
+
+    @asynccontextmanager
+    async def connection(*args, **kwargs):
+        yield object()
+
+    async def state(*args):
+        return xray_bulk.NodeState(
+            container="test", server={}, table=[], default=str(uuid.uuid4()), address="socket",
+            inbounds=[], runtime={},
+        )
+
+    async def runtime(*args):
+        return {}
+
+    monkeypatch.setattr(bulk_clients, "_connection", connection)
+    monkeypatch.setattr(bulk_clients, "_xray_state", state)
+    monkeypatch.setattr(xray_bulk, "_runtime", runtime)
+    alias = selected.hex.upper()
+    for _ in range(2):
+        response = await client.post(f"/api/servers/{sid}/bulk-clients/xray/revoke", headers=auth_headers,
+                                     json={"client_ids": [alias], "confirmed": True})
+        assert response.status_code == 200 and response.json()["revoked"] == 1
+        assert response.json()["items"][0]["client_id"] == alias
+
+    async with session_factory() as session:
+        assert await pausestore.list_paused(session, sid, "xray") == {}
+        for column in (AwgNote.public_key, ClientLimit.client_id, ClientName.client_id):
+            assert list(await session.scalars(select(column))) == [kept]
+    response = await client.post(f"/api/servers/{sid}/xray/resume", headers=auth_headers,
+                                 json={"client_id": str(selected)})
+    assert response.status_code == 404
 
 
 async def test_restore_never_replays_archived_pending_issue(client, auth_headers, session_factory):

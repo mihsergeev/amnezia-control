@@ -4,6 +4,10 @@ All notable changes to Amnezia Control are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.84.33] - 2026-11-10
+
+- Fully revoke paused Xray profiles when a bulk request uses an equivalent UUID spelling. The panel removes the pause record and related metadata so the revoked profile cannot be resumed.
+
 ## [0.84.32] - 2026-11-09
 
 - Make bulk client actions easier to scan on desktop and mobile, with compact client rows, themed controls, and a selection count next to the main action.

@@ -5,7 +5,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import Response
-from sqlalchemy import delete, select
+from sqlalchemy import delete, select, union
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 
 from app import (
@@ -17,7 +17,10 @@ from app.api.awg3 import _state as awg3_state
 from app.bulk_schemas import ExportProtocol, ExportRequest, IssueProtocol, IssueRequest, IssueResult, PendingIssue, RevokeRequest
 from app.config import get_settings
 from app.deps import CurrentUser, SessionDep
-from app.models import AuditLog, AwgConfig, BulkClientIssue, ClientName, NativeVpnConfig, OvpnConfig, Server
+from app.models import (
+    AuditLog, AwgConfig, AwgNote, BulkClientIssue, ClientLimit, ClientName,
+    NativeVpnConfig, OvpnConfig, PausedClient, Server,
+)
 from app.schemas import RevokeBulkResult, RevokeBulkResultItem
 from app.sshkeys import ensure_panel_key, key_paths
 
@@ -307,6 +310,21 @@ async def export(server_id: int, protocol: ExportProtocol, body: ExportRequest,
     })
 
 
+async def _xray_revoke_metadata_ids(session, server_id: int, ids: list[str]) -> set[str]:
+    # Node revocation treats equivalent UUID spellings as one client, while
+    # existing panel records retain the spelling that was used to create them.
+    selected = {xray_bulk.canonical_uuid(cid) for cid in ids}
+    selected.discard(None)
+    stored_ids = await session.scalars(union(*(
+        select(column).where(model.server_id == server_id, model.protocol == "xray")
+        for model, column in (
+            (AwgNote, AwgNote.public_key), (ClientLimit, ClientLimit.client_id),
+            (ClientName, ClientName.client_id), (PausedClient, PausedClient.client_id),
+        )
+    )))
+    return set(ids) | {cid for cid in stored_ids if xray_bulk.canonical_uuid(cid) in selected}
+
+
 @router.post("/revoke", response_model=RevokeBulkResult)
 @nodelock.operation()
 async def revoke(server_id: int, protocol: IssueProtocol, body: RevokeRequest,
@@ -339,11 +357,14 @@ async def revoke(server_id: int, protocol: IssueProtocol, body: RevokeRequest,
             errors.update(dict.fromkeys(selected, "Отзыв на сервере не подтвержден. Повторите выбранные профили."))
     done = [cid for cid in ids if cid not in errors]
     try:
-        for cid in done:
+        cleanup_ids = done
+        if protocol == "xray" and done:
+            cleanup_ids = await _xray_revoke_metadata_ids(session, server_id, done)
+        for cid in cleanup_ids:
             await expiry.cleanup_client_db(session, server_id, protocol, cid)
-        if done:
+        if cleanup_ids:
             await session.execute(delete(ClientName).where(
-                ClientName.server_id == server_id, ClientName.protocol == protocol, ClientName.client_id.in_(done),
+                ClientName.server_id == server_id, ClientName.protocol == protocol, ClientName.client_id.in_(cleanup_ids),
             ))
         session.add(AuditLog(username=username, action="clients_bulk_revoke", target=server_name,
                              detail=f"{protocol}: {len(done)} из {len(ids)}"))

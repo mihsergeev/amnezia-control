@@ -262,7 +262,7 @@ async def apply(conn, node: NodeState, items: list[dict]) -> None:
             raise xray.XrayError("Не удалось подтвердить выдачу всех клиентов в работающем Xray")
 
 
-def _canonical(value):
+def canonical_uuid(value: str) -> str | None:
     try:
         return str(uuid.UUID(value))
     except ValueError:
@@ -272,11 +272,11 @@ def _canonical(value):
 
 
 async def revoke(conn, node: NodeState, ids: list[str]) -> dict[str, str]:
-    default = _canonical(node.default)
+    default = canonical_uuid(node.default)
     errors = {}
     candidates = {}
     for cid in ids:
-        canon = _canonical(cid)
+        canon = canonical_uuid(cid)
         if canon is None:
             errors[cid] = "Групповой отзыв Xray требует UUID клиента"
         elif canon == default:
@@ -285,7 +285,7 @@ async def revoke(conn, node: NodeState, ids: list[str]) -> dict[str, str]:
             candidates[cid] = canon
     # A configured user without email may not appear in GetInboundUsers.
     for inbound in node.inbounds:
-        clients = {_canonical(row["id"]): row for row in _clients(inbound)}
+        clients = {canonical_uuid(row["id"]): row for row in _clients(inbound)}
         runtime = node.runtime[inbound["tag"]]
         for cid, canon in candidates.items():
             if (canon in clients and not clients[canon].get("email")) or (
@@ -302,14 +302,14 @@ async def revoke(conn, node: NodeState, ids: list[str]) -> dict[str, str]:
     changed = False
     for inbound in node.inbounds:
         clients = _clients(inbound)
-        filtered = [row for row in clients if _canonical(row["id"]) not in selected]
+        filtered = [row for row in clients if canonical_uuid(row["id"]) not in selected]
         if filtered != clients:
             clients[:] = filtered
             changed = True
     if changed:
         await xray._write_server(conn, node.container, node.server)
     table = [row for row in node.table
-             if not isinstance(row.get("clientId"), str) or _canonical(row["clientId"]) not in selected]
+             if not isinstance(row.get("clientId"), str) or canonical_uuid(row["clientId"]) not in selected]
     if table != node.table:
         await xray._write_table(conn, node.container, table)
     for tag, users in node.runtime.items():
