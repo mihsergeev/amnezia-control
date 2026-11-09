@@ -4,6 +4,12 @@ All notable changes to Amnezia Control are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.84.34] - 2026-11-10
+
+- Keep unfinished bulk issuance requests on the panel that created them. Server transfers still include saved client profiles, and imports skip unfinished requests from older archives.
+- Show the latest cascade check in the server list and details while preserving the background alert state.
+- Keep the last complete traffic sample when Xray statistics are temporarily unavailable.
+
 ## [0.84.33] - 2026-11-10
 
 - Fully revoke paused Xray profiles when a bulk request uses an equivalent UUID spelling. The panel removes the pause record and related metadata so the revoked profile cannot be resumed.

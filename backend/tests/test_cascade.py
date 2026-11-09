@@ -439,8 +439,18 @@ async def test_cascade_entry_country_api_preserves_override_for_retry_and_check(
     legacy = await client.post(retry_path, headers=auth_headers)
     assert legacy.status_code == 202, legacy.text
     assert legacy.json()["entry_country"] == "RU"
+    async with session_factory() as session:
+        row = await session.get(Cascade, cid)
+        row.status = "ready"
+        await session.commit()
     checked = await client.post(f"/api/cascades/{cid}/check", headers=auth_headers)
     assert checked.status_code == 200, checked.text
+    listed = await client.get("/api/cascades", headers=auth_headers)
+    assert listed.status_code == 200, listed.text
+    result = listed.json()[0]["result"]
+    assert result["manual_check"]["ok"] == checked.json()["ok"] is False
+    assert result["manual_check"]["reason"] == checked.json()["reason"]
+    assert "health" not in result
     assert checks == ["RU"]
     assert spawned == [cid, cid, cid, cid]
 

@@ -74,7 +74,7 @@ async def get_xray(server_id: int, _: CurrentUser, session: SessionDep) -> XrayS
     try:
         async with _connect(server) as conn:
             container = await xray.detect_container(conn)
-            clients, counters = await xray.read_clients_and_stats(conn, container)
+            clients, counters, _ = await xray.read_clients_and_stats(conn, container)
             stats = xray.client_stats_by_id(clients, counters)
     except Exception as exc:  # noqa: BLE001
         raise _xray_error(exc) from exc

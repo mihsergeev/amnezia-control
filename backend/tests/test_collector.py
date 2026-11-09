@@ -82,13 +82,18 @@ async def test_xray_online_counts_recent_traffic_not_cumulative_totals(factory, 
         {"id": f"client-{i}", "email": f"stats-{i}"} for i in range(7)
     ]
     clients.append({"id": "default", "email": "default-stats"})
-    server = {"inbounds": [{"settings": {"clients": clients}}]}
+    server = {
+        "inbounds": [{"settings": {"clients": clients}}],
+        "api": {"listen": "/tmp/stats.sock", "services": ["StatsService"]},
+    }
     monkeypatch.setattr(collector.xray, "detect_container", AsyncMock(return_value="amnezia-xray"))
     monkeypatch.setattr(collector.xray, "_read_all", AsyncMock(return_value=(server, "default", [])))
     read_stats = AsyncMock()
     monkeypatch.setattr(collector.xray, "read_client_stats", read_stats)
 
     async def sample(stats, expected_online):
+        async with factory() as session:
+            previous = await session.scalar(select(TrafficSample.id).order_by(TrafficSample.id.desc()))
         read_stats.return_value = stats
         totals, rows = await collector._xray_part(None, "node.example")
         await _run(factory, monkeypatch, _sample(sid, None) | {
@@ -97,10 +102,16 @@ async def test_xray_online_counts_recent_traffic_not_cumulative_totals(factory, 
             "rx_total": totals["rx"], "tx_total": totals["tx"],
             "clients": rows, "parts": frozenset({"xray", "awg"}),
             "xray_counters": totals["xray_counters"],
+            "xray_stats_missing": totals.get("xray_stats_missing", False),
         })
         async with factory() as session:
             last = await session.scalar(select(TrafficSample).order_by(TrafficSample.id.desc()))
-        assert (last.clients_online, last.clients_total) == (expected_online, 8)
+        if expected_online is None:
+            assert last.id == previous
+            assert last.rx_total > 0
+        else:
+            assert last.id != previous
+            assert (last.clients_online, last.clients_total) == (expected_online, 8)
 
     await sample({}, 1)
     active = {"stats-0": {"up": 15, "down": 100}, "stats-1": {"up": 0, "down": 20},
@@ -110,9 +121,12 @@ async def test_xray_online_counts_recent_traffic_not_cumulative_totals(factory, 
     await sample(active, 1)
     await sample(active | {"stats-0": {"up": 2, "down": 0},
                            "stats-1": {"up": 0, "down": 0}}, 2)
-    await sample(None, 1)
+    await sample(None, None)
+    await sample(None, None)
     await sample(active, 1)  # the first good poll after a failure only sets the baseline
     await sample(active | {"stats-0": {"up": 15, "down": 101}}, 2)
+    server.pop("api")  # older servers without StatsService still report provisioned clients
+    await sample(None, 1)
 
 
 @pytest.mark.parametrize("extra_flaps, carried", [(False, 1), (True, 0)])

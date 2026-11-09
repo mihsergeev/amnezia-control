@@ -32,7 +32,7 @@ from app.clientip import client_ip
 from app.config import get_settings
 from app.db import Base
 from app.deps import CurrentUser, SessionDep
-from app.models import Server
+from app.models import BulkClientIssue, Server
 from app.schemas import ServerImportResult
 
 router = APIRouter(tags=["transfer"])
@@ -45,6 +45,11 @@ FORMAT_VERSION = 1
 # наполнятся сами при первом же опросе, а перенос устаревших значений только
 # путал бы: новая панель показывала бы чужое «онлайн» до первой проверки.
 _RUNTIME_TABLES = {"server_status", "node_metrics", "torrent_hits"}
+
+# Issue journals belong to the panel and user that prepared the operation.
+# A pending journal can write credentials to the node when replayed; only the
+# separately stored profiles and other client metadata belong in a transfer.
+_PANEL_LOCAL_TABLES = {BulkClientIssue.__tablename__}
 
 # История трафика на активной ноде — сотни тысяч строк (у боевого сервера это
 # ~0.8 млн). Тащим только по явному запросу, иначе файл раздувается в сотни
@@ -103,7 +108,7 @@ def _coerce_row(model, row: dict) -> dict:
 
 
 def _selected_models(history: bool) -> list:
-    skip = set(_RUNTIME_TABLES)
+    skip = _RUNTIME_TABLES | _PANEL_LOCAL_TABLES
     if not history:
         skip |= _HISTORY_TABLES
     return [m for m in server_scoped_models() if m.__tablename__ not in skip]
@@ -261,6 +266,12 @@ async def import_server_file(
     now = datetime.now(timezone.utc)
     for table, rows in (payload.get("tables") or {}).items():
         model = by_table.get(table)
+        if table in _PANEL_LOCAL_TABLES:
+            # Older exports carried these journals. Never rebind them to a
+            # new server or to an unrelated account with the same numeric ID.
+            if rows:
+                skipped.append(table)
+            continue
         if table in _RUNTIME_TABLES:
             # статус и метрики панель наберет сама, из файла их не берем
             continue

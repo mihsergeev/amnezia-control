@@ -4,7 +4,8 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from app import alerts, cascade, cascadewatch, config, settings_store
+from app import alerts, cascade, cascade_observations, cascadewatch, config, settings_store
+from app.api import cascades
 from app.db import Base, create_engine_and_factory
 from app.models import Cascade, Server
 
@@ -204,7 +205,9 @@ async def test_cascade_changed_during_check(factory, sent) -> None:
     проверка: удаленный пропускаем, свежий result не затираем."""
     from sqlalchemy import delete
 
-    manual = {"egress": "fresh-manual", "client": "x", "health": {"ok": True}}
+    newer = (NOW + timedelta(seconds=1)).isoformat()
+    manual = {"egress": "198.51.100.9", "client": "198.51.100.9", "checked_at": newer,
+              "manual_check": {"ok": True, "checked_at": newer}}
     async with factory() as s:
         for sid in (3, 4, 5, 6):
             s.add(Server(id=sid, name=f"vpn-{sid}", host=f"203.0.113.{sid}",
@@ -227,4 +230,96 @@ async def test_cascade_changed_during_check(factory, sent) -> None:
     async with factory() as s:
         assert await s.get(Cascade, 2) is None
         res = json.loads((await s.get(Cascade, 3)).result)
-    assert res == manual
+    assert res["health"]["ok"] is False and res["health"]["checked_at"] == NOW.isoformat()
+    assert {key: res[key] for key in manual} == manual
+
+
+async def test_manual_check_preserves_watchdog_transitions(factory, sent, monkeypatch):
+    settings = config.get_settings()
+    start = datetime.now(timezone.utc) - timedelta(minutes=settings.cascade_down_minutes + 1)
+    await cascadewatch.watch_once(factory, settings, now=start, check=_check(NO_EXIT))
+
+    @asynccontextmanager
+    async def locked(_server):
+        yield object()
+
+    async def no_geo(_host, _ip):
+        return None
+
+    async def run_check(_conn, _country):
+        # A periodic probe reached the DB after the manual request read the row.
+        await cascadewatch.watch_once(factory, settings, check=_check(NO_EXIT))
+        return OK
+
+    monkeypatch.setattr(cascades, "_locked", locked)
+    monkeypatch.setattr(cascade, "run_check", run_check)
+    monkeypatch.setattr(cascades.server_ops, "describe_egress", no_geo)
+    async with factory() as s:
+        response = await cascades.check(1, None, s)
+        item = (await cascades.list_cascades(None, s))[0]
+    assert response.ok is True and item.result["manual_check"]["ok"] is True
+    assert item.result["health"]["alerted"] is True and len(sent) == 1
+    await cascadewatch.watch_once(factory, settings, check=_check(NO_EXIT))
+    assert len(sent) == 1
+    await cascadewatch.watch_once(factory, settings, check=_check(OK))
+    assert len(sent) == 2 and "снова работает" in sent[1]
+
+    async def failed_check(_conn, _country):
+        return NO_EXIT
+
+    monkeypatch.setattr(cascade, "run_check", failed_check)
+    async with factory() as s:
+        response = await cascades.check(1, None, s)
+        item = (await cascades.list_cascades(None, s))[0]
+    assert response.ok is False and item.result["manual_check"]["ok"] is False
+    assert item.result["health"]["ok"] is True and len(sent) == 2
+
+
+async def test_watchdog_cas_retries_without_losing_concurrent_manual_result(factory, sent, monkeypatch):
+    save = cascade_observations.save
+    attempts = 0
+    newer = (NOW + timedelta(seconds=1)).isoformat()
+    manual = {"ok": True, "checked_at": newer}
+
+    async def race(session, generation, old, result):
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            async with factory() as other:
+                c = await other.get(Cascade, 1)
+                c.result = json.dumps({"manual_check": manual, "checked_at": newer, "egress": "198.51.100.9"})
+                await other.commit()
+        return await save(session, generation, old, result)
+
+    monkeypatch.setattr(cascade_observations, "save", race)
+    await cascadewatch.watch_once(factory, config.get_settings(), now=NOW, check=_check(NO_EXIT))
+    async with factory() as s:
+        item = (await cascades.list_cascades(None, s))[0]
+    assert attempts == 2
+    assert item.result["manual_check"] == manual and item.result["egress"] == "198.51.100.9"
+    assert item.result["health"]["ok"] is False
+
+
+async def test_manual_check_rejects_result_after_route_change(factory, monkeypatch):
+    from fastapi import HTTPException
+
+    @asynccontextmanager
+    async def locked(_server):
+        yield object()
+
+    async def run_check(_conn, _country):
+        async with factory() as s:
+            c = await s.get(Cascade, 1)
+            c.params = json.dumps({"routes": [{"destination": "example.test", "via": "entry"}]})
+            await s.commit()
+        return NO_EXIT
+
+    monkeypatch.setattr(cascades, "_locked", locked)
+    monkeypatch.setattr(cascade, "run_check", run_check)
+    async with factory() as s:
+        with pytest.raises(HTTPException) as error:
+            await cascades.check(1, None, s)
+    assert error.value.status_code == 409
+    async with factory() as s:
+        item = (await cascades.list_cascades(None, s))[0]
+    assert item.result == {} and item.routes[0].destination == "example.test"

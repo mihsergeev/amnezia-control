@@ -1058,6 +1058,7 @@ export type CascadeTransportProbe = {
 }
 
 export type CascadeRoute = { destination: string; via: 'entry' | 'exit' }
+export type CascadeHealth = { ok: boolean; reason?: string; since?: string; checked_at?: string }
 
 export type Cascade = {
   routes?: CascadeRoute[]
@@ -1089,7 +1090,8 @@ export type Cascade = {
     direct?: string
     checked_at?: string
     // фоновая проверка панели раз в пару минут
-    health?: { ok: boolean; reason?: string; since?: string; checked_at?: string }
+    health?: CascadeHealth
+    manual_check?: CascadeHealth
   }
   created_at: string
 }

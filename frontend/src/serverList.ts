@@ -1,5 +1,5 @@
 import type { Cascade, CheckInfo, Server, ServerStat } from './api'
-import { cascadeEntryCountry } from './cascadeUi.ts'
+import { cascadeEntryCountry, latestCascadeHealth } from './cascadeUi.ts'
 
 export type ServerRouteNode = { name: string; host: string; country: string }
 export type ServerListRoute = { entry: ServerRouteNode; exit: ServerRouteNode; manual: boolean }
@@ -118,7 +118,7 @@ export function serverListAnchors(items: ServerListItem[]): Server[] {
 }
 
 export function serverListProblem(item: ServerListItem, problem: (server: Server) => boolean): boolean {
-  if (item.cascade && (item.cascade.status !== 'ready' || !item.entry || !item.exit || item.cascade.result.health?.ok === false)) return true
+  if (item.cascade && (item.cascade.status !== 'ready' || !item.entry || !item.exit || latestCascadeHealth(item.cascade.result)?.ok === false)) return true
   return item.members.some(problem)
 }
 

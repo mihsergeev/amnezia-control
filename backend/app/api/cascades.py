@@ -13,7 +13,10 @@ import asyncssh
 from fastapi import APIRouter, HTTPException, Request, status
 from sqlalchemy import select
 
-from app import audit, cascade, cascade_awg, cascade_exit, cascade_lock, cascade_probe, cascadejob, deploy, geo, nodelock, server_ops
+from app import (
+    audit, cascade, cascade_awg, cascade_exit, cascade_lock, cascade_observations,
+    cascade_probe, cascadejob, deploy, geo, nodelock, server_ops,
+)
 from app.cascade_routes import RouteUpdate, update_script
 from app.conflict import conflict
 from app.config import get_settings
@@ -564,39 +567,60 @@ async def check(cascade_id: int, _: CurrentUser, session: SessionDep) -> Cascade
     entry = await session.get(Server, c.entry_server_id)
     if entry is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Сервер не найден")
+    generation = cascade_observations.Generation.of(c)
+    entry_host = entry.host
     country = json.loads(c.params or "{}").get("entry_country") or entry.country
+    # All reads above are complete; don't hold a DB transaction during SSH.
+    await session.commit()
     try:
         async with _locked(entry) as conn:
             out = await cascade.run_check(conn, country)
+            now = datetime.now(timezone.utc)
     except Exception as exc:  # noqa: BLE001
         raise _ssh_error(exc) from exc
     kv = cascade.parse_kv(out)
     res = cascade.check_result(kv)
     confirmed = cascade.egress_confirmed(res)
-    now = datetime.now(timezone.utc)
-    result = json.loads(c.result or "{}") | res | {"checked_at": now.isoformat()}
-    c.result = json.dumps(result)
-    # на карточку сервера - адрес, с которого реально выходят клиенты
-    if res["client"]:
-        server_ops.apply_egress(
-            entry, await server_ops.describe_egress(entry.host, res["client"]), now
-        )
-    await session.commit()
-    tunnel = kv.get("tun", "") if c.transport == "gre" else (
+    transport = generation.transport
+    tunnel = kv.get("tun", "") if transport == "gre" else (
         "UP" if kv.get("awg") == "yes" else "DOWN"
-    ) if c.transport == "awg" else ""
+    ) if transport == "awg" else ""
     gateway = kv.get("gw") == "yes"
     tproxy = kv.get("tproxy") == "active"
-    rule = kv.get("rule") != "no" and (c.transport != "gre" or kv.get("grerule") != "no")
-    if c.transport == "awg":
+    rule = kv.get("rule") != "no" and (transport != "gre" or kv.get("grerule") != "no")
+    if transport == "awg":
         rule = rule and kv.get("awg") == "yes"
-    ok, reason = cascade.health(c.transport, kv, res)
-    return CascadeCheckOut(
+    ok, reason = cascade.health(transport, kv, res)
+    response = CascadeCheckOut(
         ok=ok, gateway=gateway, tproxy=tproxy, rule=rule, tunnel=tunnel,
         egress=res["egress"], ru=res["ru"], client=res["client"], direct=res["direct"],
         leak=cascade.leaks(res), egress_confirmed=confirmed, reason=reason, checked_at=now,
         **cascade.encryption_result(kv),
     )
+    if generation.status != "ready":
+        return response
+    desc = await server_ops.describe_egress(entry_host, res["client"]) if res["client"] else None
+    for _attempt in range(cascade_observations.WRITE_ATTEMPTS):
+        fresh = await session.get(Cascade, cascade_id, populate_existing=True)
+        if (fresh is None or cascade_observations.Generation.of(fresh) != generation
+                or cascadejob.running(cascade_id)):
+            break
+        result = json.loads(fresh.result or "{}")
+        if cascade_observations.newer_than(result.get("manual_check") or {}, now):
+            return response
+        result["manual_check"] = {"ok": ok, "reason": reason, "checked_at": now.isoformat()}
+        latest_paths = cascade_observations.merge_paths(result, res, now)
+        if await cascade_observations.save(session, generation, fresh.result, result):
+            # Only the client network observation can update its egress address.
+            if latest_paths and res["client"]:
+                fresh_entry = await session.get(Server, generation.entry_server_id, populate_existing=True)
+                if fresh_entry is not None and fresh_entry.host == entry_host:
+                    server_ops.apply_egress(fresh_entry, desc, now)
+            await session.commit()
+            return response
+        await session.rollback()
+    raise conflict("cascade_check_changed", "Каскад изменился во время проверки, повторите проверку.",
+                   cascade_id=cascade_id)
 
 
 async def _dismantle(server: Server, script: str, cascade_id: int, side: str) -> str:

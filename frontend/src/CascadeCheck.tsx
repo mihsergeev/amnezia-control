@@ -63,7 +63,8 @@ export function CascadeCheckModal({ cascade, entry, exit, onClose, onChecked, on
           onUnauthorized()
           return
         }
-        setError(err instanceof Error ? err.message : t('Ошибка'))
+        const message = err instanceof Error ? err.message : t('Ошибка')
+        setError(err instanceof ApiError && err.status === 409 ? t(message) : t('Вход не ответил: {err}', { err: message }))
       })
       .finally(() => {
         if (!alive) return
@@ -258,7 +259,7 @@ export function CascadeCheckModal({ cascade, entry, exit, onClose, onChecked, on
           </p>
         )}
         {error && !running && (
-          <p className="form-error">{t('Вход не ответил: {err}', { err: error })}</p>
+          <p className="form-error">{error}</p>
         )}
 
         <div className="modal-actions">

@@ -1191,6 +1191,8 @@ const EN: Record<string, string> = {
   'Сервер не ответил: {err}': 'The server did not respond: {err}',
   'Каскад не собрался: {err}': 'Cascade build failed: {err}',
   'Каскад собирается…': 'Cascade is being built…',
+  'Каскад еще не проверен': 'The cascade has not been checked yet',
+  'Каскад изменился во время проверки, повторите проверку.': 'The cascade changed during the check. Run the check again.',
   'Подробнее': 'Details',
   'Выход {host} не отвечает: {err}': 'Exit {host} is not responding: {err}',
   'нет связи': 'no connection',

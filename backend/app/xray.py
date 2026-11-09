@@ -393,11 +393,15 @@ async def discard_staged_stats(conn, name: str) -> None:
         await conn.run(f'rm -f -- "$HOME/.acontrol/xray/"{shlex.quote(name)}', check=False)
 
 
-async def read_client_stats(conn, container, server: dict) -> dict[str, dict] | None:
-    """Счетчики StatsService. None — статистика недоступна, {} — счетчиков пока нет."""
+def _client_stats_address(server: dict) -> str | None:
     if not _api_has_service(server.get("api") or {}, "statsservice"):
         return None
-    address = _stats_api_address(server)
+    return _stats_api_address(server)
+
+
+async def read_client_stats(conn, container, server: dict) -> dict[str, dict] | None:
+    """Счетчики StatsService. None — статистика недоступна, {} — счетчиков пока нет."""
+    address = _client_stats_address(server)
     if address is None:
         return None
     inner = f'xray api statsquery --server={shlex.quote(address)} -pattern "user>>>" 2>/dev/null'
@@ -462,9 +466,13 @@ async def read_clients(
     return _clients_from_config(server, default, table)
 
 
-async def read_clients_and_stats(conn, container: str) -> tuple[list[XrayClient], dict[str, dict] | None]:
+async def read_clients_and_stats(
+    conn, container: str,
+) -> tuple[list[XrayClient], dict[str, dict] | None, bool]:
+    """Return the configured clients, counters, and whether the node offers statistics."""
     server, default, table = await _read_all(conn, container)
-    return _clients_from_config(server, default, table), await read_client_stats(conn, container, server)
+    stats = await read_client_stats(conn, container, server)
+    return _clients_from_config(server, default, table), stats, _client_stats_address(server) is not None
 
 
 def _clients_from_config(server: dict, default: str, table: list) -> list[XrayClient]:

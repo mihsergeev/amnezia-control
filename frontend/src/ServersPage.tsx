@@ -36,7 +36,7 @@ import { countryFlag, formatBytes, formatUptime } from './format'
 import { CascadeWizard } from './CascadeWizard'
 import { CascadeCheckModal } from './CascadeCheck'
 import { CascadeRoutesModal } from './CascadeRoutes'
-import { cascadeEntryCountry, cascadeTransportLabel } from './cascadeUi'
+import { cascadeEntryCountry, cascadeTransportLabel, latestCascadeHealth } from './cascadeUi'
 import { EgressCheckModal } from './EgressCheck'
 import { TorrentLine } from './Torrent'
 import { translate, useI18n } from './i18n'
@@ -236,14 +236,15 @@ function Hop({
 }
 
 // exitDown: выход каскада этого сервера не отвечает - у клиентов не открывается все, что идет через выход
-function StatusDot({ server, exitDown = false }: { server: Server; exitDown?: boolean }) {
+function StatusDot({ server, exitDown = false, cascadeUnverified = false }: {
+  server: Server; exitDown?: boolean; cascadeUnverified?: boolean
+}) {
   const { t } = useI18n()
   const cls =
     server.last_check_ok === null
       ? 'dot-unknown'
-      : server.last_check_ok && !exitDown
-        ? 'dot-ok'
-        : 'dot-fail'
+      : !server.last_check_ok || exitDown ? 'dot-fail'
+        : cascadeUnverified ? 'dot-unknown' : 'dot-ok'
   const title =
     server.last_check_ok === null
       ? t('не проверялся')
@@ -251,18 +252,21 @@ function StatusDot({ server, exitDown = false }: { server: Server; exitDown?: bo
         ? t('ошибка (см. лог)')
         : exitDown
           ? t('выход каскада не отвечает')
-          : t('онлайн')
+          : cascadeUnverified ? t('Каскад еще не проверен') : t('онлайн')
   return <span className={`dot ${cls}`} title={title} />
 }
 
 function ListStatusDot({ item }: { item: ServerListItem }) {
   const { t } = useI18n()
   if (!item.cascade) return item.anchor ? <StatusDot server={item.anchor} /> : null
+  const health = latestCascadeHealth(item.cascade.result)
   const failed = item.cascade.status === 'error' || !item.entry || !item.exit
-    || item.cascade.result.health?.ok === false || item.members.some((server) => server.last_check_ok === false)
-  const unknown = item.cascade.status === 'installing' || item.members.some((server) => server.last_check_ok === null)
+    || health?.ok === false || item.members.some((server) => server.last_check_ok === false)
+  const installing = item.cascade.status === 'installing'
+  const unknown = installing || !health || item.members.some((server) => server.last_check_ok === null)
   const cls = failed ? 'dot-fail' : unknown ? 'dot-unknown' : 'dot-ok'
-  const title = failed ? t('ошибка (см. лог)') : unknown ? t('Каскад собирается…') : t('онлайн')
+  const title = failed ? t('ошибка (см. лог)') : installing ? t('Каскад собирается…')
+    : !health ? t('Каскад еще не проверен') : unknown ? t('не проверялся') : t('онлайн')
   return <span className={`dot ${cls}`} title={title} />
 }
 
@@ -366,7 +370,7 @@ function ServerDetail({
   const diskPct = m ? pct(m.disk_used, m.disk_total) : 0
   const cpuPct = m?.cpu_pct != null ? Math.round(m.cpu_pct) : null
   const isEntry = cascade?.entry_server_id === server.id
-  const health = isEntry ? cascade?.result.health : undefined
+  const health = isEntry && cascade?.status === 'ready' ? latestCascadeHealth(cascade.result) : undefined
   const exitDown = isEntry && (peer?.last_check_ok === false || health?.ok === false)
   const checkManaged = cascade?.status === 'ready' && !!peer
   const checkExternal = !cascade && !!server.egress_ip
@@ -380,7 +384,7 @@ function ServerDetail({
   return (
     <div className={`card srv-detail${server.last_check_ok === false ? ' server-down' : ''}`}>
       <div className="srv-detail-head">
-        <StatusDot server={server} exitDown={exitDown} />
+        <StatusDot server={server} exitDown={exitDown} cascadeUnverified={isEntry && cascade?.status === 'ready' && !health} />
         <h3 className="srv-detail-name" title={server.name}>
           {server.name}
         </h3>
@@ -463,17 +467,14 @@ function ServerDetail({
       )}
       {health?.ok === false && (
         <div className="small err-text cas-exit-down">
-          {t('Каскад не работает с {time}: {reason}', {
-            time: health.since
-              ? new Date(health.since).toLocaleString(lang === 'en' ? 'en-GB' : 'ru-RU', {
-                  day: 'numeric',
-                  month: 'short',
-                  hour: '2-digit',
-                  minute: '2-digit',
-                })
-              : '?',
-            reason: t(health.reason ?? ''),
-          })}
+          {health.since
+            ? t('Каскад не работает с {time}: {reason}', {
+                time: new Date(health.since).toLocaleString(lang === 'en' ? 'en-GB' : 'ru-RU', {
+                  day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit',
+                }),
+                reason: t(health.reason ?? ''),
+              })
+            : health.reason ? t('Каскад не работает: {reason}', { reason: t(health.reason) }) : t('Каскад не работает')}
         </div>
       )}
       {isEntry && peer?.last_check_ok === false && (

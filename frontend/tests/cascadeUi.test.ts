@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { cascadeClientExitConfirmed, cascadeLocalExpected, cascadeLocalRoute, cascadePort, cascadeRequestId, cascadeSecurityState, DEFAULT_CASCADE_TRANSPORT } from '../src/cascadeUi.ts'
+import { cascadeClientExitConfirmed, cascadeLocalExpected, cascadeLocalRoute, cascadePort, cascadeRequestId, cascadeSecurityState, DEFAULT_CASCADE_TRANSPORT, latestCascadeHealth } from '../src/cascadeUi.ts'
 
 test('the new default is AWG, not an unencrypted transport recommendation', () => {
   assert.equal(DEFAULT_CASCADE_TRANSPORT, 'awg')
@@ -58,4 +58,24 @@ test('client egress needs a matching exit address distinct from the entry', () =
   assert.equal(cascadeClientExitConfirmed({ client: direct, direct, egress: direct }), false)
   assert.equal(cascadeClientExitConfirmed({ client: egress, egress }), false)
   assert.equal(cascadeClientExitConfirmed({ direct, egress }), false)
+})
+
+test('a manual result overrides the older watchdog result in either direction', () => {
+  const old = '2026-11-10T11:58:00Z'
+  const recent = '2026-11-10T11:59:00Z'
+  for (const ok of [true, false]) {
+    const manual = { ok, checked_at: recent }
+    const health = { ok: !ok, checked_at: old }
+    assert.equal(latestCascadeHealth({ manual_check: manual, health }), manual)
+    const nextHealth = { ok: !ok, checked_at: '2026-11-10T11:59:30Z' }
+    assert.equal(latestCascadeHealth({ manual_check: manual, health: nextHealth }), nextHealth)
+  }
+})
+
+test('only dated observations determine the last known cascade status', () => {
+  assert.equal(latestCascadeHealth({}), undefined)
+  assert.equal(latestCascadeHealth({ health: { ok: true } }), undefined)
+  assert.equal(latestCascadeHealth({ manual_check: { ok: false, checked_at: 'bad date' } }), undefined)
+  const health = { ok: false, checked_at: '2000-01-01T00:00:00Z' }
+  assert.equal(latestCascadeHealth({ health }), health)
 })

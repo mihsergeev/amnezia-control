@@ -16,6 +16,17 @@ export function cascadeSecurityState(value: { encrypted?: boolean | null; encryp
   return value.encrypted === false && value.encryption === 'none' ? 'plain' : 'unknown'
 }
 
+export function latestCascadeHealth({ health, manual_check }: Cascade['result']) {
+  const time = (value: typeof health) => {
+    const at = Date.parse(value?.checked_at ?? '')
+    return Number.isFinite(at) ? at : -Infinity
+  }
+  const automatic = time(health)
+  const manual = time(manual_check)
+  if (manual === -Infinity && automatic === -Infinity) return undefined
+  return manual >= automatic ? manual_check : health
+}
+
 export function cascadeLocalRoute(result: { ru?: string; direct?: string; egress?: string }): 'entry' | 'exit' | 'unknown' {
   const { ru, direct, egress } = result
   if (!ru || !direct || !egress || direct === egress) return 'unknown'

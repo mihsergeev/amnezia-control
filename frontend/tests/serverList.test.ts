@@ -105,12 +105,23 @@ test('cascade roles permit repeated exits, but exclude entries and manual entry 
 })
 
 test('problems include either node, cascade errors, installing and health failures', () => {
-  for (const extra of [{ status: 'error' as const }, { status: 'installing' as const }, { result: { health: { ok: false } } }]) {
+  const checked_at = new Date().toISOString()
+  for (const extra of [{ status: 'error' as const }, { status: 'installing' as const }, { result: { health: { ok: false, checked_at } } }]) {
     assert.equal(serverListProblem(serverListItems([node(1), node(2)], [cascade(1, 1, 2, extra)])[0], () => false), true)
   }
   const row = serverListItems([node(1), node(2)], [cascade()])[0]
   assert.equal(serverListProblem(row, (server) => server.id === 2), true)
   assert.equal(serverListProblem(row, () => false), false)
+})
+
+test('the problems filter agrees with a fresh manual cascade check', () => {
+  const checked_at = new Date().toISOString()
+  const older = new Date(Date.now() - 30_000).toISOString()
+  for (const ok of [true, false]) {
+    const result = { health: { ok: !ok, checked_at: older }, manual_check: { ok, checked_at } }
+    const [row] = serverListItems([node(1), node(2)], [cascade(1, 1, 2, { result })])
+    assert.equal(serverListProblem(row, () => false), !ok)
+  }
 })
 
 test('missing nodes retain the remaining node and completely orphaned cascade is still visible', () => {

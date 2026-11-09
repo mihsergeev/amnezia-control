@@ -191,7 +191,7 @@ async def _openvpn_part(conn, host) -> tuple[dict, list[dict]]:
 async def _xray_part(conn, host) -> tuple[dict, list[dict]]:
     # трафик по клиентам — из xray StatsService (если включён на сервере)
     container = await xray.detect_container(conn)
-    clients, stats = await xray.read_clients_and_stats(conn, container)
+    clients, stats, stats_enabled = await xray.read_clients_and_stats(conn, container)
     names = {c.client_id: c.name for c in clients}
     rows: list[dict] = []
     rx = tx = 0
@@ -204,6 +204,7 @@ async def _xray_part(conn, host) -> tuple[dict, list[dict]]:
         )
     counters = {c["client_id"]: (c["rx"], c["tx"]) for c in rows} if stats is not None else None
     return {"rx": rx, "tx": tx, "total": len(clients), "online": 0, "xray_counters": counters,
+            "xray_stats_missing": bool(clients) and stats_enabled and stats is None,
             "parts": ["xray"], "known": [("xray", c.client_id) for c in clients]}, rows
 
 
@@ -267,6 +268,7 @@ async def _sample_server(
                 known: list[tuple[str, str]] = []
                 nets: list[dict] = []
                 xray_counters = None
+                xray_stats_missing = False
                 for part in (_awg_part, _openvpn_part, _xray_part, _native_part):
                     try:
                         totals, cl = await part(conn, server.host)
@@ -280,6 +282,7 @@ async def _sample_server(
                     client_rows.extend(cl)
                     if part is _xray_part:
                         xray_counters = totals["xray_counters"]
+                        xray_stats_missing = totals["xray_stats_missing"]
                 # блокировка торрентов: правила в контейнерах и кто попался
                 try:
                     torrent_hits = await torrent.sample(conn, server, nets)
@@ -325,6 +328,7 @@ async def _sample_server(
         "clients_total": agg["total"],
         "clients_online": agg["online"],
         "xray_counters": xray_counters,
+        "xray_stats_missing": xray_stats_missing,
         "resources": res,
         "clients": client_rows,
         "parts": frozenset(parts),
@@ -382,7 +386,9 @@ async def collect_once(
             known_xray = {cid for protocol, cid in s["known"] if protocol == "xray"}
             recent_xray &= known_xray
             older_xray &= known_xray
-        if prev is None or prev == parts:
+        # A temporary StatsService failure isn't a fresh observation of zero
+        # Xray activity. Keep the last complete snapshot and carry other deltas.
+        if not s.get("xray_stats_missing") and (prev is None or prev == parts):
             pend = _pending.pop(sid, None)
             if delta is not None and pend:
                 delta = (delta[0] + pend[0], delta[1] + pend[1])

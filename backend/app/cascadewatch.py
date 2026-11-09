@@ -17,9 +17,9 @@ import json
 import logging
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import select, update
+from sqlalchemy import select
 
-from app import alerts, cascade, cascadejob, nodelock, settings_store
+from app import alerts, cascade, cascade_observations, cascadejob, nodelock, settings_store
 from app.config import Settings
 from app.models import Cascade, Server
 
@@ -92,6 +92,7 @@ async def watch_once(session_factory, settings: Settings, *, now: datetime | Non
         entry = entries.get(c.entry_server_id)
         if entry is None or cascadejob.running(c.id):
             continue
+        generation = cascade_observations.Generation.of(c)
         try:
             country = json.loads(c.params or "{}").get("entry_country") or entry.country
             out = await check(entry) if check else await _ssh_check(entry, country, settings)
@@ -102,49 +103,44 @@ async def watch_once(session_factory, settings: Settings, *, now: datetime | Non
         res = cascade.check_result(kv)
         ok, reason = cascade.health(c.transport, kv, res)
         stamp = now or datetime.now(timezone.utc)
-        async with session_factory() as session:
-            fresh = await session.get(Cascade, c.id)
-            if fresh is None or fresh.status != "ready" or cascadejob.running(c.id):
-                continue
-            # A manual check or route change may have completed during SSH.
-            if (fresh.result != c.result or fresh.params != c.params
-                    or fresh.created_at != c.created_at):
-                continue
-            result = json.loads(fresh.result or "{}")
-            # SSH мог идти полторы минуты: галочку успели выключить во время
-            # проверки, поэтому разрешение отправки перечитываем сейчас.
-            cascade_alerts = bool(await session.scalar(
-                select(Server.id).where(
-                    Server.id.in_((fresh.entry_server_id, fresh.exit_server_id)),
-                    Server.alerts_enabled.is_(True),
-                ).limit(1)
-            ))
-            old_health = (result.get("health") or {}) if cascade_alerts else {}
-            health, event = next_health(old_health, ok, reason, stamp, grace)
-            if not cascade_alerts:
-                # Пока обе стороны выключены, отсчет аварии не копим и не
-                # запоминаем отправленный алерт.
-                event = None
-                if not ok:
-                    health["since"] = stamp.isoformat()
-                    health["alerted"] = False
-            result["health"] = health
-            result.update(res, checked_at=stamp.isoformat())
-            saved = await session.execute(
-                update(Cascade).where(
-                    Cascade.id == c.id, Cascade.status == "ready",
-                    Cascade.params == c.params, Cascade.result == c.result,
-                ).values(result=json.dumps(result)).execution_options(synchronize_session=False)
-            )
-            if saved.rowcount != 1:
-                continue
-            await session.commit()
-            if event:
-                await _send(
-                    session, settings, names.get(c.entry_server_id, "?"),
-                    names.get(c.exit_server_id, "?"), event, reason,
-                    settings.cascade_down_minutes,
-                )
+        for _attempt in range(cascade_observations.WRITE_ATTEMPTS):
+            async with session_factory() as session:
+                fresh = await session.get(Cascade, c.id)
+                if (fresh is None or cascade_observations.Generation.of(fresh) != generation
+                        or cascadejob.running(c.id)):
+                    break
+                result = json.loads(fresh.result or "{}")
+                saved_health = result.get("health") or {}
+                if cascade_observations.newer_than(saved_health, stamp):
+                    break
+                # SSH мог идти полторы минуты: галочку успели выключить во время
+                # проверки, поэтому разрешение отправки перечитываем сейчас.
+                cascade_alerts = bool(await session.scalar(
+                    select(Server.id).where(
+                        Server.id.in_((fresh.entry_server_id, fresh.exit_server_id)),
+                        Server.alerts_enabled.is_(True),
+                    ).limit(1)
+                ))
+                health, event = next_health(saved_health if cascade_alerts else {}, ok, reason, stamp, grace)
+                if not cascade_alerts:
+                    # Пока обе стороны выключены, отсчет аварии не копим и не
+                    # запоминаем отправленный алерт.
+                    event = None
+                    if not ok:
+                        health["since"] = stamp.isoformat()
+                        health["alerted"] = False
+                result["health"] = health
+                cascade_observations.merge_paths(result, res, stamp)
+                if not await cascade_observations.save(session, generation, fresh.result, result):
+                    continue
+                await session.commit()
+                if event:
+                    await _send(
+                        session, settings, names.get(c.entry_server_id, "?"),
+                        names.get(c.exit_server_id, "?"), event, reason,
+                        settings.cascade_down_minutes,
+                    )
+                break
 
 
 async def cascade_watch_loop(session_factory, settings: Settings) -> None:

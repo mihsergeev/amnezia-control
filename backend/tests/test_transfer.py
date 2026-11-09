@@ -9,12 +9,13 @@
 
 import json
 from urllib.parse import unquote
+from uuid import uuid4
 
 import httpx
 from sqlalchemy import select
 
 from app.api.transfer import _selected_models, server_scoped_models
-from app.models import AwgConfig, AwgNote, ClientLimit, PausedClient
+from app.models import AwgConfig, AwgNote, BulkClientIssue, ClientLimit, PausedClient, User
 
 SERVER = {
     "name": "vpn-f",
@@ -135,11 +136,47 @@ async def test_every_server_scoped_table_is_accounted_for() -> None:
     # страховка от тихой потери: новая таблица с server_id обязана попасть либо
     # в перенос, либо в осознанные исключения
     known = {"server_status", "node_metrics", "traffic_samples",
-             "client_traffic_samples", "torrent_hits"}
+             "client_traffic_samples", "torrent_hits", "bulk_client_issues"}
     exported = {m.__tablename__ for m in _selected_models(False)}
     for model in server_scoped_models():
         t = model.__tablename__
         assert t in exported or t in known, f"таблица {t} не учтена в переносе"
+
+
+async def test_transfer_keeps_profiles_but_does_not_move_pending_issue(client, auth_headers, session_factory):
+    sid = await _make_server(client, auth_headers)
+    await _seed(session_factory, sid)
+    async with session_factory() as session:
+        owner = await session.scalar(select(User))
+        pending = {
+            "request_id": str(uuid4()), "owner_id": owner.id, "protocol": "awg3",
+            "prefix": "Test", "count": 1, "complete": False,
+            "items": [{"name": "Test-001", "client_id": "planned-client", "config": "synthetic profile"}],
+        }
+        session.add(BulkClientIssue(server_id=sid, **pending))
+        await session.commit()
+
+    for history in ("true", "false"):
+        response = await client.get(f"/api/servers/{sid}/export?history={history}", headers=_pw(auth_headers))
+        assert response.status_code == 200
+        dump = response.json()
+        assert "bulk_client_issues" not in dump["tables"]
+        assert len(dump["tables"]["awg_configs"]) == 1
+
+    # Older transfer files include the pending journal of the source panel.
+    dump["tables"]["bulk_client_issues"] = [pending]
+    dump["server"]["host"] = "203.0.113.78"
+    response = await client.post("/api/servers/import-file", json=dump, headers=auth_headers)
+    assert response.status_code == 200, response.text
+    result = response.json()
+    assert "bulk_client_issues" in result["skipped_tables"]
+    assert result["imported"]["awg_configs"] == 1
+    url = "/api/servers/{}/bulk-clients/awg3/issue/pending"
+    before = await client.get(url.format(sid), headers=auth_headers)
+    after = await client.get(url.format(result["server_id"]), headers=auth_headers)
+    assert before.status_code == after.status_code == 200
+    assert before.json()["request_id"] == pending["request_id"]
+    assert after.json() is None
 
 
 async def test_import_restores_server_with_its_data(
