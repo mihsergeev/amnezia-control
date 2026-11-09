@@ -31,6 +31,7 @@ import asyncssh
 # реальным трафиком; серверный конфиг, UUID и ключи при обновлении сохраняются.
 # Это не подтверждает совместимость более старых XRay и клиентов на sing-box.
 XRAY_RELEASE = "v26.10.31"
+DEFAULT_REALITY_SITE = "www.googletagmanager.com"
 XRAY_DIR = "/opt/amnezia/xray"
 SERVER_JSON = f"{XRAY_DIR}/server.json"
 CLIENTS_TABLE = f"{XRAY_DIR}/clientsTable"
@@ -368,8 +369,7 @@ async def read_server_bits(conn, container) -> dict:
     inbound = (server.get("inbounds") or [{}])[0]
     port = inbound.get("port", 443)
     reality = (inbound.get("streamSettings") or {}).get("realitySettings", {})
-    names = reality.get("serverNames") or ["www.googletagmanager.com"]
-    site = names[0] if names else "www.googletagmanager.com"
+    site = (reality.get("serverNames") or [DEFAULT_REALITY_SITE])[0]
     clients = _client_list(server)
     flow = clients[0].get("flow", FLOW) if clients else FLOW
     return {
@@ -655,7 +655,10 @@ ENTRYPOINT ["dumb-init","tail","-f","/dev/null"]
 """
 
 
-def build_deploy_script(port: int, site: str, xray_release: str = XRAY_RELEASE) -> str:
+def build_deploy_script(
+    port: int, site: str, xray_release: str = XRAY_RELEASE, *,
+    dest: str = "", require_fresh: bool = False,
+) -> str:
     """Скрипт build-on-target: ставит docker, собирает amnezia-xray, конфигурит, запускает.
 
     Запускается от ssh_user (не root), поэтому все привилегированные операции —
@@ -663,22 +666,29 @@ def build_deploy_script(port: int, site: str, xray_release: str = XRAY_RELEASE) 
     выполняется НЕ-root'ом до sudo). Маркеры DEPLOY_DONE / DEPLOY_ERROR.
     xray_release — тег релиза XTLS/Xray-core (для деплоя/обновления ядра).
     """
-    if not site or any(ch in site for ch in " \t\n'\"$`\\;&|<>()"):
-        site = "www.googletagmanager.com"
+    site = site or DEFAULT_REALITY_SITE
+    dest = dest or f"{site}:443"
     if not re.fullmatch(r"v?\d+\.\d+\.\d+", xray_release or ""):
         xray_release = XRAY_RELEASE
     port = int(port)
     dockerfile_b64 = base64.b64encode(_XRAY_DOCKERFILE.encode()).decode()
+    fresh_guard = """\
+if sudo test -f "$D/server.json" || sudo docker container inspect "$C" >/dev/null 2>&1; then
+  fail "Xray already has a configuration or container. Leave SNI and Dest blank to reuse the existing configuration."
+fi
+""" if require_fresh else ""
     return f"""set +e
 fail() {{ echo "DEPLOY_ERROR: $1"; exit 1; }}
 log(){{ echo "[$(date +%H:%M:%S)] $*"; }}
 XRAY_SERVER_PORT={port}
-XRAY_SITE_NAME={site}
+XRAY_SITE_NAME={shlex.quote(json.dumps(site))}
+XRAY_DEST={shlex.quote(json.dumps(dest))}
 IMG=amnezia-xray
 C=amnezia-xray
 BUILD=/opt/amnezia-build/xray
 D=/opt/amnezia/xray
 
+{fresh_guard}
 # Адрес, на котором XRay уже опубликован, при пересборке сохраняем: на ноде со
 # вторым адресом рядом на том же порту может жить другой сервис (сама панель)
 BIND=$(sudo docker inspect -f '{{{{range $k, $v := .HostConfig.PortBindings}}}}{{{{range $v}}}}{{{{.HostIp}}}} {{{{end}}}}{{{{end}}}}' "$C" 2>/dev/null | awk '{{print $1}}')
@@ -741,8 +751,8 @@ if ! sudo test -f "$D/server.json"; then
                 "network": "tcp",
                 "security": "reality",
                 "realitySettings": {{
-                    "dest": "$XRAY_SITE_NAME:443",
-                    "serverNames": [ "$XRAY_SITE_NAME" ],
+                    "dest": $XRAY_DEST,
+                    "serverNames": [ $XRAY_SITE_NAME ],
                     "privateKey": "$PRIV",
                     "shortIds": [ "$SID" ]
                 }}

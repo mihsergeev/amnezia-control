@@ -691,8 +691,12 @@ const EN: Record<string, string> = {
   'Установка AmneziaWG': 'Installing AmneziaWG',
   'Обновление XRay': 'Updating XRay',
   'Обновление AmneziaWG': 'Updating AmneziaWG',
-  'Сервер собирает образ Xray-core (alpine) и запускает VLESS+REALITY на 443. Это займёт 1–3 минуты.':
-    'The server builds the Xray-core image (alpine) and starts VLESS+REALITY on 443. Takes 1–3 minutes.',
+  'Сервер собирает образ Xray-core и запускает VLESS + REALITY на выбранном порту. Это займёт 1–3 минуты.':
+    'The server builds the Xray-core image and starts VLESS + REALITY on the selected port. Takes 1–3 minutes.',
+  'Свой SNI (домен-маска)': 'Custom SNI (camouflage domain)',
+  'Цель REALITY (Dest)': 'REALITY target (Dest)',
+  'Оба поля необязательны. Если указан только один домен, он используется и для SNI, и для цели. Порт цели по умолчанию — 443. Для цели с IP-адресом укажите SNI из сертификата сайта. Цель должна поддерживать TLS 1.3 и HTTP/2.':
+    'Both fields are optional. If you enter only one domain, it is used for both SNI and the target. The default target port is 443. For an IP target, enter an SNI from the site certificate. The target must support TLS 1.3 and HTTP/2.',
   'Сервер собирает образ из amneziavpn/amneziawg-go:latest и запускает AmneziaWG. Это займёт 1–3 минуты.':
     'The server builds the image from amneziavpn/amneziawg-go:latest and starts AmneziaWG. Takes 1–3 minutes.',
   'Сервер собирает образ (openvpn + Cloak + shadowsocks) и генерирует PKI. Это займёт 1–3 минуты.':

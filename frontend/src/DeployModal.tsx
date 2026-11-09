@@ -28,6 +28,8 @@ export function DeployModal({
   const { t } = useI18n()
   const dismiss = useModalDismiss(onClose)
   const nativeProtocol = protocol === 'wireguard' || protocol === 'openvpn-native'
+  const xraySetup = protocol === 'xray' && mode === 'deploy'
+  const needsSetup = xraySetup || (nativeProtocol && mode === 'deploy')
   const label =
     protocol === 'xray'
       ? 'XRay'
@@ -47,7 +49,9 @@ export function DeployModal({
     protocol === 'wireguard' ? 51820 : protocol === 'openvpn-native' ? 1194 : protocol === 'xray' ? 443 : protocol === 'openvpn' ? 8443 : protocol === 'awg3' ? 47300 : 47180
   const [port, setPort] = useState(defaultPort)
   const [transport, setTransport] = useState<'udp' | 'tcp'>('udp')
-  const [configured, setConfigured] = useState(!(nativeProtocol && mode === 'deploy'))
+  const [site, setSite] = useState('')
+  const [dest, setDest] = useState('')
+  const [configured, setConfigured] = useState(!needsSetup)
   // порт занят другим контейнером — предлагаем выбрать свободный и повторить
   const [portBusy, setPortBusy] = useState(false)
   const startedRef = useRef(false)
@@ -155,16 +159,23 @@ export function DeployModal({
                 : `/api/servers/${serverId}/${protocol}/deploy`
         await api(path, {
           method: 'POST',
-          body: mode === 'deploy' ? JSON.stringify({ port: p, ...(nativeProtocol ? { transport: protocol === 'wireguard' ? 'udp' : transport } : {}) }) : undefined,
+          body: mode === 'deploy' ? JSON.stringify({
+            port: p,
+            ...(nativeProtocol ? { transport: protocol === 'wireguard' ? 'udp' : transport } : {}),
+            ...(xraySetup ? { site: site.trim(), dest: dest.trim() } : {}),
+          }) : undefined,
         })
       } catch (err) {
         handleError(err)
+        if (xraySetup && err instanceof ApiError && [409, 422].includes(err.status)) {
+          setConfigured(false)
+        }
         return
       }
       schedule(2500)
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [serverId, mode, protocol, nativeProtocol, transport, handleError],
+    [serverId, mode, protocol, nativeProtocol, transport, xraySetup, site, dest, handleError],
   )
 
   // установка запускается один раз за жизнь окна; остановка опроса - только
@@ -174,7 +185,7 @@ export function DeployModal({
   startRef.current = start
   useEffect(() => {
     aliveRef.current = true
-    if (!startedRef.current && !(nativeProtocol && mode === 'deploy')) {
+    if (!startedRef.current && !needsSetup) {
       startedRef.current = true
       void startRef.current(defaultPort)
     } else if (startedRef.current && timerRef.current === undefined) {
@@ -226,7 +237,7 @@ export function DeployModal({
             : protocol === 'openvpn-native'
               ? t('Отдельный обычный OpenVPN с сертификатами клиентов. Для подключения нужен только файл .ovpn, без Cloak.')
             : protocol === 'xray'
-              ? t('Сервер собирает образ Xray-core (alpine) и запускает VLESS+REALITY на 443. Это займёт 1–3 минуты.')
+              ? t('Сервер собирает образ Xray-core и запускает VLESS + REALITY на выбранном порту. Это займёт 1–3 минуты.')
               : protocol === 'openvpn'
                 ? t('Сервер собирает образ (openvpn + Cloak + shadowsocks) и генерирует PKI. Это займёт 1–3 минуты.')
                 : protocol === 'awg3'
@@ -246,31 +257,49 @@ export function DeployModal({
         )}
 
         {(!configured || portBusy) && (
-          <div className="row port-retry">
-            <label className="muted small">{t('Порт для установки')}
-            <input
-              type="number"
-              min={1}
-              max={65535}
-              value={port}
-              onChange={(e) => setPort(Number(e.target.value))}
-              style={{ maxWidth: 140 }}
-            />
-            </label>
-            {protocol === 'openvpn-native' && <label className="muted small">{t('Транспорт')}
-              <select aria-label={t('Транспорт')} value={transport} onChange={e => setTransport(e.target.value as 'udp' | 'tcp')}><option value="udp">UDP</option><option value="tcp">TCP</option></select>
-            </label>}
-            <button
-              onClick={() => {
-                startedRef.current = true
-                setConfigured(true)
-                void start(port)
-              }}
-              disabled={!Number.isInteger(port) || port < 1 || port > 65535}
-            >
-              {t('Развернуть на этом порту')}
-            </button>
-          </div>
+          <form onSubmit={(event) => {
+            event.preventDefault()
+            startedRef.current = true
+            setConfigured(true)
+            void start(port)
+          }}>
+            {xraySetup && <div className="reality-setup">
+              <label>
+                {t('Свой SNI (домен-маска)')}
+                <input value={site} onChange={(event) => setSite(event.target.value)}
+                  placeholder="www.example.com" maxLength={254} autoComplete="off" spellCheck={false} />
+              </label>
+              <label>
+                {t('Цель REALITY (Dest)')}
+                <input value={dest} onChange={(event) => setDest(event.target.value)}
+                  placeholder="www.example.com:443" maxLength={260} autoComplete="off" spellCheck={false} />
+              </label>
+              <p className="muted small">
+                {t('Оба поля необязательны. Если указан только один домен, он используется и для SNI, и для цели. Порт цели по умолчанию — 443. Для цели с IP-адресом укажите SNI из сертификата сайта. Цель должна поддерживать TLS 1.3 и HTTP/2.')}
+              </p>
+            </div>}
+            <div className="row port-retry">
+              <label className="muted small">{t('Порт для установки')}
+                <input
+                  type="number"
+                  min={1}
+                  max={65535}
+                  value={port}
+                  onChange={(e) => setPort(Number(e.target.value))}
+                  style={{ maxWidth: 140 }}
+                />
+              </label>
+              {protocol === 'openvpn-native' && <label className="muted small">{t('Транспорт')}
+                <select aria-label={t('Транспорт')} value={transport} onChange={e => setTransport(e.target.value as 'udp' | 'tcp')}><option value="udp">UDP</option><option value="tcp">TCP</option></select>
+              </label>}
+              <button
+                type="submit"
+                disabled={!Number.isInteger(port) || port < 1 || port > 65535}
+              >
+                {t('Развернуть на этом порту')}
+              </button>
+            </div>
+          </form>
         )}
 
         {configured && <pre className="script-box deploy-log">

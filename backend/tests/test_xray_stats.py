@@ -44,7 +44,7 @@ def test_deploy_script_server_json_valid_with_stats():
     m = re.search(r'server\.json" >/dev/null <<EOF\n(.*?)\nEOF', s, re.S)
     block = m.group(1)
     for k, v in {
-        "$XRAY_SERVER_PORT": "443", "$XRAY_SITE_NAME": "ex.com",
+        "$XRAY_SERVER_PORT": "443", "$XRAY_SITE_NAME": '"ex.com"', "$XRAY_DEST": '"ex.com:443"',
         "$UUID": "11111111-1111-1111-1111-111111111111",
         "$PRIV": "P", "$SID": "ab",
     }.items():

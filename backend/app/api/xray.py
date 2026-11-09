@@ -306,7 +306,9 @@ async def deploy_xray(
 ) -> dict:
     server = await _get_or_404(server_id, session)
     # закрепленная версия, а не последний релиз: см. xray.XRAY_RELEASE
-    script = xray.build_deploy_script(body.port, body.site, xray.XRAY_RELEASE)
+    script = xray.build_deploy_script(
+        body.port, body.site, dest=body.dest, require_fresh=bool(body.site or body.dest),
+    )
     try:
         async with _connect(server) as conn:
             await deploy.ensure_idle(conn, tag="xray")

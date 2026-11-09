@@ -4,6 +4,11 @@ All notable changes to Amnezia Control are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.84.24] - 2026-11-09
+
+- Set an optional SNI and REALITY target (Dest) when installing Xray. New client profiles use the configured SNI.
+- Keep the default REALITY settings when both fields are blank and protect existing configurations from being overwritten by custom settings.
+
 ## [0.84.23] - 2026-11-09
 
 - Fix the Xray online client count in the server list and overview by counting clients that transferred data between consecutive successful polls.

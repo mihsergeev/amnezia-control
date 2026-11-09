@@ -6,7 +6,9 @@
 """
 
 import base64
+import json
 import re
+import subprocess
 
 import pytest
 
@@ -100,6 +102,52 @@ async def test_deploy_installs_pinned(client, auth_headers, node) -> None:
     )
     assert r.status_code == 202
     assert f"XRAY_RELEASE={xray.XRAY_RELEASE}" in node[0]
+
+
+@pytest.mark.parametrize("settings,sni,target", [
+    ({"site": "  ", "dest": ""}, xray.DEFAULT_REALITY_SITE, f"{xray.DEFAULT_REALITY_SITE}:443"),
+    ({"site": "WWW.Example.COM."}, "www.example.com", "www.example.com:443"),
+    ({"dest": "BÜCHER.example:8443"}, "xn--bcher-kva.example", "xn--bcher-kva.example:8443"),
+    ({"site": "www.example.com", "dest": "192.0.2.1:8443"}, "www.example.com", "192.0.2.1:8443"),
+    ({"site": "www.example.com", "dest": "[2001:db8::1]"}, "www.example.com", "[2001:db8::1]:443"),
+])
+async def test_deploy_renders_reality_settings(client, auth_headers, node, settings, sni, target) -> None:
+    sid = await _server(client, auth_headers)
+    r = await client.post(
+        f"/api/servers/{sid}/xray/deploy", json={"port": 9443, **settings}, headers=auth_headers
+    )
+    assert r.status_code == 202
+    script, = node
+    assignments = re.findall(r"^XRAY_(?:SITE_NAME|DEST|SERVER_PORT)=.*$", script, re.M)
+    block = re.search(r'server\.json" >/dev/null <<EOF\n(.*?)\nEOF', script, re.S)
+    assert block is not None
+    rendered = subprocess.run(
+        ["bash", "-s"], input="\n".join([*assignments, "cat <<EOF", block[1], "EOF", ""]).encode(),
+        capture_output=True, check=True,
+    ).stdout
+    inbound = json.loads(rendered)["inbounds"][0]
+    assert inbound["port"] == 9443
+    reality = inbound["streamSettings"]["realitySettings"]
+    assert reality["serverNames"] == [sni]
+    assert reality["dest"] == target
+    custom = bool(settings.get("site", "").strip() or settings.get("dest", "").strip())
+    assert ("Xray already has a configuration or container" in script) == custom
+
+
+@pytest.mark.parametrize("settings", [
+    {"site": "*.example.com"},
+    {"site": "192.0.2.1"},
+    {"site": "www.example.com:443"},
+    {"dest": "https://www.example.com/"},
+    {"dest": "www.example.com;id"},
+    {"dest": "www.example.com:65536"},
+    {"dest": "[2001:db8::1]:443"},
+])
+async def test_deploy_rejects_invalid_reality_settings(client, auth_headers, node, settings) -> None:
+    sid = await _server(client, auth_headers)
+    r = await client.post(f"/api/servers/{sid}/xray/deploy", json=settings, headers=auth_headers)
+    assert r.status_code == 422
+    assert not node
 
 
 async def test_update_installs_pinned(client, auth_headers, node) -> None:

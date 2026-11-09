@@ -1,7 +1,10 @@
+import re
 from datetime import datetime
+from ipaddress import IPv4Address, IPv6Address
 from typing import Literal
 from uuid import UUID
 
+import idna
 from pydantic import BaseModel, ConfigDict, Field, computed_field, field_validator, model_validator
 
 
@@ -508,9 +511,63 @@ class XrayRevokeRequest(BaseModel):
     client_id: str = Field(min_length=1)
 
 
+def _reality_domain(value: str) -> str:
+    error = "Enter a DNS name without a scheme, wildcard or port for SNI"
+    try:
+        domain = idna.encode(value, uts46=True).decode("ascii").removesuffix(".")
+    except idna.IDNAError as exc:
+        raise ValueError(error) from exc
+    if "." in domain and not domain.rsplit(".", 1)[-1].isdigit():
+        return domain
+    raise ValueError(error)
+
+
 class XrayDeployRequest(BaseModel):
     port: int = Field(default=443, ge=1, le=65535)
-    site: str = Field(default="www.googletagmanager.com", max_length=253)
+    site: str = Field(default="", max_length=254)
+    dest: str = Field(default="", max_length=260)
+
+    @field_validator("site")
+    @classmethod
+    def normalize_site(cls, value: str) -> str:
+        value = value.strip()
+        return _reality_domain(value) if value else ""
+
+    @field_validator("dest")
+    @classmethod
+    def normalize_dest(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            return ""
+        match = re.fullmatch(r"(\[[0-9a-fA-F:.]+\]|[^:\[\]]+)(?::([0-9]{1,5}))?", value)
+        error = "Enter a domain, IPv4 address or [IPv6 address], with an optional port from 1 to 65535"
+        if match is None:
+            raise ValueError(error)
+        host, port = match.groups()
+        port = int(port) if port else 443
+        if not 1 <= port <= 65535:
+            raise ValueError(error)
+        try:
+            if host.startswith("["):
+                host = f"[{IPv6Address(host[1:-1])}]"
+            else:
+                try:
+                    host = str(IPv4Address(host))
+                except ValueError:
+                    host = _reality_domain(host)
+        except ValueError as exc:
+            raise ValueError(error) from exc
+        return f"{host}:{port}"
+
+    @model_validator(mode="after")
+    def infer_site(self) -> "XrayDeployRequest":
+        if self.dest and not self.site:
+            host = self.dest.rsplit(":", 1)[0]
+            try:
+                self.site = _reality_domain(host)
+            except ValueError as exc:
+                raise ValueError("Enter an SNI domain when Dest is an IP address") from exc
+        return self
 
 
 class XrayVersionOut(BaseModel):
