@@ -8,6 +8,7 @@
 import base64
 import json
 import re
+import shutil
 import subprocess
 
 import pytest
@@ -124,17 +125,18 @@ async def test_deploy_renders_reality_settings(client, auth_headers, node, setti
     assert r.status_code == 202
     script, = node
     assignments = re.findall(r"^(?:XRAY_(?:SITE_NAME|DEST|SERVER_PORT)|INBOUND_PORT)=.*$", script, re.M)
-    remap = re.search(r'^ +if \[ "\$INBOUND_PORT" = .*INBOUND_PORT=443; fi$', script, re.M)
-    assert remap is not None
     block = re.search(r'server\.json" >/dev/null <<EOF[^\n]*\n(.*?)\nEOF', script, re.S)
     assert block is not None
     rendered = subprocess.run(
-        ["bash", "-s"], input="\n".join([*assignments, remap[0], "cat <<EOF", block[1], "EOF", ""]).encode(),
+        [shutil.which("bash") or "bash", "-s"],
+        input="\n".join([*assignments, "cat <<EOF", block[1], "EOF", ""]).encode(),
         capture_output=True, check=True,
     ).stdout
-    inbound, stats = json.loads(rendered)["inbounds"]
-    assert inbound["port"] == (443 if settings.get("port") == xray.STATS_API_PORT else 9443)
-    assert stats["port"] == xray.STATS_API_PORT
+    config = json.loads(rendered)
+    inbound, = config["inbounds"]
+    assert inbound["port"] == settings.get("port", 9443)
+    assert config["api"]["listen"] == xray.MANAGEMENT_API_LISTEN
+    assert set(config["api"]["services"]) == {"StatsService", "HandlerService"}
     reality = inbound["streamSettings"]["realitySettings"]
     assert reality["serverNames"] == [sni]
     assert reality["dest"] == target
