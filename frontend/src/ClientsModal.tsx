@@ -26,6 +26,7 @@ import { AmneziaQr } from './AmneziaQr'
 import { ExpiryCell, ExpirySelect } from './Expiry'
 import { ClientStatsModal } from './ClientStatsModal'
 import { BulkRevokeBar, SelectAllCell, SelectCell } from './BulkActions'
+import { BulkClientsModal } from './BulkClientsModal'
 import { useSelection } from './useSelection'
 import { useShareLink } from './ShareLink'
 import { TorrentBadge } from './Torrent'
@@ -90,6 +91,8 @@ export function ClientsModal({
   const [versionFailed, setVersionFailed] = useState(false)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [bulkOpen, setBulkOpen] = useState(false)
+  const [clientListRevision, setClientListRevision] = useState(0)
   const [addOpen, setAddOpen] = useState(false)
   const [newName, setNewName] = useState('')
   const [newNote, setNewNote] = useState('')
@@ -453,9 +456,12 @@ export function ClientsModal({
       >
         <div className="clients-head">
           <h3>{t('Клиенты')} · {server.name}</h3>
-          <button className="ghost" onClick={onClose}>
-            {t('Закрыть')}
-          </button>
+          <div className="client-batch-buttons">
+            {protocols.length > 0 && !focus && (
+              <button className="ghost" onClick={() => setBulkOpen(true)}>{t('Массовые операции')}</button>
+            )}
+            <button className="ghost" onClick={onClose}>{t('Закрыть')}</button>
+          </div>
         </div>
 
         {protocols.length > 1 && (
@@ -490,7 +496,7 @@ export function ClientsModal({
 
         {(proto === 'openvpn' || proto === 'openvpn-native') && (
           <OpenVpnClients
-            key={`${server.id}:${proto}`}
+            key={`${server.id}:${proto}:${clientListRevision}`}
             serverId={server.id}
             serverName={server.name}
             protocol={proto}
@@ -503,6 +509,7 @@ export function ClientsModal({
 
         {proto === 'xray' && (
           <XrayClients
+            key={clientListRevision}
             serverId={server.id}
             serverName={server.name}
             groupName={server.group_name}
@@ -983,6 +990,20 @@ export function ClientsModal({
           </>
         )}
 
+        {bulkOpen && (
+          <BulkClientsModal
+            serverId={server.id}
+            serverName={server.name}
+            protocols={protocols}
+            initialProtocol={proto}
+            onChanged={() => {
+              if (isAwg) void load()
+              else setClientListRevision((revision) => revision + 1)
+            }}
+            onClose={() => setBulkOpen(false)}
+            onUnauthorized={onUnauthorized}
+          />
+        )}
       </div>
     </div>
   )

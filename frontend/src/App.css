@@ -1494,6 +1494,10 @@ tr:hover .note-edit {
   flex-shrink: 0;
 }
 
+.xray-version-line,
+.xray-version-line .version-actions { flex-wrap: wrap; }
+.xray-version-line .version-actions { flex-shrink: 1; }
+
 .update-badge {
   margin-left: 0.5rem;
   background: rgba(230, 160, 40, 0.16);
@@ -2228,6 +2232,61 @@ button.linklike.srv-filter-only:hover {
   margin: 0.6rem 0;
 }
 
+.client-batch-head,
+.client-batch-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.client-batch-form,
+.client-batch-field {
+  display: grid;
+  gap: 0.55rem;
+}
+
+.client-batch-fields {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 12rem), 1fr));
+  gap: 0.7rem;
+}
+
+.client-batch input,
+.client-batch select {
+  min-width: 0;
+}
+
+.client-batch-buttons button[aria-pressed="true"] {
+  border-color: #3563e9;
+}
+
+.client-batch-list {
+  max-height: min(38vh, 22rem);
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.client-batch-list > p,
+.client-batch-row {
+  padding: 0.55rem 0.75rem;
+}
+
+.client-batch-row {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+}
+
+.client-batch-row + .client-batch-row {
+  border-top: 1px solid var(--border);
+}
+
+.client-batch-name {
+  overflow-wrap: anywhere;
+}
+
 /* ---------- страница серверов: список слева, выбранный сервер справа ---------- */
 .srv-split {
   display: grid;
@@ -2484,6 +2543,13 @@ button.srv-side-gh:hover .drag-handle {
 
 .reality-setup { display: grid; gap: 0.75rem; }
 .reality-setup label { display: grid; gap: 0.25rem; min-width: 0; }
+.reality-values {
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) minmax(0, 3fr);
+  gap: 0.4rem 0.75rem;
+  font-size: 0.9rem;
+}
+.reality-values dd { margin: 0; overflow-wrap: anywhere; }
 .reality-setup p { margin: 0; }
 .port-retry { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 0.75rem; margin: 1rem 0; }
 .port-retry label { display: flex; flex-direction: column; gap: 0.25rem; min-width: 0; }

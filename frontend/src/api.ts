@@ -137,7 +137,7 @@ export async function logoutServer(): Promise<void> {
 }
 
 // Скачивание файла с POST-запроса: fetch с токеном -> blob -> загрузка.
-async function downloadPost(path: string, body: unknown, fallback: string): Promise<void> {
+async function downloadPost(path: string, body: unknown, fallback: string): Promise<Headers> {
   const token = getToken()
   const res = await stepUpFetch(path, {
     method: 'POST',
@@ -152,6 +152,7 @@ async function downloadPost(path: string, body: unknown, fallback: string): Prom
     throw new ApiError(errorDetail(err, res.status), res.status)
   }
   await downloadResponse(res, fallback)
+  return res.headers
 }
 
 // Смена пароля: возвращает новый токен (старые инвалидируются на бэкенде).
@@ -877,6 +878,50 @@ export type RevokeBulkResult = {
   revoked: number
   failed: number
   items: RevokeBulkResultItem[]
+}
+
+export type BulkIssueRequest = {
+  request_id: string
+  prefix: string
+  count: number
+}
+
+export type BulkIssueItem = { client_id: string; name: string }
+export type BulkPendingIssue = BulkIssueRequest & { client_ids: string[] }
+export type BulkIssueResult = { items: BulkIssueItem[]; cancelled: number }
+
+function clientBatchPath(serverId: number, protocol: ClientProtocol, action: string) {
+  return `/api/servers/${serverId}/bulk-clients/${protocol}/${action}`
+}
+
+export function issueClientBatch(serverId: number, protocol: ClientProtocol, request: BulkIssueRequest) {
+  return api<BulkIssueResult>(clientBatchPath(serverId, protocol, 'issue'), {
+    method: 'POST',
+    body: JSON.stringify({ ...request, confirmed: true }),
+  })
+}
+
+export function pendingClientBatch(serverId: number, protocol: ClientProtocol, signal?: AbortSignal) {
+  return api<BulkPendingIssue | null>(clientBatchPath(serverId, protocol, 'issue/pending'), { signal })
+}
+
+export async function downloadClientBatch(serverId: number, protocol: ClientProtocol, clientIds: string[]) {
+  const headers = await downloadPost(
+    clientBatchPath(serverId, protocol, 'export'),
+    { client_ids: clientIds },
+    'vpn-clients.zip',
+  )
+  return {
+    exported: Number(headers.get('X-Bulk-Exported') ?? clientIds.length),
+    missing: Number(headers.get('X-Bulk-Missing') ?? 0),
+  }
+}
+
+export function revokeClientBatch(serverId: number, protocol: ClientProtocol, clientIds: string[]) {
+  return api<RevokeBulkResult>(clientBatchPath(serverId, protocol, 'revoke'), {
+    method: 'POST',
+    body: JSON.stringify({ client_ids: clientIds, confirmed: true }),
+  })
 }
 
 // paused - все клиенты на паузе по парку (q тогда необязателен и сужает список)

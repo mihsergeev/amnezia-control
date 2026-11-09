@@ -23,6 +23,7 @@ from app.api.awg import (
     _ssh_error,
     _store_config,
 )
+from app import bulk_issue_state
 from app.config import get_settings
 from app.deps import CurrentUser, SessionDep
 from app.models import AwgConfig
@@ -314,6 +315,7 @@ async def revoke_client(
     try:
         async with _connect(server) as conn:
             state = await _state(conn, server.host)
+            await bulk_issue_state.request_cancel(session, server_id, PROTO, [body.public_key])
             await awg.revoke_client(
                 conn, state.container, state.interface, body.public_key
             )
@@ -324,6 +326,7 @@ async def revoke_client(
     await audit.record(
         session, user.username, "awg3_revoke", server.name, body.public_key
     )
+    await bulk_issue_state.cancel_clients(session, server_id, PROTO, [body.public_key])
     await pausestore.drop(session, server_id, PROTO, body.public_key)
     await session.execute(
         delete(AwgConfig).where(

@@ -7,6 +7,7 @@ from sqlalchemy import (
     Float,
     Index,
     Integer,
+    JSON,
     String,
     Text,
     UniqueConstraint,
@@ -131,6 +132,29 @@ class NativeVpnConfig(Base):
     config: Mapped[str] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
+    )
+
+
+class BulkClientIssue(Base):
+    """Persist planned client identities before applying changes on a node."""
+
+    __tablename__ = "bulk_client_issues"
+
+    request_id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    server_id: Mapped[int] = mapped_column(Integer, index=True)
+    protocol: Mapped[str] = mapped_column(String(16))
+    owner_id: Mapped[int] = mapped_column(Integer)
+    prefix: Mapped[str] = mapped_column(String(124))
+    count: Mapped[int] = mapped_column(Integer)
+    items: Mapped[list[dict]] = mapped_column(JSON)
+    complete: Mapped[bool] = mapped_column(Boolean)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+
+    __table_args__ = (
+        Index("uq_bulk_client_issues_pending", "server_id", "protocol", unique=True,
+              postgresql_where=complete.is_(False), sqlite_where=complete.is_(False)),
     )
 
 

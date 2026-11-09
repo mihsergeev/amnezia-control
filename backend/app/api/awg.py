@@ -4,6 +4,7 @@ from fastapi import APIRouter, HTTPException, Request, status
 from sqlalchemy import delete, select, update
 
 from app import audit, awg, client_endpoint, deploy, deploywatch, limits, nodelock, notes, pausestore, sshops
+from app import bulk_issue_state
 from app.config import get_settings
 from app.deps import CurrentUser, SessionDep
 from app.models import AwgConfig, AwgNote, ClientLimit, ClientName, Server
@@ -100,7 +101,8 @@ async def _reissue_peer(session, server_id, protocol, conn, state, public_key, d
     if protocol != "awg3" and (not name or name == "—"):
         name = "client"
     fixed_ip = target.address.split("/")[0] if target and target.address else None
-    reserved = {ip for record in paused.values() if (ip := record["data"].get("ip"))}
+    reserved = await pausestore.paused_ips(session, server_id, protocol)
+    await bulk_issue_state.request_cancel(session, server_id, protocol, [public_key])
     client, config = await awg.create_client(
         conn, state, name, dns, fixed_ip=fixed_ip, reserved=reserved
     )
@@ -108,6 +110,7 @@ async def _reissue_peer(session, server_id, protocol, conn, state, public_key, d
         await awg.revoke_client(conn, state.container, state.interface, public_key)
 
     try:
+        await bulk_issue_state.cancel_clients(session, server_id, protocol, [public_key])
         await session.execute(delete(AwgConfig).where(
             AwgConfig.server_id == server_id,
             AwgConfig.public_key == public_key,

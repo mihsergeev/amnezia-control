@@ -218,6 +218,18 @@ async def delete_server(
     session: SessionDep,
     remove_key: bool = False,
 ) -> DeleteServerResult:
+    # Wait for bulk operations to commit before deleting their server-scoped records.
+    async with (
+        nodelock.hold("awg", server_id),
+        nodelock.hold("wireguard", server_id),
+        nodelock.hold("xray", server_id),
+    ):
+        return await _delete_server(server_id, user, session, remove_key)
+
+
+async def _delete_server(
+    server_id: int, user: CurrentUser, session: SessionDep, remove_key: bool
+) -> DeleteServerResult:
     server = await _get_or_404(server_id, session)
     result = DeleteServerResult()
     server_name = server.name

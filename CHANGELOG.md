@@ -4,6 +4,13 @@ All notable changes to Amnezia Control are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.84.31] - 2026-11-09
+
+- Inspect live Xray REALITY settings and edit SNI and the TLS target after validation. Preserve existing client IDs, keys, and accepted server names, and restore the previous configuration if activation fails.
+- Issue and revoke batches of AmneziaWG 3.1, WireGuard, and Xray REALITY profiles from the panel. Recover interrupted issuance with the same names and credentials, honor the Client Endpoint, and record bulk operations in the audit log.
+- Filter and select existing clients for ZIP export, with configuration files, QR codes and connection links where available, and a manifest explaining skipped profiles. Xray profiles are generated from the current server settings.
+- Manage Xray batches through a private Unix socket without restarting the service. Existing nodes need an explicit Xray update to enable this API. Revoking an Xray profile blocks new connections while existing connections continue until closed.
+
 ## [0.84.30] - 2026-11-09
 
 - Persist AmneziaWG and WireGuard peer removal across restarts. Honor the `users` alias when managing or counting clients on Xray VLESS inbounds.

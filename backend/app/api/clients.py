@@ -20,7 +20,7 @@ from fastapi import APIRouter, HTTPException, Query, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app import audit, expiry, nodelock, pausestore, protolabel
+from app import audit, bulk_issue_state, expiry, nodelock, pausestore, protolabel
 from app.config import get_settings
 from app.deps import CurrentUser, SessionDep
 from app.models import AwgConfig, AwgNote, ClientName, NativeVpnConfig, OvpnConfig, PausedClient, Server
@@ -214,6 +214,8 @@ async def revoke_bulk(
             return [result(sid, protocol, c, "сервер не найден в панели") for c in ids]
         async with sem, nodelock.hold(protocol, sid):
             try:
+                async with AsyncSession(bind=session.bind, expire_on_commit=False) as journal_session:
+                    await bulk_issue_state.request_cancel(journal_session, sid, protocol, ids)
                 errors = await expiry.revoke_many_on_node(
                     server, protocol, ids, key_path, settings.ssh_connect_timeout,
                 )

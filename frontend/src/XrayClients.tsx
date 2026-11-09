@@ -21,6 +21,7 @@ import { Menu } from './Menu'
 import { NoteCell } from './NoteCell'
 import { ClientStatsModal } from './ClientStatsModal'
 import { RollbackMenu } from './RollbackMenu'
+import { XrayRealitySettings } from './XrayRealitySettings'
 import { copyText } from './clipboard'
 import { formatBytes } from './format'
 import { useShareLink } from './ShareLink'
@@ -75,6 +76,7 @@ export function XrayClients({
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState<string | null>(null)
+  const [realityOpen, setRealityOpen] = useState(false)
 
   const [addOpen, setAddOpen] = useState(false)
   const [newName, setNewName] = useState('')
@@ -307,33 +309,44 @@ export function XrayClients({
     <>
       <p className="muted small">
         {t(
-          'XRay VLESS + REALITY (маскировка под TLS к настоящему сайту). Конфиг: ссылка vpn:// для AmneziaVPN или vless:// для Happ, v2rayN и других клиентов. Выдача/отзыв перезапускают xray (~2 сек, активные клиенты переподключатся).',
+          'Xray VLESS + REALITY маскирует трафик под TLS к настоящему сайту. Для AmneziaVPN используйте ссылку vpn://, для Happ, v2rayN и других клиентов - vless://.',
+        )}
+        {' '}
+        {t(
+          'Одиночная выдача и отзыв перезапускают Xray. Пакетная выдача и отзыв работают через локальный API без перезапуска. Если API недоступен, его можно включить плановым обновлением или переустановкой Xray из панели.',
         )}
       </p>
 
-      {version && (
-        <div className="version-line">
-          <span className="muted small">
-            {t('XRay-core:')}{' '}
-            <span className="mono">{version.current_version ?? '—'}</span>
-            {version.update_available && (
-              <span className="update-badge">
-                {t('есть {ver}', { ver: version.latest_version ?? t('новее') })}
-              </span>
-            )}
-            {!version.update_available && version.current_version && (
-              <span className="version-ok"> {t('актуальна')}</span>
-            )}
-          </span>
+      {(version || state) && (
+        <div className="version-line xray-version-line">
+          {version && (
+            <span className="muted small">
+              {t('XRay-core:')}{' '}
+              <span className="mono">{version.current_version ?? '—'}</span>
+              {version.update_available && (
+                <span className="update-badge">
+                  {t('есть {ver}', { ver: version.latest_version ?? t('новее') })}
+                </span>
+              )}
+              {!version.update_available && version.current_version && (
+                <span className="version-ok"> {t('актуальна')}</span>
+              )}
+            </span>
+          )}
           <div className="version-actions">
-            <RollbackMenu
-              serverId={serverId}
-              serverName={serverName}
-              proto="xray"
-              onRestored={load}
-              onUnauthorized={onUnauthorized}
-            />
-            {onRequestUpdate && (
+            {(state || version?.deployed) && !focusClient && (
+              <button className="ghost" onClick={() => setRealityOpen(true)}>{t('Настройки REALITY')}</button>
+            )}
+            {version && (
+              <RollbackMenu
+                serverId={serverId}
+                serverName={serverName}
+                proto="xray"
+                onRestored={load}
+                onUnauthorized={onUnauthorized}
+              />
+            )}
+            {version && onRequestUpdate && (
               <button className="ghost" onClick={onRequestUpdate}>
                 {version.update_available
                   ? t('Обновить ядро')
@@ -346,6 +359,14 @@ export function XrayClients({
 
       {error && <p className="form-error">{error}</p>}
       {loading && <p className="muted">{t('загрузка…')}</p>}
+      {realityOpen && (
+        <XrayRealitySettings
+          key={serverId}
+          serverId={serverId}
+          onClose={() => setRealityOpen(false)}
+          onUnauthorized={onUnauthorized}
+        />
+      )}
 
       {state && !loading && (
         <>

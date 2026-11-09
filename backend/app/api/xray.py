@@ -2,7 +2,7 @@ import asyncssh
 from fastapi import APIRouter, HTTPException, Request, status
 from sqlalchemy import delete
 
-from app import audit, awg, deploy, deploywatch, limits, nodelock, notes, pausestore, sshops, xray
+from app import audit, awg, bulk_issue_state, deploy, deploywatch, limits, nodelock, notes, pausestore, sshops, xray, xray_reality
 from app.config import get_settings
 from app.deps import CurrentUser, SessionDep
 from app.models import ClientLimit, Server
@@ -55,6 +55,10 @@ def _xray_error(exc: Exception) -> HTTPException:
         return HTTPException(status.HTTP_409_CONFLICT, str(exc))
     if isinstance(exc, xray.XrayNotDeployed):
         return HTTPException(status.HTTP_409_CONFLICT, str(exc))
+    if isinstance(exc, xray_reality.RealityConflict):
+        return HTTPException(status.HTTP_409_CONFLICT, str(exc))
+    if isinstance(exc, xray_reality.RealityValidation):
+        return HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(exc))
     if isinstance(exc, xray.XrayError):
         return HTTPException(status.HTTP_502_BAD_GATEWAY, str(exc))
     if isinstance(exc, (asyncssh.Error, OSError)):
@@ -103,6 +107,34 @@ async def get_xray(server_id: int, _: CurrentUser, session: SessionDep) -> XrayS
             "tx_bytes": last.get(cid, {}).get("tx", 0), "paused": True,
         })
     return XrayStateOut(container=container, clients=out)
+
+
+@router.get("/reality", response_model=xray_reality.RealityState)
+async def get_reality(server_id: int, _: CurrentUser, session: SessionDep) -> xray_reality.RealityState:
+    server = await _get_or_404(server_id, session)
+    try:
+        async with _connect(server) as conn:
+            container = await xray.detect_container(conn)
+            return await xray_reality.read(conn, container)
+    except Exception as exc:  # noqa: BLE001
+        raise _xray_error(exc) from exc
+
+
+@router.put("/reality", response_model=xray_reality.RealityState)
+@nodelock.operation("xray")
+async def update_reality(
+    server_id: int, body: xray_reality.RealityUpdate, user: CurrentUser, session: SessionDep,
+) -> xray_reality.RealityState:
+    server = await _get_or_404(server_id, session)
+    try:
+        async with _connect(server) as conn:
+            container = await xray.detect_container(conn)
+            state, changed = await xray_reality.update(conn, container, body, server.host)
+    except Exception as exc:  # noqa: BLE001
+        raise _xray_error(exc) from exc
+    if changed:
+        await audit.record(session, user.username, "xray_reality_update", server.name)
+    return state
 
 
 @router.post("/note", status_code=status.HTTP_204_NO_CONTENT)
@@ -236,10 +268,13 @@ async def revoke_client(
     try:
         async with _connect(server) as conn:
             container = await xray.detect_container(conn)
+            await bulk_issue_state.request_cancel(session, server_id, "xray", [body.client_id])
             await xray.revoke_client(conn, container, body.client_id)
     except Exception as exc:  # noqa: BLE001
         raise _xray_error(exc) from exc
+    await bulk_issue_state.cancel_clients(session, server_id, "xray", [body.client_id])
     await pausestore.drop(session, server_id, "xray", body.client_id)
+    await session.commit()
     await audit.record(
         session, user.username, "xray_revoke", server.name, body.client_id
     )
@@ -274,7 +309,10 @@ async def reissue_client(
             if target is None:
                 raise HTTPException(status.HTTP_404_NOT_FOUND, "Клиент не найден")
             name = target.name if target.name and target.name != "—" else "client"
+            await bulk_issue_state.request_cancel(session, server_id, "xray", [body.client_id])
             await xray.revoke_client(conn, container, body.client_id)
+            await bulk_issue_state.cancel_clients(session, server_id, "xray", [body.client_id])
+            await session.commit()
             client, configs = await xray.issue_client(
                 conn, container, name, server.host, server.name, dns1, dns2,
             )

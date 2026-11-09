@@ -8,7 +8,7 @@ import asyncssh
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app import alerts, audit, awg, deploy, native_vpn, nodelock, openvpn, pausestore, sshops, xray
+from app import alerts, audit, awg, bulk_issue_state, deploy, native_vpn, nodelock, openvpn, pausestore, sshops, xray
 from app.config import Settings
 from app.models import AwgConfig, AwgNote, ClientLimit, NativeVpnConfig, OvpnConfig, Server
 from app.sshkeys import ensure_panel_key, key_paths
@@ -127,6 +127,7 @@ async def _revoker(conn, server: Server, protocol: str):
 
 
 async def cleanup_client_db(session: AsyncSession, server_id, protocol, client_id) -> None:
+    await bulk_issue_state.cancel_clients(session, server_id, protocol, [client_id])
     if protocol in native_vpn.PROTOCOLS:
         await session.execute(delete(NativeVpnConfig).where(
             NativeVpnConfig.server_id == server_id, NativeVpnConfig.protocol == protocol,
@@ -147,6 +148,11 @@ async def cleanup_client_db(session: AsyncSession, server_id, protocol, client_i
                 AwgNote.protocol == protocol,
             )
         )
+    elif protocol == "xray":
+        await session.execute(delete(AwgNote).where(
+            AwgNote.server_id == server_id, AwgNote.protocol == protocol,
+            AwgNote.public_key == client_id,
+        ))
     elif protocol == "openvpn":
         await session.execute(
             delete(OvpnConfig).where(
@@ -221,6 +227,8 @@ async def _expire_group(session_factory, settings, server_id, protocol, limit_id
             ))
             await session.commit()
             return 0
+        if lims and server_id not in unreachable:
+            await bulk_issue_state.request_cancel(session, server_id, protocol, [lim.client_id for lim in lims])
     if not lims:
         return 0
     gone = False

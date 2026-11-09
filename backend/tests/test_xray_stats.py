@@ -58,9 +58,13 @@ def test_deploy_script_server_json_valid_with_stats():
         block = block.replace(k, v)
     cfg = json.loads(block)
     assert cfg["api"]["tag"] == "api"
+    assert cfg["api"]["listen"] == xray.MANAGEMENT_API_LISTEN
+    assert cfg["api"]["services"] == ["StatsService", "HandlerService"]
+    assert xray._stats_api_address(cfg) == f"unix:{xray.MANAGEMENT_API_SOCKET}"
+    assert cfg["inbounds"][0]["tag"] == "acontrol-vless"
     assert cfg["inbounds"][0]["settings"]["clients"][0]["email"]
-    assert any(i.get("tag") == "api" for i in cfg["inbounds"])
-    assert cfg["routing"]["rules"][0]["outboundTag"] == "api"
+    assert len(cfg["inbounds"]) == 1
+    assert "routing" not in cfg
 
 
 def test_enable_stats_preserves_custom_policy_api_and_client_email():

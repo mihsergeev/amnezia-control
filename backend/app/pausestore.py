@@ -6,6 +6,7 @@ from datetime import timezone
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app import bulk_issue_state
 from app.models import ClientTrafficSample, PausedClient
 
 
@@ -85,7 +86,8 @@ async def paused_ips(session: AsyncSession, server_id: int, protocol: str) -> se
     """Адреса клиентов AWG на паузе: их нет среди живых пиров, но выдавать их
     новым клиентам нельзя - возобновление вернет адрес прежнему."""
     paused = await list_paused(session, server_id, protocol)
-    return {ip for rec in paused.values() if (ip := rec["data"].get("ip"))}
+    reserved = await bulk_issue_state.reserve_ips(session, server_id, protocol)
+    return reserved | {ip for rec in paused.values() if (ip := rec["data"].get("ip"))}
 
 
 async def add(

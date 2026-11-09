@@ -13,6 +13,7 @@ from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import awg, deploy, native_vpn, openvpn, xray
+from app import bulk_issue_state
 from app.models import (
     AwgConfig,
     AwgNote,
@@ -139,6 +140,7 @@ async def remove(conn, protocol: str) -> RemoveResult:
 async def cleanup_db(session: AsyncSession, server_id: int, protocols: set[str]) -> None:
     """Стирает в панели все следы клиентов этих протоколов на сервере."""
     for proto in protocols:
+        await bulk_issue_state.cancel_protocol(session, server_id, proto)
         if proto in native_vpn.PROTOCOLS:
             await session.execute(delete(NativeVpnConfig).where(
                 NativeVpnConfig.server_id == server_id, NativeVpnConfig.protocol == proto))

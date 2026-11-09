@@ -17,6 +17,7 @@ from app.api import (
     awg_legacy,
     backup,
     branding,
+    bulk_clients,
     cascades,
     clients,
     fullaccess,
@@ -131,6 +132,7 @@ def create_app() -> FastAPI:
     app.include_router(awg_legacy.router, prefix="/api")
     app.include_router(awg3.router, prefix="/api")
     app.include_router(clients.router, prefix="/api")
+    app.include_router(bulk_clients.router, prefix="/api")
     app.include_router(openvpn.router, prefix="/api")
     app.include_router(native_vpn.wireguard_router, prefix="/api")
     app.include_router(native_vpn.openvpn_router, prefix="/api")

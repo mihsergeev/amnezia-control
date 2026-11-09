@@ -26,6 +26,7 @@ from dataclasses import dataclass
 from urllib.parse import quote
 
 import asyncssh
+from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey
 
 # Версия xray-core, которую ставит панель: установка, обновление и переустановка.
 # Закреплена, а не releases/latest. В 26.10.31 MPTCP выключен по умолчанию
@@ -45,6 +46,9 @@ FLOW = "xtls-rprx-vision"
 FINGERPRINT = "firefox"
 CONTAINER_NAME = "amnezia-xray"
 STATS_API_PORT = 10085  # локальный gRPC-API xray (127.0.0.1) для чтения статистики
+MANAGEMENT_API_DIR = "/run/acontrol"
+MANAGEMENT_API_SOCKET = f"{MANAGEMENT_API_DIR}/xray-api.sock"
+MANAGEMENT_API_LISTEN = f"{MANAGEMENT_API_SOCKET},0600"
 STATS_QUERY_TIMEOUT = 5
 _DOCKER = 'DOCKER=$({ [ -w /var/run/docker.sock ] || [ -w /run/docker.sock ]; } && echo docker || echo "sudo -n docker"); '
 _BINDINGS_FORMAT = r'{{range $k, $v := .HostConfig.PortBindings}}{{range $v}}{{printf "%s|%s|%s\n" $k .HostIp .HostPort}}{{end}}{{end}}'
@@ -255,7 +259,8 @@ def _stats_api_address(server: dict) -> str | None:
     api = server.get("api") or {}
     if isinstance(listen := api.get("listen"), str) and listen:
         if listen.startswith("/"):
-            return f"unix:{listen}"
+            path = listen.split(",")[0] if listen.count(",") == 1 else listen
+            return f"unix:{path}"
         if listen.startswith("@"):
             return f"unix-abstract:{listen[1:]}"
         host, _, port = listen.rpartition(":")
@@ -273,6 +278,10 @@ def _stats_api_address(server: dict) -> str | None:
             if address := _local_api_address(inbound.get("listen") or "", inbound.get("port")):
                 return address
     return None
+
+
+def _api_has_service(api: dict, service: str) -> bool:
+    return any(isinstance(name, str) and name.lower() == service for name in (api.get("services") or []))
 
 
 def _free_stats_port(inbounds: list) -> int:
@@ -303,7 +312,7 @@ def ensure_stats_config(server: dict) -> bool:
         changed = True
     server["api"] = api
     services = api.get("services") or []
-    if "StatsService" not in services:
+    if not _api_has_service(api, "statsservice"):
         api["services"] = [*services, "StatsService"]
         changed = True
     clients = list(_client_list(server) or [])
@@ -354,6 +363,8 @@ def ensure_stats_config(server: dict) -> bool:
 
 async def stage_update_stats(conn, container) -> tuple[str, str] | None:
     """Готовит новый конфиг отдельно; действующий файл и скрипт его не содержат."""
+    from app.xray_bulk import configure_management
+
     raw = await _run(conn, _docker_exec(container, f"cat {SERVER_JSON}"))
     try:
         server = json.loads(raw)
@@ -361,7 +372,9 @@ async def stage_update_stats(conn, container) -> tuple[str, str] | None:
         raise XrayError("не удалось прочитать server.json") from exc
     if not isinstance(server, dict):
         raise XrayError("некорректный server.json")
-    if not ensure_stats_config(server):
+    stats_changed = ensure_stats_config(server)
+    management_changed = configure_management(server)
+    if not stats_changed and not management_changed:
         return None
     result = await conn.run(
         'umask 077; D="$HOME/.acontrol/xray"; mkdir -p "$D" && chmod 700 "$D" '
@@ -382,7 +395,7 @@ async def discard_staged_stats(conn, name: str) -> None:
 
 async def read_client_stats(conn, container, server: dict) -> dict[str, dict] | None:
     """Счетчики StatsService. None — статистика недоступна, {} — счетчиков пока нет."""
-    if "StatsService" not in ((server.get("api") or {}).get("services") or []):
+    if not _api_has_service(server.get("api") or {}, "statsservice"):
         return None
     address = _stats_api_address(server)
     if address is None:
@@ -492,6 +505,13 @@ def client_stats_by_id(clients: list[XrayClient], stats: dict[str, dict] | None)
     }
 
 
+def reality_public_key(value: object) -> str | None:
+    if not isinstance(value, str) or not re.fullmatch(r"[A-Za-z0-9_-]{43}", value):
+        return None
+    key = X25519PrivateKey.from_private_bytes(base64.urlsafe_b64decode(value + "="))
+    return base64.urlsafe_b64encode(key.public_key().public_bytes_raw()).decode().rstrip("=")
+
+
 async def read_server_bits(conn, container) -> dict:
     """REALITY-параметры сервера для сборки клиентского конфига."""
     inner = (
@@ -528,11 +548,15 @@ async def read_server_bits(conn, container) -> dict:
                 port = int(published)
     reality = (inbound.get("streamSettings") or {}).get("realitySettings", {})
     site = (reality.get("serverNames") or [DEFAULT_REALITY_SITE])[0]
+    short = _sec("SID")
+    short_ids = reality.get("shortIds")
+    if isinstance(short_ids, list) and short_ids and short not in short_ids:
+        short = short_ids[0]
     clients = _client_list(server)
     flow = clients[0].get("flow", FLOW) if clients else FLOW
     return {
-        "pub": _sec("PUB"),
-        "short": _sec("SID"),
+        "pub": reality_public_key(reality.get("privateKey")) or _sec("PUB"),
+        "short": short,
         "site": site,
         "port": port,
         "flow": flow or FLOW,
@@ -976,8 +1000,6 @@ if sudo test -f "$CONFIG_DIR/server.json"; then
   log "конфиг уже есть — сохранён, клиенты не тронуты"
 else
   {tls_check}  NEW_CONFIG=1
-  # Внешний порт может совпадать с внутренним портом StatsService.
-  if [ "$INBOUND_PORT" = {STATS_API_PORT} ]; then INBOUND_PORT=443; fi
   log "генерация ключей + server.json (новый сервер)"
   sudo docker run --rm -v "$D":/opt/amnezia/xray --entrypoint sh "$IMG" -c 'cd /opt/amnezia/xray; xray uuid > xray_uuid.key; openssl rand -hex 8 > xray_short_id.key; xray x25519 > xray_x25519.raw 2>&1' || fail keys
   UUID=$(sudo cat "$D/xray_uuid.key" | tr -d " \\r\\n")
@@ -991,11 +1013,12 @@ else
 {{
     "log": {{ "loglevel": "error" }},
     "stats": {{}},
-    "api": {{ "tag": "api", "services": [ "StatsService" ] }},
+    "api": {{ "tag": "api", "listen": "{MANAGEMENT_API_LISTEN}", "services": [ "StatsService", "HandlerService" ] }},
     "policy": {{ "levels": {{ "0": {{ "statsUserUplink": true, "statsUserDownlink": true }} }}, "system": {{ "statsInboundUplink": true, "statsInboundDownlink": true }} }},
     "inbounds": [
         {{
             "port": $INBOUND_PORT,
+            "tag": "acontrol-vless",
             "protocol": "vless",
             "settings": {{
                 "clients": [ {{ "id": "$UUID", "flow": "{FLOW}", "email": "$UUID" }} ],
@@ -1011,17 +1034,9 @@ else
                     "shortIds": [ "$SID" ]
                 }}
             }}
-        }},
-        {{
-            "listen": "127.0.0.1",
-            "port": {STATS_API_PORT},
-            "protocol": "dokodemo-door",
-            "settings": {{ "address": "127.0.0.1" }},
-            "tag": "api"
         }}
     ],
-    "outbounds": [ {{ "protocol": "freedom" }} ],
-    "routing": {{ "rules": [ {{ "type": "field", "inboundTag": [ "api" ], "outboundTag": "api" }} ] }}
+    "outbounds": [ {{ "protocol": "freedom" }} ]
 }}
 EOF
   sudo test -f "$D/clientsTable" || echo "[]" | sudo tee "$D/clientsTable" >/dev/null
@@ -1060,8 +1075,10 @@ fi
 PROBE_HOST=$BIND
 case "$PROBE_HOST" in ''|0.0.0.0) PROBE_HOST=127.0.0.1 ;; ::) PROBE_HOST=::1 ;; esac
 case "$BIND" in *:*) BIND="[$BIND]" ;; esac
+# После аварийной остановки файл сокета не должен пережить запуск контейнера.
 sudo docker run -d --name "$C" --cidfile "$WORK/container-id" --restart always --privileged --cap-add=NET_ADMIN $MPTCP_OPT \\
   -e GODEBUG=multipathtcp=0 \\
+  --tmpfs {MANAGEMENT_API_DIR}:rw,noexec,nosuid,nodev,mode=0700,size=1m \\
   -p "${{BIND:+$BIND:}}$XRAY_SERVER_PORT:$INBOUND_PORT/tcp" \\
   -v "$D":/opt/amnezia/xray \\
   --entrypoint sh "$IMG" -c "xray -config /opt/amnezia/xray/server.json" >/dev/null \\
@@ -1075,6 +1092,15 @@ if [ "$STATE" != 'running|0' ] || [ -z "$CONTAINER_IP" ] \\
   || ! timeout 3 bash -c 'exec 3<>"/dev/tcp/$1/$2"' _ "$PROBE_HOST" "$XRAY_SERVER_PORT"; then
   sudo docker logs "$C" 2>&1 | tail
   fail "Xray did not start listening on its published port."
+fi
+if sudo docker exec "$C" jq -e --arg listen {shlex.quote(MANAGEMENT_API_LISTEN)} \\
+    '.api.listen == $listen' "$D/server.json" >/dev/null; then
+  if ! sudo docker exec "$C" sh -c 'test -S {MANAGEMENT_API_SOCKET} && \\
+      [ "$(stat -c %a {MANAGEMENT_API_DIR})" = 700 ] && \\
+      [ "$(stat -c %a {MANAGEMENT_API_SOCKET})" = 600 ] && \\
+      xray api statsquery -s unix:{MANAGEMENT_API_SOCKET} -pattern "user>>>" >/dev/null'; then
+    fail "Xray did not start its private management socket."
+  fi
 fi
 DEPLOYED=1
 if [ -n "$NEW_CONFIG" ]; then

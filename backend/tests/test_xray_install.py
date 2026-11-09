@@ -47,13 +47,19 @@ docker() {
     'stop amnezia-xray-previous-'*) rm "$TEST_DIR/old-running";;
     'run -d')
       [[ "$*" == *'192.0.2.2:18443:19443/tcp'* ]] || return 99
+      [[ "$*" == *'--tmpfs /run/acontrol:rw,noexec,nosuid,nodev,mode=0700,size=1m'* ]] || return 99
       cmp -s "$D/server.json" "$TEST_DIR/candidate" || return 99
       while [ "$1" != --cidfile ]; do shift; done
       echo next > "$2"
       touch "$TEST_DIR/next"
       [ "$FAULT" != run ];;
     'exec amnezia-xray')
-      [[ "$*" == *'nc -z 172.17.0.2 19443'* ]] && [ "$FAULT" != listen ];;
+      case "$*" in
+        *'nc -z 172.17.0.2 19443'*) [ "$FAULT" != listen ];;
+        *' jq -e '*) :;;
+        *'xray api statsquery -s unix:/run/acontrol/xray-api.sock'*) [ "$FAULT" != management ];;
+        *) return 99;;
+      esac;;
     'start amnezia-xray')
       cmp -s "$D/server.json" "$TEST_DIR/original" && touch "$TEST_DIR/old-running";;
     'rm -f') [ "$3" = next ] && rm "$TEST_DIR/next";;
@@ -74,7 +80,7 @@ def _bash_path(path):
 
 @pytest.mark.skipif(shutil.which("bash") is None, reason="Bash is required")
 @pytest.mark.parametrize("fault", [
-    "missing", "network", "mounts", "build", "config-test", "stale", "run", "listen", "interrupted", "none",
+    "missing", "network", "mounts", "build", "config-test", "stale", "run", "listen", "management", "interrupted", "none",
 ])
 def test_xray_upgrade_keeps_original_config_until_replacement_is_ready(tmp_path, fault):
     config_dir = tmp_path / "config"
@@ -135,7 +141,10 @@ async def test_stats_stage_uploads_without_writing_to_container():
                 return type("Result", (), {"exit_status": 0, "stdout": raw})
             assert "docker" not in cmd
             assert "mktemp" in cmd and "umask 077" in cmd
-            assert json.loads(input)["api"]["services"] == ["StatsService"]
+            staged = json.loads(input)
+            assert staged["api"]["services"] == ["StatsService", "HandlerService"]
+            assert staged["api"]["listen"] == xray.MANAGEMENT_API_LISTEN
+            assert staged["inbounds"][0]["tag"] == "acontrol-vless"
             return type("Result", (), {"exit_status": 0, "stdout": "stats.ABC12345\n"})
 
     raw = '{"inbounds":[{"protocol":"vless","port":19443}]}\n'

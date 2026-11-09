@@ -7,7 +7,7 @@ from contextlib import asynccontextmanager
 from fastapi import APIRouter, HTTPException, Request, status
 from sqlalchemy import delete, select
 
-from app import audit, client_endpoint, deploy, deploywatch, expiry, limits, native_deploy, native_snapshots, native_vpn, nodelock, notes, pausestore, sshops
+from app import audit, bulk_issue_state, client_endpoint, deploy, deploywatch, expiry, limits, native_deploy, native_snapshots, native_vpn, nodelock, notes, pausestore, sshops
 from app.config import get_settings
 from app.deps import CurrentUser, SessionDep
 from app.models import NativeVpnConfig, Server
@@ -216,6 +216,7 @@ def build_router(protocol: str) -> APIRouter:
         try:
             async with connection(server, protocol) as conn:
                 await deploy.ensure_idle(conn, tag=protocol)
+                await bulk_issue_state.request_cancel(session, server_id, protocol, [cid])
                 await native_vpn.revoke(conn, protocol, cid)
         except Exception as exc:
             raise failure(exc) from None
@@ -243,6 +244,7 @@ def build_router(protocol: str) -> APIRouter:
                 target = next((value for value in current["clients"] if value[key] == cid), None)
                 if target is None:
                     raise LookupError("Клиент не найден")
+                await bulk_issue_state.request_cancel(session, server_id, protocol, [cid])
                 client, text = await native_vpn.issue(conn, protocol, target["name"], server.host,
                     get_settings().awg_client_dns,
                     fixed_ip=target.get("address", "").split("/")[0] or None)

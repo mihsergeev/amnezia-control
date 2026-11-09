@@ -23,6 +23,7 @@ dependencies = [
     "cryptography>=43.0",
     "httpx>=0.27,<1",
     "idna>=3,<4",
+    "segno>=1.6,<2",
 ]
 
 [project.optional-dependencies]
