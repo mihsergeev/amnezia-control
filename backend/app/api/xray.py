@@ -72,7 +72,7 @@ async def get_xray(server_id: int, _: CurrentUser, session: SessionDep) -> XrayS
             container = await xray.detect_container(conn)
             clients = await xray.read_clients(conn)
             try:
-                stats = await xray.read_client_stats(conn, container)
+                stats = await xray.read_client_stats(conn, container) or {}
             except Exception:  # noqa: BLE001 — статистика не критична
                 stats = {}
     except Exception as exc:  # noqa: BLE001

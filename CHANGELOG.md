@@ -4,6 +4,11 @@ All notable changes to Amnezia Control are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.84.23] - 2026-11-09
+
+- Fix the Xray online client count in the server list and overview by counting clients that transferred data between consecutive successful polls.
+- Ignore historical traffic on the first poll or after a statistics outage and keep the total client count available when Xray statistics cannot be read.
+
 ## [0.84.22] - 2026-11-08
 
 - Verify cascade egress from both the gateway and the VPN client network. Report missing, mismatched, or indistinguishable routes and avoid premature recovery alerts.

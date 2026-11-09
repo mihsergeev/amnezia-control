@@ -2,12 +2,15 @@
 docker ps — чтобы удалённый извне протокол пропадал без ручной «Проверки»."""
 
 import json
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
+from sqlalchemy import select
 
 from app import cascade_alias, collector, config
 from app.db import Base, create_engine_and_factory
-from app.models import Server
+from app.models import Server, TrafficSample
 from app.sshops import CheckResult
 
 
@@ -71,6 +74,41 @@ async def _info(factory, sid: int) -> dict:
     async with factory() as session:
         s = await session.get(Server, sid)
         return json.loads(s.last_check_info)
+
+
+async def test_xray_online_counts_recent_traffic_not_cumulative_totals(factory, monkeypatch):
+    sid = await _seed(factory, ["amnezia-xray", "amnezia-awg"])
+    monkeypatch.setattr(collector, "_last_xray_counters", {})
+    clients = [SimpleNamespace(client_id=f"client-{i}", name=f"Client {i}") for i in range(7)]
+    monkeypatch.setattr(collector.xray, "detect_container", AsyncMock(return_value="amnezia-xray"))
+    monkeypatch.setattr(collector.xray, "read_clients", AsyncMock(return_value=clients))
+    read_stats = AsyncMock()
+    monkeypatch.setattr(collector.xray, "read_client_stats", read_stats)
+
+    async def sample(stats, expected_online):
+        read_stats.return_value = stats
+        totals, rows = await collector._xray_part(None, "node.example")
+        await _run(factory, monkeypatch, _sample(sid, None) | {
+            "clients_online": 1,  # one connected AWG client
+            "clients_total": 1 + totals["total"],
+            "rx_total": totals["rx"], "tx_total": totals["tx"],
+            "clients": rows, "parts": frozenset({"xray", "awg"}),
+            "xray_counters": totals["xray_counters"],
+        })
+        async with factory() as session:
+            last = await session.scalar(select(TrafficSample).order_by(TrafficSample.id.desc()))
+        assert (last.clients_online, last.clients_total) == (expected_online, 8)
+
+    await sample({}, 1)
+    active = {"client-0": {"up": 15, "down": 100}, "client-1": {"up": 0, "down": 20},
+              "revoked": {"up": 50, "down": 50}}
+    await sample(active, 3)
+    await sample(active, 1)
+    await sample(active | {"client-0": {"up": 2, "down": 0},
+                           "client-1": {"up": 0, "down": 0}}, 2)
+    await sample(None, 1)
+    await sample(active, 1)  # the first good poll after a failure only sets the baseline
+    await sample(active | {"client-0": {"up": 15, "down": 101}}, 2)
 
 
 async def test_removed_container_drops_protocol(factory, monkeypatch):

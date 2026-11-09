@@ -49,6 +49,26 @@ _last_clients: dict[int, dict[str, dict[str, tuple[int, int]]]] = {}
 # прирост циклов, в которые общий снимок сервера не писался (см. _last_parts)
 _pending: dict[int, tuple[int, int]] = {}
 
+# Для онлайна Xray нужны два подряд успешных опроса. Историю трафика
+# (_last_clients) храним дольше, поэтому она для этого не подходит.
+_last_xray_counters: dict[int, dict[str, tuple[int, int]]] = {}
+
+
+def _xray_online(server_id: int, counters: dict[str, tuple[int, int]] | None) -> int:
+    previous = _last_xray_counters.pop(server_id, None)
+    if counters is None:
+        return 0
+    _last_xray_counters[server_id] = counters
+    if previous is None:
+        return 0
+    online = 0
+    for uid, (rx, tx) in counters.items():
+        old_rx, old_tx = previous.get(uid, (0, 0))
+        # После рестарта счетчик может уменьшиться: ненулевые байты после
+        # сброса тоже означают трафик, а сам сброс до нуля — нет.
+        online += int((rx > 0 and rx != old_rx) or (tx > 0 and tx != old_tx))
+    return online
+
 
 def _client_delta(sample: dict) -> tuple[int, int] | None:
     """Прирост rx/tx сервера с прошлого цикла по клиентам. None - сравнивать
@@ -172,7 +192,7 @@ async def _xray_part(conn, host) -> tuple[dict, list[dict]]:
     names = {c.client_id: c.name for c in clients}
     rows: list[dict] = []
     rx = tx = 0
-    for uid, st in stats.items():
+    for uid, st in (stats or {}).items():
         if uid not in names:  # дефолтный UUID / уже отозванные — пропускаем
             continue
         rx += st["up"]
@@ -181,7 +201,8 @@ async def _xray_part(conn, host) -> tuple[dict, list[dict]]:
             {"protocol": "xray", "client_id": uid,
              "rx": st["up"], "tx": st["down"], "name": names.get(uid, "")}
         )
-    return {"rx": rx, "tx": tx, "total": len(clients), "online": 0,
+    counters = {c["client_id"]: (c["rx"], c["tx"]) for c in rows} if stats is not None else None
+    return {"rx": rx, "tx": tx, "total": len(clients), "online": 0, "xray_counters": counters,
             "parts": ["xray"], "known": [("xray", c.client_id) for c in clients]}, rows
 
 
@@ -244,6 +265,7 @@ async def _sample_server(
                 parts: set[str] = set()
                 known: list[tuple[str, str]] = []
                 nets: list[dict] = []
+                xray_counters = None
                 for part in (_awg_part, _openvpn_part, _xray_part, _native_part):
                     try:
                         totals, cl = await part(conn, server.host)
@@ -255,6 +277,8 @@ async def _sample_server(
                     known.extend(totals.get("known") or [])
                     nets.extend(totals.get("nets") or [])
                     client_rows.extend(cl)
+                    if part is _xray_part:
+                        xray_counters = totals["xray_counters"]
                 # блокировка торрентов: правила в контейнерах и кто попался
                 try:
                     torrent_hits = await torrent.sample(conn, server, nets)
@@ -299,6 +323,7 @@ async def _sample_server(
         "tx_total": agg["tx"],
         "clients_total": agg["total"],
         "clients_online": agg["online"],
+        "xray_counters": xray_counters,
         "resources": res,
         "clients": client_rows,
         "parts": frozenset(parts),
@@ -332,12 +357,18 @@ async def collect_once(
     servers = [s for s, _r in kept]
     results = [r for _s, r in kept]
     hostkey_changed &= alive
-    for state in (_last_parts, _last_clients, _pending):
+    for state in (_last_parts, _last_clients, _pending, _last_xray_counters):
         for sid in [k for k in state if k not in alive]:
             del state[sid]
     names = {s.id: s.name for s in servers}
     enabled_server_ids = {s.id for s in servers if s.alerts_enabled}
-    samples = [r for r in results if r is not None]
+    samples = []
+    for server, sample in zip(servers, results):
+        if sample is None:
+            _last_xray_counters.pop(server.id, None)
+            continue
+        sample["clients_online"] += _xray_online(server.id, sample.get("xray_counters"))
+        samples.append(sample)
     stable = []
     for s in samples:
         sid = s["server_id"]

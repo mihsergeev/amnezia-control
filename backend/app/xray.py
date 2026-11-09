@@ -263,9 +263,8 @@ async def enable_stats(conn, container) -> bool:
     return False
 
 
-async def read_client_stats(conn, container) -> dict[str, dict]:
-    """{uuid: {"up": bytes, "down": bytes}} из StatsService. Пусто, если статистика
-    не включена/не читается (напр. сервер ещё не пересобран со stats-конфигом)."""
+async def read_client_stats(conn, container) -> dict[str, dict] | None:
+    """Счетчики StatsService. None — статистика недоступна, {} — счетчиков пока нет."""
     inner = (
         f'xray api statsquery --server=127.0.0.1:{STATS_API_PORT} '
         f'-pattern "user>>>" 2>/dev/null'
@@ -273,18 +272,25 @@ async def read_client_stats(conn, container) -> dict[str, dict]:
     try:
         out = await _run(conn, _docker_exec(container, inner))
         data = json.loads(out)
-    except (XrayError, json.JSONDecodeError, ValueError):
-        return {}
+    except (XrayError, ValueError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    counters = data.get("stat", [])
+    if not isinstance(counters, list):
+        return None
     res: dict[str, dict] = {}
-    for stat in data.get("stat") or []:
-        parts = (stat.get("name") or "").split(">>>")
+    for stat in counters:
+        if not isinstance(stat, dict) or not isinstance(stat.get("name"), str):
+            return None
+        parts = stat["name"].split(">>>")
         if len(parts) != 4 or parts[0] != "user" or parts[2] != "traffic":
             continue
         uid, direction = parts[1], parts[3]
         try:
             val = int(stat.get("value", 0) or 0)
         except (ValueError, TypeError):
-            val = 0
+            return None
         entry = res.setdefault(uid, {"up": 0, "down": 0})
         if direction == "uplink":
             entry["up"] = val

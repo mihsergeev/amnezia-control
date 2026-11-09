@@ -77,6 +77,7 @@ async def test_read_client_stats_parses_statsquery():
     assert stats["UID-B"] == {"up": 0, "down": 7}
     assert "api" not in stats  # inbound-статистика не попадает в клиентов
 
-    # статистика не включена / мусор → пусто, без исключений
-    assert await xray.read_client_stats(C("", code=1), "amnezia-xray") == {}
-    assert await xray.read_client_stats(C("not json"), "amnezia-xray") == {}
+    assert await xray.read_client_stats(C("{}"), "amnezia-xray") == {}
+    assert await xray.read_client_stats(C("", code=1), "amnezia-xray") is None
+    for invalid in ("not json", "[]", '{"stat":{}}', '{"stat":[42]}'):
+        assert await xray.read_client_stats(C(invalid), "amnezia-xray") is None
