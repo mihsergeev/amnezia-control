@@ -36,27 +36,31 @@ def normalize_url(url: str) -> str:
     """Адрес сервиса -> его origin (https://host[:port]): путь вроде /msg не нужен."""
     try:
         parts = urlsplit(url.strip())
-    except ValueError as exc:
+        port = parts.port
+        parsed = httpx.URL(url.strip())
+    except (ValueError, httpx.InvalidURL) as exc:
         raise ShareError("нужен адрес вида https://secret.example.com") from exc
-    if parts.scheme not in ("http", "https") or not parts.hostname:
+    if (parts.scheme not in ("http", "https") or not parts.hostname
+            or any(ch.isspace() for ch in parts.netloc) or "\\" in parts.netloc
+            or not parsed.host or port == 0):
         raise ShareError("нужен адрес вида https://secret.example.com")
     if parts.username is not None or parts.password is not None:
         # Origin хранится в настройках и журнале. Не принимаем URL, который
         # превратит пароль Basic Auth в обычный текст журнала и списка сервисов.
         raise ShareError("логин и пароль в адресе сервиса не поддерживаются")
-    return f"{parts.scheme}://{parts.netloc}"
+    return str(parsed.copy_with(path="", query=None, fragment=None))
 
 
 async def detect_engine(base: str, client: httpx.AsyncClient | None = None) -> str:
     async with _client(client) as http:
         try:
-            r = await http.get(f"{base}/api/v2/version")
-            if r.status_code == 200 and "application_version" in r.json():
+            r = await http.get(f"{base}/api/v2/version", follow_redirects=False)
+            if r.status_code == 200 and isinstance(r.json(), dict) and "application_version" in r.json():
                 return "pwpush"
         except (httpx.HTTPError, ValueError):
             pass
         try:
-            r = await http.get(f"{base}/msg")
+            r = await http.get(f"{base}/msg", follow_redirects=False)
             if r.status_code == 200 and "sup3rS3cretMes5age" in r.text:
                 return "sup3rs3cret"
         except httpx.HTTPError as exc:
@@ -77,8 +81,9 @@ async def create_link(
                     follow_redirects=False,
                 )
                 r.raise_for_status()
-                token = r.json().get("token")
-                if not token:
+                data = r.json()
+                token = data.get("token") if isinstance(data, dict) else None
+                if not isinstance(token, str) or not token:
                     raise ShareError("сервис не вернул токен")
                 return f"{public_url(base)}/getmsg?token={quote(token, safe='')}"
             if engine == "pwpush":
@@ -93,10 +98,15 @@ async def create_link(
                 )
                 r.raise_for_status()
                 data = r.json()
-                if data.get("html_url"):
-                    return public_url(data["html_url"])
-                if data.get("url_token"):
+                if not isinstance(data, dict):
+                    raise ShareError("сервис не вернул ссылку")
+                if isinstance(data.get("url_token"), str) and data["url_token"]:
                     return f"{public_url(base)}/p/{quote(data['url_token'], safe='')}/r"
+                if isinstance(data.get("html_url"), str) and data["html_url"]:
+                    url = public_url(data["html_url"])
+                    if normalize_url(url) != normalize_url(public_url(base)):
+                        raise ShareError("ссылка ведет на другой сервис")
+                    return url
                 raise ShareError("сервис не вернул ссылку")
         except httpx.HTTPStatusError as exc:
             raise ShareError(f"сервис ответил {exc.response.status_code}") from exc
@@ -111,7 +121,7 @@ async def create_link(
 def _client(client: httpx.AsyncClient | None):
     if client is not None:
         return _Borrowed(client)
-    return httpx.AsyncClient(timeout=TIMEOUT, follow_redirects=True)
+    return httpx.AsyncClient(timeout=TIMEOUT, follow_redirects=False)
 
 
 class _Borrowed:

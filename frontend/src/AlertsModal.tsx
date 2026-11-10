@@ -9,13 +9,44 @@ type Props = {
   onUnauthorized: () => void
 }
 
+function AlertSecretField({ label, placeholder, saved, value, onChange }: {
+  label: string
+  placeholder: string
+  saved: boolean
+  value: string | undefined
+  onChange: (value: string | undefined) => void
+}) {
+  const { t } = useI18n()
+  return (
+    <div>
+      <label className="field">
+        <span>{label}</span>
+        <input
+          type="password"
+          autoComplete="new-password"
+          value={value ?? ''}
+          onChange={(e) => onChange(e.target.value || undefined)}
+          placeholder={saved && value === undefined ? t('Значение сохранено') : placeholder}
+        />
+      </label>
+      {saved && (
+        <button type="button" className="ghost small" onClick={() => onChange(value === '' ? undefined : '')}>
+          {value === '' ? t('Отменить удаление') : t('Удалить при сохранении')}
+        </button>
+      )}
+    </div>
+  )
+}
+
 export function AlertsModal({ onClose, onUnauthorized }: Props) {
   const { t, lang } = useI18n()
   const dismiss = useModalDismiss(onClose)
-  const [token, setToken] = useState('')
+  const [token, setToken] = useState<string>()
+  const [tokenSet, setTokenSet] = useState(false)
   const [chat, setChat] = useState('')
   const [apiUrl, setApiUrl] = useState('')
-  const [webhook, setWebhook] = useState('')
+  const [webhook, setWebhook] = useState<string>()
+  const [webhookSet, setWebhookSet] = useState(false)
   const [alertLang, setAlertLang] = useState<'ru' | 'en'>(lang)
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
@@ -35,14 +66,14 @@ export function AlertsModal({ onClose, onUnauthorized }: Props) {
     getAlerts()
       .then((c) => {
         if (cancelled) return
-        setToken(c.telegram_token)
+        setTokenSet(c.telegram_token_set)
         setChat(c.telegram_chat)
         setApiUrl(c.telegram_api)
-        setWebhook(c.webhook)
+        setWebhookSet(c.webhook_set)
         // язык еще не выбирали: настроенные раньше алерты шли по-русски
         const l = c.lang || (c.enabled ? 'ru' : callbacks.current.lang)
         setAlertLang(l)
-        setSaved(JSON.stringify([c.telegram_token, c.telegram_chat, c.telegram_api, c.webhook, l]))
+        setSaved(JSON.stringify([undefined, c.telegram_chat, c.telegram_api, undefined, l]))
       })
       .catch((err) => {
         if (cancelled) return
@@ -60,7 +91,7 @@ export function AlertsModal({ onClose, onUnauthorized }: Props) {
   // ошибку пароля показывает окно подтверждения, остальное - само окно алертов
   async function put(password: string) {
     try {
-      await putAlerts({
+      const cfg = await putAlerts({
         telegram_token: token,
         telegram_chat: chat,
         telegram_api: apiUrl,
@@ -68,6 +99,13 @@ export function AlertsModal({ onClose, onUnauthorized }: Props) {
         lang: alertLang,
         password,
       })
+      setToken(undefined)
+      setWebhook(undefined)
+      setTokenSet(cfg.telegram_token_set)
+      setWebhookSet(cfg.webhook_set)
+      setChat(cfg.telegram_chat)
+      setApiUrl(cfg.telegram_api)
+      setSaved(JSON.stringify([undefined, cfg.telegram_chat, cfg.telegram_api, undefined, alertLang]))
     } catch (err) {
       if (err instanceof ApiError && err.status === 401) {
         onUnauthorized()
@@ -75,7 +113,6 @@ export function AlertsModal({ onClose, onUnauthorized }: Props) {
       }
       throw err
     }
-    setSaved(current)
     setStepUp(null)
     return true
   }
@@ -120,7 +157,7 @@ export function AlertsModal({ onClose, onUnauthorized }: Props) {
     }
   }
 
-  const canTest = Boolean((token && chat) || webhook)
+  const canTest = Boolean(((token ?? tokenSet) && chat) || (webhook ?? webhookSet))
 
   return (
     <div className="modal-backdrop" onClick={dismiss}>
@@ -150,14 +187,13 @@ export function AlertsModal({ onClose, onUnauthorized }: Props) {
                   'Создайте бота через @BotFather, вставьте его токен и chat_id (свой ID узнаете у @userinfobot).',
                 )}
               </p>
-              <label className="field">
-                <span>{t('Токен бота')}</span>
-                <input
-                  value={token}
-                  onChange={(e) => setToken(e.target.value)}
-                  placeholder="123456:ABC-DEF…"
-                />
-              </label>
+              <AlertSecretField
+                label={t('Токен бота')}
+                placeholder="123456:ABC-DEF…"
+                saved={tokenSet}
+                value={token}
+                onChange={setToken}
+              />
               <label className="field">
                 <span>{t('Chat ID')}</span>
                 <input
@@ -186,14 +222,13 @@ export function AlertsModal({ onClose, onUnauthorized }: Props) {
               <p className="muted small">
                 {t('POST с JSON {"text": "…"} на указанный URL (Slack, Mattermost, свой сервис).')}
               </p>
-              <label className="field">
-                <span>URL</span>
-                <input
-                  value={webhook}
-                  onChange={(e) => setWebhook(e.target.value)}
-                  placeholder="https://…"
-                />
-              </label>
+              <AlertSecretField
+                label="URL"
+                placeholder="https://…"
+                saved={webhookSet}
+                value={webhook}
+                onChange={setWebhook}
+              />
             </div>
 
             <div className="settings-group">

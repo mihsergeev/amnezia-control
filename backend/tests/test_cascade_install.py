@@ -64,7 +64,16 @@ sudo() {
     mkdir) if [ "$2" = -m ]; then command mkdir "$4"; else command "$@"; fi;;
     install) cp "$4" "$5";;
     sh)
-      if [[ "$5" == /etc/systemd/system/* ]]; then
+      if [ "$2" = -s ]; then
+        # Inline ownership checks run in a new shell, where these fake
+        # functions are unavailable. Accept only the exact preflight command
+        # and runtime payload; other inline operations must fail the test.
+        [ "$#" -eq 4 ] && [ "$3" = -- ] && [ "$4" = preflight ] || return 99
+        local inline
+        inline=$(cat)
+        [ "$inline" = "$TPROXY_PREFLIGHT" ] || return 99
+        echo "tproxy-preflight" >> "$STATE/calls"
+      elif [[ "$5" == /etc/systemd/system/* ]]; then
         sh "$2" "$3" "$4" "$STATE/units/${5##*/}" "$6"
       else
         command "$@"
@@ -75,6 +84,7 @@ sudo() {
       case "$2" in
         is-active) test -f "$STATE/$4";;
         enable)
+          if [ "$4" = acontrol-cascade-tproxy.service ] && [ "$FAULT" = tproxy ]; then return 1; fi
           if [ "$4" = acontrol-cascade-heal.service ] && [ "$FAULT" = heal ]; then return 1; fi
           touch "$STATE/$4"
           ;;
@@ -84,6 +94,8 @@ sudo() {
       esac
       ;;
     */cascade-tproxy.sh)
+      [ "$#" -eq 2 ] && [ "$1" = "$DIR/cascade-tproxy.sh" ] || return 99
+      case "$2" in heal|down) ;; *) return 99;; esac
       echo "tproxy-$2" >> "$STATE/calls"
       [ "$2" != heal ] || [ "$FAULT" != tproxy-rules ]
       ;;
@@ -104,7 +116,8 @@ curl() {
 
 @pytest.mark.skipif(shutil.which("bash") is None, reason="Bash is required")
 @pytest.mark.parametrize("fault", ["pull", "invalid-config", "create", "start", "egress", "promote", "tproxy-rules", "heal",
-                                    "interrupted", "first-heal", "none"])
+                                    "interrupted", "first-tproxy", "first-tproxy-rules", "first-heal",
+                                    "first-interrupted", "none"])
 def test_gateway_reinstall_keeps_previous_container_config_and_rules(tmp_path, monkeypatch, fault):
     state = tmp_path / "state"
     state.mkdir()
@@ -113,7 +126,7 @@ def test_gateway_reinstall_keeps_previous_container_config_and_rules(tmp_path, m
     (base / "config").mkdir(parents=True)
     (base / "geo").mkdir()
     config = base / "config" / "config.json"
-    first = fault == "first-heal"
+    first = fault.startswith("first-")
     for name in ("geoip.dat", "geosite.dat"):
         (base / "geo" / name).write_bytes(b"geo fixture")
     if not first:
@@ -122,18 +135,28 @@ def test_gateway_reinstall_keeps_previous_container_config_and_rules(tmp_path, m
             (state / name).write_text(value, encoding="utf-8")
         (state / "old.running").touch()
         (state / "acontrol-cascade-tproxy.service").touch()
-    if fault not in ("heal", "first-heal"):
+    if not first and fault != "heal":
         (state / "acontrol-cascade-heal.service").touch()
-    if fault == "interrupted":
+    if fault in ("interrupted", "first-interrupted"):
         tx = base / "gateway-transaction"
         tx.mkdir()
-        (tx / "state").write_bytes(f"{'c' * 32} {OLD} true unless-stopped\n".encode())
+        prior = "- false no" if first else f"{OLD} true unless-stopped"
+        (tx / "state").write_bytes(f"{'c' * 32} {prior}\n".encode())
         (tx / "switch").touch()
-        (tx / "config.previous").write_bytes(config.read_bytes())
+        if first:
+            helper = base / "cascade-tproxy.sh"
+            helper.write_text("#!/bin/sh\n", encoding="utf-8", newline="\n")
+            helper.chmod(0o755)
+            for name in ("new-tproxy", "new-heal"):
+                (tx / name).touch()
+            for name in ("acontrol-cascade-tproxy.service", "acontrol-cascade-heal.service"):
+                (state / name).touch()
+        else:
+            (tx / "config.previous").write_bytes(config.read_bytes())
+            (state / "old.name").write_text(f"{cascade.GATEWAY}-previous", encoding="utf-8")
+            (state / "old.running").unlink()
+            (state / "old.policy").write_text("no", encoding="utf-8")
         config.write_bytes(b"interrupted candidate config")
-        (state / "old.name").write_text(f"{cascade.GATEWAY}-previous", encoding="utf-8")
-        (state / "old.running").unlink()
-        (state / "old.policy").write_text("no", encoding="utf-8")
         (state / "next.name").write_text(cascade.GATEWAY, encoding="utf-8")
         (state / "next.running").touch()
 
@@ -141,15 +164,20 @@ def test_gateway_reinstall_keeps_previous_container_config_and_rules(tmp_path, m
     monkeypatch.setattr(cascade, "_reality_encryption_command", lambda: "true")
     params = cascade.new_vless_params() | {"port": 8443}
     script = cascade.build_entry_script("vless", "198.51.100.20", 7, params, "DE")
-    injected = {"interrupted": "create", "first-heal": "heal"}.get(fault, fault)
-    values = {"FAULT": injected, "STATE": state.as_posix(), "DIR": base.as_posix(), "OLD": OLD, "NEXT": NEXT}
+    injected = "create" if fault in ("interrupted", "first-interrupted") else fault.removeprefix("first-")
+    values = {"FAULT": injected, "STATE": state.as_posix(), "DIR": base.as_posix(), "OLD": OLD, "NEXT": NEXT,
+              "TPROXY_PREFLIGHT": cascade._fill(cascade._TPROXY_SH).rstrip("\n")}
     prefix = "\n".join(f"{key}={shlex.quote(value)}" for key, value in values.items())
     result = subprocess.run([shutil.which("bash"), "-s"], input=(prefix + "\n" + FAKE_ENTRY + script).encode(),
                             capture_output=True, timeout=15)
 
     calls = (state / "calls").read_text(encoding="utf-8")
     assert (state / "acontrol-cascade-tproxy.service").is_file() == (not first)
+    assert (state / "acontrol-cascade-heal.service").is_file() == (not first and fault != "heal")
     assert ("tproxy-down" in calls) == first
+    if first:
+        assert calls.index("tproxy-preflight") < calls.index("systemctl disable --now acontrol-cascade-tproxy.service")
+        assert calls.index("systemctl disable --now acontrol-cascade-tproxy.service") < calls.index("tproxy-down")
     output = result.stdout.decode(errors="replace")
     assert not (base / "gateway-transaction").exists(), (output, result.stderr.decode(errors="replace"), calls)
     if fault == "none":
@@ -161,6 +189,8 @@ def test_gateway_reinstall_keeps_previous_container_config_and_rules(tmp_path, m
         assert result.returncode != 0 and "DEPLOY_DONE" not in output
         assert not (state / "next.name").exists()
         assert not config.exists()
+        if fault == "first-interrupted":
+            assert calls.index(f"docker rm -f {NEXT}") < calls.index("docker create")
     else:
         assert result.returncode != 0 and "DEPLOY_DONE" not in output
         assert (state / "old.name").read_text().strip() == cascade.GATEWAY

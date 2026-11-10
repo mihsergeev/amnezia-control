@@ -8,6 +8,7 @@ import base64
 import binascii
 import json
 import zlib
+from collections.abc import Iterator
 from dataclasses import dataclass, field
 
 from app import sshops
@@ -45,13 +46,16 @@ def _b64_decode(text: str) -> bytes:
 
 # лимит на распакованный размер — защита от zlib-бомбы в присланной ссылке
 _MAX_UNCOMPRESSED = 8 * 1024 * 1024
+_MAX_JSON_DEPTH = 128
 
 
 def _decompress_limited(data: bytes) -> bytes:
     obj = zlib.decompressobj()
-    out = obj.decompress(data, _MAX_UNCOMPRESSED)
-    if obj.unconsumed_tail:
-        raise zlib.error("превышен лимит распаковки")
+    out = obj.decompress(data, _MAX_UNCOMPRESSED + 1)
+    if len(out) > _MAX_UNCOMPRESSED:
+        raise ImportParseError("конфиг Amnezia слишком большой")
+    if not obj.eof:
+        raise zlib.error("неполный сжатый конфиг")
     return out
 
 
@@ -65,44 +69,35 @@ def _maybe_uncompress(raw: bytes) -> bytes:
         return _decompress_limited(raw)
     except zlib.error:
         pass
+    if len(raw) > _MAX_UNCOMPRESSED:
+        raise ImportParseError("конфиг Amnezia слишком большой")
     return raw
 
 
-def _find_creds(node: object) -> dict | None:
-    """Рекурсивно ищет объект с host/hostName."""
+def _walk_objects(node: object, depth: int = 0) -> Iterator[dict]:
+    if depth > _MAX_JSON_DEPTH:
+        raise ImportParseError("слишком глубокая вложенность конфига Amnezia")
     if isinstance(node, dict):
-        if any(k in node for k in ("hostName", "host")):
-            return node
+        yield node
         for value in node.values():
-            found = _find_creds(value)
-            if found is not None:
-                return found
+            yield from _walk_objects(value, depth + 1)
     elif isinstance(node, list):
         for item in node:
-            found = _find_creds(item)
-            if found is not None:
-                return found
-    return None
+            yield from _walk_objects(item, depth + 1)
 
 
-def _extract_protocols(data: object) -> list[str]:
-    protocols: list[str] = []
-
-    def walk(node: object) -> None:
-        if isinstance(node, dict):
-            container = node.get("container")
-            if isinstance(container, str) and container:
-                name = container.removeprefix("amnezia-")
-                if name not in protocols:
-                    protocols.append(name)
-            for value in node.values():
-                walk(value)
-        elif isinstance(node, list):
-            for item in node:
-                walk(item)
-
-    walk(data)
-    return protocols
+def _ssh_port(value: object, error: str) -> int:
+    if value is None or value == "":
+        return 22
+    if isinstance(value, bool) or not isinstance(value, (str, int)):
+        raise ImportParseError(error)
+    try:
+        port = int(value)
+    except ValueError as exc:
+        raise ImportParseError(error) from exc
+    if not 1 <= port <= 65535:
+        raise ImportParseError(error)
+    return port
 
 
 def _looks_like_private_key(value: str) -> bool:
@@ -118,20 +113,29 @@ def parse_amnezia_link(text: str) -> ServerSpec:
     payload = _maybe_uncompress(_b64_decode(raw))
     try:
         data = json.loads(payload)
-    except (json.JSONDecodeError, ValueError, UnicodeDecodeError) as exc:
+    except RecursionError as exc:
+        raise ImportParseError("слишком глубокая вложенность конфига Amnezia") from exc
+    except ValueError as exc:
         raise ImportParseError(
             "содержимое не похоже на конфиг Amnezia (не удалось разобрать JSON)"
         ) from exc
 
-    creds = _find_creds(data)
+    creds = None
+    protocols: dict[str, None] = {}
+    for node in _walk_objects(data):
+        if creds is None and ("hostName" in node or "host" in node):
+            creds = node
+        container = node.get("container")
+        if isinstance(container, str) and container:
+            protocols[container.removeprefix("amnezia-")] = None
     if creds is None:
         raise ImportParseError(
             "в конфиге нет адреса сервера — нужен экспорт с ПОЛНЫМ доступом"
         )
 
     host = creds.get("hostName") or creds.get("host")
-    if not host:
-        raise ImportParseError("в конфиге пустой адрес сервера")
+    if not isinstance(host, str) or not host:
+        raise ImportParseError("в конфиге неверный адрес сервера")
 
     user = (
         creds.get("userName")
@@ -140,8 +144,8 @@ def parse_amnezia_link(text: str) -> ServerSpec:
         or "root"
     )
     if not sshops.valid_ssh_user(user):
-        raise ImportParseError(f"недопустимое имя SSH-пользователя в конфиге: {user!r}")
-    port = int(creds.get("port") or 22)
+        raise ImportParseError("недопустимое имя SSH-пользователя в конфиге")
+    port = _ssh_port(creds.get("port"), "некорректный порт SSH в конфиге")
     secret = (
         creds.get("password")
         or creds.get("secretData")
@@ -154,21 +158,23 @@ def parse_amnezia_link(text: str) -> ServerSpec:
     name = ""
     if isinstance(data, dict):
         name = data.get("description") or ""
-    name = name or (creds.get("description") if isinstance(creds, dict) else "") or host
+    name = name or creds.get("description") or host
+    if not isinstance(name, str):
+        raise ImportParseError("в конфиге неверное название сервера")
 
     return ServerSpec(
-        host=str(host),
-        name=str(name),
+        host=host,
+        name=name,
         ssh_port=port,
         ssh_user=str(user),
         password=password,
-        protocols=_extract_protocols(data),
+        protocols=list(protocols),
     )
 
 
 def parse_bulk(text: str, default_user: str = "root") -> list[ServerSpec]:
     specs: list[ServerSpec] = []
-    for line in text.splitlines():
+    for line_no, line in enumerate(text.splitlines(), start=1):
         line = line.strip()
         if not line or line.startswith("#"):
             continue
@@ -177,13 +183,10 @@ def parse_bulk(text: str, default_user: str = "root") -> list[ServerSpec]:
         host, _, port_str = host_port.partition(":")
         if not host:
             continue
-        try:
-            port = int(port_str) if port_str else 22
-        except ValueError:
-            raise ImportParseError(f"некорректный порт в строке: {line}")
+        port = _ssh_port(port_str, f"некорректный порт SSH в строке {line_no}")
         user = parts[1] if len(parts) > 1 else default_user
         if not sshops.valid_ssh_user(user):
-            raise ImportParseError(f"недопустимое имя SSH-пользователя в строке: {line}")
+            raise ImportParseError(f"недопустимое имя SSH-пользователя в строке {line_no}")
         password = parts[2] if len(parts) > 2 else None
         specs.append(
             ServerSpec(

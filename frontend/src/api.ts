@@ -648,10 +648,10 @@ export type XrayVersion = {
 }
 
 export type AlertConfig = {
-  telegram_token: string
+  telegram_token_set: boolean
   telegram_chat: string
   telegram_api: string
-  webhook: string
+  webhook_set: boolean
   // язык алертов; пусто - не выбирали (панель шлет по-русски)
   lang: '' | 'ru' | 'en'
   enabled: boolean
@@ -663,10 +663,10 @@ export function getAlerts(): Promise<AlertConfig> {
 
 // сохранение каналов - с паролем (степ-ап)
 export function putAlerts(cfg: {
-  telegram_token: string
+  telegram_token?: string
   telegram_chat: string
   telegram_api: string
-  webhook: string
+  webhook?: string
   lang: 'ru' | 'en'
   password: string
 }): Promise<AlertConfig> {
@@ -999,10 +999,10 @@ export function getShareServices(): Promise<ShareService[]> {
   return api<ShareService[]>('/api/share/services')
 }
 
-export function addShareService(name: string, url: string): Promise<ShareService[]> {
+export function addShareService(name: string, url: string, password: string): Promise<ShareService[]> {
   return api<ShareService[]>('/api/share/services', {
     method: 'POST',
-    body: JSON.stringify({ name, url }),
+    body: JSON.stringify({ name, url, password }),
   })
 }
 
@@ -1063,6 +1063,8 @@ export type CascadeTransportProbe = {
   entry_port?: number | null
   exit_port?: number | null
   prerequisite_tcp?: { ok: boolean; error: string }
+  transfer_ok?: boolean | null
+  cleanup_failed?: ('entry' | 'exit')[]
 }
 
 export type CascadeRoute = { destination: string; via: 'entry' | 'exit' }

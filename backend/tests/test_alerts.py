@@ -1,11 +1,14 @@
+import asyncio
+import json
 from datetime import datetime, timedelta, timezone
+from unittest.mock import AsyncMock
 
 import httpx
 import pytest
 
 from app import alerts, config, settings_store
 from app.db import Base, create_engine_and_factory
-from app.models import ServerStatus
+from app.models import AppSetting, Server, ServerStatus
 
 # «сейчас» и момент заведомо позже порога недоступности — антидребезг теперь
 # ВРЕМЕННОЙ (server_down_minutes), состояние в БД, а не в памяти модуля
@@ -22,6 +25,7 @@ async def test_checkbox_resets_old_cascade_alert(client, auth_headers):
         "/api/servers", headers=auth_headers,
         json={"name": "vpn-a", "host": "203.0.113.10"},
     )
+    assert created.status_code == 201, created.text
     sid = created.json()["id"]
     assert created.json()["alerts_enabled"] is False
     async with client.session_factory() as s:
@@ -48,6 +52,11 @@ async def session(tmp_path, monkeypatch):
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
     async with factory() as s:
+        s.add_all([
+            Server(id=1, name="vpn-a", host="203.0.113.10", alerts_enabled=True),
+            Server(id=2, name="vpn-b", host="203.0.113.11", alerts_enabled=True),
+        ])
+        await s.commit()
         yield s
     await engine.dispose()
     config.get_settings.cache_clear()
@@ -178,6 +187,44 @@ async def test_recovery_discards_undelivered_outage(session, monkeypatch):
     assert "снова онлайн" in sent[-1][1]
 
 
+@pytest.mark.parametrize("delivery_errors", [[], ["timeout"]])
+async def test_disabling_alerts_stops_delivery_to_next_channel(
+    client, auth_headers, monkeypatch, delivery_errors,
+):
+    settings = config.get_settings()
+    created = await client.post(
+        "/api/servers", headers=auth_headers,
+        json={"name": "vpn-a", "host": "203.0.113.10"},
+    )
+    assert created.status_code == 201
+    sid = created.json()["id"]
+    response = await client.patch(
+        f"/api/servers/{sid}", headers=auth_headers, json={"alerts_enabled": True},
+    )
+    assert response.status_code == 200 and response.json()["alerts_enabled"] is True
+    sent = []
+
+    async def fake_send(cfg, text, *, html_text=None):
+        if cfg["telegram_token"]:
+            sent.append("telegram")
+            response = await client.patch(
+                f"/api/servers/{sid}", headers=auth_headers, json={"alerts_enabled": False},
+            )
+            assert response.status_code == 200
+            return delivery_errors
+        sent.append("webhook")
+        return []
+
+    monkeypatch.setattr(alerts, "send_alert", fake_send)
+    async with client.session_factory() as session:
+        await settings_store.set_alert_config(session, "TOKEN", "123", "https://hooks.example/test")
+        await alerts.reconcile(session, settings, {sid: False}, {sid: "vpn-a"}, now=NOW)
+        await alerts.reconcile(session, settings, {sid: False}, {sid: "vpn-a"}, now=LATER)
+        await alerts.reconcile(session, settings, {sid: False}, {sid: "vpn-a"}, now=LATER)
+
+    assert sent == ["telegram"]
+
+
 async def test_webhook_error_does_not_disclose_url(monkeypatch, caplog):
     client = httpx.AsyncClient
     transport = httpx.MockTransport(lambda request: httpx.Response(401))
@@ -189,6 +236,240 @@ async def test_webhook_error_does_not_disclose_url(monkeypatch, caplog):
     assert errors == ["Webhook: HTTP 401"]
     assert "HTTP 401" in caplog.text
     assert "example-credential" not in caplog.text
+
+
+async def test_opt_out_before_final_settings_snapshot_stops_delivery(
+    client, auth_headers, monkeypatch,
+):
+    created = await client.post(
+        "/api/servers", headers=auth_headers,
+        json={"name": "vpn-a", "host": "203.0.113.10"},
+    )
+    assert created.status_code == 201
+    sid = created.json()["id"]
+    response = await client.patch(
+        f"/api/servers/{sid}", headers=auth_headers, json={"alerts_enabled": True},
+    )
+    assert response.status_code == 200
+    sent = AsyncMock(return_value=[])
+    monkeypatch.setattr(alerts, "send_card", sent)
+
+    async with client.session_factory() as session:
+        settings = config.get_settings()
+        await settings_store.set_alert_config(session, "TOKEN", "123", "")
+        await alerts.reconcile(session, settings, {sid: False}, {}, now=NOW)
+        reads = 0
+
+        async def revoke_before_settings_read(statement):
+            nonlocal reads
+            if AppSetting.__tablename__ not in str(statement):
+                return
+            reads += 1
+            if reads == 2:
+                response = await client.patch(
+                    f"/api/servers/{sid}", headers=auth_headers,
+                    json={"alerts_enabled": False},
+                )
+                assert response.status_code == 200
+                assert response.json()["alerts_enabled"] is False
+
+        execute = session.execute
+        scalar = session.scalar
+
+        async def execute_after_revoke(statement, *args, **kwargs):
+            await revoke_before_settings_read(statement)
+            return await execute(statement, *args, **kwargs)
+
+        async def scalar_after_revoke(statement, *args, **kwargs):
+            await revoke_before_settings_read(statement)
+            return await scalar(statement, *args, **kwargs)
+
+        monkeypatch.setattr(session, "execute", execute_after_revoke)
+        monkeypatch.setattr(session, "scalar", scalar_after_revoke)
+        await alerts.reconcile(session, settings, {sid: False}, {}, now=LATER)
+        assert reads == 2
+    sent.assert_not_awaited()
+
+
+async def test_concurrent_alert_puts_preserve_other_masked_secret_changes(
+    client, auth_headers, monkeypatch,
+):
+    async with client.session_factory() as session:
+        await settings_store.set_alert_config(
+            session, "old-token", "123", "https://example.org/old-hook",
+        )
+    monkeypatch.setattr(alerts, "send_card", AsyncMock(return_value=[]))
+    first_read = asyncio.Event()
+    second_started = asyncio.Event()
+    writers = set()
+    snapshot = None
+    read_raw = settings_store._get_raw
+    write_raw = settings_store._set_raw
+    save_config = settings_store.set_alert_config
+
+    async def concurrent_read(session, key):
+        nonlocal snapshot
+        if key != settings_store.ALERTS_KEY or asyncio.current_task() not in writers:
+            return await read_raw(session, key)
+        if snapshot is not None:
+            # Concurrent raw reads can observe the first writer's old snapshot.
+            return snapshot
+        raw = await read_raw(session, key)
+        snapshot = raw
+        first_read.set()
+        await second_started.wait()
+        return raw
+
+    async def committed_write(session, key, value):
+        nonlocal snapshot
+        await write_raw(session, key, value)
+        snapshot = None
+
+    async def concurrent_save(*args, **kwargs):
+        task = asyncio.current_task()
+        writers.add(task)
+        if len(writers) == 2:
+            second_started.set()
+        try:
+            return await save_config(*args, **kwargs)
+        finally:
+            writers.remove(task)
+
+    monkeypatch.setattr(settings_store, "_get_raw", concurrent_read)
+    monkeypatch.setattr(settings_store, "_set_raw", committed_write)
+    monkeypatch.setattr(settings_store, "set_alert_config", concurrent_save)
+    async with asyncio.timeout(30):
+        first = asyncio.create_task(client.put(
+            "/api/alerts", headers=auth_headers,
+            json={"telegram_token": "new-token", "telegram_chat": "123", "password": "testpass"},
+        ))
+        await first_read.wait()
+        second = asyncio.create_task(client.put(
+            "/api/alerts", headers=auth_headers,
+            json={"webhook": "", "telegram_chat": "123", "password": "testpass"},
+        ))
+        responses = await asyncio.gather(first, second)
+    assert [response.status_code for response in responses] == [200, 200]
+    async with client.session_factory() as session:
+        cfg = await settings_store.get_alert_config(session, config.get_settings())
+        assert cfg["telegram_token"] == "new-token"
+        assert cfg["webhook"] == ""
+        raw = json.loads((await session.get(AppSetting, settings_store.ALERTS_KEY)).value)
+        assert "webhook" in raw["empty_overrides"]
+
+
+@pytest.mark.parametrize("legacy_blanks", [False, True])
+@pytest.mark.parametrize("null_secrets", [False, True])
+async def test_masked_settings_preserve_env_rotation_and_explicit_clear(
+    client, auth_headers, monkeypatch, legacy_blanks, null_secrets,
+):
+    settings = config.get_settings()
+    monkeypatch.setattr(settings, "alert_telegram_token", "environment-token")
+    monkeypatch.setattr(settings, "alert_telegram_chat", "42")
+    monkeypatch.setattr(settings, "alert_webhook", "https://example.org/environment-hook")
+    monkeypatch.setattr(alerts, "send_card", AsyncMock(return_value=[]))
+    if legacy_blanks:
+        async with client.session_factory() as session:
+            session.add(AppSetting(key=settings_store.ALERTS_KEY, value=json.dumps({
+                "telegram_token": "", "telegram_chat": "", "webhook": "",
+            })))
+            await session.commit()
+
+    response = await client.get("/api/alerts", headers=auth_headers)
+    assert response.status_code == 200
+    assert response.json()["telegram_token_set"] and response.json()["webhook_set"]
+    assert response.json()["telegram_chat"] == "42"
+
+    body = {"telegram_chat": "42", "lang": "en", "password": "testpass"}
+    if null_secrets:
+        body.update(telegram_token=None, webhook=None)
+    response = await client.put("/api/alerts", headers=auth_headers, json=body)
+    assert response.status_code == 200
+    async with client.session_factory() as session:
+        raw = json.loads((await session.get(AppSetting, settings_store.ALERTS_KEY)).value)
+        for key in ("telegram_token", "webhook"):
+            if legacy_blanks:
+                assert raw[key] == ""
+            else:
+                assert key not in raw
+
+    settings.alert_telegram_token = "rotated-token"
+    settings.alert_webhook = "https://example.org/rotated-hook"
+    async with client.session_factory() as session:
+        cfg = await settings_store.get_alert_config(session, settings)
+        assert cfg["telegram_token"] == settings.alert_telegram_token
+        assert cfg["webhook"] == settings.alert_webhook
+
+    response = await client.put("/api/alerts", headers=auth_headers, json={
+        "telegram_token": "", "telegram_chat": "", "webhook": "", "password": "testpass",
+    })
+    assert response.status_code == 200 and response.json()["enabled"] is False
+    body["telegram_chat"] = ""
+    response = await client.put("/api/alerts", headers=auth_headers, json=body)
+    assert response.status_code == 200 and response.json()["enabled"] is False
+    response = await client.get("/api/alerts", headers=auth_headers)
+    assert response.status_code == 200 and response.json()["enabled"] is False
+    async with client.session_factory() as session:
+        cfg = await settings_store.get_alert_config(session, settings)
+        assert cfg["telegram_token"] == cfg["telegram_chat"] == cfg["webhook"] == ""
+
+
+async def test_recipient_change_does_not_reuse_delivery_receipt(session, monkeypatch):
+    settings = config.get_settings()
+    await settings_store.set_alert_config(session, "TOKEN", "123", "https://hooks.example/test")
+    sent = []
+
+    async def fake_send(cfg, text, *, html_text=None):
+        sent.append((cfg.get("telegram_chat") or cfg["webhook"], text))
+        return []
+
+    monkeypatch.setattr(alerts, "send_alert", fake_send)
+    await alerts.reconcile(session, settings, {1: False}, {}, now=NOW)
+    await alerts.reconcile(session, settings, {1: False}, {}, now=LATER)
+    await settings_store.set_alert_config(session, "TOKEN", "456", "https://hooks.example/test")
+    await alerts.reconcile(session, settings, {1: True}, {}, now=LATER)
+    assert [dest for dest, _ in sent] == ["123", "https://hooks.example/test", "https://hooks.example/test"]
+    assert "снова онлайн" in sent[-1][1]
+
+
+async def test_config_change_during_send_skips_old_pending_destination(session, monkeypatch):
+    settings = config.get_settings()
+    await settings_store.set_alert_config(session, "TOKEN", "123", "https://hooks.example/test")
+    sent = []
+
+    async def fake_send(cfg, text, *, html_text=None):
+        sent.append(cfg)
+        await settings_store.set_alert_config(session, "TOKEN", "123", "")
+        return []
+
+    monkeypatch.setattr(alerts, "send_alert", fake_send)
+    await alerts.reconcile(session, settings, {1: False}, {}, now=NOW)
+    await alerts.reconcile(session, settings, {1: False}, {}, now=LATER)
+    assert len(sent) == 1 and sent[0]["telegram_token"]
+
+
+async def test_partial_observation_preserves_other_server_outage(session, monkeypatch):
+    settings = config.get_settings()
+    await settings_store.set_alert_config(session, "TOKEN", "123", "")
+    sent = AsyncMock(return_value=[])
+    monkeypatch.setattr(alerts, "send_card", sent)
+    await alerts.reconcile(session, settings, {1: False, 2: False}, {}, now=NOW)
+    await alerts.reconcile(session, settings, {1: False}, {}, now=LATER)
+    assert await session.get(ServerStatus, 2) is not None
+    await alerts.reconcile(session, settings, {2: False}, {}, now=LATER)
+    assert sent.await_count == 2
+
+
+@pytest.mark.parametrize("receipt", [None, {"telegram": True}])
+async def test_legacy_receipt_does_not_notify_unknown_recipient(session, monkeypatch, receipt):
+    settings = config.get_settings()
+    await settings_store.set_alert_config(session, "TOKEN", "123", "")
+    session.add(ServerStatus(server_id=1, online=False, changed_at=NOW, availability_alerts=receipt))
+    await session.commit()
+    sent = AsyncMock(return_value=[])
+    monkeypatch.setattr(alerts, "send_card", sent)
+    await alerts.reconcile(session, settings, {1: True}, {}, now=LATER)
+    sent.assert_not_awaited()
 
 
 async def test_reconcile_no_alert_when_unconfigured(session, monkeypatch):
@@ -223,27 +504,23 @@ async def test_disabled_server_stays_neutral_until_checkbox_enabled(session, mon
 
     monkeypatch.setattr(alerts, "send_alert", fake_send)
     names = {1: "vpn-a"}
-    assert await alerts.reconcile(
-        session, settings, {1: False}, names, now=NOW,
-        enabled_server_ids=set(),
-    ) == []
-    assert await alerts.reconcile(
-        session, settings, {1: False}, names, now=LATER,
-        enabled_server_ids=set(),
-    ) == []
+    server = await session.get(Server, 1)
+    server.alerts_enabled = False
+    await session.commit()
+    assert await alerts.reconcile(session, settings, {1: False}, names, now=NOW) == []
+    assert await alerts.reconcile(session, settings, {1: False}, names, now=LATER) == []
     row = await session.get(ServerStatus, 1)
     assert row.online is True and row.down_since is None
     assert sent == []
 
     # После включения полный порог начинается заново.
     start = LATER + timedelta(minutes=1)
-    assert await alerts.reconcile(
-        session, settings, {1: False}, names, now=start,
-        enabled_server_ids={1},
-    ) == []
+    server.alerts_enabled = True
+    await session.commit()
+    assert await alerts.reconcile(session, settings, {1: False}, names, now=start) == []
     assert await alerts.reconcile(
         session, settings, {1: False}, names,
-        now=start + timedelta(minutes=31), enabled_server_ids={1},
+        now=start + timedelta(minutes=31),
     ) == [(1, False)]
     assert len(sent) == 1 and "недоступен" in sent[0]
 
@@ -277,25 +554,53 @@ async def test_down_alert_carries_panel_link(session, monkeypatch):
 
 
 async def test_alerts_api_roundtrip(
-    client: httpx.AsyncClient, auth_headers: dict[str, str]
+    client: httpx.AsyncClient, auth_headers: dict[str, str], monkeypatch
 ):
+    from app.config import get_settings
+
+    settings = get_settings()
+    monkeypatch.setattr(settings, "alert_telegram_token", "environment-token")
+    monkeypatch.setattr(settings, "alert_telegram_chat", "42")
+    monkeypatch.setattr(settings, "alert_webhook", "https://example.org/environment-hook")
+    monkeypatch.setattr(alerts, "send_card", AsyncMock(return_value=[]))
+
     r = await client.get("/api/alerts", headers=auth_headers)
     assert r.status_code == 200
-    assert r.json()["enabled"] is False
+    assert r.json()["enabled"] is True
 
     r = await client.put(
         "/api/alerts",
         headers=auth_headers,
-        json={"telegram_token": "", "telegram_chat": "", "webhook": "https://ex/hook",
+        json={"telegram_token": "test-token", "telegram_chat": "42", "webhook": "https://example.org/test-hook",
               "password": "testpass"},
     )
     assert r.status_code == 200
     body = r.json()
     assert body["enabled"] is True
-    assert body["webhook"] == "https://ex/hook"
+    assert body["telegram_token_set"] and body["webhook_set"]
+    assert "telegram_token" not in body and "webhook" not in body
 
     r = await client.get("/api/alerts", headers=auth_headers)
-    assert r.json()["webhook"] == "https://ex/hook"
+    assert r.json() == body
+
+    r = await client.put(
+        "/api/alerts", headers=auth_headers,
+        json={"telegram_chat": "42", "lang": "en", "password": "testpass"},
+    )
+    assert r.status_code == 200
+    assert r.json()["telegram_token_set"] and r.json()["webhook_set"]
+    assert (await client.post("/api/alerts/test", headers=auth_headers)).status_code == 200
+    config = alerts.send_card.await_args.args[0]
+    assert config["telegram_token"] == "test-token"
+    assert config["webhook"] == "https://example.org/test-hook"
+
+    r = await client.put(
+        "/api/alerts", headers=auth_headers,
+        json={"telegram_token": "", "webhook": "", "password": "testpass"},
+    )
+    assert r.status_code == 200
+    assert not r.json()["telegram_token_set"] and not r.json()["webhook_set"]
+    assert not r.json()["enabled"]
 
 
 async def test_alerts_test_requires_config(

@@ -8,7 +8,9 @@ import json
 import tarfile
 
 import httpx
+import pytest
 
+from app import apikeys
 from app.api.backup import _skip_data_dir, verify_archive
 
 
@@ -132,7 +134,7 @@ async def test_backup_restore_roundtrip_preserves_expiry_and_alerts(
         json={"telegram_token": "", "telegram_chat": "", "webhook": "", "password": "testpass"},
     )
     cfg = (await client.get("/api/alerts", headers=auth_headers)).json()
-    assert not cfg["telegram_token_set"] if "telegram_token_set" in cfg else True
+    assert not cfg["telegram_token_set"]
 
     # восстановление из архива
     r = await client.post(
@@ -194,6 +196,69 @@ def _tar(files: dict[str, bytes]) -> bytes:
             info.size = len(d)
             tar.addfile(info, io.BytesIO(d))
     return buf.getvalue()
+
+
+@pytest.mark.parametrize("reverse", [False, True])
+async def test_restore_rejects_archive_path_conflict_before_mutation(
+    client, auth_headers, tmp_path, reverse,
+):
+    created = await client.post("/api/servers", headers=auth_headers, json={
+        "name": "srv-bkp", "host": "203.0.113.50",
+    })
+    assert created.status_code == 201, created.text
+    data = tmp_path / "data"
+    data.mkdir(exist_ok=True)
+    marker = data / "marker.txt"
+    marker.write_bytes(b"before")
+    collision = [("data/folder", b"file"), ("data/folder/conflict", b"child")]
+    if reverse:
+        collision.reverse()
+    archive = _tar({
+        "db.json": b'{"servers": []}',
+        "data/marker.txt": b"after",
+        **dict(collision),
+    })
+    response = await client.post(
+        "/api/backup/restore", content=archive,
+        headers={**auth_headers, "X-Confirm-Password": "testpass"},
+    )
+    assert response.status_code == 400, response.text
+    assert "конфликт файла и каталога" in response.json()["detail"]
+    servers = await client.get("/api/servers", headers=auth_headers)
+    assert [server["name"] for server in servers.json()] == ["srv-bkp"]
+    assert marker.read_bytes() == b"before"
+    assert not (data / "folder").exists()
+
+
+async def test_restore_retires_keys_absent_from_older_archive(client, auth_headers):
+    key, prefix, key_hash = apikeys.generate()
+    headers = {**auth_headers, "X-Confirm-Password": "testpass"}
+    key_headers = {"X-API-Key": key}
+    older = _tar({"db.json": b'{"api_keys": []}'})
+    newer = _tar({"db.json": json.dumps({"api_keys": [{
+        "id": 1, "name": "integration", "prefix": prefix, "key_hash": key_hash,
+        "revoked": False,
+    }]}).encode()})
+
+    # При переносе на чистую панель активный ключ архива сохраняет доступ.
+    imported = await client.post("/api/backup/restore", content=newer, headers=headers)
+    assert imported.status_code == 200, imported.text
+    assert (await client.get("/api/v1/servers", headers=key_headers)).status_code == 200
+
+    rolled_back = await client.post("/api/backup/restore", content=older, headers=headers)
+    assert rolled_back.status_code == 200, rolled_back.text
+    keys = (await client.get("/api/apikeys", headers=auth_headers)).json()
+    assert len(keys) == 1 and keys[0]["revoked"] is True
+    assert (await client.get("/api/v1/servers", headers=key_headers)).status_code == 401
+
+    issued = await client.post("/api/apikeys", headers=auth_headers, json={
+        "name": "next integration", "password": "testpass",
+    })
+    assert issued.status_code == 201, issued.text
+
+    restored = await client.post("/api/backup/restore", content=newer, headers=headers)
+    assert restored.status_code == 200, restored.text
+    assert (await client.get("/api/v1/servers", headers=key_headers)).status_code == 401
 
 
 async def test_backup_restores_cascades_and_skips_secrets(client, auth_headers, tmp_path):

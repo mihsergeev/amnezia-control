@@ -44,7 +44,7 @@ def test_scripts_are_valid_shell(transport) -> None:
 
 @pytest.mark.skipif(shutil.which("bash") is None, reason="нужен bash")
 @pytest.mark.parametrize("transport", ["awg", "gre", "vless"])
-@pytest.mark.parametrize("fault", ["service", "tproxy", "rule", "container", "absent"])
+@pytest.mark.parametrize("fault", ["service", "tproxy", "rule", "route", "container", "absent", "foreign"])
 def test_remove_entry_only_reports_confirmed_cleanup(transport, fault) -> None:
     commands = r'''
 fault=$1
@@ -54,15 +54,18 @@ docker() { return 1; }
 sudo() {
   case "$1 $2" in
     'systemctl show')
+      echo systemctl_show_attempt >&2
       if [ "$fault" = absent ]; then echo not-found; else echo loaded; fi
       ;;
     'systemctl disable') [ "$fault" != service ] ;;
     'systemctl daemon-reload'|'rm -rf'|'rm -f') return 0 ;;
+    'sh -s') cat >/dev/null; [ "$fault" != foreign ] ;;
     'iptables -w')
       if [ "$fault" = tproxy ]; then echo '-N ACONTROL_CASCADE'; fi
       ;;
     'ip -N')
       if [ "$fault" = rule ]; then echo '100: from all fwmark 0x100 lookup 241'; fi
+      if [ "$fault" = route ] && [ "$4" = route ]; then echo '2 default dev lo table 241 scope 254'; fi
       ;;
     'docker container')
       [ "$3" = ls ] || return 1
@@ -81,6 +84,54 @@ sudo() {
     assert result.returncode == (0 if fault == "absent" else 73), result.stderr
     assert ("CASCADE_REMOVED=yes" in result.stdout) == (fault == "absent")
     assert ("docker_remove_attempt" in result.stderr) == (fault == "container")
+    assert ("systemctl_show_attempt" in result.stderr) == (fault != "foreign")
+
+
+@pytest.mark.skipif(shutil.which("bash") is None, reason="requires bash")
+@pytest.mark.parametrize("conflict", [False, True])
+def test_gateway_retry_replaces_legacy_tproxy_before_exec_stop(conflict) -> None:
+    commands = r'''
+sudo() {
+  case "$1 $2" in
+    'test -e') [ "$3" = "$GW_TX" ] ;;
+    'test -L') return 1 ;;
+    'test -f')
+      case "$3" in "$GW_TX/state"|"$GW_TX/new-tproxy"|"$GW_TX/new-heal") return 0 ;; *) return 1 ;; esac
+      ;;
+    'test -x') return 0 ;;
+    'stat -c') echo 0:700 ;;
+    'sh -s') cat >/dev/null; echo preflight >&2; [ "$CONFLICT" = no ] ;;
+    'sh -c') cat >/dev/null; echo helper_replaced >&2 ;;
+    'systemctl disable') echo "stop $4" >&2 ;;
+    'iptables -w'|'ip -N'|'docker container'|'rm -rf') return 0 ;;
+    *)
+      if [ "$1" = cat ]; then echo 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa - false no'; return 0; fi
+      if [ "$1" = '/opt/acontrol/cascade/cascade-tproxy.sh' ] && [ "$2" = down ]; then
+        echo safe_down >&2; return 0
+      fi
+      echo "unexpected $*" >&2; return 1
+      ;;
+  esac
+}
+ip() { return 1; }
+iptables() { return 1; }
+'''
+    script = cascade.cascade_gateway.commands(
+        cascade.DIR, cascade.GATEWAY, "", cascade._remove_tproxy(),
+        tproxy_prepare=cascade._prepare_tproxy_removal(),
+    )
+    installed = cascade.build_entry_script("vless", "198.51.100.20", 3, VLESS)
+    assert script.split("GW_TOKEN=")[0] in installed
+    result = subprocess.run(
+        [shutil.which("bash"), "-s"],
+        input=f"CONFLICT={'yes' if conflict else 'no'}\n" + commands + script + "gateway_recover || exit 73\n",
+        capture_output=True, text=True, timeout=10,
+    )
+    assert result.returncode == (73 if conflict else 0), result.stderr
+    assert result.stderr.splitlines() == (["preflight"] if conflict else [
+        "preflight", "helper_replaced", "stop acontrol-cascade-heal.service",
+        "stop acontrol-cascade-tproxy.service", "safe_down",
+    ])
 
 
 def test_mptcp_optout_covers_gateway_exit_and_geo_check() -> None:
@@ -640,30 +691,65 @@ def test_tproxy_catches_amnezia_dns_net() -> None:
 
 
 @pytest.mark.skipif(shutil.which("bash") is None, reason="requires bash")
-@pytest.mark.parametrize("foreign_jump", [False, True])
-def test_tproxy_removes_stale_rules_without_touching_other_routes(foreign_jump) -> None:
+@pytest.mark.parametrize("conflict", ["", "goto", "foreign-interface", "foreign-live-bridge", "extra-match",
+                                      "foreign-chain-rule", "foreign-chain-race", "foreign-policy"])
+def test_tproxy_removes_stale_rules_without_touching_other_routes(conflict) -> None:
     commands = r'''
+export PATH="/usr/bin:/bin:$PATH"
+docker() { return 1; }
 iptables() {
   case "$*" in
     '-w -S INPUT')
       echo '-A INPUT -i docker0 -m mark --mark 0x100/0x100 -j ACCEPT'
+      echo '-A INPUT -i br-deadbeef1234 -m mark --mark 0x100/0x100 -j ACCEPT'
+      echo '-A INPUT -i br-deadbeef4321 -m mark --mark 0x100/0x100 -j ACCEPT'
+      echo '-A INPUT -i eth0 -m mark --mark 0x100/0x100 -j ACCEPT'
       echo '-A INPUT -i eth0 -p tcp -m mark --mark 0x100/0x100 -j ACCEPT'
-      ;;
-    '-w -t mangle -S PREROUTING')
-      echo '-A PREROUTING -i br-deleted -j ACONTROL_CASCADE'
       ;;
     '-w -t mangle -S')
       echo '-N ACONTROL_CASCADE'
-      if [ "$FOREIGN" = yes ]; then echo '-A OUTPUT -j ACONTROL_CASCADE'; fi
+      echo '-A ACONTROL_CASCADE -d 10.0.0.0/8 -j RETURN'
+      echo '-A ACONTROL_CASCADE -d 192.0.2.10/32 -j RETURN'
+      echo '-A ACONTROL_CASCADE -m conntrack --ctstate DNAT -j RETURN'
+      echo '-A ACONTROL_CASCADE -p tcp -j TPROXY --on-port 12350 --on-ip 127.0.0.1 --tproxy-mark 0x100/0x100'
+      echo '-A ACONTROL_CASCADE -p udp -j TPROXY --on-port 12350 --on-ip 127.0.0.1 --tproxy-mark 0x100/0x100'
+      if [ "${live_jump_removed:-no}" = no ]; then
+        echo '-A PREROUTING -i docker0 -j ACONTROL_CASCADE'
+      fi
+      if [ "${stale_jump_removed:-no}" = no ]; then
+        echo '-A PREROUTING -i br-deadbeef1234 -j ACONTROL_CASCADE'
+      fi
+      case "$FOREIGN" in
+        goto) echo '-A OUTPUT -g ACONTROL_CASCADE' ;;
+        foreign-interface) echo '-A PREROUTING -i eth0 -j ACONTROL_CASCADE' ;;
+        foreign-live-bridge) echo '-A PREROUTING -i br-deadbeef4321 -j ACONTROL_CASCADE' ;;
+        extra-match) echo '-A PREROUTING -i docker0 -p tcp -j ACONTROL_CASCADE' ;;
+        foreign-chain-rule) echo '-A ACONTROL_CASCADE -j MARK --set-xmark 0x200/0x200' ;;
+        foreign-chain-race)
+          if [ "${stale_jump_removed:-no}" = yes ]; then
+            echo '-A ACONTROL_CASCADE -j MARK --set-xmark 0x200/0x200'
+          fi
+          ;;
+      esac
       ;;
+    '-w -t mangle -D PREROUTING -i docker0 -j ACONTROL_CASCADE')
+      live_jump_removed=yes; echo "iptables $*" ;;
+    '-w -t mangle -D PREROUTING -i br-deadbeef1234 -j ACONTROL_CASCADE')
+      stale_jump_removed=yes; echo "iptables $*" ;;
+    '-w -t mangle -X ACONTROL_CASCADE')
+      echo "iptables $*"; [ "$FOREIGN" != foreign-chain-race ] ;;
     *) echo "iptables $*";;
   esac
 }
 ip() {
   case "$*" in
+    '-o link show')
+      printf '%s\n' '1: lo: <LOOPBACK>' '2: br-deadbeef4321: <UP>'
+      ;;
     '-N -4 rule show')
       printf '%s\n' '100: from all fwmark 0x100 lookup 241' '101: from all fwmark 0x100 lookup 241' \
-        '102: from 192.0.2.10 fwmark 0x100 lookup 241'
+        '102: from 192.0.2.10 fwmark 0x100 lookup 242'
+      if [ "$FOREIGN" = foreign-policy ]; then echo '103: from 192.0.2.10 lookup 241'; fi
       ;;
     '-N -4 route show table all type local')
       printf '%s\n' '2 default dev lo table 241 scope 254' '2 192.0.2.1 dev lo table 241 scope 254'
@@ -674,23 +760,30 @@ ip() {
 '''
     result = subprocess.run(
         [shutil.which("bash"), "-s", "--", "down"],
-        input=f"FOREIGN={'yes' if foreign_jump else 'no'}\n" + commands + cascade._fill(cascade._TPROXY_SH),
+        input=f"FOREIGN={conflict}\n" + commands + cascade._fill(cascade._TPROXY_SH),
         capture_output=True, text=True, timeout=10,
     )
-    assert result.returncode == int(foreign_jump), result.stderr
-    deletes = [
-        "iptables -w -D INPUT -i docker0 -m mark --mark 0x100/0x100 -j ACCEPT",
-        "iptables -w -t mangle -D PREROUTING -i br-deleted -j ACONTROL_CASCADE",
-    ]
-    if not foreign_jump:
-        deletes.extend([
-            "iptables -w -t mangle -F ACONTROL_CASCADE",
+    assert result.returncode == bool(conflict), result.stderr
+    deletions = [
+            "iptables -w -D INPUT -i docker0 -m mark --mark 0x100/0x100 -j ACCEPT",
+            "iptables -w -D INPUT -i br-deadbeef1234 -m mark --mark 0x100/0x100 -j ACCEPT",
+            "iptables -w -t mangle -D PREROUTING -i docker0 -j ACONTROL_CASCADE",
+            "iptables -w -t mangle -D PREROUTING -i br-deadbeef1234 -j ACONTROL_CASCADE",
+            "iptables -w -t mangle -D ACONTROL_CASCADE -d 10.0.0.0/8 -j RETURN",
+            "iptables -w -t mangle -D ACONTROL_CASCADE -d 192.0.2.10/32 -j RETURN",
+            "iptables -w -t mangle -D ACONTROL_CASCADE -m conntrack --ctstate DNAT -j RETURN",
+            "iptables -w -t mangle -D ACONTROL_CASCADE -p tcp -j TPROXY --on-port 12350 --on-ip 127.0.0.1 --tproxy-mark 0x100/0x100",
+            "iptables -w -t mangle -D ACONTROL_CASCADE -p udp -j TPROXY --on-port 12350 --on-ip 127.0.0.1 --tproxy-mark 0x100/0x100",
             "iptables -w -t mangle -X ACONTROL_CASCADE",
             "ip -4 rule del pref 100 from all fwmark 0x100 lookup 241",
             "ip -4 rule del pref 101 from all fwmark 0x100 lookup 241",
             "ip -4 route del local default dev lo table 241",
-        ])
-    assert result.stdout.splitlines() == deletes
+    ]
+    if conflict == "foreign-chain-race":
+        deletions = deletions[:-3]
+    elif conflict:
+        deletions = []
+    assert result.stdout.splitlines() == deletions
 
 
 @pytest.mark.skipif(shutil.which("bash") is None, reason="requires bash")

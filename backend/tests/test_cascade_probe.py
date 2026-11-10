@@ -171,7 +171,7 @@ def test_gre_watchdog_needs_no_docker_and_removes_empty_private_lease(tmp_path):
     def command(args, required=True):
         calls.append(args)
         assert args[0] != "docker"
-        return subprocess.CompletedProcess(args, 1, b"", b"")
+        return subprocess.CompletedProcess(args, 1, b"", b'Device "acp1234567890" does not exist.\n')
     def child_exit(code): raise ChildExit(code)
     worker["command"] = command
     worker["Path"] = lambda _: tmp_path
@@ -182,6 +182,75 @@ def test_gre_watchdog_needs_no_docker_and_removes_empty_private_lease(tmp_path):
     worker["time"] = SimpleNamespace(sleep=lambda _: None)
     with pytest.raises(ChildExit): worker["main"]()
     assert calls and not list(tmp_path.iterdir())
+
+
+@pytest.mark.parametrize(("error", "absent"), [
+    (b"error: no such object: probe-test\n", True),
+    (b"Error response from daemon: No such container: probe-test\n", True),
+    (b"permission denied while trying to connect to the docker API\n", False),
+    (b"Error response from daemon: No such container: other-probe-test\n", False),
+])
+def test_awg_watchdog_distinguishes_absent_container_from_unknown_state(tmp_path, error, absent):
+    worker = worker_namespace()
+    config = {"tag": "a" * 32, "interface": "acp1234567890", "container": "probe-test",
+              "transport": "awg", "lease": 100, "cleanup_rules": []}
+
+    class ChildExit(BaseException): pass
+
+    def command(args, required=True):
+        if args == ["docker", "container", "inspect", "probe-test"]:
+            return subprocess.CompletedProcess(args, 1, b"[]", error)
+        assert args == ["ip", "-j", "-d", "link", "show", "dev", config["interface"]]
+        return subprocess.CompletedProcess(args, 1, b"", b'Device "acp1234567890" does not exist.\n')
+
+    def child_exit(code): raise ChildExit(code)
+
+    worker["command"] = command
+    worker["Path"] = lambda value: tmp_path
+    worker["sys"] = SimpleNamespace(stdin=io.StringIO(json.dumps(config) + "\n"))
+    worker["os"] = SimpleNamespace(umask=lambda _: None, fork=lambda: 0, setsid=lambda: None,
+        devnull="null", O_RDWR=2, open=lambda *args: 99, dup2=lambda *args: None, _exit=child_exit)
+    worker["signal"] = SimpleNamespace(SIGTERM=15, SIG_DFL=0, signal=lambda *args: None)
+    worker["time"] = SimpleNamespace(sleep=lambda _: None)
+    with pytest.raises(ChildExit):
+        worker["main"]()
+    assert bool(list(tmp_path.iterdir())) is not absent
+
+
+@pytest.mark.parametrize("launch_code", [124, 125])
+def test_awg_keeps_watchdog_only_when_container_launch_may_be_pending(tmp_path, launch_code):
+    worker = worker_namespace()
+    config = {"tag": "a" * 32, "interface": "acp1234567890", "container": "probe-test",
+              "transport": "awg", "role": "exit", "inner": "198.51.100.1", "peer_inner": "198.51.100.2",
+              "network": "198.51.100.0/30", "lease": 100, "awg_config": "", "images": ["test-image"],
+              "xray_version": "unused"}
+    events, stopped = [], []
+
+    def command(args, required=True):
+        if args[:3] == ["docker", "image", "inspect"]:
+            return subprocess.CompletedProcess(args, 0, b'[{"Id":"test-image-id"}]', b"")
+        if args[:3] == ["docker", "container", "inspect"]:
+            return subprocess.CompletedProcess(args, 1, b"[]", b"error: no such object: probe-test\n")
+        if args[:2] == ["docker", "run"]:
+            return subprocess.CompletedProcess(args, launch_code, b"", b"")
+        if args[:3] == ["ip", "-j", "-4"]:
+            return subprocess.CompletedProcess(args, 0, b"[]", b"")
+        assert args[0] == "ip" and args[-1] == config["interface"]
+        return subprocess.CompletedProcess(args, 1, b"", b'Device "acp1234567890" does not exist.\n')
+
+    worker["command"] = command
+    worker["Path"] = lambda value: tmp_path
+    worker["shutil"] = SimpleNamespace(which=lambda _: "/test/tool")
+    worker["sys"] = SimpleNamespace(stdin=io.StringIO(json.dumps(config) + "\n"))
+    worker["os"] = SimpleNamespace(umask=lambda _: None, fork=lambda: 123,
+        kill=lambda *args: stopped.append(args), waitpid=lambda *args: (123, 0))
+    worker["signal"] = SimpleNamespace(SIGTERM=15, SIGALRM=14, signal=lambda *args: None, alarm=lambda _: None)
+    worker["emit"] = lambda **value: events.append(value)
+    worker["main"]()
+    confirmed = launch_code == 125
+    assert events[-1] == {"event": "cleanup", "ok": confirmed}
+    assert stopped == ([(123, 15)] if confirmed else [])
+    assert bool(list(tmp_path.iterdir())) is not confirmed
 
 
 class Process:
@@ -284,7 +353,7 @@ async def test_cancelling_preparation_closes_stdin_and_waits_for_worker():
     assert cleaned.is_set()
 
 
-async def test_cleanup_failure_overrides_full_measurement(monkeypatch):
+async def test_cleanup_failure_retains_full_measurement_and_identifies_side(monkeypatch):
     size = cascade_probe.PAYLOAD_BYTES
     exit_ = Process([{"event": "ready", "receiver_port": 43123},
                      {"event": "result", "bytes": size}, {"event": "cleanup", "ok": False}])
@@ -296,8 +365,23 @@ async def test_cleanup_failure_overrides_full_measurement(monkeypatch):
     monkeypatch.setattr(cascade_probe, "_start", start)
     result = await cascade_probe.run(None, None, "203.0.113.10", "203.0.113.20", "gre")
     assert result["status"] == "failed" and result["ok"] is False
-    assert "очистка" in result["error"]
+    assert result["error"] == cascade_probe.CLEANUP_ERROR
+    assert result["transfer_ok"] is True and result["bytes"] == size
+    assert result["cleanup_failed"] == ["exit"]
     assert entry.writes[0] == "go\n"
+
+
+async def test_gre_probe_uses_routed_entry_address_for_exit_peer_and_firewall(monkeypatch):
+    async def start(connection, config):
+        assert config["role"] == "exit"
+        assert config["peer_ip"] == config["peer_source"] == "203.0.113.30"
+        assert config["cleanup_rules"][0][4] == "203.0.113.30"
+        return Process([{"event": "unavailable"}, {"event": "cleanup", "ok": True}])
+
+    monkeypatch.setattr(cascade_probe, "_start", start)
+    result = await cascade_probe.run(None, None, "203.0.113.10", "203.0.113.20", "gre",
+                                     entry_source_ip="203.0.113.30")
+    assert result["status"] == "unavailable"
 
 
 async def test_cancellation_waits_for_cleanup_of_both_partially_started_workers(monkeypatch):

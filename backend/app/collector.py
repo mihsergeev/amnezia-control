@@ -500,10 +500,7 @@ async def collect_once(
     if online_map:
         try:
             async with session_factory() as session:
-                await alerts.reconcile(
-                    session, settings, online_map, names,
-                    enabled_server_ids=enabled_server_ids,
-                )
+                await alerts.reconcile(session, settings, online_map, names)
         except Exception:  # noqa: BLE001 — алерты не должны ронять сбор метрик
             log.exception("ошибка сверки статусов серверов")
         try:

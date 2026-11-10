@@ -101,13 +101,13 @@ async def test_api_add_share_and_audit(client: httpx.AsyncClient, auth_headers, 
     monkeypatch.setattr(share, "detect_engine", fake_detect)
     monkeypatch.setattr(share, "create_link", fake_create)
 
-    r = await client.post("/api/share/services", json={"name": "Corp", "url": BASE + "/"},
+    r = await client.post("/api/share/services", json={"name": "Corp", "url": BASE + "/", "password": "testpass"},
                           headers=auth_headers)
     assert r.status_code == 200
     svc = r.json()[0]
     assert svc["url"] == BASE and svc["engine"] == "pwpush"
     # тот же сервис второй раз не добавляется
-    r = await client.post("/api/share/services", json={"name": "Corp2", "url": BASE},
+    r = await client.post("/api/share/services", json={"name": "Corp2", "url": BASE, "password": "testpass"},
                           headers=auth_headers)
     assert r.status_code == 409
 
@@ -144,7 +144,7 @@ async def test_share_service_rejects_credentials_before_network_or_audit(
     monkeypatch.setattr(share, "detect_engine", fake_detect)
     response = await client.post(
         "/api/share/services", headers=auth_headers,
-        json={"name": "Example", "url": "https://test-user:test-password@secret.example.com"},
+        json={"name": "Example", "url": "https://test-user:test-password@secret.example.com", "password": "testpass"},
     )
     assert response.status_code == 400
     assert detected == []
@@ -192,3 +192,62 @@ async def test_delete_old_service_never_logs_credentials(client, auth_headers):
     assert deleted.status_code == 200
     audit = (await client.get("/api/audit", headers=auth_headers)).text
     assert "share_service_delete" in audit and "test-password" not in audit
+
+
+@pytest.mark.parametrize("password", [None, "incorrect"])
+async def test_registration_requires_stepup_before_network(client, auth_headers, monkeypatch, password):
+    async def must_not_probe(*args, **kwargs):
+        pytest.fail("unconfirmed service registration performed a network request")
+
+    monkeypatch.setattr(share, "detect_engine", must_not_probe)
+    body = {"name": "Example", "url": BASE}
+    if password is not None:
+        body["password"] = password
+    response = await client.post("/api/share/services", headers=auth_headers, json=body)
+    assert response.status_code == 403
+    assert (await client.get("/api/share/services", headers=auth_headers)).json() == []
+
+
+@pytest.mark.parametrize("url", [
+    "https://secret.example.com:99999", "https://secret.example.com:bad",
+    "https://secret.example.com:0", "https://secret.example.com\\path",
+    "https://secret.example.com something", "javascript:alert(1)",
+])
+def test_invalid_service_destination(url):
+    with pytest.raises(share.ShareError):
+        share.normalize_url(url)
+
+
+async def test_detection_does_not_follow_redirects():
+    seen = []
+
+    def handler(req):
+        seen.append(req.url.host)
+        return httpx.Response(302, headers={"Location": "https://other.example.org/msg"})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler), follow_redirects=True) as client:
+        with pytest.raises(share.ShareError):
+            await share.detect_engine(BASE, client)
+    assert seen == ["secret.example.com", "secret.example.com"]
+
+
+@pytest.mark.parametrize("url", [
+    "https://other.example.org/p/token/r", "javascript:alert(1)",
+    "//secret.example.com/p/token/r", "https://secret.example.com:99999/p/token/r",
+])
+async def test_pwpush_rejects_untrusted_returned_link(url):
+    with pytest.raises(share.ShareError):
+        await share.create_link("pwpush", BASE, "config", _client(
+            lambda req: httpx.Response(200, json={"html_url": url})
+        ))
+
+
+@pytest.mark.parametrize("engine,data", [
+    ("sup3rs3cret", []), ("sup3rs3cret", {"token": ["secret"]}),
+    ("pwpush", []), ("pwpush", {"url_token": ["secret"]}),
+])
+async def test_bad_response_shape_is_share_error(engine, data):
+    with pytest.raises(share.ShareError):
+        await share.create_link(engine, BASE, "config", _client(
+            lambda req: httpx.Response(200, json=data)
+        ))

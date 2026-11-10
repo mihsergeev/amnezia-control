@@ -112,7 +112,7 @@ async def test_alerts_put_needs_password(client, auth_headers):
     assert r.status_code == 403
     r = await client.put("/api/alerts", json={**body, "password": "nope"}, headers=auth_headers)
     assert r.status_code == 403
-    assert (await client.get("/api/alerts", headers=auth_headers)).json()["webhook"] == ""
+    assert not (await client.get("/api/alerts", headers=auth_headers)).json()["webhook_set"]
 
 
 async def test_server_export_needs_password(client, auth_headers, sent):

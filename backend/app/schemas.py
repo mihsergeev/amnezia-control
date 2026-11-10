@@ -594,19 +594,19 @@ class FullAccessOut(BaseModel):
 
 
 class AlertConfigOut(BaseModel):
-    telegram_token: str
+    telegram_token_set: bool
     telegram_chat: str
     telegram_api: str = ""
-    webhook: str
+    webhook_set: bool
     lang: Literal["", "ru", "en"] = ""  # пусто - не выбирали (алерты по-русски)
     enabled: bool
 
 
 class AlertConfigIn(BaseModel):
-    telegram_token: str = Field(default="", max_length=256)
+    telegram_token: str | None = Field(default=None, max_length=256)
     telegram_chat: str = Field(default="", max_length=64)
     telegram_api: str = Field(default="", max_length=256)
-    webhook: str = Field(default="", max_length=512)
+    webhook: str | None = Field(default=None, max_length=512)
     lang: Literal["", "ru", "en"] = ""
     # смена каналов - со степ-апом: подменой адреса Telegram API или вебхука
     # укравший сессию увел бы токен бота и security-алерты
@@ -765,6 +765,8 @@ class RevokeBulkResult(BaseModel):
 class ShareServiceIn(BaseModel):
     name: str = Field(min_length=1, max_length=64)
     url: str = Field(min_length=1, max_length=255)
+    password: str = Field(default="", max_length=1024)
+    otp: str | None = None
 
 
 class ShareServiceOut(BaseModel):
@@ -874,6 +876,8 @@ class CascadeTransportProbeOut(BaseModel):
     entry_port: int | None = None
     exit_port: int | None = None
     prerequisite_tcp: dict | None = None
+    transfer_ok: bool | None = None
+    cleanup_failed: list[Literal["entry", "exit"]] = Field(default_factory=list)
 
 
 class CascadeOut(BaseModel):

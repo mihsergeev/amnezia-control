@@ -173,6 +173,10 @@ async def change_password(
     body: PasswordChangeRequest, request: Request, user: CurrentUser, session: SessionDep
 ) -> TokenResponse:
     """Смена пароля из UI: проверяет текущий, инвалидирует все старые токены."""
+    old_version = user.token_version
+    old_hash = user.password_hash
+    totp_enabled = user.totp_enabled
+    totp_secret = user.totp_secret
     try:
         await stepup.verify(user, body.current_password, request)
     except HTTPException as exc:
@@ -181,8 +185,22 @@ async def change_password(
                 status.HTTP_400_BAD_REQUEST, "Неверный текущий пароль"
             ) from exc
         raise
-    user.password_hash = hash_password(body.new_password)
-    token_version = await _bump_token_version(session, user)
+    # Пока проверялся пароль, другой запрос мог сменить его или отозвать сессию.
+    # Записываем новый пароль и версию только для проверенных учетных данных.
+    token_version = await session.scalar(
+        update(User).where(
+            User.id == user.id,
+            User.token_version == old_version,
+            User.password_hash == old_hash,
+            User.totp_enabled.is_(totp_enabled),
+            User.totp_secret == totp_secret,
+        ).values(
+            password_hash=hash_password(body.new_password),
+            token_version=User.token_version + 1,
+        ).returning(User.token_version).execution_options(synchronize_session=False)
+    )
+    if token_version is None:
+        raise HTTPException(status.HTTP_409_CONFLICT, "Учетные данные изменились. Войдите заново.")
     # Смена пароля закрывает и постоянный доступ интеграций: ключ мог быть
     # выпущен до обнаружения чужой сессии. Отзываем в той же транзакции.
     await session.execute(update(ApiKey).where(ApiKey.revoked.is_(False)).values(revoked=True))

@@ -138,6 +138,14 @@ const EN: Record<string, string> = {
   'Не удалось подключиться к TCP-порту VLESS': 'Could not connect to the VLESS TCP port',
   'Не удалось подготовить или завершить временную проверку': 'Could not prepare or finish the temporary probe',
   'Не подтверждена полная очистка временной проверки': 'Complete cleanup of the temporary probe was not confirmed',
+  'Не удалось подтвердить очистку временных ресурсов': 'Could not verify cleanup of temporary resources',
+  'Очистка временных ресурсов не подтверждена на входе и выходе': 'Temporary resource cleanup could not be verified on either server',
+  'Очистка временных ресурсов не подтверждена на входе': 'Temporary resource cleanup could not be verified on the entry server',
+  'Очистка временных ресурсов не подтверждена на выходе': 'Temporary resource cleanup could not be verified on the exit server',
+  'Не удалось открыть тестовое соединение через туннель': 'Could not open a test connection through the tunnel',
+  'Через туннель получена только часть тестовых данных': 'Only part of the test data was received through the tunnel',
+  'Получены все данные, но проверка целостности не подтверждена': 'All data was received, but its integrity could not be verified',
+  'Выход не получил тестовые данные через туннель': 'The exit did not receive test data through the tunnel',
   'Вход и выход указывают на один сервер': 'Entry and exit point to the same server',
   'Проверка отменена': 'The probe was cancelled',
   'Вход и выход - один сервер': 'Entry and exit are the same server',
@@ -506,6 +514,7 @@ const EN: Record<string, string> = {
   'Ссылка через {name}: откроется один раз, через {n} дн. сгорит сама.':
     'Link via {name}: opens once, expires by itself in {n} days.',
   'Ссылки на конфиги': 'Config links',
+  'Этот сервис будет получать клиентские конфиги. Введите пароль от панели, чтобы добавить его.': 'This service will receive client profiles. Enter your panel password to add it.',
   'Маршруты каскада': 'Cascade routes',
   'Вход': 'Entry',
   'Настроить маршруты': 'Configure routes',
@@ -599,6 +608,9 @@ const EN: Record<string, string> = {
   'Создайте бота через @BotFather, вставьте его токен и chat_id (свой ID узнаете у @userinfobot).':
     'Create a bot via @BotFather, paste its token and chat_id (get your ID from @userinfobot).',
   'Токен бота': 'Bot token',
+  'Значение сохранено': 'Value saved',
+  'Отменить удаление': 'Undo removal',
+  'Удалить при сохранении': 'Remove on save',
   'Адрес Bot API': 'Bot API address',
   'Оставьте пустым для api.telegram.org. Укажите зеркало/прокси, если Telegram заблокирован в регионе сервера (напр. https://api-tg.example.com).':
     'Leave empty for api.telegram.org. Set a mirror/proxy if Telegram is blocked in the server’s region (e.g. https://api-tg.example.com).',

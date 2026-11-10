@@ -64,24 +64,33 @@ function TransportProbeStatus({ row }: { row: TransportProbeRow }) {
   const { t, lang } = useI18n()
   const tone = probeRowTone(row)
   const result = row.result
+  const transferred = result?.ok === true || result?.transfer_ok === true
+  const cleanupFailed = result?.cleanup_failed ?? []
+  const cleanupText = cleanupFailed.length === 2 ? t('Очистка временных ресурсов не подтверждена на входе и выходе')
+    : cleanupFailed.includes('entry') ? t('Очистка временных ресурсов не подтверждена на входе')
+    : t('Очистка временных ресурсов не подтверждена на выходе')
   const text = row.state === 'queued' ? t('В очереди')
     : row.state === 'preparing' ? t('Подготовка образа и проверка…')
     : row.state === 'running' ? t('Проверяется…')
     : row.state === 'error' ? t(row.error)
     : row.state === 'unavailable' ? t(result?.error || row.error || 'Проверка недоступна')
-    : result?.ok ? t('Данные прошли') : t(result?.error || 'Данные не прошли')
+    : transferred ? t('Данные прошли') : t(result?.error || 'Данные не прошли')
   return (
     <div className={`cas-transport-probe cas-probe-${tone}`} data-probe-state={row.state} aria-live="polite" aria-busy={tone === 'run'}>
-      <div className="cas-transport-status">
-        <span aria-hidden="true">{tone === 'ok' ? '✓' : tone === 'bad' ? '✕' : tone === 'run' ? '●' : '○'}</span>
+      {(!cleanupFailed.length || result?.error !== 'Не удалось подтвердить очистку временных ресурсов' || transferred) && <div className={`cas-transport-status${transferred ? ' cas-transport-passed' : ''}`}>
+        <span aria-hidden="true">{transferred ? '✓' : tone === 'bad' ? '✕' : tone === 'run' ? '●' : '○'}</span>
         <span>{text}</span>
-      </div>
+      </div>}
       {result && result.bytes > 0 && <div className="muted small">
-        {result.ok && result.secs != null && result.mbps != null
+        {transferred && result.secs != null && result.mbps != null
           ? t('{size} за {secs} с, ~{mbps} Мбит/с', { size: formatBytes(result.bytes), secs: formatProbeMetric(result.secs, lang, 'secs'), mbps: formatProbeMetric(result.mbps, lang, 'mbps') })
           : t('Получено: {size}', { size: formatBytes(result.bytes) })}
       </div>}
-      {result?.prerequisite_tcp && result.ok !== true && <div className="muted small">
+      {cleanupFailed.length > 0 && <div className="cas-transport-status">
+        <span aria-hidden="true">!</span>
+        <span>{cleanupText}</span>
+      </div>}
+      {result?.prerequisite_tcp && !transferred && <div className="muted small">
         {result.prerequisite_tcp.ok ? t('Предварительное TCP-соединение доступно; это не замер VLESS.') : t('Предварительное TCP-соединение недоступно.')}
       </div>}
       {tone === 'run' && <div className="cas-probe-indeterminate" aria-hidden="true" />}

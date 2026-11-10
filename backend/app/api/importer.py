@@ -56,11 +56,11 @@ async def _import_spec(session: SessionDep, spec: ServerSpec) -> ImportResult:
         )
 
     try:
-        ok, error = await server_ops.bootstrap_and_check(
+        ok, _ = await server_ops.bootstrap_and_check(
             session, server, spec.password, settings
         )
-    except Exception as exc:  # noqa: BLE001
-        ok, error = False, str(exc)
+    except Exception:  # noqa: BLE001
+        ok = False
 
     if ok:
         return ImportResult(
@@ -70,7 +70,8 @@ async def _import_spec(session: SessionDep, spec: ServerSpec) -> ImportResult:
     return ImportResult(
         name=spec.name, host=spec.host, ok=True, server_id=server.id,
         bootstrapped=False,
-        message=f"добавлен, но автонастройка не удалась: {error}",
+        # Диагностика включает вывод удаленного сервера и может содержать пароль.
+        message="добавлен, но автонастройка не удалась — запустите «Скрипт»",
     )
 
 
@@ -97,7 +98,7 @@ async def import_amnezia(
     body: ImportAmneziaRequest, _: CurrentUser, session: SessionDep
 ) -> ImportResponse:
     results: list[ImportResult] = []
-    for link in body.links:
+    for link_no, link in enumerate(body.links, start=1):
         link = link.strip()
         if not link:
             continue
@@ -105,7 +106,7 @@ async def import_amnezia(
             spec = amnezia_import.parse_amnezia_link(link)
         except ImportParseError as exc:
             results.append(
-                ImportResult(name=link[:24] + "…", host="?", ok=False, message=str(exc))
+                ImportResult(name=f"Ссылка {link_no}", host="?", ok=False, message=str(exc))
             )
             continue
         results.append(await _import_spec(session, spec))

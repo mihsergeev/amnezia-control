@@ -2,9 +2,9 @@
 
 import secrets
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, HTTPException, Request, status
 
-from app import audit, settings_store, share
+from app import audit, settings_store, share, stepup
 from app.deps import CurrentUser, SessionDep
 from app.schemas import ShareLinkOut, ShareRequest, ShareServiceIn, ShareServiceOut
 
@@ -24,8 +24,10 @@ async def list_services(_: CurrentUser, session: SessionDep) -> list[dict]:
 
 @router.post("/services", response_model=list[ShareServiceOut])
 async def add_service(
-    body: ShareServiceIn, user: CurrentUser, session: SessionDep
+    body: ShareServiceIn, request: Request, user: CurrentUser, session: SessionDep
 ) -> list[dict]:
+    # A new destination receives client secrets; require a fresh credential check.
+    await stepup.verify(user, body.password, request, otp=body.otp)
     try:
         base = share.normalize_url(body.url)
         engine = await share.detect_engine(base)

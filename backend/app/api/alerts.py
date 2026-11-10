@@ -10,7 +10,14 @@ router = APIRouter(prefix="/alerts", tags=["alerts"])
 
 
 def _out(cfg: dict) -> AlertConfigOut:
-    return AlertConfigOut(**cfg, enabled=alerts.alerts_enabled(cfg))
+    return AlertConfigOut(
+        telegram_token_set=bool(cfg["telegram_token"]),
+        telegram_chat=cfg["telegram_chat"],
+        telegram_api=cfg["telegram_api"],
+        webhook_set=bool(cfg["webhook"]),
+        lang=cfg["lang"],
+        enabled=alerts.alerts_enabled(cfg),
+    )
 
 
 @router.get("", response_model=AlertConfigOut)
@@ -28,7 +35,10 @@ async def put_alerts(
     await stepup.verify(user, body.password, request, otp=body.otp)
     old = await settings_store.get_alert_config(session, get_settings())
     await settings_store.set_alert_config(
-        session, body.telegram_token, body.telegram_chat, body.webhook,
+        session,
+        body.telegram_token,
+        body.telegram_chat,
+        body.webhook,
         telegram_api=body.telegram_api, lang=body.lang,
     )
     cfg = await settings_store.get_alert_config(session, get_settings())

@@ -35,6 +35,9 @@ gateway_recover() {
       if [ "$ids" = "$old" ]; then sudo docker rm "$old" >/dev/null || return 1; fi
     fi
   else
+    if sudo test -f "$GW_TX/new-tproxy"; then
+@TPROXY_PREPARE@
+    fi
     if sudo test -f "$GW_TX/new-heal"; then
       sudo systemctl disable --now acontrol-cascade-heal.service >/dev/null || return 1
     fi
@@ -127,11 +130,12 @@ gateway_commit() {
 '''
 
 
-def commands(base: str, name: str, owner: str, tproxy_down: str) -> str:
+def commands(base: str, name: str, owner: str, tproxy_down: str, *, tproxy_prepare: str = ":") -> str:
     return (
         _TRANSACTION.replace("@BASE@", shlex.quote(base))
         .replace("@NAME@", shlex.quote(name))
         .replace("@OWNER@", shlex.quote(owner))
+        .replace("@TPROXY_PREPARE@", tproxy_prepare.replace("exit 73", "return 1"))
         .replace("@TPROXY_DOWN@", tproxy_down.replace("exit 73", "return 1"))
         + f"\nGW_TOKEN={secrets.token_hex(16)}\n"
     )

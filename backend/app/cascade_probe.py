@@ -21,6 +21,9 @@ class PrerequisiteError(Exception):
     pass
 
 
+CLEANUP_ERROR = "Не удалось подтвердить очистку временных ресурсов"
+
+
 class CleanupError(Exception):
     pass
 
@@ -77,12 +80,10 @@ from pathlib import Path
 ''' + IMAGE_SELECTION + r'''
 
 class WorkerStopped(BaseException): pass
-uncertain=[False]
 def emit(**value): print(json.dumps(value),flush=True)
 def command(args,required=True):
-    try: p=subprocess.run(args,stdout=subprocess.PIPE,stderr=subprocess.PIPE,timeout=8)
+    try: p=subprocess.run(args,stdout=subprocess.PIPE,stderr=subprocess.PIPE,timeout=8,env={**os.environ,'LC_ALL':'C'})
     except (subprocess.TimeoutExpired,OSError):
-        if required: uncertain[0]=True
         if required: raise Unavailable('resource operation timed out')
         return subprocess.CompletedProcess(args,124,b'',b'')
     if required and p.returncode: raise Unavailable('resource operation failed')
@@ -122,7 +123,7 @@ def receive(listener,token,total):
         except OSError: pass
         return record
 def send(host,port,token,total,interface=None,own=None):
-    count=0; received=0; start=None; error=''; digest=hashlib.sha256(); matched=False
+    count=0; received=0; start=None; error=''; digest=hashlib.sha256(); matched=False; connected=False
     try:
         with socket.socket() as conn:
             conn.settimeout(8)
@@ -130,6 +131,7 @@ def send(host,port,token,total,interface=None,own=None):
                 conn.setsockopt(socket.SOL_SOCKET,socket.SO_BINDTODEVICE,interface.encode()+b'\0')
                 conn.bind((own,0))
             conn.connect((host,port))
+            connected=True
             conn.settimeout(15)
             conn.sendall(token)
             if exact(conn,5)!=b'READY': raise OSError('receiver not ready')
@@ -150,7 +152,7 @@ def send(host,port,token,total,interface=None,own=None):
             received=int(record['bytes'])
             matched=record.get('sha256')==digest.hexdigest()
     except (OSError,ValueError,KeyError): error='transfer incomplete or timed out'
-    return {'bytes':received,'sent':count,'secs':(time.monotonic_ns()-start)/1e9 if start else None,'digest_matches':matched,'error':error}
+    return {'bytes':received,'sent':count,'secs':(time.monotonic_ns()-start)/1e9 if start else None,'digest_matches':matched,'error':error,'connected':connected}
 
 def main():
     os.umask(0o077)
@@ -160,7 +162,7 @@ def main():
     directory=Path('/run')/('acontrol-probe-'+tag)
     if directory.exists(): raise Unavailable('lease already exists')
     directory.mkdir(mode=0o700)
-    rules=[]; interface_created=False; container_attempted=False
+    rules=[]; interface_created=False; container_attempted=False; container_launch_uncertain=False
     def save_owner(record):
         temporary=directory/'link-owner.json.tmp'
         with temporary.open('x',encoding='utf-8') as stream:
@@ -171,22 +173,33 @@ def main():
         spec=['INPUT',*parts,'-m','comment','--comment',tag,'-j',target]
         rules.append(spec)
         command(['iptables','-w','3','-I',*spec])
+    def launch_container(args,required=True):
+        nonlocal container_attempted,container_launch_uncertain
+        container_attempted=True
+        container_launch_uncertain=True
+        item=command(args,False)
+        container_launch_uncertain=item.returncode==124
+        if required and item.returncode:
+            raise Unavailable('resource operation timed out' if container_launch_uncertain else 'resource operation failed')
+        return item
+    def remove(check,delete,missing,owned):
+        item=command(check,False)
+        if missing(item): return True
+        if item.returncode or not owned(item): return False
+        return command(delete,False).returncode==0 or missing(command(check,False))
     def cleanup():
         good=True
         if container_attempted:
-            item=command(['docker','inspect',name],False)
-            if item.returncode==124: good=False
-            if item.returncode==0:
+            def container_owned(item):
                 try:
-                    owned=json.loads(item.stdout)[0]['Config']['Labels'].get(label)==tag
-                except (ValueError,KeyError,TypeError): owned=False
-                if owned:
-                    good=command(['docker','rm','-f',name],False).returncode==0 and good
-                else: good=False
+                    return json.loads(item.stdout)[0]['Config']['Labels'].get(label)==tag
+                except (ValueError,KeyError,TypeError,AttributeError,IndexError): return False
+            def container_missing(item):
+                return item.returncode==1 and any(item.stderr.strip().lower().endswith(
+                    (prefix+name).encode()) for prefix in ('no such object: ','no such container: '))
+            good=remove(['docker','container','inspect',name],['docker','rm','-f',name],container_missing,container_owned)
         if interface_created:
-            item=command(['ip','-j','-d','link','show','dev',iface],False)
-            if item.returncode==124: good=False
-            if item.returncode==0:
+            def interface_owned(item):
                 try:
                     link=json.loads(item.stdout)[0]
                     alias=link.get('ifalias','')
@@ -204,26 +217,31 @@ def main():
                             and gre_key(data.get('ikey'))==cfg['gre_key']
                             and gre_key(data.get('okey'))==cfg['gre_key']
                             and (not record.get('ifindex') or record['ifindex']==link.get('ifindex')))
-                except (OSError,ValueError,KeyError,IndexError): owned=False
-                if owned: good=command(['ip','link','del',iface],False).returncode==0 and good
-                else: good=False
+                    return owned
+                except (OSError,ValueError,KeyError,IndexError,TypeError,AttributeError): return False
+            def interface_missing(item):
+                return item.returncode==1 and item.stderr.strip()==('Device "'+iface+'" does not exist.').encode()
+            good=remove(['ip','-j','-d','link','show','dev',iface],['ip','link','del',iface],
+                interface_missing,interface_owned) and good
+        def rule_missing(item):
+            return item.returncode==1 and item.stderr.strip().endswith(
+                b'Bad rule (does a matching rule exist in that chain?).')
         for spec in reversed(rules):
-            check=command(['iptables','-w','3','-C',*spec],False)
-            if check.returncode==124: good=False
-            if check.returncode==0:
-                good=command(['iptables','-w','3','-D',*spec],False).returncode==0 and good
-        # Keep the private ownership record/config for the watchdog if an
-        # earlier deletion could not be confirmed.
-        if not good or uncertain[0]: return False
+            good=remove(['iptables','-w','3','-C',*spec],['iptables','-w','3','-D',*spec],
+                rule_missing,lambda item: True) and good
+        # An interrupted Docker client may leave a pending daemon operation.
+        # Keep the lease for a later recheck even if no container exists yet.
+        if not good or container_launch_uncertain: return False
         # Never recursively remove an arbitrary path, symlink, or extra file.
         try:
             for path in directory.iterdir():
                 if path.name not in ('link.conf','config.json','link-owner.json','link-owner.json.tmp') or not path.is_file() or path.is_symlink():
                     good=False; continue
-                path.unlink()
+                path.unlink(missing_ok=True)
             directory.rmdir()
+        except FileNotFoundError: pass
         except OSError: good=False
-        return good and not uncertain[0]
+        return good
     # Fork before the first mutation. If the panel, SSH channel, or worker dies,
     # the independent child still removes only this random lease's resources.
     watchdog=os.fork()
@@ -251,16 +269,12 @@ def main():
         if command(['ip','link','show','dev',iface],False).returncode==0:
             raise Unavailable('temporary interface name is occupied')
         if transport!='gre':
-            if command(['docker','inspect',name],False).returncode==0:
+            if command(['docker','container','inspect',name],False).returncode==0:
                 raise Unavailable('temporary container name is occupied')
             def check_legacy_xray(selected):
-                nonlocal container_attempted
-                container_attempted=True
-                version=command(['docker','run','--rm','--pull=never','--name',name,
+                return launch_container(['docker','run','--rm','--pull=never','--name',name,
                     '--label',label+'='+tag,'--network','none',
                     '--read-only','--cap-drop','ALL','--entrypoint','/usr/bin/xray',selected,'version'],False)
-                if version.returncode==124: uncertain[0]=True
-                return version
             image,executable=local_image(cfg['images'],cfg['xray_version'],
                 lambda args: command(args,False),check_legacy_xray)
             if not image:
@@ -295,15 +309,15 @@ def main():
             rule(['-p','gre','-s',cfg['peer_source']])
         if transport=='awg':
             path=directory/'link.conf'; path.write_text(cfg['awg_config']); path.chmod(0o600)
-            container_attempted=True
-            command(['docker','run','--pull=never','-d','--name',name,'--label',label+'='+tag,
+            interface_created=True
+            launch_container(['docker','run','--pull=never','-d','--name',name,'--label',label+'='+tag,
                 '--network','host','--cap-drop','ALL','--cap-add','NET_ADMIN','--cap-add','NET_BIND_SERVICE','--device','/dev/net/tun',
                 '--read-only','--tmpfs','/run','--tmpfs','/tmp','--security-opt','no-new-privileges:true',
                 '-v',str(directory)+':/probe:ro','--entrypoint','/usr/bin/amneziawg-go',image,'-f',iface])
             for attempt in range(30):
                 if command(['ip','link','show',iface],False).returncode==0: break
                 time.sleep(0.1)
-            command(['ip','link','set','dev',iface,'alias',tag]); interface_created=True
+            command(['ip','link','set','dev',iface,'alias',tag])
             command(['docker','exec',name,'awg','setconf',iface,'/probe/link.conf'])
             rule(['-p','udp','-s',cfg['peer_source'],'--dport',str(cfg['port'])])
             rule(['-p','udp','!','-s',cfg['peer_source'],'--dport',str(cfg['port'])],'DROP')
@@ -327,7 +341,6 @@ def main():
             else:
                 config['inbounds'][0]['settings']['port']=receiver_port
             path=directory/'config.json'; path.write_text(json.dumps(config)); path.chmod(0o600)
-            container_attempted=True
             launch=['docker','run','--pull=never','-d','--name',name,'--label',label+'='+tag,
                 '--network','host','--user','0:0','--read-only','--cap-drop','ALL','--cap-add','NET_BIND_SERVICE',
                 '--security-opt','no-new-privileges:true','-e','GODEBUG=multipathtcp=0',
@@ -335,7 +348,7 @@ def main():
             if executable: launch+=['--entrypoint',executable]
             launch+=[image]
             if executable: launch+=['run','-c','/usr/local/etc/xray/config.json']
-            command(launch)
+            launch_container(launch)
             listen_port=cfg['port']
             for attempt in range(40):
                 if command(['docker','inspect','-f','{{.State.Running}}',name]).stdout.strip()!=b'true':
@@ -548,9 +561,19 @@ def verdict(sent: dict, received: dict) -> dict:
     ok = (count == PAYLOAD_BYTES and sent.get("bytes") == count
           and sent.get("sent") == count and sent.get("digest_matches") is True
           and not sent.get("error"))
+    error = ""
+    if not ok:
+        if sent.get("connected") is False:
+            error = "Не удалось открыть тестовое соединение через туннель"
+        elif 0 < count < PAYLOAD_BYTES:
+            error = "Через туннель получена только часть тестовых данных"
+        elif count == PAYLOAD_BYTES:
+            error = "Получены все данные, но проверка целостности не подтверждена"
+        else:
+            error = "Выход не получил тестовые данные через туннель"
     return {"status": "ok" if ok else "failed", "ok": ok, "bytes": count, "secs": secs,
             "mbps": count * 8 / secs / 1e6 if secs else None,
-            "error": "" if ok else "Передача прервалась или приняты не все данные"}
+            "error": error}
 
 
 def xray_configs(params: dict, peer_ip: str, exit_port: int, entry_port: int) -> tuple[dict, dict]:
@@ -663,7 +686,8 @@ async def run(exit_conn, entry_conn, entry_ip: str, exit_ip: str, transport: str
     result = {"transport": transport, "measurement": transport, "run_id": run_id,
               "requested_bytes": PAYLOAD_BYTES, "status": "unavailable", "ok": None,
               "bytes": 0, "secs": None, "mbps": None, "error": "Проверка не запущена"}
-    cleanup_ok = True
+    cleanup_failed = []
+    starting_role = "exit"
     try:
         if transport != "gre":
             protocol = "udp" if transport == "awg" else "tcp"
@@ -691,7 +715,7 @@ async def run(exit_conn, entry_conn, entry_ip: str, exit_ip: str, transport: str
         elif transport == "vless":
             entry_config, exit_config = xray_configs(cascade.new_vless_params(), exit_ip, exit_port, entry_port)
         for role, own_ip, peer_ip, own_inner, peer_inner, port in (
-            ("exit", exit_ip, entry_ip, exit_inner, entry_inner, exit_port),
+            ("exit", exit_ip, source_ip if transport == "gre" else entry_ip, exit_inner, entry_inner, exit_port),
             ("entry", entry_ip, exit_ip, entry_inner, exit_inner, entry_port),
         ):
             tag = run_id + ("x" if role == "exit" else "e")
@@ -716,7 +740,7 @@ async def run(exit_conn, entry_conn, entry_ip: str, exit_ip: str, transport: str
                 cfg["xray_config"] = exit_config if role == "exit" else entry_config
                 cfg["peer_port"] = exit_port if role == "entry" else entry_port
             configs.append(cfg)
-        exit_process = await _start(exit_conn, configs[0]); processes.append(exit_process)
+        exit_process = await _start(exit_conn, configs[0]); processes.append(("exit", exit_process))
         ready = await _event(exit_process)
         if ready.get("event") != "ready":
             result["error"] = REASONS.get(ready.get("error"), "Выход не готов к проверке")
@@ -724,7 +748,8 @@ async def run(exit_conn, entry_conn, entry_ip: str, exit_ip: str, transport: str
                 result["reason"] = LOCAL_IMAGE_MISSING
             return result
         configs[1]["receiver_port"] = ready["receiver_port"]
-        entry_process = await _start(entry_conn, configs[1]); processes.append(entry_process)
+        starting_role = "entry"
+        entry_process = await _start(entry_conn, configs[1]); processes.append(("entry", entry_process))
         ready = await _event(entry_process)
         if ready.get("event") != "ready":
             result["error"] = REASONS.get(ready.get("error"), "Вход не готов к проверке")
@@ -739,20 +764,22 @@ async def run(exit_conn, entry_conn, entry_ip: str, exit_ip: str, transport: str
         result.update(verdict(sent, received))
         if transport != "gre": result.update(entry_port=entry_port, exit_port=exit_port)
     except CleanupError:
-        result.update(status="failed", ok=False, error="Не подтверждена полная очистка временной проверки")
+        cleanup_failed.append(starting_role)
+        result["error"] = CLEANUP_ERROR
     except PrerequisiteError as exc:
         result["error"] = str(exc)
     except (OSError, ValueError, RuntimeError, TimeoutError):
         result["error"] = "Не удалось подготовить или завершить временную проверку"
     finally:
         if processes:
-            cleanup = asyncio.ensure_future(asyncio.gather(*(_close(process) for process in processes)))
+            cleanup = asyncio.gather(*(_close(process) for _, process in processes))
             try:
-                cleanup_ok = all(await asyncio.shield(cleanup))
+                confirmed = await asyncio.shield(cleanup)
             except asyncio.CancelledError:
                 await cleanup
                 raise
-        if not cleanup_ok:
-            result.update(status="failed", ok=False, reason=None,
-                          error="Не подтверждена полная очистка временной проверки")
+            cleanup_failed.extend(role for (role, _), ok in zip(processes, confirmed) if not ok)
+        if cleanup_failed:
+            result.update(status="failed", transfer_ok=result["ok"], ok=False, reason=None,
+                          cleanup_failed=cleanup_failed, error=result["error"] or CLEANUP_ERROR)
     return result

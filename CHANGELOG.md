@@ -4,6 +4,18 @@ All notable changes to Amnezia Control are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.84.40] - 2026-11-10
+
+- Fix false cleanup failures after temporary cascade transport checks. Keep cleanup safeguards active when a timed-out container launch remains uncertain.
+- Show transfer results separately from cleanup failures, identify the affected endpoint, and explain connection, incomplete transfer, and data integrity failures.
+- Preserve unrelated firewall and policy routing rules during cascade recovery. Validate conflicts and replace legacy cleanup helpers before stopping the old gateway.
+- Honor current server alert preferences and destination settings before delivery. Keep recovery notifications tied to confirmed outage deliveries to the same destination.
+- Hide saved alert secrets in API responses, preserve unchanged secrets and environment defaults, and prevent concurrent settings updates from losing changes.
+- Require password confirmation when adding a configuration sharing service. Validate service URLs and returned links, and refuse redirects during service detection.
+- Reject stale concurrent password changes after credentials have already changed.
+- Validate import size, nesting, and SSH ports, and avoid exposing internal errors from malformed imports.
+- Reject conflicting backup paths before restoring data, and keep API keys revoked across repeated restores of older backups.
+
 ## [0.84.39] - 2026-11-10
 
 - Retry server outage and recovery alerts on a later monitoring pass if Telegram or the webhook could not be reached. Track delivery separately for each channel.

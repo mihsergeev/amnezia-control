@@ -3264,10 +3264,12 @@ tr.row-link:hover td {
 
 .cas-probe-ok .cas-transport-status { color: #6bd19b; }
 .cas-probe-bad .cas-transport-status { color: #ff7b6e; }
+.cas-probe-bad .cas-transport-passed { color: #6bd19b; }
 .cas-probe-muted { color: var(--text-muted); }
 .cas-probe-run .cas-transport-status { color: #7da4ff; }
 [data-theme='light'] .cas-probe-ok .cas-transport-status { color: #167447; }
 [data-theme='light'] .cas-probe-bad .cas-transport-status { color: #b42318; }
+[data-theme='light'] .cas-probe-bad .cas-transport-passed { color: #167447; }
 [data-theme='light'] .cas-probe-run .cas-transport-status { color: #2456c6; }
 
 /* Activity only: neither elapsed time nor received bytes imply completion. */

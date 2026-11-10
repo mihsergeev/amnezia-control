@@ -9,6 +9,7 @@ import {
 import { useI18n } from './i18n'
 import { resetShareServices } from './ShareLink'
 import { useModalDismiss } from './useModalDismiss'
+import { StepUpModal } from './StepUpModal'
 
 type Props = {
   onClose: () => void
@@ -30,6 +31,7 @@ export function ShareServicesModal({ onClose, onUnauthorized }: Props) {
   const [url, setUrl] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [pending, setPending] = useState<{ name: string; url: string } | null>(null)
 
   useEffect(() => {
     getShareServices()
@@ -49,6 +51,7 @@ export function ShareServicesModal({ onClose, onUnauthorized }: Props) {
       resetShareServices()
       return true
     } catch (err) {
+      if (err instanceof ApiError && err.status === 401) onUnauthorized()
       setError(err instanceof Error ? err.message : t('Ошибка'))
       return false
     } finally {
@@ -56,10 +59,21 @@ export function ShareServicesModal({ onClose, onUnauthorized }: Props) {
     }
   }
 
-  async function add() {
-    if (await run(() => addShareService(name.trim(), url.trim()))) {
+  async function add(password: string) {
+    if (!pending) return
+    setBusy(true)
+    try {
+      setServices(await addShareService(pending.name, pending.url, password))
+      resetShareServices()
       setName('')
       setUrl('')
+      setError(null)
+      setPending(null)
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 401) onUnauthorized()
+      throw err
+    } finally {
+      setBusy(false)
     }
   }
 
@@ -140,13 +154,18 @@ export function ShareServicesModal({ onClose, onUnauthorized }: Props) {
             {error && <p className="form-error">{error}</p>}
 
             <div className="modal-actions">
-              <button onClick={add} disabled={busy || !name.trim() || !url.trim()}>
+              <button onClick={() => setPending({ name: name.trim(), url: url.trim() })} disabled={busy || !name.trim() || !url.trim()}>
                 {busy ? t('Проверяю…') : t('Добавить')}
               </button>
             </div>
           </>
         )}
       </div>
+      {pending && <StepUpModal
+        text={t('Этот сервис будет получать клиентские конфиги. Введите пароль от панели, чтобы добавить его.')}
+        onSubmit={add}
+        onCancel={() => setPending(null)}
+      />}
     </div>
   )
 }

@@ -6,6 +6,7 @@ import os
 import tarfile
 import uuid
 from datetime import date, datetime, timezone
+from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Request, status
 from fastapi.responses import Response
@@ -155,6 +156,45 @@ def _sqlite_runtime_paths(session) -> set[str]:
         return set()
     path = os.path.normcase(os.path.realpath(url.database))
     return {path + suffix for suffix in ("", "-wal", "-shm", "-journal")}
+
+
+def _restore_files(tar: tarfile.TarFile, data_dir: str, sqlite_paths: set[str]) -> dict[Path, tarfile.TarInfo]:
+    """Проверяет пути архива и существующие типы файлов до записи в БД."""
+    root = Path(data_dir).resolve()
+    files: dict[Path, tarfile.TarInfo] = {}
+    directories: set[Path] = set()
+    for member in tar.getmembers():
+        if not (member.isfile() or member.isdir()) or not member.name.startswith("data/"):
+            continue
+        rel = member.name[len("data/"):]
+        if not rel or ".." in rel or os.path.isabs(rel) or _skip_data_dir(rel.split("/", 1)[0]):
+            continue
+        target = (root / rel).resolve()
+        if not target.is_relative_to(root) or os.path.normcase(target) in sqlite_paths:
+            continue
+        if target == root:
+            if member.isfile():
+                raise ValueError("в архиве файл занимает путь каталога данных")
+            continue
+        if _skip_data_dir(target.relative_to(root).parts[0]):
+            continue
+        if member.isfile():
+            if target in files:
+                raise ValueError("в архиве несколько файлов с одинаковым путем")
+            files[target] = member
+        else:
+            directories.add(target)
+        for parent in target.parents:
+            directories.add(parent)
+            if parent == root:
+                break
+    if (
+        files.keys() & directories
+        or any(path.exists() and not path.is_file() for path in files)
+        or any(path.exists() and not path.is_dir() for path in directories)
+    ):
+        raise ValueError("конфликт файла и каталога при восстановлении данных")
+    return files
 
 
 def verify_archive(archive: bytes) -> list[str]:
@@ -390,7 +430,7 @@ async def restore_backup(
     body = b"".join(chunks)
     try:
         tar = tarfile.open(fileobj=io.BytesIO(body), mode="r:gz")
-    except (tarfile.TarError, OSError) as exc:
+    except (tarfile.TarError, OSError, EOFError) as exc:
         raise HTTPException(
             status.HTTP_400_BAD_REQUEST, "не удалось прочитать архив (ожидается .tar.gz)"
         ) from exc
@@ -400,7 +440,7 @@ async def restore_backup(
         if db_member is None:
             raise KeyError
         dump = json.loads(db_member.read())
-    except (KeyError, json.JSONDecodeError, ValueError) as exc:
+    except (KeyError, ValueError, tarfile.TarError, OSError, EOFError) as exc:
         raise HTTPException(
             status.HTTP_400_BAD_REQUEST, "в архиве нет валидного db.json"
         ) from exc
@@ -422,6 +462,14 @@ async def restore_backup(
             prepared[model.__tablename__] = [_coerce_row(model, row) for row in rows]
     except ValueError as exc:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
+
+    settings = get_settings()
+    try:
+        files = _restore_files(tar, settings.data_dir, _sqlite_runtime_paths(session))
+    except ValueError as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
+    except (tarfile.TarError, OSError, EOFError, RuntimeError) as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "не удалось прочитать файлы архива") from exc
 
     # восстанавливаем ТОЛЬКО таблицы, присутствующие в db.json. Отсутствующие
     # (напр. история трафика в лёгком бэкапе) не трогаем — иначе restore затёр бы
@@ -454,22 +502,29 @@ async def restore_backup(
         prepared[journal] = [_retired_issue(request_id) for request_id in sorted(ids)]
         if BulkClientIssue not in present:
             present.append(BulkClientIssue)
-    # версии токенов и отозванные ключи до замены: старый архив не должен
-    # оживлять украденные JWT (версия из архива меньше текущей) и ключи,
-    # отозванные после бэкапа
+    # Старый архив не должен оживлять JWT или отозванные API-ключи.
     old_versions = dict(
         (await session.execute(select(User.username, User.token_version))).all()
     )
-    revoked_keys = {}
+    retired_keys = []
     if ApiKey in present:
-        revoked = await session.scalars(select(ApiKey).where(ApiKey.revoked.is_(True)))
-        revoked_keys = {
-            key.prefix: {
-                column.name: getattr(key, column.name)
-                for column in ApiKey.__table__.columns if not column.primary_key
-            }
-            for key in revoked
-        }
+        archived_keys = {}
+        for row in prepared[ApiKey.__tablename__]:
+            prefix = row.get("prefix")
+            if not isinstance(prefix, str) or not prefix or prefix in archived_keys:
+                raise HTTPException(400, "В архиве неверный или повторяющийся префикс API-ключа")
+            archived_keys[prefix] = row
+        for key in await session.scalars(select(ApiKey)):
+            archived = archived_keys.get(key.prefix)
+            if archived is None:
+                # Удаление ключа при восстановлении тоже отзывает доступ.
+                # Сохраняем отзыв для следующего архива, где ключ ещё активен.
+                retired_keys.append({
+                    column.name: getattr(key, column.name)
+                    for column in ApiKey.__table__.columns if not column.primary_key
+                } | {"revoked": True})
+            elif key.revoked:
+                archived["revoked"] = True
     restored: dict[str, int] = {}
     for model in reversed(present):  # чистим в обратном порядке (FK нет)
         await session.execute(delete(model))
@@ -488,11 +543,6 @@ async def restore_backup(
                     token_version=max(old_versions.get(name, 0), ver or 0) + 1
                 )
             )
-    if revoked_keys:
-        await session.execute(
-            update(ApiKey).where(ApiKey.prefix.in_(revoked_keys)).values(revoked=True)
-        )
-
     # Postgres: строки вставлены с явными id, но identity-sequence не сдвинулась →
     # следующий INSERT упал бы на duplicate key. Догоняем sequence до max(id).
     # (На SQLite не нужно; таблицы с натуральным PK — server_status/app_settings/
@@ -513,41 +563,19 @@ async def restore_backup(
                         f"(SELECT COUNT(*) FROM {tbl}) > 0)"
                     )
                 )
-    if revoked_keys:
-        # Сохраняем отзыв и при восстановлении архива, снятого до создания ключа.
-        # Иначе следующий архив, в котором ключ еще активен, оживит его.
-        archived_prefixes = {row["prefix"] for row in prepared[ApiKey.__tablename__]}
-        for prefix, row in revoked_keys.items():
-            if prefix not in archived_prefixes:
-                await session.execute(insert(ApiKey).values(**row))
+    if retired_keys:
+        await session.execute(insert(ApiKey), retired_keys)
     await session.commit()
 
     # восстановление data/ (ssh-ключ и пр.), без postgres
-    settings = get_settings()
-    base = os.path.realpath(settings.data_dir)
-    sqlite_paths = _sqlite_runtime_paths(session)
-    for m in tar.getmembers():
-        if not (m.isfile() and m.name.startswith("data/")):
-            continue
-        rel = m.name[len("data/"):]
-        if not rel or ".." in rel or _skip_data_dir(rel.split("/", 1)[0]):
-            continue
-        # КРИТИЧНО: отвергаем абсолютные пути ("data//etc/x" → rel="/etc/x", где
-        # os.path.join отбрасывает base) и любой выход за пределы data_dir
-        if os.path.isabs(rel):
-            continue
-        dest = os.path.realpath(os.path.join(base, rel))
-        if os.path.normcase(dest) in sqlite_paths:
-            continue
-        if dest != base and not dest.startswith(base + os.sep):
-            continue
-        os.makedirs(os.path.dirname(dest), exist_ok=True)
-        src = tar.extractfile(m)
+    for dest, member in files.items():
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        src = tar.extractfile(member)
         if src is None:
             continue
-        with open(dest, "wb") as fh:
+        with src, dest.open("wb") as fh:
             fh.write(src.read())
-        if rel.endswith("id_ed25519"):
+        if member.name.endswith("id_ed25519"):
             try:
                 os.chmod(dest, 0o600)
             except OSError:

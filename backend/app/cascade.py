@@ -59,7 +59,7 @@ TAG = "cascade"  # каталог деплоя на нодах ($HOME/.acontrol/
 TRANSPORTS = ("vless", "gre", "awg")
 # ревизия скриптов входа: проверка видит старую и обновляет их на месте
 # (upgrade_entry), без переустановки каскада
-SCRIPTS_REV = "4"
+SCRIPTS_REV = "5"
 
 # проверка канала: сколько отправляем со входа на выход и сколько ждем
 PROBE_BYTES = 20 * 1024 * 1024
@@ -216,7 +216,7 @@ _TPROXY_SH = r"""#!/bin/sh
 # rev @REV@
 # Amnezia Control: заворачивает исходящий трафик VPN-контейнеров в шлюз каскада
 # (tproxy на 127.0.0.1:@PORT@). Дальше шлюз решает, куда выпустить.
-#   cascade-tproxy.sh up|down|heal|status
+#   cascade-tproxy.sh up|down|preflight|heal|status
 set -u
 PORT=@PORT@
 MARK=@MARK@
@@ -292,30 +292,88 @@ heal() {
   logger -t acontrol-cascade "tproxy rules restored"
 }
 
+tproxy_preflight() {
+  mangle_rules=$(iptables -w -t mangle -S) || return 1
+  # A reserved name can still contain operator-owned rules. Accept only the
+  # rules our setup emits, including an incomplete chain from a failed setup.
+  printf '%s\n' "$mangle_rules" | awk -v chain="$CHAIN" -v skip="$SKIP" -v port="$PORT" -v mark="$MARK/$MARK" '
+    BEGIN { split(skip, nets, " "); for (i in nets) allowed[nets[i]]=1 }
+    $1 != "-A" || $2 != chain { next }
+    NF == 6 && $3 == "-d" && $5 == "-j" && $6 == "RETURN" &&
+      ($4 in allowed || $4 ~ /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+\/32$/) { next }
+    $0 == "-A " chain " -m conntrack --ctstate DNAT -j RETURN" { next }
+    NF == 12 && $3 == "-p" && ($4 == "tcp" || $4 == "udp") && $5 == "-j" && $6 == "TPROXY" {
+      for (i=7; i<=NF; i+=2) options[$i]=$(i+1)
+      if (options["--on-port"] == port && options["--on-ip"] == "127.0.0.1" && options["--tproxy-mark"] == mark) {
+        for (i in options) delete options[i]
+        next
+      }
+    }
+    { exit 1 }
+  ' || return 1
+  jump_pattern="^-A PREROUTING -i \([a-zA-Z0-9_.:-][a-zA-Z0-9_.:-]*\) -j $CHAIN$"
+  foreign_refs=$(printf '%s\n' "$mangle_rules" | grep -E " -[jg] $CHAIN( |$)" | sed "/$jump_pattern/d")
+  [ -z "$foreign_refs" ] || return 1
+  jump_ifaces=$(printf '%s\n' "$mangle_rules" | sed -n "s/$jump_pattern/\1/p")
+  [ -n "$jump_ifaces" ] || return 0
+  known_bridges=$(bridges)
+  links=''
+  for iface in $jump_ifaces; do
+    printf '%s\n' "$known_bridges" | grep -Fxq -- "$iface" && continue
+    # Only absent default Docker bridges can be stale Amnezia networks.
+    printf '%s\n' "$iface" | grep -Eq '^br-[0-9a-f]{12}$' || return 1
+    [ -n "$links" ] || links=$(ip -o link show) || return 1
+    if printf '%s\n' "$links" | awk -F': ' '{print $2}' | cut -d@ -f1 | grep -Fxq -- "$iface"; then
+      return 1
+    fi
+  done
+}
+
+policy_preflight() {
+  policy_rules=$(ip -N -4 rule show) || return 1
+  policy_pattern="^\([0-9][0-9]*\):[[:space:]]*from all fwmark $MARK lookup $TABLE[[:space:]]*$"
+  routes=$(ip -N -4 route show table all type local) || return 1
+  # Numeric output prints RTN_LOCAL as 2 and keeps table IDs independent of rt_tables.
+  local_route_pattern="^2 default dev lo table $TABLE scope 254[[:space:]]*$"
+  if printf '%s\n' "$routes" | grep -Eq "$local_route_pattern"; then
+    foreign_policy=$(printf '%s\n' "$policy_rules" | grep -E " lookup $TABLE([[:space:]]|$)" | sed "/$policy_pattern/d")
+    [ -z "$foreign_policy" ] || return 1
+  fi
+}
+
+preflight() {
+  if command -v iptables >/dev/null; then tproxy_preflight || return 1; fi
+  policy_preflight
+}
+
 down() {
-  # снимаем все переходы в цепочку, в том числе на мосты, которых уже нет
+  preflight || return 1
   if command -v iptables >/dev/null; then
     rules=$(iptables -w -S INPUT) || return 1
+    # The cascade jump is the ownership evidence for an unlabelled INPUT rule.
     printf '%s\n' "$rules" | sed -n "s/^-A INPUT -i \([^ ]*\) -m mark --mark $MARK\/$MARK -j ACCEPT$/\1/p" | while read -r iface; do
+      printf '%s\n' "$jump_ifaces" | grep -Fxq -- "$iface" || continue
       iptables -w -D INPUT -i "$iface" -m mark --mark "$MARK/$MARK" -j ACCEPT || exit 1
     done || return 1
-    rules=$(iptables -w -t mangle -S PREROUTING) || return 1
-    printf '%s\n' "$rules" | sed -n "s/^-A PREROUTING -i \([^ ]*\) -j $CHAIN$/\1/p" | while read -r iface; do
-      iptables -w -t mangle -D PREROUTING -i "$iface" -j "$CHAIN" || exit 1
-    done || return 1
+    for iface in $jump_ifaces; do
+      iptables -w -t mangle -D PREROUTING -i "$iface" -j "$CHAIN" || return 1
+    done
     rules=$(iptables -w -t mangle -S) || return 1
     if printf '%s\n' "$rules" | grep -Eq " -[jg] $CHAIN( |$)"; then return 1; fi
     if printf '%s\n' "$rules" | grep -Fxq -- "-N $CHAIN"; then
-      iptables -w -t mangle -F "$CHAIN" && iptables -w -t mangle -X "$CHAIN" || return 1
+      # Delete the checked rules by spec. A rule added after preflight must
+      # leave the chain busy rather than being flushed with our rules.
+      printf '%s\n' "$mangle_rules" | sed -n "s/^-A $CHAIN //p" | while IFS= read -r spec; do
+        set -- $spec
+        iptables -w -t mangle -D "$CHAIN" "$@" || exit 1
+      done || return 1
+      iptables -w -t mangle -X "$CHAIN" || return 1
     fi
   fi
-  rules=$(ip -N -4 rule show) || return 1
-  printf '%s\n' "$rules" | sed -n "s/^\([0-9][0-9]*\):[[:space:]]*from all fwmark $MARK lookup $TABLE[[:space:]]*$/\1/p" | while read -r priority; do
+  printf '%s\n' "$policy_rules" | sed -n "s/$policy_pattern/\1/p" | while read -r priority; do
     ip -4 rule del pref "$priority" from all fwmark "$MARK" lookup "$TABLE" || exit 1
   done || return 1
-  routes=$(ip -N -4 route show table all type local) || return 1
-  # Numeric output prints RTN_LOCAL as 2 and keeps table IDs independent of rt_tables.
-  if printf '%s\n' "$routes" | grep -Eq "^2 default dev lo table $TABLE( |$)"; then
+  if printf '%s\n' "$routes" | grep -Eq "$local_route_pattern"; then
     ip -4 route del local default dev lo table "$TABLE" || return 1
   fi
 }
@@ -328,9 +386,10 @@ status() {
 case "${1:-}" in
   up) up ;;
   down) down ;;
+  preflight) preflight ;;
   heal) heal ;;
   status) status ;;
-  *) echo "usage: $0 up|down|heal|status" >&2; exit 2 ;;
+  *) echo "usage: $0 up|down|preflight|heal|status" >&2; exit 2 ;;
 esac
 """
 
@@ -763,7 +822,8 @@ def build_entry_script(transport: str, exit_ip: str, cascade_id: int, params: di
                   f"sudo install -d -m 700 {DIR}",
                   _put(f"{DIR}/owner.json", json.dumps(cascade_exit._owner(cascade_id, transport, params)), "600")]
     owner = params.get("runtime_owner", "")
-    lines += ['log "[1/5] docker"', _DOCKER, cascade_gateway.commands(DIR, GATEWAY, owner, _remove_tproxy()),
+    lines += ['log "[1/5] docker"', _DOCKER,
+              cascade_gateway.commands(DIR, GATEWAY, owner, _remove_tproxy(), tproxy_prepare=_prepare_tproxy_removal()),
               "gateway_recover || fail 'previous gateway transaction'"]
     if transport == "awg":
         lines += ['log "[2/5] зашифрованный канал AWG 3.1"']
@@ -1092,8 +1152,26 @@ def _verify_tproxy_removed() -> str:
         "  if printf '%s\\n' \"$ac_rules\" | grep -Eq '^-N ACONTROL_CASCADE$| -[jg] ACONTROL_CASCADE( |$)'; then exit 73; fi\n"
         "fi\n"
         "ac_rules=$(sudo ip -N -4 rule show) || exit 73\n"
-        f"if printf '%s\\n' \"$ac_rules\" | grep -Eq 'fwmark {TPROXY_MARK}(/[^ ]+)? lookup {TPROXY_TABLE}([[:space:]]|$)'; then exit 73; fi\n"
+        f"if printf '%s\\n' \"$ac_rules\" | grep -Eq '^[0-9]+:[[:space:]]*from all fwmark {TPROXY_MARK} lookup {TPROXY_TABLE}[[:space:]]*$'; then exit 73; fi\n"
+        "ac_routes=$(sudo ip -N -4 route show table all type local) || exit 73\n"
+        f"if printf '%s\\n' \"$ac_routes\" | grep -Eq '^2 default dev lo table {TPROXY_TABLE} scope 254[[:space:]]*$'; then exit 73; fi\n"
     )
+
+
+def _tproxy_command(action: str) -> str:
+    return (f"sudo sh -s -- {action} <<'AC_CASCADE_TPROXY' || exit 73\n"
+            + _fill(_TPROXY_SH) + "AC_CASCADE_TPROXY\n")
+
+
+def _prepare_tproxy_removal() -> str:
+    helper = f"{DIR}/cascade-tproxy.sh"
+    # ExecStop uses the installed copy. Check live ownership before stopping
+    # services, then replace legacy helpers that could delete unrelated rules.
+    return ("if ! (\n" + _tproxy_command("preflight")
+            + "); then echo CASCADE_RECOVERY_TPROXY_FAILED; exit 73; fi\n"
+            + f"if sudo test -x {helper}; then\n"
+            + "  (fail() { exit 73; }; " + _put(helper, _fill(_TPROXY_SH), "755")
+            + ") || exit 73\nfi\n")
 
 
 def _remove_tproxy(*, recover: bool = False) -> str:
@@ -1101,9 +1179,7 @@ def _remove_tproxy(*, recover: bool = False) -> str:
         # A partial teardown can leave kernel rules after removing the node helper.
         return (
             "if ! (\n"
-            "sudo sh -s -- down <<'AC_CASCADE_TPROXY' || exit 73\n"
-            + _fill(_TPROXY_SH)
-            + "AC_CASCADE_TPROXY\n"
+            + _tproxy_command("down")
             + _verify_tproxy_removed()
             + "); then echo CASCADE_RECOVERY_TPROXY_FAILED; exit 73; fi\n"
         )
@@ -1129,6 +1205,7 @@ def build_remove_entry(transport: str = "gre", cascade_id: int = 0, params: dict
         cascade_exit.entry_preflight(cascade_id, transport, params) if cascade_exit.scoped(params or {}) else "",
         cascade_awg.foreign_guard(),
         cascade_awg.preflight_command(cascade_id) if transport == "awg" else "",
+        _prepare_tproxy_removal(),
         stop_units(*units),
         remove_tproxy,
         f"if sudo test -e {DIR}/gateway-transaction || sudo test -L {DIR}/gateway-transaction; then\n"

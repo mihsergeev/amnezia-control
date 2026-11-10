@@ -1,5 +1,7 @@
 """Алерты о падении/восстановлении серверов (Telegram / вебхук)."""
 
+import hashlib
+import json
 import logging
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -12,7 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import settings_store
 from app.config import Settings
-from app.models import Server, ServerStatus
+from app.models import AppSetting, Server, ServerStatus
 
 log = logging.getLogger("acontrol.alerts")
 
@@ -254,6 +256,22 @@ async def security_alert(
         log.warning("security-алерт не отправлен", exc_info=True)
 
 
+def _availability_channels(cfg: dict) -> dict[str, dict]:
+    """Bind delivery receipts to their destination without storing credentials."""
+    channels = {}
+    for kind, identity, enabled, channel_cfg in (
+        ("telegram", [cfg.get("telegram_token"), cfg.get("telegram_chat"),
+                      (cfg.get("telegram_api") or "https://api.telegram.org").rstrip("/")],
+         cfg.get("telegram_token") and cfg.get("telegram_chat"), {**cfg, "webhook": ""}),
+        ("webhook", [cfg.get("webhook")], cfg.get("webhook"),
+         {**cfg, "telegram_token": "", "telegram_chat": ""}),
+    ):
+        if enabled:
+            digest = hashlib.sha256(json.dumps(identity).encode()).hexdigest()
+            channels[f"{kind}:{digest}"] = channel_cfg
+    return channels
+
+
 async def reconcile(
     session: AsyncSession,
     settings: Settings,
@@ -261,7 +279,6 @@ async def reconcile(
     names: dict[int, str],
     *,
     now: datetime | None = None,
-    enabled_server_ids: set[int] | None = None,
 ) -> list[tuple[int, bool]]:
     """Сверяет текущий статус с сохранённым, шлёт алерты на переходах.
 
@@ -274,17 +291,18 @@ async def reconcile(
     now = now or datetime.now(timezone.utc)
     grace = timedelta(minutes=max(0, settings.server_down_minutes))
     known = {s.server_id: s for s in await session.scalars(select(ServerStatus))}
+    alert_flags = dict((await session.execute(
+        select(Server.id, Server.alerts_enabled)
+    )).all())
     cfg = await settings_store.get_alert_config(session, settings)
-    channels = {}
-    if cfg.get("telegram_token") and cfg.get("telegram_chat"):
-        channels["telegram"] = {**cfg, "webhook": ""}
-    if cfg.get("webhook"):
-        channels["webhook"] = {**cfg, "telegram_token": "", "telegram_chat": ""}
+    channels = _availability_channels(cfg)
     transitions: list[tuple[int, bool]] = []
     pending: list[ServerStatus] = []
     for sid, online in online_map.items():
+        if sid not in alert_flags:
+            continue
         prev = known.get(sid)
-        if enabled_server_ids is not None and sid not in enabled_server_ids:
+        if not alert_flags[sid]:
             # Пока алерты выключены, статус держим в нейтральной точке. После
             # включения офлайн-нода должна выдержать полный grace-период.
             if prev is None:
@@ -312,10 +330,11 @@ async def reconcile(
                 prev.online = True
                 prev.changed_at = now
                 transitions.append((sid, True))
-                # Rows from before delivery tracking may already have sent an outage.
+                # Legacy receipts have no destination identity: do not send a
+                # recovery to a recipient whose outage delivery is unknown.
                 delivered = prev.availability_alerts
                 prev.availability_alerts = {
-                    channel: False for channel in channels if delivered is None or delivered.get(channel)
+                    channel: False for channel in channels if delivered and delivered.get(channel)
                 }
         elif prev.online:
             # Нода молчит, но статус ещё «онлайн». Засекаем начало серии и
@@ -338,7 +357,7 @@ async def reconcile(
                 pending.append(prev)
     # чистим статусы удалённых серверов
     for sid in list(known):
-        if sid not in online_map:
+        if sid not in alert_flags:
             await session.delete(known[sid])
     await session.commit()
 
@@ -352,8 +371,36 @@ async def reconcile(
             else Card("crit", "🖥", t("Сервер недоступен больше {mins} мин", mins=mins), subject=name)
         )
         delivery = dict(row.availability_alerts)
+        current_status = (
+            ServerStatus.server_id == row.server_id,
+            ServerStatus.changed_at == row.changed_at,
+            ServerStatus.online == row.online,
+        )
         for channel, delivered in tuple(delivery.items()):
-            if delivered or await send_card(channels[channel], settings, card):
+            if delivered:
+                continue
+            # Read opt-in, status and destinations together so a change during
+            # config loading cannot leave the earlier opt-in check stale.
+            current = (await session.execute(
+                select(
+                    Server.alerts_enabled,
+                    select(AppSetting.value)
+                    .where(AppSetting.key == settings_store.ALERTS_KEY)
+                    .scalar_subquery(),
+                )
+                .join(ServerStatus, ServerStatus.server_id == Server.id)
+                .where(*current_status)
+            )).first()
+            # Release the read transaction before waiting for the network.
+            await session.commit()
+            if current is None or not current[0]:
+                break
+            current_channels = _availability_channels(
+                settings_store.alert_config_from_raw(current[1], settings)
+            )
+            if channel not in current_channels:
+                continue
+            if await send_card(current_channels[channel], settings, card):
                 continue
             if row.online:
                 del delivery[channel]
@@ -363,7 +410,7 @@ async def reconcile(
             # alerts or deleted the server while the channel was responding.
             result = await session.execute(
                 update(ServerStatus)
-                .where(ServerStatus.server_id == row.server_id, ServerStatus.changed_at == row.changed_at)
+                .where(*current_status)
                 .values(availability_alerts=dict(delivery))
             )
             await session.commit()
