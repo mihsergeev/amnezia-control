@@ -776,6 +776,9 @@ async def _entry_recovery(entry_id: int, user: CurrentUser, session: SessionDep,
                 if "CASCADE_RECOVERY_STATE_CHANGED" in markers:
                     raise conflict("cascade_recovery_changed", "Состояние шлюза изменилось. Проверьте вход заново.")
                 if removed.exit_status != 0 or "CASCADE_REMOVED=yes" not in markers:
+                    if "CASCADE_RECOVERY_TPROXY_FAILED" in markers:
+                        raise conflict("cascade_recovery_tproxy", "Не удалось снять правила маршрутизации старого шлюза (TPROXY).",
+                                       cascade_id=cid, server_id=entry.id, side="entry")
                     if "CASCADE_RECOVERY_CLEANUP_STARTED" in markers:
                         raise conflict("cascade_recovery_cleanup", "Снятие шлюза началось, но на входе остались его ресурсы. Проверьте вход заново.")
                     raise conflict("cascade_recovery_failed", "Вход не подтвердил начало снятия шлюза. Проверьте вход заново.")

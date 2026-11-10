@@ -4,6 +4,11 @@ All notable changes to Amnezia Control are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.84.38] - 2026-11-10
+
+- Recover a cascade entry in the setup wizard when the old TPROXY helper is missing or unusable and its routing rules remain. Preserve existing VPN clients and profiles.
+- Identify TPROXY cleanup failures in the wizard instead of reporting a generic recovery failure.
+
 ## [0.84.37] - 2026-11-10
 
 - Recover a leftover cascade gateway directly in the setup wizard and continue with the selected exit. When replacing a recorded cascade, carry over its saved route overrides.

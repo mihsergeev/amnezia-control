@@ -40,7 +40,7 @@ async def test_entry_recovery_only_uses_entry_and_keeps_retryable_state(
                 return SimpleNamespace(exit_status=0, stdout="CASCADE_AVAILABLE")
             writes.append(command)
             if fail_cleanup:
-                return SimpleNamespace(exit_status=73, stdout="")
+                return SimpleNamespace(exit_status=73, stdout="CASCADE_RECOVERY_CLEANUP_STARTED\nCASCADE_RECOVERY_TPROXY_FAILED")
             return SimpleNamespace(exit_status=0, stdout="CASCADE_REMOVED=yes")
 
     @asynccontextmanager
@@ -60,6 +60,7 @@ async def test_entry_recovery_only_uses_entry_and_keeps_retryable_state(
 
     response = await client.post(url, headers=auth_headers, json={"token": details["token"]})
     assert response.status_code == 409 and len(writes) == 1
+    assert "TPROXY" in response.json()["detail"]
     async with session_factory() as session:
         assert bool(await session.get(Cascade, 7)) == (scenario != "forgotten")
 

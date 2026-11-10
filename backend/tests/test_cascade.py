@@ -35,6 +35,7 @@ def test_scripts_are_valid_shell(transport) -> None:
     _bash_ok(cascade.build_exit_script(transport, "203.0.113.10", 3, VLESS))
     _bash_ok(cascade.build_entry_script(transport, "198.51.100.20", 3, VLESS))
     _bash_ok(cascade.build_remove_entry() + cascade.ufw_cleanup("198.51.100.20", None))
+    _bash_ok(cascade.build_remove_entry(transport, 3, recover=True))
     _bash_ok(cascade.build_remove_exit() + cascade.ufw_cleanup("203.0.113.10", 443))
     _bash_ok(cascade.build_check_command())
     for text in (cascade._GRE_TUN_SH, cascade._TPROXY_SH, cascade._GEO_SH):
@@ -636,8 +637,60 @@ def test_tproxy_catches_amnezia_dns_net() -> None:
     tp = cascade._fill(cascade._TPROXY_SH)
     # контейнеры приложения Amnezia выходят через amnezia-dns-net, а не docker0
     assert "amnezia-dns-net" in tp and "for IF in $(bridges)" in tp
-    # переходы снимаются все, в том числе на мосты, которых уже нет
-    assert "iptables -t mangle -S PREROUTING | sed -n" in tp
+
+
+@pytest.mark.skipif(shutil.which("bash") is None, reason="requires bash")
+@pytest.mark.parametrize("foreign_jump", [False, True])
+def test_tproxy_removes_stale_rules_without_touching_other_routes(foreign_jump) -> None:
+    commands = r'''
+iptables() {
+  case "$*" in
+    '-w -S INPUT')
+      echo '-A INPUT -i docker0 -m mark --mark 0x100/0x100 -j ACCEPT'
+      echo '-A INPUT -i eth0 -p tcp -m mark --mark 0x100/0x100 -j ACCEPT'
+      ;;
+    '-w -t mangle -S PREROUTING')
+      echo '-A PREROUTING -i br-deleted -j ACONTROL_CASCADE'
+      ;;
+    '-w -t mangle -S')
+      echo '-N ACONTROL_CASCADE'
+      if [ "$FOREIGN" = yes ]; then echo '-A OUTPUT -j ACONTROL_CASCADE'; fi
+      ;;
+    *) echo "iptables $*";;
+  esac
+}
+ip() {
+  case "$*" in
+    '-N -4 rule show')
+      printf '%s\n' '100: from all fwmark 0x100 lookup 241' '101: from all fwmark 0x100 lookup 241' \
+        '102: from 192.0.2.10 fwmark 0x100 lookup 241'
+      ;;
+    '-N -4 route show table all type local')
+      printf '%s\n' '2 default dev lo table 241 scope 254' '2 192.0.2.1 dev lo table 241 scope 254'
+      ;;
+    *) echo "ip $*";;
+  esac
+}
+'''
+    result = subprocess.run(
+        [shutil.which("bash"), "-s", "--", "down"],
+        input=f"FOREIGN={'yes' if foreign_jump else 'no'}\n" + commands + cascade._fill(cascade._TPROXY_SH),
+        capture_output=True, text=True, timeout=10,
+    )
+    assert result.returncode == int(foreign_jump), result.stderr
+    deletes = [
+        "iptables -w -D INPUT -i docker0 -m mark --mark 0x100/0x100 -j ACCEPT",
+        "iptables -w -t mangle -D PREROUTING -i br-deleted -j ACONTROL_CASCADE",
+    ]
+    if not foreign_jump:
+        deletes.extend([
+            "iptables -w -t mangle -F ACONTROL_CASCADE",
+            "iptables -w -t mangle -X ACONTROL_CASCADE",
+            "ip -4 rule del pref 100 from all fwmark 0x100 lookup 241",
+            "ip -4 rule del pref 101 from all fwmark 0x100 lookup 241",
+            "ip -4 route del local default dev lo table 241",
+        ])
+    assert result.stdout.splitlines() == deletes
 
 
 @pytest.mark.skipif(shutil.which("bash") is None, reason="requires bash")

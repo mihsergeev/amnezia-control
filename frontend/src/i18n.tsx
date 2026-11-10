@@ -1231,6 +1231,7 @@ const EN: Record<string, string> = {
     'The panel could not verify that it owns the entry gateway. The entry was left unchanged.',
   'На входе не найден шлюз каскада для восстановления.': 'There is no cascade gateway to recover on the entry.',
   'Состояние каскада изменилось. Откройте восстановление заново.': 'The cascade state changed. Reopen entry recovery.',
+  'Не удалось снять правила маршрутизации старого шлюза (TPROXY).': 'Could not remove the old gateway’s routing rules (TPROXY).',
   'Вход не подтвердил снятие старого шлюза. Повторите восстановление.':
     'The entry did not confirm removal of the old gateway. Retry recovery.',
   'Панель уберет шлюз и туннель с обоих серверов. Клиенты входа останутся подключенными, но в интернет пойдут с адреса самого входа.':

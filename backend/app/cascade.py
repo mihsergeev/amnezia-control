@@ -294,16 +294,30 @@ heal() {
 
 down() {
   # снимаем все переходы в цепочку, в том числе на мосты, которых уже нет
-  iptables -S INPUT | sed -n "s/^-A \(INPUT .*--mark $MARK\/$MARK -j ACCEPT\)$/\1/p" | while read -r r; do
-    iptables -D $r 2>/dev/null
-  done
-  iptables -t mangle -S PREROUTING | sed -n "s/^-A \(PREROUTING .*-j $CHAIN\)$/\1/p" | while read -r r; do
-    iptables -t mangle -D $r 2>/dev/null
-  done
-  iptables -t mangle -F $CHAIN 2>/dev/null || true
-  iptables -t mangle -X $CHAIN 2>/dev/null || true
-  ip rule del fwmark $MARK lookup $TABLE 2>/dev/null || true
-  ip route flush table $TABLE 2>/dev/null || true
+  if command -v iptables >/dev/null; then
+    rules=$(iptables -w -S INPUT) || return 1
+    printf '%s\n' "$rules" | sed -n "s/^-A INPUT -i \([^ ]*\) -m mark --mark $MARK\/$MARK -j ACCEPT$/\1/p" | while read -r iface; do
+      iptables -w -D INPUT -i "$iface" -m mark --mark "$MARK/$MARK" -j ACCEPT || exit 1
+    done || return 1
+    rules=$(iptables -w -t mangle -S PREROUTING) || return 1
+    printf '%s\n' "$rules" | sed -n "s/^-A PREROUTING -i \([^ ]*\) -j $CHAIN$/\1/p" | while read -r iface; do
+      iptables -w -t mangle -D PREROUTING -i "$iface" -j "$CHAIN" || exit 1
+    done || return 1
+    rules=$(iptables -w -t mangle -S) || return 1
+    if printf '%s\n' "$rules" | grep -Eq " -[jg] $CHAIN( |$)"; then return 1; fi
+    if printf '%s\n' "$rules" | grep -Fxq -- "-N $CHAIN"; then
+      iptables -w -t mangle -F "$CHAIN" && iptables -w -t mangle -X "$CHAIN" || return 1
+    fi
+  fi
+  rules=$(ip -N -4 rule show) || return 1
+  printf '%s\n' "$rules" | sed -n "s/^\([0-9][0-9]*\):[[:space:]]*from all fwmark $MARK lookup $TABLE[[:space:]]*$/\1/p" | while read -r priority; do
+    ip -4 rule del pref "$priority" from all fwmark "$MARK" lookup "$TABLE" || exit 1
+  done || return 1
+  routes=$(ip -N -4 route show table all type local) || return 1
+  # Numeric output prints RTN_LOCAL as 2 and keeps table IDs independent of rt_tables.
+  if printf '%s\n' "$routes" | grep -Eq "^2 default dev lo table $TABLE( |$)"; then
+    ip -4 route del local default dev lo table "$TABLE" || return 1
+  fi
 }
 
 status() {
@@ -1082,7 +1096,17 @@ def _verify_tproxy_removed() -> str:
     )
 
 
-def _remove_tproxy() -> str:
+def _remove_tproxy(*, recover: bool = False) -> str:
+    if recover:
+        # A partial teardown can leave kernel rules after removing the node helper.
+        return (
+            "if ! (\n"
+            "sudo sh -s -- down <<'AC_CASCADE_TPROXY' || exit 73\n"
+            + _fill(_TPROXY_SH)
+            + "AC_CASCADE_TPROXY\n"
+            + _verify_tproxy_removed()
+            + "); then echo CASCADE_RECOVERY_TPROXY_FAILED; exit 73; fi\n"
+        )
     return (f"if sudo test -x {DIR}/cascade-tproxy.sh; then sudo {DIR}/cascade-tproxy.sh down || exit 73; fi\n"
             + _verify_tproxy_removed())
 
@@ -1100,14 +1124,15 @@ def build_remove_entry(transport: str = "gre", cascade_id: int = 0, params: dict
              "acontrol-cascade-tproxy.service")
     if transport != "awg":
         units += ("acontrol-gre.service",)
+    remove_tproxy = _remove_tproxy(recover=recover)
     return "\n".join([
         cascade_exit.entry_preflight(cascade_id, transport, params) if cascade_exit.scoped(params or {}) else "",
         cascade_awg.foreign_guard(),
         cascade_awg.preflight_command(cascade_id) if transport == "awg" else "",
         stop_units(*units),
-        _remove_tproxy(),
+        remove_tproxy,
         f"if sudo test -e {DIR}/gateway-transaction || sudo test -L {DIR}/gateway-transaction; then\n"
-        + cascade_gateway.commands(DIR, GATEWAY, (params or {}).get("runtime_owner", ""), _remove_tproxy())
+        + cascade_gateway.commands(DIR, GATEWAY, (params or {}).get("runtime_owner", ""), remove_tproxy)
         + "gateway_recover || exit 73\nfi",
         _remove_container(GATEWAY),
         cascade_awg.remove(cascade_id, owner=(params or {}).get("runtime_owner", ""), recover=recover)
