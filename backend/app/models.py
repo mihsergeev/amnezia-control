@@ -249,6 +249,8 @@ class ServerStatus(Base):
     down_since: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True, default=None
     )
+    # Per channel, False is pending and True is a delivered outage notification.
+    availability_alerts: Mapped[dict[str, bool] | None] = mapped_column(JSON(none_as_null=True))
     # Алерт «пропали клиенты» (onlinedrop): когда отправлен последний и идет ли
     # еще эта просадка. В БД, а не в памяти - иначе каждый рестарт панели
     # (релиз) заново слал алерт про ту же самую просадку.

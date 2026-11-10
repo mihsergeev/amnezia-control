@@ -2,12 +2,13 @@
 docker ps — чтобы удалённый извне протокол пропадал без ручной «Проверки»."""
 
 import json
+from contextlib import asynccontextmanager
 from unittest.mock import AsyncMock
 
 import pytest
 from sqlalchemy import select
 
-from app import cascade_alias, collector, config
+from app import cascade_alias, collector, config, settings_store
 from app.db import Base, create_engine_and_factory
 from app.models import Server, TrafficSample
 from app.sshops import CheckResult
@@ -73,6 +74,35 @@ async def _info(factory, sid: int) -> dict:
     async with factory() as session:
         s = await session.get(Server, sid)
         return json.loads(s.last_check_info)
+
+
+async def test_ssh_timeout_retries_opted_in_server_alert(factory, monkeypatch):
+    enabled = await _seed(factory, ["amnezia-awg"])
+    disabled = await _seed(factory, [])
+    async with factory() as session:
+        server = await session.get(Server, enabled)
+        server.name = "opted-in"
+        server.alerts_enabled = True
+        await settings_store.set_alert_config(session, "TEST_TOKEN", "123", "")
+
+    @asynccontextmanager
+    async def timeout(*args, **kwargs):
+        raise TimeoutError("SSH connection timed out")
+        yield
+
+    monkeypatch.setattr(collector.sshops, "connect", timeout)
+    send = AsyncMock(side_effect=[["Telegram: timeout"], []])
+    monkeypatch.setattr(collector.alerts, "send_alert", send)
+    settings = config.get_settings().model_copy(update={"server_down_minutes": 0})
+
+    for _ in range(4):
+        await collector.collect_once(factory, settings)
+
+    async with factory() as session:
+        assert (await session.get(Server, enabled)).last_check_ok is False
+        assert (await session.get(Server, disabled)).last_check_ok is False
+    assert send.await_count == 2
+    assert all("opted-in" in call.args[1] for call in send.await_args_list)
 
 
 async def test_xray_online_counts_recent_traffic_not_cumulative_totals(factory, monkeypatch):

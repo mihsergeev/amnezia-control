@@ -90,6 +90,7 @@ in. Torrent blocking works independently. Panel security and backup alerts are
 global and use the configured channels.
 - Overview dashboard: aggregate traffic and online-clients charts (24 h), per-server breakdown
 - **Server-down alerts** and **low-disk alerts** to Telegram and/or a webhook, configured from the UI. Every alert is a short card: level, server, what happened, one line of detail. Alerts come in English or Russian, set in ⚙ > Alerts
+  - The server-down alert fires after 30 minutes of continuous unreachability by default. Failed deliveries are retried on the next monitoring pass. The separate **Clients gone** alert requires at least 8 clients in its historical baseline by default.
 - **"Clients gone" alert**: the node still answers, but far fewer clients are active than at the same time yesterday and a week ago. This is what it looks like when ISPs start blocking a node's address. One alert per drop, at most once a day per server, and no "clients are back" message
 - **"Cascade down" alert**: the panel checks every cascade from its entry every 2 minutes and alerts with the reason when traffic has not gone through the exit for 10 minutes, then says when it works again
 

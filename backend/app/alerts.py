@@ -7,7 +7,7 @@ from html import escape
 from urllib.parse import urlsplit
 
 import httpx
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import settings_store
@@ -208,8 +208,12 @@ async def send_alert(cfg: dict, text: str, *, html_text: str | None = None) -> l
                 r = await http.post(cfg["webhook"], json={"text": text})
                 r.raise_for_status()
         except Exception as exc:  # noqa: BLE001
-            errors.append(f"Webhook: {exc}")
-            log.warning("Вебхук-алерт не отправлен: %s", exc)
+            # Webhook paths and query strings may contain credentials.
+            msg = type(exc).__name__
+            if isinstance(exc, httpx.HTTPStatusError):
+                msg = f"HTTP {exc.response.status_code}"
+            errors.append(f"Webhook: {msg}")
+            log.warning("Вебхук-алерт не отправлен: %s", msg)
     return errors
 
 
@@ -270,7 +274,14 @@ async def reconcile(
     now = now or datetime.now(timezone.utc)
     grace = timedelta(minutes=max(0, settings.server_down_minutes))
     known = {s.server_id: s for s in await session.scalars(select(ServerStatus))}
+    cfg = await settings_store.get_alert_config(session, settings)
+    channels = {}
+    if cfg.get("telegram_token") and cfg.get("telegram_chat"):
+        channels["telegram"] = {**cfg, "webhook": ""}
+    if cfg.get("webhook"):
+        channels["webhook"] = {**cfg, "telegram_token": "", "telegram_chat": ""}
     transitions: list[tuple[int, bool]] = []
+    pending: list[ServerStatus] = []
     for sid, online in online_map.items():
         prev = known.get(sid)
         if enabled_server_ids is not None and sid not in enabled_server_ids:
@@ -281,6 +292,7 @@ async def reconcile(
             else:
                 prev.online = True
                 prev.down_since = None
+                prev.availability_alerts = None
             continue
         if prev is None:
             # Впервые увиден офлайн (только добавили): считаем онлайн с
@@ -300,6 +312,11 @@ async def reconcile(
                 prev.online = True
                 prev.changed_at = now
                 transitions.append((sid, True))
+                # Rows from before delivery tracking may already have sent an outage.
+                delivered = prev.availability_alerts
+                prev.availability_alerts = {
+                    channel: False for channel in channels if delivered is None or delivered.get(channel)
+                }
         elif prev.online:
             # Нода молчит, но статус ещё «онлайн». Засекаем начало серии и
             # объявляем падение, только если молчит НЕПРЕРЫВНО дольше grace:
@@ -311,25 +328,45 @@ async def reconcile(
                 prev.changed_at = now
                 prev.down_since = None
                 transitions.append((sid, False))
+                prev.availability_alerts = dict.fromkeys(channels, False)
+        if prev.availability_alerts:
+            prev.availability_alerts = {
+                channel: delivered for channel, delivered in prev.availability_alerts.items()
+                if channel in channels
+            }
+            if online == prev.online and False in prev.availability_alerts.values():
+                pending.append(prev)
     # чистим статусы удалённых серверов
     for sid in list(known):
         if sid not in online_map:
             await session.delete(known[sid])
     await session.commit()
 
-    if not transitions:
-        return transitions
-    cfg = await settings_store.get_alert_config(session, settings)
-    if not alerts_enabled(cfg):
-        return transitions
     mins = max(0, settings.server_down_minutes)
-    for sid, online in transitions:
-        name = names.get(sid, str(sid))
+    for row in pending:
+        name = names.get(row.server_id, str(row.server_id))
         # длительность в тексте — сразу видно, что это не блип, а реальная авария
         card = (
             Card("ok", "🖥", t("Сервер снова онлайн"), subject=name)
-            if online
+            if row.online
             else Card("crit", "🖥", t("Сервер недоступен больше {mins} мин", mins=mins), subject=name)
         )
-        await send_card(cfg, settings, card)
+        delivery = dict(row.availability_alerts)
+        for channel, delivered in tuple(delivery.items()):
+            if delivered or await send_card(channels[channel], settings, card):
+                continue
+            if row.online:
+                del delivery[channel]
+            else:
+                delivery[channel] = True
+            # Sending is outside the transaction. An operator may have reset
+            # alerts or deleted the server while the channel was responding.
+            result = await session.execute(
+                update(ServerStatus)
+                .where(ServerStatus.server_id == row.server_id, ServerStatus.changed_at == row.changed_at)
+                .values(availability_alerts=dict(delivery))
+            )
+            await session.commit()
+            if not result.rowcount:
+                break
     return transitions

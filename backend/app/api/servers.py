@@ -164,7 +164,9 @@ async def update_server(
         status_row = await session.get(ServerStatus, server_id)
         if status_row is not None:
             status_row.online = True
+            status_row.changed_at = datetime.now(timezone.utc)
             status_row.down_since = None
+            status_row.availability_alerts = None
             status_row.drop_alerted = False
             status_row.drop_alerted_at = None
         metric = await session.get(NodeMetric, server_id)

@@ -4,6 +4,11 @@ All notable changes to Amnezia Control are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.84.39] - 2026-11-10
+
+- Retry server outage and recovery alerts on a later monitoring pass if Telegram or the webhook could not be reached. Track delivery separately for each channel.
+- Hide secret webhook URLs in delivery errors.
+
 ## [0.84.38] - 2026-11-10
 
 - Recover a cascade entry in the setup wizard when the old TPROXY helper is missing or unusable and its routing rules remain. Preserve existing VPN clients and profiles.

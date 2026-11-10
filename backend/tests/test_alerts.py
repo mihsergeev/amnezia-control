@@ -114,6 +114,83 @@ async def test_reconcile_debounces_flapping_offline(session, monkeypatch):
     assert sent == []  # за полтора часа моргания — тишина, дежурного не будим
 
 
+async def test_availability_retries_only_failed_channel_after_new_session(session, monkeypatch):
+    from sqlalchemy.ext.asyncio import AsyncSession
+
+    settings = config.get_settings()
+    await settings_store.set_alert_config(session, "TOKEN", "123", "https://hooks.example/test")
+    telegram_attempts = []
+    webhook_messages = []
+
+    def receive(request):
+        import json
+
+        payload = json.loads(request.content)
+        if request.url.host == "api.telegram.org":
+            telegram_attempts.append(payload["text"])
+            if len(telegram_attempts) in (1, 3):
+                raise httpx.ReadTimeout("temporary delivery failure", request=request)
+        else:
+            webhook_messages.append(payload["text"])
+        return httpx.Response(200)
+
+    client = httpx.AsyncClient
+    transport = httpx.MockTransport(receive)
+    monkeypatch.setattr(httpx, "AsyncClient", lambda **kw: client(transport=transport, **kw))
+
+    names = {1: "vpn-a"}
+    await alerts.reconcile(session, settings, {1: False}, names, now=NOW)
+    assert await alerts.reconcile(session, settings, {1: False}, names, now=LATER) == [(1, False)]
+    assert len(telegram_attempts) == len(webhook_messages) == 1
+    engine = session.bind
+    await session.close()
+
+    async with AsyncSession(engine, expire_on_commit=False) as restarted:
+        assert await alerts.reconcile(restarted, settings, {1: False}, names, now=LATER) == []
+        await alerts.reconcile(restarted, settings, {1: False}, names, now=LATER)
+        assert len(telegram_attempts) == 2 and len(webhook_messages) == 1
+        assert all("недоступен" in msg for msg in [*telegram_attempts, *webhook_messages])
+        recovered = LATER + timedelta(minutes=1)
+        assert await alerts.reconcile(restarted, settings, {1: True}, names, now=recovered) == [(1, True)]
+        assert await alerts.reconcile(restarted, settings, {1: True}, names, now=recovered) == []
+        await alerts.reconcile(restarted, settings, {1: True}, names, now=recovered)
+        assert len(telegram_attempts) == 4 and len(webhook_messages) == 2
+        assert all("снова онлайн" in msg for msg in [*telegram_attempts[2:], webhook_messages[-1]])
+
+
+async def test_recovery_discards_undelivered_outage(session, monkeypatch):
+    settings = config.get_settings()
+    await settings_store.set_alert_config(session, "TOKEN", "123", "https://hooks.example/test")
+    sent = []
+
+    async def fake_send(cfg, text, *, html_text=None):
+        channel = "telegram" if cfg["telegram_token"] else "webhook"
+        sent.append((channel, text))
+        return ["failed"] if channel == "telegram" else []
+
+    monkeypatch.setattr(alerts, "send_alert", fake_send)
+    names = {1: "vpn-a"}
+    await alerts.reconcile(session, settings, {1: False}, names, now=NOW)
+    await alerts.reconcile(session, settings, {1: False}, names, now=LATER)
+    await alerts.reconcile(session, settings, {1: True}, names, now=LATER)
+    await alerts.reconcile(session, settings, {1: True}, names, now=LATER)
+    assert [channel for channel, _ in sent] == ["telegram", "webhook", "webhook"]
+    assert "снова онлайн" in sent[-1][1]
+
+
+async def test_webhook_error_does_not_disclose_url(monkeypatch, caplog):
+    client = httpx.AsyncClient
+    transport = httpx.MockTransport(lambda request: httpx.Response(401))
+    monkeypatch.setattr(httpx, "AsyncClient", lambda **kw: client(transport=transport, **kw))
+
+    url = "https://hooks.example/test?token=example-credential"
+    errors = await alerts.send_alert({"webhook": url}, "test")
+
+    assert errors == ["Webhook: HTTP 401"]
+    assert "HTTP 401" in caplog.text
+    assert "example-credential" not in caplog.text
+
+
 async def test_reconcile_no_alert_when_unconfigured(session, monkeypatch):
     settings = config.get_settings()
 
