@@ -33,7 +33,8 @@ import { Menu, type MenuItem } from './Menu'
 import { ServerExportModal, ServerImportModal } from './ServerTransfer'
 import { copyText } from './clipboard'
 import { countryFlag, formatBytes, formatUptime } from './format'
-import { CascadeWizard } from './CascadeWizard'
+import { CascadeWizard, type RecoveredEntry } from './CascadeWizard'
+import { CascadeRecoveryModal } from './CascadeRecovery'
 import { CascadeCheckModal } from './CascadeCheck'
 import { CascadeRoutesModal } from './CascadeRoutes'
 import { cascadeEntryCountry, cascadeTransportLabel, latestCascadeHealth } from './cascadeUi'
@@ -654,7 +655,8 @@ export function ServersPage({ onUnauthorized }: Props) {
   const [copied, setCopied] = useState(false)
   const [cascades, setCascades] = useState<Cascade[]>([])
   // мастер каскада: новый (resume нет) или ход установки уже созданного
-  const [wizard, setWizard] = useState<{ resume?: Cascade } | null>(null)
+  const [wizard, setWizard] = useState<{ resume?: Cascade; recovered?: RecoveredEntry } | null>(null)
+  const [recoverEntry, setRecoverEntry] = useState<Server | null>(null)
   const [unbuild, setUnbuild] = useState<{ c: Cascade; error?: string; canForget?: boolean } | null>(null)
   const [unbuilding, setUnbuilding] = useState(false)
   const [casRoutes, setCasRoutes] = useState<Cascade | null>(null)
@@ -1118,6 +1120,9 @@ export function ServersPage({ onUnauthorized }: Props) {
     }
     if (!online) {
       items.push({ label: t('Скрипт настройки'), onClick: () => openScript(s) })
+    }
+    if (!cascades.some((row) => row.exit_server_id === s.id)) {
+      items.push({ label: t('Восстановить вход…'), onClick: () => setRecoverEntry(s) })
     }
     const cas = cascadeOf(s)
     if (cas) {
@@ -1916,12 +1921,34 @@ export function ServersPage({ onUnauthorized }: Props) {
           cascades={cascades}
           defaultUser={config?.default_ssh_user ?? FALLBACK_USER}
           resume={wizard.resume}
+          recovered={wizard.recovered}
           onClose={() => setWizard(null)}
+          onRecover={(entry) => {
+            setWizard(null)
+            setRecoverEntry(entry)
+          }}
           onRemove={(c) => {
             setWizard(null)
             setUnbuild({ c })
           }}
           onChanged={() => void load()}
+          onUnauthorized={onUnauthorized}
+        />
+      )}
+
+      {recoverEntry && (
+        <CascadeRecoveryModal
+          entry={recoverEntry}
+          onClose={() => setRecoverEntry(null)}
+          onRecovered={(result) => {
+            invalidateLoads()
+            if (!result.resume) setCascades((rows) => rows.filter((row) => row.entry_server_id !== recoverEntry.id))
+            setRecoverEntry(null)
+            setWizard(result.resume ? { resume: result.resume } : { recovered: {
+              id: recoverEntry.id, country: result.entry_country, routes: result.routes, transport: result.transport,
+            } })
+            void load()
+          }}
           onUnauthorized={onUnauthorized}
         />
       )}

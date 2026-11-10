@@ -8,7 +8,7 @@ import idna
 from pydantic import AfterValidator, BaseModel, ConfigDict, Field, computed_field, field_validator, model_validator
 
 
-from app.cascade_routes import Route
+from app.cascade_routes import Route, RouteUpdate
 from app.client_endpoint import normalize as normalize_client_endpoint
 from app.geo import normalize_country_code
 from app.xray import STATS_API_PORT
@@ -805,8 +805,9 @@ class CascadeInstall(BaseModel):
         return country
 
 
-class CascadeCreate(CascadePair, CascadeInstall):
+class CascadeCreate(CascadePair, CascadeInstall, RouteUpdate):
     transport: Literal["vless", "gre", "awg"]
+    routes: list[Route] = Field(default_factory=list, max_length=100)
     entry_port: int | None = Field(default=None, ge=1, le=65535)
     exit_port: int | None = Field(default=None, ge=1, le=65535)
     request_id: UUID | None = None

@@ -2,6 +2,7 @@
 (см. app/cascade.py и app/cascadejob.py)."""
 
 import asyncio
+import hashlib
 import inspect
 import json
 import secrets
@@ -11,13 +12,14 @@ from functools import wraps
 
 import asyncssh
 from fastapi import APIRouter, HTTPException, Request, status
+from pydantic import BaseModel, Field
 from sqlalchemy import select
 
 from app import (
     audit, cascade, cascade_awg, cascade_exit, cascade_lock, cascade_observations,
-    cascade_probe, cascadejob, deploy, geo, nodelock, server_ops,
+    cascade_probe, cascade_recovery, cascadejob, deploy, geo, nodelock, server_ops,
 )
-from app.cascade_routes import RouteUpdate, update_script
+from app.cascade_routes import Route, RouteUpdate, update_script
 from app.conflict import conflict
 from app.config import get_settings
 from app.deps import CurrentUser, SessionDep
@@ -57,10 +59,16 @@ def _pair_operation(handler):
         cid = values["cascade_id"]
         row = await _get_or_404(cid, session)
         _check_local_install(cid)
-        first, second = sorted((row.entry_server_id, row.exit_server_id))
+        pair = row.entry_server_id, row.exit_server_id
+        identity = row.created_at, json.loads(row.params or "{}").get("runtime_owner")
+        first, second = sorted(pair)
         async with nodelock.hold("cascade", first), nodelock.hold("cascade", second):
-            if await session.get(Cascade, cid, populate_existing=True) is None:
+            current = await session.get(Cascade, cid, populate_existing=True)
+            if current is None or (current.entry_server_id, current.exit_server_id) != pair or (
+                current.created_at, json.loads(current.params or "{}").get("runtime_owner")
+            ) != identity:
                 raise HTTPException(status.HTTP_404_NOT_FOUND, "Каскад не найден")
+            _check_local_install(cid)
             return await handler(*args, **kwargs)
     return wrapped
 
@@ -404,7 +412,7 @@ async def create(
     request_lock = nodelock.hold("cascade-create-request", body.request_id.int % 64) if body.request_id else nullcontext()
     async with request_lock:
         if body.request_id:
-            data = body.model_dump(mode="json")
+            data = _create_request_data(body)
             rows = await session.scalars(select(Cascade))
             for row in rows:
                 previous = json.loads(row.params or "{}").get("create_request")
@@ -415,6 +423,11 @@ async def create(
                     await _settle(session, row)
                     return _out(row)
         return await _create_cascade(body, request, user, session)
+
+
+def _create_request_data(body: CascadeCreate) -> dict:
+    # Requests stored by earlier versions have no routes key.
+    return body.model_dump(mode="json", exclude={"routes"} if not body.routes else None)
 
 
 async def _create_cascade(body: CascadeCreate, request: Request, user: CurrentUser, session: SessionDep) -> CascadeOut:
@@ -431,8 +444,10 @@ async def _create_cascade(body: CascadeCreate, request: Request, user: CurrentUs
                             "inner_net": _inner_reservation(siblings)}
             if body.entry_country:
                 params["entry_country"] = body.entry_country.upper()
+            if body.routes:
+                params["routes"] = [route.model_dump() for route in body.routes]
             if body.request_id:
-                params["create_request"] = body.model_dump(mode="json")
+                params["create_request"] = _create_request_data(body)
             if body.transport == "vless":
                 params |= cascade.new_vless_params()
                 params["port"] = await _vless_port(xc, _reserved_ports(siblings, "vless"))
@@ -654,6 +669,112 @@ async def _check_remove_node(server: Server, cascade_id: int, owner: str, side: 
             raise
         return f"«{server.name}»: {error.detail}"
     return ""
+
+
+class EntryRecoveryRequest(BaseModel):
+    token: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
+class EntryRecoveryOut(BaseModel):
+    token: str
+    transport: str
+    entry_country: str = ""
+    routes: list[Route] = Field(default_factory=list)
+    resume: CascadeOut | None = None
+
+
+def _unsafe_entry() -> HTTPException:
+    return conflict("cascade_recovery_ownership", "Панель не смогла подтвердить, что шлюз на входе принадлежит ей. Вход не изменен.")
+
+
+async def _entry_recovery(entry_id: int, user: CurrentUser, session: SessionDep,
+                          token: str | None = None) -> EntryRecoveryOut:
+    async with nodelock.hold("cascade", entry_id):
+        entry = await session.get(Server, entry_id, populate_existing=True)
+        if entry is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "Сервер не найден")
+        rows = list(await session.scalars(select(Cascade).execution_options(populate_existing=True)))
+        row = next((c for c in rows if c.entry_server_id == entry_id), None)
+        other_ids = {c.exit_server_id for c in rows} | {c.entry_server_id for c in rows if c is not row}
+        if entry_id in other_ids:
+            raise conflict("cascade_role_in_use", "Сервер уже входит в каскад", server_id=entry_id)
+        if other_ids:
+            addresses = await server_ops._host_addrs(entry.host)
+            for other in await session.scalars(select(Server).where(Server.id.in_(other_ids))):
+                if entry.host == other.host or addresses & (await server_ops._host_addrs(other.host)):
+                    raise conflict("cascade_duplicate_host", "Этот узел уже используется под другой записью сервера",
+                                   server_id=other.id)
+        if row:
+            _check_local_install(row.id)
+        options = json.loads(row.params or "{}") if row else {}
+        try:
+            async with _locked(entry) as conn:
+                result = await conn.run(cascade_recovery.INSPECT, check=False, timeout=20)
+                if "CASCADE_EXTERNAL_UNDERLAY" in (result.stdout or ""):
+                    raise conflict("cascade_external_underlay", "Канал защищен внешним AWG helper. Сначала отключите его штатным способом")
+                if result.exit_status != 0:
+                    raise _unsafe_entry()
+                runtime = json.loads(result.stdout)
+                stored = cascade_exit._owner(row.id, row.transport, options) if row and cascade_exit.scoped(options) else None
+                if runtime is None and stored is None:
+                    raise conflict("cascade_recovery_absent", "На входе не найден шлюз каскада для восстановления.")
+                marker = runtime or stored
+                cid, transport, owner = marker["cascade_id"], marker["transport"], marker["owner"]
+                same_owner = stored == {key: marker[key] for key in ("cascade_id", "transport", "owner", "layout")}
+                if same_owner and runtime and "gre_key" in runtime and runtime["gre_key"] != options.get("gre_key"):
+                    raise _unsafe_entry()
+                resume = bool(row and not same_owner)
+                if resume and (row.status not in ("error", "installing") or stored is None):
+                    raise _unsafe_entry()
+                recovery_options = cascade_recovery.params(marker)
+                if same_owner and transport == "gre":
+                    recovery_options |= {key: options[key] for key in ("gre_key", "exit_ip") if key in options}
+                snapshot = (entry.id, entry.host, entry.ssh_port, entry.ssh_user, runtime,
+                            (row.id, row.exit_server_id, row.transport, row.status, row.params, row.result) if row else None)
+                fingerprint = hashlib.sha256(json.dumps(snapshot, sort_keys=True).encode()).hexdigest()
+                out = EntryRecoveryOut(token=fingerprint, transport=transport,
+                                       entry_country=options.get("entry_country", ""), routes=options.get("routes", []),
+                                       resume=_out(row).model_copy(update={"status": "error"}) if resume else None)
+                guard = cascade_recovery.guard(runtime, cid, transport, recovery_options)
+                if token is None:
+                    verified = await conn.run(guard, check=False, timeout=45)
+                    if verified.exit_status != 0:
+                        raise _unsafe_entry()
+                    return out
+                if not secrets.compare_digest(token, fingerprint):
+                    raise conflict("cascade_recovery_changed", "Состояние каскада изменилось. Откройте восстановление заново.")
+                row_lock = (row.id, stored["owner"]) if resume else None
+                script = cascade_lock.recover(cid, cascade_recovery.cleanup(runtime, cid, transport, recovery_options),
+                                              owner, guard, row_lock)
+                removed = await conn.run(script, check=False, timeout=120)
+                if "CASCADE_OPERATION_BUSY" in (removed.stdout or ""):
+                    raise _remote_install_busy(cid, "entry")
+                if removed.exit_status != 0 or "CASCADE_REMOVED=yes" not in (removed.stdout or ""):
+                    raise conflict("cascade_recovery_failed", "Вход не подтвердил снятие старого шлюза. Повторите восстановление.")
+        except Exception as exc:  # noqa: BLE001
+            raise _ssh_error(exc) from exc
+        entry.egress_ip = entry.egress_country = entry.egress_org = ""
+        entry.egress_at = None
+        if row:
+            if resume:
+                row.status = "error"
+            else:
+                await session.delete(row)
+        await session.commit()
+        await audit.record(session, user.username, "cascade_entry_recovery", entry.name,
+                           "снят старый шлюз каскада на входе")
+        return out
+
+
+@router.get("/entry-recovery/{entry_id}", response_model=EntryRecoveryOut)
+async def preview_entry_recovery(entry_id: int, user: CurrentUser, session: SessionDep) -> EntryRecoveryOut:
+    return await _entry_recovery(entry_id, user, session)
+
+
+@router.post("/entry-recovery/{entry_id}", response_model=EntryRecoveryOut)
+async def recover_entry(entry_id: int, body: EntryRecoveryRequest,
+                        user: CurrentUser, session: SessionDep) -> EntryRecoveryOut:
+    return await _entry_recovery(entry_id, user, session, body.token)
 
 
 @router.delete("/{cascade_id}", status_code=status.HTTP_204_NO_CONTENT)

@@ -1213,6 +1213,23 @@ const EN: Record<string, string> = {
   'Каскад: ход установки': 'Cascade: install progress',
   'Разобрать каскад…': 'Remove the cascade…',
   'Разобрать каскад?': 'Remove the cascade?',
+  'Восстановить вход…': 'Recover cascade entry…',
+  'Восстановление входа каскада': 'Recover cascade entry',
+  'Проверяем шлюз на входе…': 'Checking the entry gateway…',
+  'Панель снимет старый шлюз только на входе. VPN-клиенты и их конфигурации сохранятся.':
+    'The panel will remove the old gateway from the entry only. VPN clients and their profiles will be preserved.',
+  'До установки нового каскада трафик клиентов может идти напрямую через вход.':
+    'Client traffic may go directly through the entry until the new cascade is installed.',
+  'Затем можно повторить установку на уже выбранный выход.': 'You can then retry installation with the selected exit.',
+  'Затем мастер предложит выбрать новый выход.': 'The wizard will then prompt you to select a new exit.',
+  'Снимаем шлюз…': 'Removing the gateway…',
+  'Снять старый шлюз': 'Remove old gateway',
+  'Панель не смогла подтвердить, что шлюз на входе принадлежит ей. Вход не изменен.':
+    'The panel could not verify that it owns the entry gateway. The entry was left unchanged.',
+  'На входе не найден шлюз каскада для восстановления.': 'There is no cascade gateway to recover on the entry.',
+  'Состояние каскада изменилось. Откройте восстановление заново.': 'The cascade state changed. Reopen entry recovery.',
+  'Вход не подтвердил снятие старого шлюза. Повторите восстановление.':
+    'The entry did not confirm removal of the old gateway. Retry recovery.',
   'Панель уберет шлюз и туннель с обоих серверов. Клиенты входа останутся подключенными, но в интернет пойдут с адреса самого входа.':
     'The panel removes the gateway and the tunnel from both servers. Entry clients stay connected but reach the internet from the entry\'s own address.',
   'Убрать только из панели': 'Remove from the panel only',

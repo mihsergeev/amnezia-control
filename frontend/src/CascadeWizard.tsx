@@ -12,6 +12,7 @@ import {
   type Cascade,
   type CascadeCreateRequest,
   type CascadeImageTransport,
+  type CascadeRoute,
   type CascadeTransportProbe,
   type CascadeTransport,
   type Server,
@@ -31,14 +32,23 @@ import { useModalDismiss } from './useModalDismiss'
 
 type Step = 'entry' | 'exit' | 'link' | 'install' | 'done'
 
+export type RecoveredEntry = {
+  id: number
+  country: string
+  routes: CascadeRoute[]
+  transport: CascadeTransport
+}
+
 type Props = {
   servers: Server[]
   cascades: Cascade[]
   defaultUser: string
   // открыть сразу на установке уже созданного каскада (ход или ошибка)
   resume?: Cascade
+  recovered?: RecoveredEntry
   onClose: () => void
   onRemove: (cascade: Cascade) => void
+  onRecover: (entry: Server) => void
   onChanged: () => void
   onUnauthorized: () => void
 }
@@ -115,17 +125,19 @@ export function CascadeWizard({
   cascades,
   defaultUser,
   resume,
+  recovered,
   onClose,
   onRemove,
+  onRecover,
   onChanged,
   onUnauthorized,
 }: Props) {
   const { t, lang } = useI18n()
   const [step, setStep] = useState<Step>(
-    resume ? (resume.status === 'ready' ? 'done' : 'install') : 'entry',
+    resume ? (resume.status === 'ready' ? 'done' : 'install') : recovered ? 'exit' : 'entry',
   )
-  const [entryId, setEntryId] = useState<number | null>(resume?.entry_server_id ?? null)
-  const [entryCountry, setEntryCountry] = useState('')
+  const [entryId, setEntryId] = useState<number | null>(resume?.entry_server_id ?? recovered?.id ?? null)
+  const [entryCountry, setEntryCountry] = useState(recovered?.country ?? '')
   const [exitId, setExitId] = useState<number | null>(resume?.exit_server_id ?? null)
   const [tab, setTab] = useState<'panel' | 'new'>('panel')
   const [error, setError] = useState<string | null>(null)
@@ -143,7 +155,7 @@ export function CascadeWizard({
     if (!activeProbe.current?.preparing) onClose()
   }
   const dismiss = useModalDismiss(close)
-  const [transport, setTransport] = useState<CascadeTransport>(DEFAULT_CASCADE_TRANSPORT)
+  const [transport, setTransport] = useState<CascadeTransport>(recovered?.transport ?? DEFAULT_CASCADE_TRANSPORT)
   const [entryPort, setEntryPort] = useState('')
   const [exitPort, setExitPort] = useState('')
   const [cascade, setCascade] = useState<Cascade | null>(resume ?? null)
@@ -361,6 +373,7 @@ export function CascadeWizard({
       transport,
       ...(transport === 'awg' ? requestedPorts : {}),
       ...(entryCountry ? { entry_country: entryCountry } : {}),
+      ...(recovered?.routes.length ? { routes: recovered.routes } : {}),
     }
     const signature = JSON.stringify(form)
     setBusy(true)
@@ -832,7 +845,7 @@ export function CascadeWizard({
         {error && <p className="small err-text">{error}</p>}
 
         <div className="cas-actions">
-          {(step === 'exit' || step === 'link') && (
+          {((step === 'exit' && !recovered) || step === 'link') && (
             <button
               className="ghost"
               disabled={busy}
@@ -864,6 +877,9 @@ export function CascadeWizard({
             )}
             {step === 'install' && cascade?.status === 'error' && (
               <>
+                {entry && !recovered && <button className="ghost" disabled={busy} onClick={() => onRecover(entry)}>
+                  {t('Восстановить вход…')}
+                </button>}
                 <button className="ghost" disabled={busy} onClick={() => onRemove(cascade)}>
                   {t('Разобрать каскад…')}
                 </button>

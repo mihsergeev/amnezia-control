@@ -1190,7 +1190,27 @@ export type CascadeCreateRequest = {
   entry_port?: number | null
   exit_port?: number | null
   entry_country?: string
+  routes?: CascadeRoute[]
   request_id: string
+}
+
+export type CascadeEntryRecovery = {
+  token: string
+  transport: CascadeTransport
+  entry_country: string
+  routes: CascadeRoute[]
+  resume: Cascade | null
+}
+
+export function previewCascadeEntryRecovery(id: number, signal: AbortSignal): Promise<CascadeEntryRecovery> {
+  return api<CascadeEntryRecovery>(`/api/cascades/entry-recovery/${id}`, { signal })
+}
+
+export function recoverCascadeEntry(id: number, token: string): Promise<CascadeEntryRecovery> {
+  return api<CascadeEntryRecovery>(`/api/cascades/entry-recovery/${id}`, {
+    method: 'POST',
+    body: JSON.stringify({ token }),
+  })
 }
 
 export function createCascade(request: CascadeCreateRequest): Promise<Cascade> {

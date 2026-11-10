@@ -1071,9 +1071,8 @@ def _remove_container(name: str) -> str:
     )
 
 
-def _remove_tproxy() -> str:
+def _verify_tproxy_removed() -> str:
     return (
-        f"if sudo test -x {DIR}/cascade-tproxy.sh; then sudo {DIR}/cascade-tproxy.sh down || exit 73; fi\n"
         "if command -v iptables >/dev/null; then\n"
         "  ac_rules=$(sudo iptables -w -t mangle -S) || exit 73\n"
         "  if printf '%s\\n' \"$ac_rules\" | grep -Eq '^-N ACONTROL_CASCADE$| -[jg] ACONTROL_CASCADE( |$)'; then exit 73; fi\n"
@@ -1083,8 +1082,13 @@ def _remove_tproxy() -> str:
     )
 
 
+def _remove_tproxy() -> str:
+    return (f"if sudo test -x {DIR}/cascade-tproxy.sh; then sudo {DIR}/cascade-tproxy.sh down || exit 73; fi\n"
+            + _verify_tproxy_removed())
+
+
 def build_remove_entry(transport: str = "gre", cascade_id: int = 0, params: dict | None = None) -> str:
-    units = ("acontrol-cascade-geo.timer", "acontrol-cascade-heal.service",
+    units = ("acontrol-cascade-geo.timer", "acontrol-cascade-geo.service", "acontrol-cascade-heal.service",
              "acontrol-cascade-tproxy.service")
     if transport != "awg":
         units += ("acontrol-gre.service",)
@@ -1125,8 +1129,8 @@ def _remove_common() -> str:
     files = " ".join(f"/etc/systemd/system/{u}" for u in _UNITS)
     return (
         f"sudo rm -f {GRE_DEFAULTS} {files} || exit 73\n"
-        f"sudo rm -rf {DIR} || exit 73\n"
         "sudo systemctl daemon-reload || exit 73\n"
+        f"sudo rm -rf {DIR} || exit 73\n"
         "echo CASCADE_REMOVED=yes"
     )
 

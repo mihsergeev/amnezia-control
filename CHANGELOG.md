@@ -4,6 +4,11 @@ All notable changes to Amnezia Control are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.84.36] - 2026-11-10
+
+- Recover a cascade entry and choose a new exit when the old exit is unreachable, even if the original cascade was already removed from the panel. Existing VPN clients and profiles are preserved.
+- Retry a failed installation after safely removing a leftover gateway or ownership marker. Carry saved route overrides into the replacement wizard when the original record is available.
+
 ## [0.84.35] - 2026-11-10
 
 - Include a looping GIF for each multi-frame AmneziaVPN import QR in client ZIP exports. Keep the individual PNG frames and all configuration files available.

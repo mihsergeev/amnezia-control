@@ -53,11 +53,13 @@ for name in ('acontrol-cascade','acontrol-cascade-awg','acontrol-cascade-exit','
  if r.returncode==0:
   labels=json.loads(r.stdout)[0]['Config'].get('Labels') or {}
   if name in ('xray-cascade','acontrol-cascade-exit') or not owned or labels.get('org.amnezia.control.owner')!=expected['owner']:sys.exit(73)
+  if name=='acontrol-cascade-awg' and expected['transport']!='awg':sys.exit(73)
  elif b'No such object:' not in r.stderr and b'No such container:' not in r.stderr:sys.exit(73)
 for name in ('acgre','acawg'):
  r=subprocess.run(['ip','-j','-d','link','show','dev',name],capture_output=True)
  if r.returncode==0:
   if not owned:sys.exit(73)
+  if name=='acawg' and expected['transport']!='awg':sys.exit(73)
   if name=='acgre':
    x=json.loads(r.stdout)[0];d=x.get('linkinfo',{});key=d.get('info_data',{}).get('ikey',0)
    key=int(key) if str(key).isdigit() else int(ipaddress.IPv4Address(key))
