@@ -4,6 +4,13 @@ All notable changes to Amnezia Control are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.84.41] - 2026-11-10
+
+- Add Debug logs to the settings menu, with operation and severity filters, expandable error details, and a downloadable support ZIP.
+- Record API failures, deployment and cascade job failures, transport check failures, and SSH monitoring failures. Link related events with an operation ID and distinguish accepted tasks from completed installations.
+- Export only fixed error categories and allowlisted metadata. Exclude raw messages, commands, configurations, credentials, server names, domains, and addresses. Restrict access to signed-in panel users.
+- Keep diagnostics across panel restarts with seven-day retention and a 5 MiB storage limit. Run file access outside the event loop and protect the store against unsafe file links and concurrent writers.
+
 ## [0.84.40] - 2026-11-10
 
 - Fix false cleanup failures after temporary cascade transport checks. Keep cleanup safeguards active when a timed-out container launch remains uncertain.

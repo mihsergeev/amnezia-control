@@ -1170,6 +1170,108 @@ input:focus {
   }
 }
 
+.modal.debug-logs-modal {
+  width: min(960px, 100%);
+}
+
+.debug-logs-modal > p {
+  margin: 0;
+}
+
+.debug-logs-toolbar {
+  display: flex;
+  align-items: end;
+  flex-wrap: wrap;
+  gap: 0.7rem;
+}
+
+.debug-logs-toolbar .field {
+  flex: 1 1 160px;
+  min-width: 0;
+}
+
+.debug-logs-toolbar select {
+  width: 100%;
+}
+
+.debug-logs-events {
+  display: grid;
+  gap: 0.6rem;
+  margin-top: 1rem;
+}
+
+.debug-log-event {
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  overflow-wrap: anywhere;
+  min-width: 0;
+}
+
+.debug-log-event summary {
+  padding: 0.8rem;
+  cursor: pointer;
+}
+
+.debug-log-event summary:focus-visible {
+  outline: 2px solid var(--text);
+  outline-offset: -3px;
+}
+
+.debug-log-meta {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.35rem 0.8rem;
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}
+
+.debug-log-level {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.debug-log-error {
+  border-inline-start: 3px solid #df6358;
+}
+
+.debug-log-warning {
+  border-inline-start: 3px solid #ba8c2a;
+}
+
+.debug-log-summary {
+  display: block;
+  margin-top: 0.45rem;
+}
+
+.debug-log-details {
+  padding: 0 0.8rem 0.8rem;
+  font-size: 0.85rem;
+  border-top: 1px solid var(--border);
+}
+
+.debug-log-details code {
+  user-select: text;
+}
+
+.debug-log-correlation {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin: 0.6rem 0;
+}
+
+@media (max-width: 540px) {
+  .debug-logs-toolbar > button {
+    flex: 1 1 auto;
+  }
+
+  .debug-log-meta time {
+    flex-basis: 100%;
+  }
+}
+
 @media (680px < width <= 1100px) {
   .header .brand {
     max-width: 62%;

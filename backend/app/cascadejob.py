@@ -17,6 +17,7 @@ from fastapi import HTTPException
 
 from app import alerts, cascade, cascade_exit, cascade_lock, deploy, geo, nodelock, server_ops, sshops
 from app.config import get_settings
+from app import debug_context
 from app.models import Cascade, Server
 from app.sshkeys import ensure_panel_key, key_paths
 
@@ -66,6 +67,8 @@ async def _side(
     owner: str = "",
 ) -> tuple[str, str]:
     """Запускает скрипт на стороне и ждет итог. (state, хвост лога)."""
+    await debug_context.arecord(operation="cascade", level="info", code="started",
+                         server_id=server.id, stage=phase)
     logs[phase] = (server.name, "")
     _progress[cid] = {"phase": phase, "log": _joined(logs)}
     # шаг SSH без своего срока: зависшая нода иначе держала бы установку вечно
@@ -79,6 +82,7 @@ async def _side(
             script = cascade_lock.wrap(cid, script, owner, generation=generation)
         await deploy.launch(conn, script, tag=tag or cascade.TAG)
     st: dict = {"state": "unknown", "log": ""}
+    reported_poll_error = False
     try:
         async with asyncio.timeout(_MAX_SECONDS):
             while True:
@@ -86,14 +90,21 @@ async def _side(
                 try:
                     async with asyncio.timeout(step), connect(server, settings) as conn:
                         st = await deploy.read_status(conn, tag=tag or cascade.TAG)
-                except Exception:  # noqa: BLE001 — нода моргнула, спросим еще раз
+                except Exception as exc:  # noqa: BLE001 — нода моргнула, спросим еще раз
+                    if not reported_poll_error:
+                        await debug_context.arecord(operation="cascade", level="warning", exc=exc,
+                                                    server_id=server.id, stage=phase)
+                        reported_poll_error = True
                     continue
                 logs[phase] = (server.name, st.get("log", ""))
                 _progress[cid] = {"phase": phase, "log": _joined(logs)}
                 if st.get("state") in ("done", "error"):
+                    if st["state"] == "done":
+                        await debug_context.arecord(operation="cascade", level="info", code="completed",
+                                             server_id=server.id, stage=phase)
                     return st["state"], st.get("log", "")
     except TimeoutError:
-        pass
+        await debug_context.arecord(operation="cascade", code="timeout", server_id=server.id, stage=phase)
     return "error", st.get("log", "") + "\nDEPLOY_ERROR: не дождался конца установки"
 
 
@@ -115,17 +126,22 @@ async def _run(cid: int, factory, settings) -> None:
         if c is None:
             return
         first, second = sorted((c.entry_server_id, c.exit_server_id))
+        protocol, server_id = c.transport, c.entry_server_id
     # Retain both node locks through both phases. Another entry may share the
     # exit, but install/delete must not interleave with a half-finished job.
-    try:
-        async with nodelock.hold("cascade", first), nodelock.hold("cascade", second):
-            await _run_locked(cid, factory, settings)
-    except HTTPException as exc:
-        message = "Не удалось дождаться освобождения узлов каскада" if exc.status_code == 409 else "Установка каскада прервана"
-        await _finish(factory, cid, "error", message, "", {"failed_phase": "exit"})
-    except Exception:
-        log.exception("unexpected cascade job failure for %s", cid)
-        await _finish(factory, cid, "error", "Установка каскада прервана", "", {"failed_phase": "exit"})
+    with debug_context.bind(protocol=protocol, server_id=server_id):
+        try:
+            async with nodelock.hold("cascade", first), nodelock.hold("cascade", second):
+                await _run_locked(cid, factory, settings)
+        except HTTPException as exc:
+            await debug_context.arecord(operation="cascade", code="conflict" if exc.status_code == 409 else None,
+                                        exc=exc, stage="install")
+            message = "Не удалось дождаться освобождения узлов каскада" if exc.status_code == 409 else "Установка каскада прервана"
+            await _finish(factory, cid, "error", message, "", {"failed_phase": "exit"})
+        except Exception as exc:
+            await debug_context.arecord(operation="cascade", exc=exc, stage="install")
+            log.exception("unexpected cascade job failure for %s", cid)
+            await _finish(factory, cid, "error", "Установка каскада прервана", "", {"failed_phase": "exit"})
 
 
 async def _run_locked(cid: int, factory, settings) -> None:
@@ -166,6 +182,8 @@ async def _run_locked(cid: int, factory, settings) -> None:
                                       tag=f"{cascade.TAG}-{cid}" if cascade_exit.scoped(params) else None,
                                       owner=params["runtime_owner"] if cascade_exit.scoped(params) else "")
         except Exception as exc:  # noqa: BLE001 — SSH при запуске
+            await debug_context.arecord(operation="cascade", protocol=transport, exc=exc,
+                                        server_id=server.id, stage=phase)
             state, tail = "error", f"DEPLOY_ERROR: SSH: {exc or type(exc).__name__}"
         if state != "done":
             detail = _error_line(tail)
@@ -198,7 +216,9 @@ async def _run_locked(cid: int, factory, settings) -> None:
                 continue
             try:
                 await server_ops.run_check(session, server, settings)
-            except Exception:  # noqa: BLE001 — каскад уже собран
+            except Exception as exc:  # noqa: BLE001 — каскад уже собран
+                await debug_context.arecord(operation="cascade", protocol=transport, level="warning",
+                                            server_id=sid, exc=exc, stage="verify")
                 log.warning("post-cascade check failed for server %s", sid, exc_info=True)
         server = await session.get(Server, entry.id)
         if server is not None and result.get("egress"):
@@ -226,9 +246,11 @@ async def _entry_country(entry: Server, params: dict) -> str:
 
 
 async def _finish(factory, cid: int, status: str, error: str, text: str, result: dict) -> None:
+    metadata = {}
     async with factory() as session:
         c = await session.get(Cascade, cid)
         if c is not None:
+            metadata = {"protocol": c.transport, "server_id": c.entry_server_id}
             c.status = status
             c.error = error
             if result:
@@ -236,6 +258,9 @@ async def _finish(factory, cid: int, status: str, error: str, text: str, result:
             await session.commit()
     # последний лог оставляем: мастер покажет его на шаге «Готово» или при ошибке
     _progress[cid] = {"phase": result.get("failed_phase", ""), "log": text}
+    await debug_context.arecord(operation="cascade", **metadata, level="error" if status == "error" else "info",
+                         code=None if status == "error" else "completed", text=error + "\n" + text,
+                         stage=result.get("failed_phase") or "completed")
 
 
 def spawn(app, cascade_id: int) -> None:
@@ -243,7 +268,8 @@ def spawn(app, cascade_id: int) -> None:
     if factory is None or running(cascade_id):
         return
     _progress[cascade_id] = {"phase": "exit", "log": ""}
-    task = asyncio.create_task(_run(cascade_id, factory, get_settings()))
+    with debug_context.bind(store=getattr(app.state, "debug_logs", None), operation="cascade"):
+        task = asyncio.create_task(_run(cascade_id, factory, get_settings()))
     _tasks[cascade_id] = task
 
     def _done(t: asyncio.Task) -> None:

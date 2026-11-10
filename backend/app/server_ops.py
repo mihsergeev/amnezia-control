@@ -86,6 +86,8 @@ async def store_check_info(session: AsyncSession, server: Server, info: dict) ->
 
 
 async def run_check(session: AsyncSession, server: Server, settings: Settings) -> None:
+    from app import debug_context
+
     ensure_panel_key(settings.data_dir)
     key_path, _pub = key_paths(settings.data_dir)
     result = await sshops.check_server(
@@ -95,6 +97,8 @@ async def run_check(session: AsyncSession, server: Server, settings: Settings) -
         key_path,
         settings.ssh_connect_timeout,
     )
+    if not result.ok:
+        await debug_context.arecord(operation="ssh", server_id=server.id, stage="connect", text=result.error)
     now = datetime.now(timezone.utc)
     server.last_check_ok = result.ok
     server.last_check_at = now

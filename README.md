@@ -97,6 +97,7 @@ global and use the configured channels.
 **Operations & security**
 - **Two-factor auth (TOTP)** for panel login
 - Action **audit log** (who issued / revoked / deployed / deleted, and when)
+- **Debug logs** in the settings menu: filter operation failures, inspect their stages, and download a support ZIP. Only fixed error categories and allowlisted metadata are retained; raw commands, configurations, credentials, server names, domains, and addresses are excluded. Access requires panel login; logs survive restarts and are limited to seven days and 5 MiB. Captures new failures after the update.
 - DB **backup & restore** (download an archive, or restore from one) + scheduled auto-backups with rotation
 - **Dark / light theme** and **English / Russian** UI
 - Edge TLS + IP allow-list via `caddy-docker-proxy` labels (or bring your own reverse proxy)

@@ -23,6 +23,7 @@ from app import (
 from app.cascade_routes import Route, RouteUpdate, update_script
 from app.conflict import conflict
 from app.config import get_settings
+from app import debug_context
 from app.deps import CurrentUser, SessionDep
 from app.models import Cascade, Server
 from app.schemas import (
@@ -325,6 +326,12 @@ async def probe_transport(
     previous = cached.get(body.transport, {})
     if not isinstance(previous, dict) or str(previous.get("checked_at", "")) <= res["checked_at"]:
         cached[body.transport] = res.copy()
+    if res.get("ok") is not True:
+        await debug_context.arecord(operation="probe", protocol=body.transport,
+                             server_id=entry.id, stage="cleanup" if res.get("cleanup_failed") else "verify",
+                             code="cleanup" if res.get("cleanup_failed") else
+                             "dependency_missing" if res.get("reason") == "local_image_missing" else None,
+                             text=res.get("error"))
     return CascadeTransportProbeOut(**res)
 
 

@@ -2,6 +2,7 @@ import asyncio
 import logging
 import secrets
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import AsyncIterator
 
 from fastapi import FastAPI
@@ -20,6 +21,7 @@ from app.api import (
     bulk_clients,
     cascades,
     clients,
+    debug_logs,
     fullaccess,
     health,
     importer,
@@ -41,7 +43,10 @@ from app.expiry import expiry_loop
 from app.heartbeat import heartbeat_loop
 from app.config import get_settings
 from app.db import create_engine_and_factory
+from app.debug_context import DiagnosticMiddleware, diagnostic_http_exception, bind, arecord
+from app.debuglog import DebugLogStore
 from app.sshkeys import ensure_panel_key
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 
 log = logging.getLogger("acontrol")
@@ -76,16 +81,24 @@ def create_app() -> FastAPI:
     settings = get_settings()
     engine, session_factory = create_engine_and_factory(settings.db_url)
 
+    async def background(coro, operation, stage):
+        with bind(store=app.state.debug_logs, operation=operation, stage=stage):
+            try:
+                await coro
+            except Exception as exc:
+                await arecord(exc=exc)
+                raise
+
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         _enforce_secrets(settings)
         ensure_panel_key(settings.data_dir)
         await ensure_admin(session_factory, settings)
-        task = asyncio.create_task(collector_loop(session_factory, settings))
-        backup_task = asyncio.create_task(backup_loop(session_factory, settings))
-        expiry_task = asyncio.create_task(expiry_loop(session_factory, settings))
-        hb_task = asyncio.create_task(heartbeat_loop(session_factory, settings))
-        cas_task = asyncio.create_task(cascade_watch_loop(session_factory, settings))
+        task = asyncio.create_task(background(collector_loop(session_factory, settings), "system", "collect"))
+        backup_task = asyncio.create_task(background(backup_loop(session_factory, settings), "backup", "backup"))
+        expiry_task = asyncio.create_task(background(expiry_loop(session_factory, settings), "clients", "remove"))
+        hb_task = asyncio.create_task(background(heartbeat_loop(session_factory, settings), "system", "verify"))
+        cas_task = asyncio.create_task(background(cascade_watch_loop(session_factory, settings), "cascade", "verify"))
         yield
         task.cancel()
         backup_task.cancel()
@@ -123,6 +136,9 @@ def create_app() -> FastAPI:
     )
     app.state.engine = engine
     app.state.session_factory = session_factory
+    app.state.debug_logs = DebugLogStore(Path(settings.data_dir) / "debug-logs")
+    app.add_middleware(DiagnosticMiddleware, store=app.state.debug_logs)
+    app.add_exception_handler(StarletteHTTPException, diagnostic_http_exception)
 
     app.include_router(health.router, prefix="/api")
     app.include_router(auth.router, prefix="/api")
@@ -144,6 +160,7 @@ def create_app() -> FastAPI:
     app.include_router(backup.router, prefix="/api")
     app.include_router(fullaccess.router, prefix="/api")
     app.include_router(audit.router, prefix="/api")
+    app.include_router(debug_logs.router, prefix="/api")
     app.include_router(alerts.router, prefix="/api")
     app.include_router(apikeys.router, prefix="/api")
     app.include_router(share.router, prefix="/api")

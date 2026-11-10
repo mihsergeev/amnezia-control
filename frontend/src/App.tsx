@@ -14,6 +14,7 @@ import {
 } from './api'
 import { LoginPage } from './LoginPage'
 import { AboutModal, PROJECT_URL } from './AboutModal'
+import { DebugLogsModal } from './DebugLogsModal'
 import { PanelLogo } from './PanelLogo'
 import { ServersPage } from './ServersPage'
 import { Dashboard } from './Dashboard'
@@ -47,6 +48,7 @@ function App() {
   const [twoFaOpen, setTwoFaOpen] = useState(false)
   const [pwOpen, setPwOpen] = useState(false)
   const [aboutOpen, setAboutOpen] = useState(false)
+  const [debugLogsOpen, setDebugLogsOpen] = useState(false)
   // Undefined while loading. A null version uses the standard logo.
   const [branding, setBranding] = useState<Branding>()
   const [theme, setTheme] = useState<'dark' | 'light'>(() =>
@@ -197,6 +199,7 @@ function App() {
     setPwOpen(false)
     setShareOpen(false)
     setAboutOpen(false)
+    setDebugLogsOpen(false)
   }, [])
 
   // Выход по кнопке: токен отзывается и на сервере
@@ -291,6 +294,7 @@ function App() {
                 label={<span className="menu-gear">⚙</span>}
                 items={[
                   { label: t('О панели'), onClick: () => setAboutOpen(true) },
+                  { label: t('Дебаг-логи'), onClick: () => setDebugLogsOpen(true) },
                   { label: t('Алерты'), onClick: () => setAlertsOpen(true) },
                   { label: t('Ссылки на конфиги'), onClick: () => setShareOpen(true) },
                   {
@@ -333,6 +337,7 @@ function App() {
         <LoginPage logoSrc={logoSrc} logoSize={branding?.login_size} onLogin={() => setAuthed(true)} />
       )}
 
+      {debugLogsOpen && <DebugLogsModal onClose={() => setDebugLogsOpen(false)} onUnauthorized={logout} />}
       {aboutOpen && (
         <AboutModal
           version={version}

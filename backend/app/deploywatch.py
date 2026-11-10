@@ -9,6 +9,7 @@ import logging
 
 from app import alerts, deploy, server_ops, sshops
 from app.config import get_settings
+from app import debug_context
 from app.models import Server
 from app.sshkeys import key_paths
 
@@ -23,11 +24,25 @@ _MAX_POLLS = 18  # ~6 минут — с запасом на сборку обр�
 
 async def _watch(
     host: str, port: int, user: str, tag: str, label: str,
-    server_id: int, session_factory, settings,
+    server_id: int, session_factory, settings, diagnostic_store=None,
 ) -> None:
+    with debug_context.bind(store=diagnostic_store, operation="deploy", protocol=tag, server_id=server_id):
+        try:
+            await _watch_job(host, port, user, tag, label, server_id, session_factory, settings)
+        except Exception as exc:
+            await debug_context.arecord(exc=exc, stage="verify")
+            raise
+
+
+async def _watch_job(host, port, user, tag, label, server_id, session_factory, settings) -> None:
+    async def report(**fields):
+        await debug_context.arecord(**fields)
+
+    await report(level="info", code="started", stage="install")
     key_path, _pub = key_paths(settings.data_dir)
     # срок на один опрос: зависшая нода иначе остановила бы слежку навсегда
     step = max(settings.ssh_connect_timeout * 4, 30)
+    reported_poll_error = False
     for _ in range(_MAX_POLLS):
         await asyncio.sleep(_POLL_SECONDS)
         try:
@@ -35,10 +50,14 @@ async def _watch(
                 host, port, user, key_path, settings.ssh_connect_timeout
             ) as conn:
                 st = await deploy.read_status(conn, tag=tag)
-        except Exception:  # noqa: BLE001 — нода моргнула, попробуем ещё
+        except Exception as exc:  # noqa: BLE001 — нода моргнула, попробуем ещё
+            if not reported_poll_error:
+                await report(level="warning", exc=exc, stage="verify")
+                reported_poll_error = True
             continue
         state = st.get("state")
         if state == "done":
+            await report(level="info", code="completed", stage="install")
             # После успешного деплоя перечитываем статус ноды, иначе карточка
             # держит доеплойный снимок (docker=false, без протокола) и пугает
             # надписью «docker недоступен», хотя контейнер уже поднят.
@@ -47,13 +66,15 @@ async def _watch(
                     server = await session.get(Server, server_id)
                     if server is not None:
                         await server_ops.run_check(session, server, settings)
-            except Exception:  # noqa: BLE001 — best-effort, деплой уже успешен
+            except Exception as exc:  # noqa: BLE001 — best-effort, деплой уже успешен
+                await report(level="warning", exc=exc, stage="verify")
                 log.warning(
                     "post-deploy re-check failed for server %s", server_id,
                     exc_info=True,
                 )
             return
         if state == "error":
+            await report(text=st.get("log", ""), stage="install")
             await alerts.maybe_alert(
                 session_factory, settings,
                 alerts.Card("crit", "🚀", alerts.t("Развертывание {proto} не удалось",
@@ -62,6 +83,7 @@ async def _watch(
                 server_id=server_id,
             )
             return
+    await report(code="timeout", stage="verify")
 
 
 def spawn(app, server, tag: str) -> None:
@@ -72,8 +94,13 @@ def spawn(app, server, tag: str) -> None:
     task = asyncio.create_task(
         _watch(
             server.host, server.ssh_port, server.ssh_user, tag, server.name,
-            server.id, factory, get_settings(),
+            server.id, factory, get_settings(), getattr(app.state, "debug_logs", None),
         )
     )
     _tasks.add(task)
-    task.add_done_callback(_tasks.discard)
+    def done(t):
+        _tasks.discard(t)
+        if not t.cancelled() and t.exception() is not None:
+            log.error("deployment watcher failed", exc_info=t.exception())
+
+    task.add_done_callback(done)

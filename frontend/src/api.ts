@@ -1,6 +1,7 @@
 import { translate } from './i18n'
 import { downloadResponse } from './download'
 import type { LogoTheme } from './logoAdapt'
+import { debugLogsPath, type DebugLogFilters, type DebugLogsResponse } from './debugLogs'
 
 export type LogoSize = { desktop: number; mobile: number }
 export const DEFAULT_PANEL_TITLE = 'Amnezia Control'
@@ -114,6 +115,23 @@ export async function api<T>(path: string, options: RequestInit = {}): Promise<T
     throw new ApiError(errorDetail(body, res.status), res.status, typeof code === 'string' ? code : undefined)
   }
   return body as T
+}
+
+export function getDebugLogs(filters: DebugLogFilters, signal?: AbortSignal): Promise<DebugLogsResponse> {
+  return api<DebugLogsResponse>(debugLogsPath(filters), { signal })
+}
+
+export async function downloadDebugLogs(filters: DebugLogFilters, signal?: AbortSignal): Promise<void> {
+  const token = getToken()
+  const res = await stepUpFetch(debugLogsPath(filters, true), {
+    signal,
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+  })
+  if (!res.ok) {
+    const body = await res.json().catch(() => null)
+    throw new ApiError(errorDetail(body, res.status), res.status)
+  }
+  await downloadResponse(res, 'support-debug-logs.zip')
 }
 
 // Текст ошибки из ответа. У 422 FastAPI detail - массив ошибок валидации, и
