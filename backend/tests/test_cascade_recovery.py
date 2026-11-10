@@ -98,6 +98,77 @@ async def test_entry_recovery_refuses_unowned_files(client, auth_headers, sessio
         assert response.status_code == 409
 
 
+async def test_create_reports_old_gateway_before_installing(client, auth_headers, session_factory, monkeypatch):
+    async with session_factory() as session:
+        session.add_all([Server(id=1, name="entry", host="192.0.2.10", last_check_ok=True),
+                         Server(id=2, name="exit", host="198.51.100.20", last_check_ok=True)])
+        await session.commit()
+
+    class Connection:
+        async def run(self, command, **kwargs):
+            assert "CASCADE_ENTRY_RECOVERY_REQUIRED" in command
+            return SimpleNamespace(exit_status=73, stdout="CASCADE_ENTRY_RECOVERY_REQUIRED\n")
+
+    @asynccontextmanager
+    async def locked(server):
+        yield Connection()
+
+    monkeypatch.setattr(api, "_locked", locked)
+    response = await client.post("/api/cascades", headers=auth_headers,
+                                 json={"entry_id": 1, "exit_id": 2, "transport": "vless"})
+    assert response.status_code == 409
+    assert response.json()["detail"]["code"] == "cascade_entry_recovery_required"
+    async with session_factory() as session:
+        assert await session.get(Cascade, 1) is None
+
+
+async def test_scoped_recovery_keeps_draft_after_remote_reply_is_lost(
+    client, auth_headers, session_factory, monkeypatch,
+):
+    params = {"runtime_layout": 2, "runtime_owner": "b" * 32, "entry_country": "RU",
+              "routes": [{"destination": "example.org", "via": "entry"}]}
+    async with session_factory() as session:
+        session.add_all([Server(id=1, name="entry", host="192.0.2.10"),
+                         Server(id=2, name="exit", host="198.51.100.20")])
+        await session.flush()
+        session.add(Cascade(id=7, entry_server_id=1, exit_server_id=2, transport="vless",
+                            status="error", params=json.dumps(params)))
+        await session.commit()
+
+    marker = {"cascade_id": 6, "transport": "awg", "owner": "a" * 32, "layout": 2}
+    runtime = marker
+
+    class Connection:
+        async def run(self, command, **kwargs):
+            nonlocal runtime
+            if command == cascade_recovery.INSPECT:
+                return SimpleNamespace(exit_status=0, stdout=json.dumps(runtime))
+            if "AC_CASCADE_OPERATION_PAYLOAD" not in command:
+                return SimpleNamespace(exit_status=0, stdout="")
+            if runtime is not None:
+                runtime = None
+                raise TimeoutError()
+            return SimpleNamespace(exit_status=0, stdout="CASCADE_REMOVED=yes\n")
+
+    @asynccontextmanager
+    async def locked(server):
+        yield Connection()
+
+    monkeypatch.setattr(api, "_locked", locked)
+    url = "/api/cascades/entry-recovery/1"
+    details = (await client.get(url, headers=auth_headers, params={"cascade_id": 7})).json()
+    assert details["resume"]["id"] == 7
+    request = {"token": details["token"], "cascade_id": 7}
+    assert (await client.post(url, headers=auth_headers, json=request)).status_code == 502
+    assert (await client.post(url, headers=auth_headers, json=request)).status_code == 409
+    details = (await client.get(url, headers=auth_headers, params={"cascade_id": 7})).json()
+    request["token"] = details["token"]
+    assert (await client.post(url, headers=auth_headers, json=request)).status_code == 200
+    async with session_factory() as session:
+        row = await session.get(Cascade, 7)
+        assert row.status == "error" and json.loads(row.params) == params
+
+
 async def test_waiting_delete_cannot_remove_replacement_with_reused_id(
     client, auth_headers, session_factory, monkeypatch,
 ):

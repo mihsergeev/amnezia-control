@@ -3331,7 +3331,8 @@ tr.row-link:hover td {
   line-height: 1.4;
 }
 
-.cas-port-options {
+.cas-port-options,
+.cas-recovery {
   margin-top: 0.7rem;
   border: 1px solid var(--border);
   border-radius: 10px;
@@ -3341,6 +3342,10 @@ tr.row-link:hover td {
 .cas-port-options summary {
   cursor: pointer;
   font-size: 0.86rem;
+}
+
+.cas-recovery p {
+  margin: 0.35rem 0;
 }
 
 .cas-security {
@@ -3414,6 +3419,8 @@ tr.row-link:hover td {
 
 .cas-actions-r {
   display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
   gap: 0.6rem;
   margin-left: auto;
 }

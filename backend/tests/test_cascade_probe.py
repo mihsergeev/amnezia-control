@@ -340,8 +340,10 @@ def mock_pair(monkeypatch, same_host=False):
     async def addrs(host): return {"203.0.113.20" if same_host else host}
     async def route(*args): return "192.168.1.10"
     async def geo(*args): raise OSError("unavailable")
+    async def available(*args): return None
     monkeypatch.setattr(api, "_locked_pair", locked)
     monkeypatch.setattr(api, "_addresses", addresses)
+    monkeypatch.setattr(api, "_entry_creation_available", available)
     monkeypatch.setattr(api, "_ipv4", ipv4)
     monkeypatch.setattr(api.server_ops, "_host_addrs", addrs)
     monkeypatch.setattr(api.cascade, "_route_src", route)

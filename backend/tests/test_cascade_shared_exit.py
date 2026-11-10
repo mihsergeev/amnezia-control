@@ -255,6 +255,7 @@ def remote_mocks(monkeypatch):
     async def no_owner(*args, **kwargs):return None
     monkeypatch.setattr(api, "_locked", locked)
     monkeypatch.setattr(api, "_addresses", addresses)
+    monkeypatch.setattr(api, "_entry_creation_available", available)
     monkeypatch.setattr(api, "_awg_preflight", available)
     monkeypatch.setattr(deploy, "port_owner", no_owner)
     monkeypatch.setattr(cascadejob, "spawn", lambda *args: None)

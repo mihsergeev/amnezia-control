@@ -6,13 +6,15 @@ import {
   getCascade,
   listCascades,
   parseCheckInfo,
+  previewCascadeEntryRecovery,
   protocolsFromContainers,
   probeCascadeTransport,
+  recoverCascadeEntry,
   reinstallCascade,
   type Cascade,
   type CascadeCreateRequest,
+  type CascadeEntryRecovery,
   type CascadeImageTransport,
-  type CascadeRoute,
   type CascadeTransportProbe,
   type CascadeTransport,
   type Server,
@@ -20,24 +22,21 @@ import {
 import { copyText } from './clipboard'
 import { countryFlag, formatBytes } from './format'
 import {
-  cascadeEntryCountry, cascadeLocalExpected, cascadeLocalRoute, cascadeMeasurement, cascadePort, cascadeRequestId,
+  cascadeEntryCountry, cascadeEntryOwnershipError, cascadeLocalExpected, cascadeLocalRoute, cascadeMeasurement, cascadePort, cascadeRequestId,
   cascadeTransportLabel, DEFAULT_CASCADE_TRANSPORT, formatProbeMetric,
   probeRowTone, PROBE_TRANSPORTS, queuedProbeRows, runTransportProbes, testedAwgPorts,
   type TransportProbeRow, type TransportProbeRows,
 } from './cascadeUi'
 import { CascadeSecurity } from './CascadeSecurity'
-import { cascadeServerEligible } from './serverList'
+import { cascadeEntryHasExistingRoute, cascadeServerEligible } from './serverList'
 import { useI18n } from './i18n'
 import { useModalDismiss } from './useModalDismiss'
 
 type Step = 'entry' | 'exit' | 'link' | 'install' | 'done'
 
-export type RecoveredEntry = {
-  id: number
-  country: string
-  routes: CascadeRoute[]
-  transport: CascadeTransport
-}
+type EntryRecovery =
+  | { state: 'checking' | 'removing' | 'removed' }
+  | { state: 'confirm'; preview: CascadeEntryRecovery }
 
 type Props = {
   servers: Server[]
@@ -45,10 +44,9 @@ type Props = {
   defaultUser: string
   // открыть сразу на установке уже созданного каскада (ход или ошибка)
   resume?: Cascade
-  recovered?: RecoveredEntry
+  replacement?: Cascade
   onClose: () => void
   onRemove: (cascade: Cascade) => void
-  onRecover: (entry: Server) => void
   onChanged: () => void
   onUnauthorized: () => void
 }
@@ -125,19 +123,18 @@ export function CascadeWizard({
   cascades,
   defaultUser,
   resume,
-  recovered,
+  replacement,
   onClose,
   onRemove,
-  onRecover,
   onChanged,
   onUnauthorized,
 }: Props) {
   const { t, lang } = useI18n()
   const [step, setStep] = useState<Step>(
-    resume ? (resume.status === 'ready' ? 'done' : 'install') : recovered ? 'exit' : 'entry',
+    resume ? (resume.status === 'ready' ? 'done' : 'install') : replacement ? 'exit' : 'entry',
   )
-  const [entryId, setEntryId] = useState<number | null>(resume?.entry_server_id ?? recovered?.id ?? null)
-  const [entryCountry, setEntryCountry] = useState(recovered?.country ?? '')
+  const [entryId, setEntryId] = useState<number | null>((resume ?? replacement)?.entry_server_id ?? null)
+  const [entryCountry, setEntryCountry] = useState(replacement?.entry_country ?? '')
   const [exitId, setExitId] = useState<number | null>(resume?.exit_server_id ?? null)
   const [tab, setTab] = useState<'panel' | 'new'>('panel')
   const [error, setError] = useState<string | null>(null)
@@ -151,11 +148,15 @@ export function CascadeWizard({
   const [probeRows, setProbeRows] = useState<TransportProbeRows>(queuedProbeRows)
   const activeProbe = useRef<{ controller: AbortController; preparing: boolean } | null>(null)
   const preparing = probeRows.awg.state === 'preparing' || probeRows.vless.state === 'preparing'
+  const [entryRecovery, setEntryRecovery] = useState<EntryRecovery | null>(null)
+  const [createNeedsRecovery, setCreateNeedsRecovery] = useState(false)
+  const recoveryBusy = entryRecovery?.state === 'checking' || entryRecovery?.state === 'removing'
+  const recoveryConfirm = entryRecovery?.state === 'confirm'
   function close() {
-    if (!activeProbe.current?.preparing) onClose()
+    if (!activeProbe.current?.preparing && !recoveryBusy) onClose()
   }
   const dismiss = useModalDismiss(close)
-  const [transport, setTransport] = useState<CascadeTransport>(recovered?.transport ?? DEFAULT_CASCADE_TRANSPORT)
+  const [transport, setTransport] = useState<CascadeTransport>(replacement?.transport ?? DEFAULT_CASCADE_TRANSPORT)
   const [entryPort, setEntryPort] = useState('')
   const [exitPort, setExitPort] = useState('')
   const [cascade, setCascade] = useState<Cascade | null>(resume ?? null)
@@ -169,6 +170,10 @@ export function CascadeWizard({
   const entry = byId(entryId)
   const exit = byId(exitId)
   const countryError = cascade?.status === 'error' && cascade.result.error_code === 'cascade_entry_country_unknown'
+  const entryOwnershipError = cascade !== null && cascadeEntryOwnershipError(cascade)
+  const recoveryTarget = step === 'install' && cascade && entryOwnershipError
+    ? { entryId: cascade.entry_server_id, cascadeId: cascade.id }
+    : step === 'link' && createNeedsRecovery && entryId !== null ? { entryId } : null
   const validCountry = /^[A-Z]{2}$/.test(entryCountry)
   const invalidCountry = entryCountry !== '' && !validCountry
   const retryNeedsCountry = countryError && !validCountry
@@ -373,7 +378,7 @@ export function CascadeWizard({
       transport,
       ...(transport === 'awg' ? requestedPorts : {}),
       ...(entryCountry ? { entry_country: entryCountry } : {}),
-      ...(recovered?.routes.length ? { routes: recovered.routes } : {}),
+      ...(replacement?.routes?.length ? { routes: replacement.routes } : {}),
     }
     const signature = JSON.stringify(form)
     setBusy(true)
@@ -387,11 +392,16 @@ export function CascadeWizard({
       }
       createRequests.current.set(signature, request)
       const c = await createCascade(request)
+      setCreateNeedsRecovery(false)
+      setEntryRecovery(null)
       setCascade(c)
       setStep(c.status === 'ready' ? 'done' : 'install')
       onChanged()
     } catch (err) {
-      if (err instanceof TypeError || err instanceof ApiError && (err.status === 408 || err.status >= 500)) {
+      if (err instanceof ApiError && err.code === 'cascade_entry_recovery_required') {
+        setCreateNeedsRecovery(true)
+        setEntryRecovery(null)
+      } else if (err instanceof TypeError || err instanceof ApiError && (err.status === 408 || err.status >= 500)) {
         const message = t('Ответ на создание каскада не получен. Нажмите «Собрать каскад» еще раз, чтобы продолжить.')
         setError(`${err.message}. ${message}`)
         onChanged()
@@ -405,12 +415,46 @@ export function CascadeWizard({
   }
 
   async function retry() {
-    if (!cascade || retryNeedsCountry) return
+    if (!cascade || retryNeedsCountry || busy || recoveryConfirm) return
     setBusy(true)
     setError(null)
     try {
       setCascade(await reinstallCascade(cascade.id, countryError ? entryCountry : undefined))
+      setEntryRecovery(null)
     } catch (err) {
+      handleError(err)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function checkEntryRecovery() {
+    if (!recoveryTarget || busy || entryRecovery) return
+    setBusy(true)
+    setError(null)
+    setEntryRecovery({ state: 'checking' })
+    try {
+      const preview = await previewCascadeEntryRecovery(recoveryTarget.entryId, recoveryTarget.cascadeId)
+      setEntryRecovery({ state: 'confirm', preview })
+    } catch (err) {
+      setEntryRecovery(null)
+      handleError(err)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function removeOldGateway() {
+    if (!recoveryTarget || busy || entryRecovery?.state !== 'confirm') return
+    setBusy(true)
+    setError(null)
+    setEntryRecovery({ state: 'removing' })
+    try {
+      await recoverCascadeEntry(recoveryTarget.entryId, entryRecovery.preview.token, recoveryTarget.cascadeId)
+      setEntryRecovery({ state: 'removed' })
+      onChanged()
+    } catch (err) {
+      setEntryRecovery(null)
       handleError(err)
     } finally {
       setBusy(false)
@@ -433,7 +477,7 @@ export function CascadeWizard({
           autoCapitalize="characters"
           spellCheck={false}
           aria-invalid={invalidCountry}
-          disabled={busy}
+          disabled={busy || recoveryConfirm}
           required={countryError}
           placeholder={countryError ? undefined : t('Автоматически')}
           onChange={event => setEntryCountry(event.target.value.toUpperCase())}
@@ -564,6 +608,9 @@ export function CascadeWizard({
             <p className="muted small">
               {kind === 'entry' ? t('Для входа показаны доступные серверы без других каскадов.') : t('Общий выход можно выбрать повторно. Серверы, уже используемые как вход, не показаны.')}
             </p>
+            {kind === 'entry' && entry && cascadeEntryHasExistingRoute(entry) && (
+              <p className="muted small" role="status">{t('Обнаружены признаки существующего маршрута. Панель проверит вход перед установкой.')}</p>
+            )}
           </>
         ) : script ? (
           <>
@@ -667,7 +714,7 @@ export function CascadeWizard({
     <div className="clients-head">
       <h3>{title}</h3>
       {closable && (
-        <button className="ghost" disabled={preparing} onClick={close}>
+        <button className="ghost" disabled={preparing || recoveryBusy} onClick={close}>
           {t('Закрыть')}
         </button>
       )}
@@ -722,7 +769,7 @@ export function CascadeWizard({
                         type="radio"
                         name="cas-transport"
                         checked={transport === k}
-                        disabled={preparing}
+                        disabled={preparing || recoveryBusy || recoveryConfirm}
                         onChange={() => setTransport(k)}
                       />
                       <div>
@@ -742,7 +789,7 @@ export function CascadeWizard({
                       <button
                         type="button"
                         className="ghost cas-prepare-probe"
-                        disabled={busy}
+                        disabled={busy || recoveryConfirm}
                         aria-label={t('Подготовить и проверить {transport}', { transport: name })}
                         onClick={() => void runProbe(entryId, exitId, k)}
                       >
@@ -757,8 +804,8 @@ export function CascadeWizard({
               <summary>{t('UDP-порты межсерверного канала')}</summary>
               <p className="muted small">{t('Пустые поля — автоматический выбор. Проверенные UDP-порты сохраняются при установке.')}</p>
               <div className="cas-row2">
-                <label>{t('UDP-порт входа')}<input inputMode="numeric" disabled={busy} value={entryPort} onChange={e => changeProbePort(setEntryPort, e.target.value)} placeholder={t('Автоматически')} /></label>
-                <label>{t('UDP-порт выхода')}<input inputMode="numeric" disabled={busy} value={exitPort} onChange={e => changeProbePort(setExitPort, e.target.value)} placeholder={t('Автоматически')} /></label>
+                <label>{t('UDP-порт входа')}<input inputMode="numeric" disabled={busy || recoveryConfirm} value={entryPort} onChange={e => changeProbePort(setEntryPort, e.target.value)} placeholder={t('Автоматически')} /></label>
+                <label>{t('UDP-порт выхода')}<input inputMode="numeric" disabled={busy || recoveryConfirm} value={exitPort} onChange={e => changeProbePort(setExitPort, e.target.value)} placeholder={t('Автоматически')} /></label>
               </div>
             </details>}
           </>
@@ -782,7 +829,7 @@ export function CascadeWizard({
                 </div>
               ))}
             </div>
-            {cascade.error && <p className="small err-text">{countryError
+            {cascade.error && !entryOwnershipError && <p className="small err-text">{countryError
               ? t('Не удалось определить страну входа. Укажите ее вручную и повторите установку.') : cascade.error}</p>}
             {countryError && countryInput()}
             {cascade.log && <pre className="script-box deploy-log">{cascade.log}</pre>}
@@ -842,15 +889,29 @@ export function CascadeWizard({
           </>
         )}
 
-        {error && <p className="small err-text">{error}</p>}
+        {recoveryTarget && <div className="cas-recovery">
+          {!entryRecovery && <p className="small err-text">{t('Установка остановилась на проверке старого шлюза на входе.')}</p>}
+          {entryRecovery?.state === 'checking' && <p className="muted small" role="status">{t('Проверяем шлюз на входе…')}</p>}
+          {entryRecovery?.state === 'confirm' && <>
+            <strong>{t('Старый шлюз на входе')} · {cascadeTransportLabel(entryRecovery.preview.transport)}</strong>
+            <p>{t('Панель снимет старый шлюз только на входе. VPN-клиенты и их конфигурации сохранятся.')}</p>
+            <p className="muted small">{t('До установки нового каскада трафик клиентов может идти напрямую через вход.')}</p>
+            <p className="muted small">{t('Затем можно повторить установку на уже выбранный выход.')}</p>
+          </>}
+          {entryRecovery?.state === 'removing' && <p className="muted small" role="status">{t('Снимаем шлюз…')}</p>}
+          {entryRecovery?.state === 'removed' && <p className="ok-text small" role="status">{t('Старый шлюз снят. Повторите установку каскада.')}</p>}
+        </div>}
+        {error && <p className="small err-text" role="alert">{error}</p>}
 
         <div className="cas-actions">
-          {((step === 'exit' && !recovered) || step === 'link') && (
+          {((step === 'exit' && !replacement) || step === 'link') && (
             <button
               className="ghost"
-              disabled={busy}
+              disabled={busy || recoveryConfirm}
               onClick={() => {
                 setError(null)
+                setCreateNeedsRecovery(false)
+                setEntryRecovery(null)
                 setTab('panel')
                 setScript(null)
                 setStep(step === 'exit' ? 'entry' : 'exit')
@@ -860,7 +921,7 @@ export function CascadeWizard({
             </button>
           )}
           {step === 'link' && (
-            <button className="ghost" disabled={busy} onClick={() => runProbe()}>
+            <button className="ghost" disabled={busy || recoveryConfirm} onClick={() => runProbe()}>
               {t('Проверить еще раз')}
             </button>
           )}
@@ -870,16 +931,20 @@ export function CascadeWizard({
                 {busy ? t('Подключаюсь…') : t('Дальше')}
               </button>
             )}
-            {step === 'link' && (
+            {recoveryTarget && !entryRecovery && <button className="ghost" disabled={busy} onClick={checkEntryRecovery}>
+              {t('Проверить старый шлюз…')}
+            </button>}
+            {recoveryConfirm && <>
+              <button className="ghost" onClick={() => setEntryRecovery(null)}>{t('Отмена')}</button>
+              <button onClick={removeOldGateway}>{t('Снять старый шлюз')}</button>
+            </>}
+            {step === 'link' && !recoveryConfirm && (
               <button disabled={busy || invalidCountry} onClick={build}>
                 {t('Собрать каскад')}
               </button>
             )}
-            {step === 'install' && cascade?.status === 'error' && (
+            {step === 'install' && cascade?.status === 'error' && !recoveryConfirm && (
               <>
-                {entry && !recovered && <button className="ghost" disabled={busy} onClick={() => onRecover(entry)}>
-                  {t('Восстановить вход…')}
-                </button>}
                 <button className="ghost" disabled={busy} onClick={() => onRemove(cascade)}>
                   {t('Разобрать каскад…')}
                 </button>

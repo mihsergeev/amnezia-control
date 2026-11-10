@@ -84,7 +84,8 @@ def test_failclosed_guards_and_cleanup_are_scoped():
     assert "dev acawg" in upgrade
 
 
-def _status(tmp_path, monkeypatch, *, age=20, guard=True, allowed="0.0.0.0/0", fail_config=False):
+def _status(tmp_path, monkeypatch, *, age=20, guard=True, allowed="0.0.0.0/0", fail_config=False,
+            down_routes: str | None = None):
     bin_ = tmp_path / "bin"
     bin_.mkdir(exist_ok=True)
     (tmp_path / "node.env").write_text(
@@ -107,9 +108,13 @@ def _status(tmp_path, monkeypatch, *, age=20, guard=True, allowed="0.0.0.0/0", f
         f"*latest-handshakes*) printf 'peer-public\\t{int(time.time())-age}\\n';;\n"
         "esac\n", encoding="utf-8", newline="\n")
     (bin_ / "ip").write_text(
-        "#!/bin/sh\ncase \"$*\" in\n"
+        "#!/bin/sh\n"
+        f'echo "ip $*" >> "{(tmp_path / "calls").as_posix()}"\n'
+        "case \"$*\" in\n"
         "'rule show') printf '1010: from all fwmark 0x200 lookup 242\\n1011: from all fwmark 0x200 unreachable\\n';;\n"
         "'route show table 242') echo 'default dev acawg scope link';;\n"
+        f"'-N -4 route show table all') echo '{down_routes or ''}';;\n"
+        f"'route flush table 242') exit {0 if down_routes else 2};;\n"
         "esac\n", encoding="utf-8", newline="\n")
     (bin_ / "iptables").write_text(
         f'#!/bin/sh\necho "iptables $*" >> "{(tmp_path / "calls").as_posix()}"\nexit {0 if guard else 1}\n',
@@ -127,13 +132,23 @@ def _status(tmp_path, monkeypatch, *, age=20, guard=True, allowed="0.0.0.0/0", f
     if os.name == "nt":
         prefix = f'export PATH="$(cygpath -u "{bin_.as_posix()}"):$PATH"\n'
     monkeypatch.setenv("PATH", str(bin_) + os.pathsep + os.environ["PATH"])
-    r = subprocess.run([shutil.which("bash"), "-s", "--", "up" if fail_config else "status"],
+    action = "down" if down_routes is not None else "up" if fail_config else "status"
+    r = subprocess.run([shutil.which("bash"), "-s", "--", action],
                        input=prefix + script, capture_output=True, text=True, timeout=10)
     if fail_config:
         assert r.returncode != 0
         return (tmp_path / "calls").read_text()
     assert r.returncode == 0, r.stderr
+    if down_routes is not None:
+        return (tmp_path / "calls").read_text()
     return cascade.parse_kv(r.stdout)
+
+
+@pytest.mark.skipif(shutil.which("bash") is None, reason="нужен bash")
+@pytest.mark.parametrize("routes", ["", "default dev acawg table 242 scope link"])
+def test_runtime_down_accepts_already_missing_routing_table(tmp_path, monkeypatch, routes):
+    calls = _status(tmp_path, monkeypatch, guard=False, down_routes=routes)
+    assert ("ip route flush table 242" in calls) == bool(routes)
 
 
 @pytest.mark.skipif(shutil.which("bash") is None, reason="нужен bash")
@@ -213,6 +228,7 @@ async def test_create_awg_preserves_secrets_in_storage_only(client, auth_headers
 
     monkeypatch.setattr(api, "_locked", locked)
     monkeypatch.setattr(api, "_addresses", addresses)
+    monkeypatch.setattr(api, "_entry_creation_available", available)
     monkeypatch.setattr(api, "_awg_preflight", available)
     monkeypatch.setattr(api, "_operation_available", available)
     monkeypatch.setattr(api, "_awg_port", port)

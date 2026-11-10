@@ -406,6 +406,7 @@ async def test_cascade_entry_country_api_preserves_override_for_retry_and_check(
 
     monkeypatch.setattr(api, "_locked", locked)
     monkeypatch.setattr(api, "_addresses", addresses)
+    monkeypatch.setattr(api, "_entry_creation_available", available)
     monkeypatch.setattr(api, "_external_preflight", available)
     monkeypatch.setattr(api, "_operation_available", available)
     monkeypatch.setattr(cascadejob, "spawn", lambda _app, cid: spawned.append(cid))

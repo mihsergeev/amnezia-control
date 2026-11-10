@@ -55,8 +55,12 @@ async def test_double_click_creates_one_cascade(
     async def addresses(conn, entry, exit_):
         return "203.0.113.20", "203.0.113.21"
 
+    async def available(*args):
+        return None
+
     monkeypatch.setattr(cascades_api, "_locked", fake_locked)
     monkeypatch.setattr(cascades_api, "_addresses", addresses)
+    monkeypatch.setattr(cascades_api, "_entry_creation_available", available)
     monkeypatch.setattr(cascadejob, "spawn", lambda app, cid: None)
 
     body = {"entry_id": a, "exit_id": b, "transport": "gre"}

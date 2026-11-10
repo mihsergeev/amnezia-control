@@ -2,6 +2,13 @@ import type { Cascade, CascadeEncryption, CascadeImageTransport, CascadeRoute, C
 
 export const DEFAULT_CASCADE_TRANSPORT: CascadeTransport = 'awg'
 
+export function cascadeEntryOwnershipError(cascade: Pick<Cascade, 'status' | 'phase' | 'result' | 'error'>): boolean {
+  return cascade.status === 'error' && (
+    cascade.result.error_code === 'cascade_entry_ownership'
+    || cascade.phase === 'entry' && /(?:^|: )(?:entry ownership|gateway ownership)$/.test(cascade.error)
+  )
+}
+
 // Blank means auto. Invalid numeric syntax must not silently turn into auto.
 export function cascadePort(value: string): number | null | undefined {
   const text = value.trim()

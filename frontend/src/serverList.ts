@@ -138,13 +138,15 @@ export function serverListClients(items: ServerListItem[], stats: Record<number,
 
 export function cascadeServerEligible(server: Server, cascades: Cascade[], role: 'entry' | 'exit'): boolean {
   if (cascades.some(c => c.entry_server_id === server.id)) return false
-  if (role === 'exit') return true
-  if (cascades.some(c => c.exit_server_id === server.id)) return false
+  return role === 'exit' || !cascades.some(c => c.exit_server_id === server.id)
+}
+
+export function cascadeEntryHasExistingRoute(server: Server): boolean {
   const info = checkedInfo(server)
   const manual = typeof info?.manual_cascade?.exit_host === 'string' && !!info.manual_cascade.exit_host.trim()
   const gre = Array.isArray(info?.tunnels) && info.tunnels.some(t => t.kind === 'gre')
   const abroad = !!server.egress_ip && !!server.egress_country && !!server.country && server.egress_country !== server.country
-  return !manual && !gre && !abroad
+  return manual || gre || abroad
 }
 
 export function resolveServerSelection(items: ServerListItem[], selection: ServerSelection) {

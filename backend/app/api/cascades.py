@@ -9,9 +9,10 @@ import secrets
 from contextlib import asynccontextmanager, nullcontext
 from datetime import datetime, timedelta, timezone
 from functools import wraps
+from typing import Annotated
 
 import asyncssh
-from fastapi import APIRouter, HTTPException, Request, status
+from fastapi import APIRouter, HTTPException, Query, Request, status
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 
@@ -437,11 +438,11 @@ async def _create_cascade(body: CascadeCreate, request: Request, user: CurrentUs
             # проверка в _pair шла до блокировки: двойной клик проходил ее дважды
             # и создавал два каскада. Перепроверяем и пишем строку под блокировкой
             await _ensure_free(session, entry, exit_)
+            params: dict = {"runtime_layout": 2, "runtime_owner": secrets.token_hex(16)}
+            await _entry_creation_available(ec, body.transport, params, entry.id)
             entry_ip, exit_ip = await _addresses(ec, entry, exit_)
             siblings = await _siblings(session, exit_.id)
-            params: dict = {"entry_ip": entry_ip, "exit_ip": exit_ip,
-                            "runtime_layout": 2, "runtime_owner": secrets.token_hex(16),
-                            "inner_net": _inner_reservation(siblings)}
+            params.update(entry_ip=entry_ip, exit_ip=exit_ip, inner_net=_inner_reservation(siblings))
             if body.entry_country:
                 params["entry_country"] = body.entry_country.upper()
             if body.routes:
@@ -673,6 +674,7 @@ async def _check_remove_node(server: Server, cascade_id: int, owner: str, side: 
 
 class EntryRecoveryRequest(BaseModel):
     token: str = Field(pattern=r"^[0-9a-f]{64}$")
+    cascade_id: int | None = Field(default=None, gt=0)
 
 
 class EntryRecoveryOut(BaseModel):
@@ -687,14 +689,31 @@ def _unsafe_entry() -> HTTPException:
     return conflict("cascade_recovery_ownership", "Панель не смогла подтвердить, что шлюз на входе принадлежит ей. Вход не изменен.")
 
 
+async def _entry_creation_available(conn, transport: str, options: dict, entry_id: int) -> None:
+    check = await conn.run(cascade_recovery.creation_guard(transport, options), check=False, timeout=45)
+    markers = (check.stdout or "").splitlines()
+    if "CASCADE_EXTERNAL_UNDERLAY" in markers:
+        raise conflict("cascade_external_underlay", "Канал защищен внешним AWG helper. Сначала отключите его штатным способом")
+    if "CASCADE_ENTRY_RECOVERY_REQUIRED" in markers:
+        code = "cascade_entry_recovery_required"
+        error = conflict(code, "На входе остался шлюз прежнего каскада. Проверьте его перед новой сборкой.",
+                         server_id=entry_id)
+        raise HTTPException(error.status_code, {"code": code, "message": error.detail})
+    if check.exit_status != 0:
+        raise _unsafe_entry()
+
+
 async def _entry_recovery(entry_id: int, user: CurrentUser, session: SessionDep,
-                          token: str | None = None) -> EntryRecoveryOut:
+                          token: str | None = None, cascade_id: int | None = None) -> EntryRecoveryOut:
     async with nodelock.hold("cascade", entry_id):
         entry = await session.get(Server, entry_id, populate_existing=True)
         if entry is None:
             raise HTTPException(status.HTTP_404_NOT_FOUND, "Сервер не найден")
         rows = list(await session.scalars(select(Cascade).execution_options(populate_existing=True)))
         row = next((c for c in rows if c.entry_server_id == entry_id), None)
+        if cascade_id is not None and (row is None or row.id != cascade_id
+                                       or row.status not in ("error", "installing")):
+            raise conflict("cascade_recovery_changed", "Черновик каскада изменился. Откройте восстановление заново.")
         other_ids = {c.exit_server_id for c in rows} | {c.entry_server_id for c in rows if c is not row}
         if entry_id in other_ids:
             raise conflict("cascade_role_in_use", "Сервер уже входит в каскад", server_id=entry_id)
@@ -723,13 +742,15 @@ async def _entry_recovery(entry_id: int, user: CurrentUser, session: SessionDep,
                 same_owner = stored == {key: marker[key] for key in ("cascade_id", "transport", "owner", "layout")}
                 if same_owner and runtime and "gre_key" in runtime and runtime["gre_key"] != options.get("gre_key"):
                     raise _unsafe_entry()
-                resume = bool(row and not same_owner)
+                if cascade_id is not None and (stored is None or (runtime is not None and same_owner)):
+                    raise _unsafe_entry()
+                resume = bool(row and (not same_owner or cascade_id is not None))
                 if resume and (row.status not in ("error", "installing") or stored is None):
                     raise _unsafe_entry()
                 recovery_options = cascade_recovery.params(marker)
                 if same_owner and transport == "gre":
                     recovery_options |= {key: options[key] for key in ("gre_key", "exit_ip") if key in options}
-                snapshot = (entry.id, entry.host, entry.ssh_port, entry.ssh_user, runtime,
+                snapshot = (entry.id, entry.host, entry.ssh_port, entry.ssh_user, runtime, cascade_id,
                             (row.id, row.exit_server_id, row.transport, row.status, row.params, row.result) if row else None)
                 fingerprint = hashlib.sha256(json.dumps(snapshot, sort_keys=True).encode()).hexdigest()
                 out = EntryRecoveryOut(token=fingerprint, transport=transport,
@@ -747,10 +768,17 @@ async def _entry_recovery(entry_id: int, user: CurrentUser, session: SessionDep,
                 script = cascade_lock.recover(cid, cascade_recovery.cleanup(runtime, cid, transport, recovery_options),
                                               owner, guard, row_lock)
                 removed = await conn.run(script, check=False, timeout=120)
-                if "CASCADE_OPERATION_BUSY" in (removed.stdout or ""):
+                markers = (removed.stdout or "").splitlines()
+                if "CASCADE_OPERATION_BUSY" in markers:
                     raise _remote_install_busy(cid, "entry")
-                if removed.exit_status != 0 or "CASCADE_REMOVED=yes" not in (removed.stdout or ""):
-                    raise conflict("cascade_recovery_failed", "Вход не подтвердил снятие старого шлюза. Повторите восстановление.")
+                if "CASCADE_RECOVERY_LOCK_CONFLICT" in markers:
+                    raise conflict("cascade_recovery_lock_conflict", "На входе сохранена операция другого каскада. Снятие шлюза не началось.")
+                if "CASCADE_RECOVERY_STATE_CHANGED" in markers:
+                    raise conflict("cascade_recovery_changed", "Состояние шлюза изменилось. Проверьте вход заново.")
+                if removed.exit_status != 0 or "CASCADE_REMOVED=yes" not in markers:
+                    if "CASCADE_RECOVERY_CLEANUP_STARTED" in markers:
+                        raise conflict("cascade_recovery_cleanup", "Снятие шлюза началось, но на входе остались его ресурсы. Проверьте вход заново.")
+                    raise conflict("cascade_recovery_failed", "Вход не подтвердил начало снятия шлюза. Проверьте вход заново.")
         except Exception as exc:  # noqa: BLE001
             raise _ssh_error(exc) from exc
         entry.egress_ip = entry.egress_country = entry.egress_org = ""
@@ -767,14 +795,15 @@ async def _entry_recovery(entry_id: int, user: CurrentUser, session: SessionDep,
 
 
 @router.get("/entry-recovery/{entry_id}", response_model=EntryRecoveryOut)
-async def preview_entry_recovery(entry_id: int, user: CurrentUser, session: SessionDep) -> EntryRecoveryOut:
-    return await _entry_recovery(entry_id, user, session)
+async def preview_entry_recovery(entry_id: int, user: CurrentUser, session: SessionDep,
+                                 cascade_id: Annotated[int | None, Query(gt=0)] = None) -> EntryRecoveryOut:
+    return await _entry_recovery(entry_id, user, session, cascade_id=cascade_id)
 
 
 @router.post("/entry-recovery/{entry_id}", response_model=EntryRecoveryOut)
 async def recover_entry(entry_id: int, body: EntryRecoveryRequest,
                         user: CurrentUser, session: SessionDep) -> EntryRecoveryOut:
-    return await _entry_recovery(entry_id, user, session, body.token)
+    return await _entry_recovery(entry_id, user, session, body.token, body.cascade_id)
 
 
 @router.delete("/{cascade_id}", status_code=status.HTTP_204_NO_CONTENT)

@@ -209,7 +209,8 @@ down() {
     ip rule del pref 1009 fwmark 0x400 table main 2>/dev/null || true
     ip rule del pref 1010 fwmark 0x200 table 242 2>/dev/null || true
     ip rule del pref 1011 fwmark 0x200 unreachable 2>/dev/null || true
-    ip route flush table 242
+    ROUTES=$(ip -N -4 route show table all) || die
+    if printf '%s\n' "$ROUTES" | grep -Eq ' table 242( |$)'; then ip route flush table 242; fi
     unrule filter OUTPUT -m mark --mark 0x200 ! -o "$IF" -j DROP
     nft delete table inet ac_cascade_awg 2>/dev/null || true
   else
@@ -382,22 +383,26 @@ WantedBy=timers.target
     return lines
 
 
-def remove(cascade_id: int, *, scoped_exit: bool = False, owner: str = "") -> str:
+def remove(cascade_id: int, *, scoped_exit: bool = False, owner: str = "", recover: bool = False) -> str:
     from app import cascade
 
     paths = resources(cascade_id if scoped_exit else None)
     BASE, SCRIPT, UNIT, TIMER = (paths[k] for k in ("base", "script", "unit", "timer"))
+    bundled = f'''sudo bash -s -- down <<'AC_CASCADE_AWG_RUNTIME' || exit 73
+{runtime_script(cascade_id if scoped_exit else None, owner)}AC_CASCADE_AWG_RUNTIME
+'''
+    # A previously installed helper may be the reason cleanup did not finish.
+    down = bundled if recover else f'''if sudo test -x {SCRIPT}; then
+    sudo {SCRIPT} down || exit 73
+  else
+    {bundled}  fi
+'''
     # A failed first install may have no device yet. Ownership remains mandatory.
     return ((preflight_command(cascade_id, scoped_exit=True) if scoped_exit else foreign_guard()) + f'''
 {cascade.stop_units(TIMER, paths['heal'], UNIT)}
 if sudo test -f {BASE}/node.env; then
   sudo grep -qx 'CID={int(cascade_id)}' {BASE}/node.env || exit 73
-  if sudo test -x {SCRIPT}; then
-    sudo {SCRIPT} down || exit 73
-  else
-    sudo bash -s -- down <<'AC_CASCADE_AWG_RUNTIME' || exit 73
-{runtime_script(cascade_id if scoped_exit else None, owner)}AC_CASCADE_AWG_RUNTIME
-  fi
+  {down}
 fi
 sudo rm -f /etc/systemd/system/{UNIT} /etc/systemd/system/{TIMER} /etc/systemd/system/{paths['heal']} || exit 73
 sudo rm -rf {BASE} || exit 73

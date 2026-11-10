@@ -1087,7 +1087,15 @@ def _remove_tproxy() -> str:
             + _verify_tproxy_removed())
 
 
-def build_remove_entry(transport: str = "gre", cascade_id: int = 0, params: dict | None = None) -> str:
+def verify_no_entry_gateway() -> str:
+    units = (*_UNITS, cascade_awg.UNIT, cascade_awg.TIMER, cascade_awg.resources()["heal"])
+    return (cascade_awg.preflight_command() + _verify_tproxy_removed()
+            + "".join(f'[ "$(sudo systemctl show -p LoadState --value {unit})" = not-found ] || exit 73\n'
+                      for unit in units))
+
+
+def build_remove_entry(transport: str = "gre", cascade_id: int = 0, params: dict | None = None,
+                       *, recover: bool = False) -> str:
     units = ("acontrol-cascade-geo.timer", "acontrol-cascade-geo.service", "acontrol-cascade-heal.service",
              "acontrol-cascade-tproxy.service")
     if transport != "awg":
@@ -1102,9 +1110,10 @@ def build_remove_entry(transport: str = "gre", cascade_id: int = 0, params: dict
         + cascade_gateway.commands(DIR, GATEWAY, (params or {}).get("runtime_owner", ""), _remove_tproxy())
         + "gateway_recover || exit 73\nfi",
         _remove_container(GATEWAY),
-        cascade_awg.remove(cascade_id, owner=(params or {}).get("runtime_owner", "")) if transport == "awg" else "",
+        cascade_awg.remove(cascade_id, owner=(params or {}).get("runtime_owner", ""), recover=recover)
+        if transport == "awg" else "",
         "sudo rm -f /etc/systemd/system/acontrol-cascade-tproxy.service.d/awg.conf || exit 73",
-        _remove_common(),
+        _remove_common(verify_no_entry_gateway() if recover else ""),
     ]) + "\n"
 
 
@@ -1124,12 +1133,13 @@ def build_remove_exit(transport: str = "gre", cascade_id: int = 0, params: dict 
     ]) + "\n"
 
 
-def _remove_common() -> str:
+def _remove_common(verify: str = "") -> str:
     # правила ufw по адресу соседа снимает панель отдельно (адрес известен ей)
     files = " ".join(f"/etc/systemd/system/{u}" for u in _UNITS)
     return (
         f"sudo rm -f {GRE_DEFAULTS} {files} || exit 73\n"
         "sudo systemctl daemon-reload || exit 73\n"
+        f"{verify}"
         f"sudo rm -rf {DIR} || exit 73\n"
         "echo CASCADE_REMOVED=yes"
     )

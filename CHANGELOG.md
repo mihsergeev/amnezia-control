@@ -4,6 +4,11 @@ All notable changes to Amnezia Control are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.84.37] - 2026-11-10
+
+- Recover a leftover cascade gateway directly in the setup wizard and continue with the selected exit. When replacing a recorded cascade, carry over its saved route overrides.
+- Fix cleanup of partially removed AmneziaWG gateways and preserve the installation draft when a recovery response is lost. Existing VPN clients and profiles are preserved.
+
 ## [0.84.36] - 2026-11-10
 
 - Recover a cascade entry and choose a new exit when the old exit is unreachable, even if the original cascade was already removed from the panel. Existing VPN clients and profiles are preserved.

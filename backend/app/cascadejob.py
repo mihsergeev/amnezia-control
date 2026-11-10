@@ -168,10 +168,14 @@ async def _run_locked(cid: int, factory, settings) -> None:
         except Exception as exc:  # noqa: BLE001 — SSH при запуске
             state, tail = "error", f"DEPLOY_ERROR: SSH: {exc or type(exc).__name__}"
         if state != "done":
-            msg = f"{PHASE_LABEL[phase]} «{server.name}»: {_error_line(tail)}"
+            detail = _error_line(tail)
+            msg = f"{PHASE_LABEL[phase]} «{server.name}»: {detail}"
             # хвост этой стороны кладем на ее место (при сбое SSH его там еще нет)
             logs[phase] = (server.name, tail)
-            await _finish(factory, cid, "error", msg, _joined(logs), {"failed_phase": phase})
+            result = {"failed_phase": phase}
+            if phase == "entry" and detail in ("entry ownership", "gateway ownership"):
+                result["error_code"] = "cascade_entry_ownership"
+            await _finish(factory, cid, "error", msg, _joined(logs), result)
             if entry.alerts_enabled or exit_.alerts_enabled:
                 await alerts.maybe_alert(
                     factory, settings,

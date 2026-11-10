@@ -64,12 +64,15 @@ else:
  if mode=='recover':
   allowed={{owner}}
   if row and row[0]==cid:allowed.add(row[1])
-  if state and state.get('owner') not in allowed and state.get('revoked') is not True:sys.exit(73)
+  if state and state.get('owner') not in allowed and state.get('revoked') is not True:
+   print('CASCADE_RECOVERY_LOCK_CONFLICT',flush=True);sys.exit(73)
   if row and row[0]!=cid:
    other_fd,other_path,other_state=locked(row[0])
-   if other_state and other_state.get('owner')!=row[1] and other_state.get('revoked') is not True:sys.exit(73)
+   if other_state and other_state.get('owner')!=row[1] and other_state.get('revoked') is not True:
+    print('CASCADE_RECOVERY_LOCK_CONFLICT',flush=True);sys.exit(73)
   verified=subprocess.run(['bash','-c',{guard!r}],stdin=subprocess.DEVNULL,timeout=45)
-  if verified.returncode:sys.exit(verified.returncode)
+  if verified.returncode:
+   print('CASCADE_RECOVERY_STATE_CHANGED',flush=True);sys.exit(verified.returncode)
   if row and row[0]!=cid:
    save(other_path,{{'owner':row[1],'generation':None,'revoked':True}})
    os.set_inheritable(other_fd,True)

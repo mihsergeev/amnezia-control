@@ -43,10 +43,12 @@ export function setToken(token: string | null) {
 
 export class ApiError extends Error {
   status: number
+  code?: string
 
-  constructor(message: string, status: number) {
+  constructor(message: string, status: number, code?: string) {
     super(message)
     this.status = status
+    this.code = code
   }
 }
 
@@ -107,7 +109,10 @@ export async function api<T>(path: string, options: RequestInit = {}): Promise<T
   if (res.status === 204) return undefined as T
 
   const body = await res.json().catch(() => null)
-  if (!res.ok) throw new ApiError(errorDetail(body, res.status), res.status)
+  if (!res.ok) {
+    const code = body?.detail?.code
+    throw new ApiError(errorDetail(body, res.status), res.status, typeof code === 'string' ? code : undefined)
+  }
   return body as T
 }
 
@@ -123,6 +128,9 @@ export function errorDetail(body: unknown, status: number): string {
         return field ? `${field}: ${d.msg ?? ''}` : (d.msg ?? '')
       })
       .join('; ')
+  }
+  if (detail && typeof detail === 'object' && 'message' in detail && typeof detail.message === 'string') {
+    return detail.message
   }
   return translate('Ошибка HTTP {status}', { status })
 }
@@ -1197,19 +1205,17 @@ export type CascadeCreateRequest = {
 export type CascadeEntryRecovery = {
   token: string
   transport: CascadeTransport
-  entry_country: string
-  routes: CascadeRoute[]
-  resume: Cascade | null
 }
 
-export function previewCascadeEntryRecovery(id: number, signal: AbortSignal): Promise<CascadeEntryRecovery> {
-  return api<CascadeEntryRecovery>(`/api/cascades/entry-recovery/${id}`, { signal })
+export function previewCascadeEntryRecovery(entryId: number, cascadeId?: number): Promise<CascadeEntryRecovery> {
+  const query = cascadeId === undefined ? '' : `?cascade_id=${cascadeId}`
+  return api<CascadeEntryRecovery>(`/api/cascades/entry-recovery/${entryId}${query}`)
 }
 
-export function recoverCascadeEntry(id: number, token: string): Promise<CascadeEntryRecovery> {
-  return api<CascadeEntryRecovery>(`/api/cascades/entry-recovery/${id}`, {
+export function recoverCascadeEntry(entryId: number, token: string, cascadeId?: number): Promise<CascadeEntryRecovery> {
+  return api<CascadeEntryRecovery>(`/api/cascades/entry-recovery/${entryId}`, {
     method: 'POST',
-    body: JSON.stringify({ token }),
+    body: JSON.stringify({ cascade_id: cascadeId, token }),
   })
 }
 

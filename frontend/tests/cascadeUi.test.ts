@@ -1,9 +1,19 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { cascadeClientExitConfirmed, cascadeLocalExpected, cascadeLocalRoute, cascadePort, cascadeRequestId, cascadeSecurityState, DEFAULT_CASCADE_TRANSPORT, latestCascadeHealth } from '../src/cascadeUi.ts'
+import { cascadeClientExitConfirmed, cascadeEntryOwnershipError, cascadeLocalExpected, cascadeLocalRoute, cascadePort, cascadeRequestId, cascadeSecurityState, DEFAULT_CASCADE_TRANSPORT, latestCascadeHealth } from '../src/cascadeUi.ts'
 
 test('the new default is AWG, not an unencrypted transport recommendation', () => {
   assert.equal(DEFAULT_CASCADE_TRANSPORT, 'awg')
+})
+
+test('wizard recovery is offered only for a failed entry ownership check', () => {
+  const current = { status: 'error', phase: 'entry', error: 'Install failed', result: { error_code: 'cascade_entry_ownership' } } as const
+  const legacy = { ...current, error: 'вход «Entry»: gateway ownership', result: {} }
+  assert.equal(cascadeEntryOwnershipError(current), true)
+  assert.equal(cascadeEntryOwnershipError(legacy), true)
+  assert.equal(cascadeEntryOwnershipError({ ...legacy, error: 'SSH: connection refused' }), false)
+  assert.equal(cascadeEntryOwnershipError({ ...legacy, phase: 'exit' }), false)
+  assert.equal(cascadeEntryOwnershipError({ ...current, status: 'installing' }), false)
 })
 
 test('blank UDP ports mean auto; explicit ports retain exact asymmetric values', () => {

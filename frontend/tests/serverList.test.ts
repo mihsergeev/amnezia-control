@@ -6,7 +6,7 @@ import {
   serverListItems, serverListMatches, serverListMembers, serverListProblem,
   serverSelectionFromHistory, serverSelectionFromParams, serverSelectionParams,
   cascadeNameParts, greLinkLabel, manualExitNameChange, serverListRoute,
-  cascadeServerEligible,
+  cascadeEntryHasExistingRoute, cascadeServerEligible,
 } from '../src/serverList.ts'
 
 function node(id: number, extra: Partial<Server> = {}): Server {
@@ -93,15 +93,18 @@ test('incoming GRE interfaces do not turn the shared exit node into a fake manua
   assert.equal(serverListRoute(rows.find(r => r.key === 'server:2')!, servers), null)
 })
 
-test('cascade roles permit repeated exits, but exclude entries and manual entry carriers', () => {
+test('cascade roles permit repeated exits and flag existing routes on unassigned entries', () => {
   const cs = [cascade(1, 1, 2)]
   assert.equal(cascadeServerEligible(node(1), cs, 'entry'), false)
   assert.equal(cascadeServerEligible(node(1), cs, 'exit'), false)
   assert.equal(cascadeServerEligible(node(2), cs, 'entry'), false)
   assert.equal(cascadeServerEligible(node(2), cs, 'exit'), true)
   const manual = node(4, { last_check_info: '{"manual_cascade":{"transport":"vless","exit_host":"198.51.100.4"}}' })
-  assert.equal(cascadeServerEligible(manual, cs, 'entry'), false)
+  assert.equal(cascadeServerEligible(manual, cs, 'entry'), true)
   assert.equal(cascadeServerEligible(manual, cs, 'exit'), true)
+  assert.equal(cascadeEntryHasExistingRoute(manual), true)
+  assert.equal(cascadeEntryHasExistingRoute(node(4, { country: 'RU', egress_country: 'FI', egress_ip: '192.0.2.4' })), true)
+  assert.equal(cascadeEntryHasExistingRoute(node(4)), false)
 })
 
 test('problems include either node, cascade errors, installing and health failures', () => {

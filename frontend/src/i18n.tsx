@@ -1213,17 +1213,20 @@ const EN: Record<string, string> = {
   'Каскад: ход установки': 'Cascade: install progress',
   'Разобрать каскад…': 'Remove the cascade…',
   'Разобрать каскад?': 'Remove the cascade?',
-  'Восстановить вход…': 'Recover cascade entry…',
-  'Восстановление входа каскада': 'Recover cascade entry',
+  'Установка остановилась на проверке старого шлюза на входе.': 'Installation stopped while checking the old entry gateway.',
+  'Обнаружены признаки существующего маршрута. Панель проверит вход перед установкой.':
+    'There are signs of an existing route. The panel will check the entry before installation.',
+  'Проверить старый шлюз…': 'Check old gateway…',
+  'Старый шлюз на входе': 'Old entry gateway',
   'Проверяем шлюз на входе…': 'Checking the entry gateway…',
   'Панель снимет старый шлюз только на входе. VPN-клиенты и их конфигурации сохранятся.':
     'The panel will remove the old gateway from the entry only. VPN clients and their profiles will be preserved.',
   'До установки нового каскада трафик клиентов может идти напрямую через вход.':
     'Client traffic may go directly through the entry until the new cascade is installed.',
   'Затем можно повторить установку на уже выбранный выход.': 'You can then retry installation with the selected exit.',
-  'Затем мастер предложит выбрать новый выход.': 'The wizard will then prompt you to select a new exit.',
   'Снимаем шлюз…': 'Removing the gateway…',
   'Снять старый шлюз': 'Remove old gateway',
+  'Старый шлюз снят. Повторите установку каскада.': 'The old gateway was removed. Retry the cascade installation.',
   'Панель не смогла подтвердить, что шлюз на входе принадлежит ей. Вход не изменен.':
     'The panel could not verify that it owns the entry gateway. The entry was left unchanged.',
   'На входе не найден шлюз каскада для восстановления.': 'There is no cascade gateway to recover on the entry.',
@@ -1233,6 +1236,7 @@ const EN: Record<string, string> = {
   'Панель уберет шлюз и туннель с обоих серверов. Клиенты входа останутся подключенными, но в интернет пойдут с адреса самого входа.':
     'The panel removes the gateway and the tunnel from both servers. Entry clients stay connected but reach the internet from the entry\'s own address.',
   'Убрать только из панели': 'Remove from the panel only',
+  'Разобрать и выбрать новый выход': 'Tear down and choose a new exit',
   'Если убрать запись из панели, на серверах могут остаться шлюз и туннель.':
     'Removing the panel record may leave the gateway and tunnel on the servers.',
   'Запись каскада удалена. Проверьте, остались ли на серверах шлюз и туннель.':
