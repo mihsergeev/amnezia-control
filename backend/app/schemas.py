@@ -846,12 +846,31 @@ class CascadeTransportProbe(CascadeCreate):
     """One independent temporary transport measurement."""
 
     prepare_missing_image: bool = False
+    run_id: UUID | None = None
 
     @model_validator(mode="after")
     def docker_transport_only(self):
         if self.prepare_missing_image and self.transport == "gre":
             raise ValueError("Image preparation is only supported for AWG and VLESS")
         return self
+
+
+class CascadeSideProgress(BaseModel):
+    status: Literal["pending", "running", "done", "error"]
+    stage: str
+    started_at: datetime | None = None
+    updated_at: datetime | None = None
+
+
+class CascadeTransportProgressOut(BaseModel):
+    run_id: str
+    entry_server_id: int
+    exit_server_id: int
+    transport: Literal["awg", "vless", "gre"]
+    status: Literal["running", "done", "error", "cancelled"]
+    started_at: datetime
+    updated_at: datetime
+    sides: dict[Literal["entry", "exit"], CascadeSideProgress]
 
 
 class CascadeTransportProbeOut(BaseModel):
@@ -878,6 +897,7 @@ class CascadeTransportProbeOut(BaseModel):
     prerequisite_tcp: dict | None = None
     transfer_ok: bool | None = None
     cleanup_failed: list[Literal["entry", "exit"]] = Field(default_factory=list)
+    failed_side: Literal["entry", "exit"] | None = None
 
 
 class CascadeOut(BaseModel):
@@ -889,6 +909,7 @@ class CascadeOut(BaseModel):
     error: str
     phase: str = ""  # exit | entry, пока идет установка
     log: str = ""
+    progress: dict[Literal["entry", "exit"], CascadeSideProgress] = Field(default_factory=dict)
     entry_ip: str = ""
     entry_country: str = ""
     exit_ip: str = ""

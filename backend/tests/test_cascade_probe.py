@@ -431,6 +431,26 @@ async def test_failed_preparation_stops_before_measurement(monkeypatch, code, st
     assert result["bytes"] == 0
 
 
+@pytest.mark.parametrize("exit_code,entry_code,failed_side", [(2, 4, "entry"), (4, 2, "exit")])
+async def test_cleanup_failure_has_priority_and_keeps_its_actual_side(
+    monkeypatch, exit_code, entry_code, failed_side,
+):
+    async def prepare(node, config, on_stage=None):
+        return exit_code if node == "exit" else entry_code
+
+    async def port(*args): return 43123
+    async def start(*args): pytest.fail("failed preparation must not start a measurement")
+    events = []
+    monkeypatch.setattr(cascade_probe, "_prepare", prepare)
+    monkeypatch.setattr(cascade_probe, "_port", port)
+    monkeypatch.setattr(cascade_probe, "_start", start)
+    result = await cascade_probe.run("exit", "entry", "203.0.113.10", "203.0.113.20", "awg",
+        prepare_missing_image=True, on_progress=lambda *value: events.append(value))
+    assert result["status"] == "failed" and result["failed_side"] == failed_side
+    assert result["error"] == cascade_probe.PREPARE_ERRORS[4][0]
+    assert ("entry", "failed", "error") in events and ("exit", "failed", "error") in events
+
+
 async def test_cancelling_preparation_closes_stdin_and_waits_for_worker():
     waiting, eof, cleaned = asyncio.Event(), asyncio.Event(), asyncio.Event()
     async def wait_closed():
@@ -650,7 +670,10 @@ async def test_legacy_gre_delegates_to_owned_adapter_without_fixed_interface(mon
 async def test_transport_api_disconnect_waits_for_cleanup_before_unlock(
     client, auth_headers, session_factory, monkeypatch,
 ):
-    from app import nodelock
+    from uuid import uuid4
+    from app import cascade_progress, nodelock
+    monkeypatch.setattr(cascade_progress, "_runs", {})
+    run_id = str(uuid4())
     entry, exit_ = await add_servers(session_factory)
     mock_pair(monkeypatch)
     started, cleaned = asyncio.Event(), asyncio.Event()
@@ -664,10 +687,121 @@ async def test_transport_api_disconnect_waits_for_cleanup_before_unlock(
     monkeypatch.setattr(cascade_probe, "run", run)
     monkeypatch.setattr(api.Request, "is_disconnected", disconnected)
     response = await client.post("/api/cascades/probe-transport", headers=auth_headers,
-        json={"entry_id": entry, "exit_id": exit_, "transport": "gre"})
+        json={"entry_id": entry, "exit_id": exit_, "transport": "gre", "run_id": run_id})
     assert response.status_code == 499 and cleaned.is_set()
+    snapshot = (await client.get(f"/api/cascades/probe-transport/{run_id}/progress",
+                                 headers=auth_headers)).json()
+    assert snapshot["status"] == "cancelled"
     async with nodelock.hold("cascade", entry, wait=0.1), nodelock.hold("cascade", exit_, wait=0.1):
         pass
+
+
+async def test_transport_progress_polling_is_live_authenticated_and_rejects_replay(
+    client, auth_headers, session_factory, monkeypatch,
+):
+    from uuid import uuid4
+    from app import cascade_progress
+
+    monkeypatch.setattr(cascade_progress, "_runs", {})
+    entry, exit_ = await add_servers(session_factory)
+    mock_pair(monkeypatch)
+    started, release = asyncio.Event(), asyncio.Event()
+    run_id = str(uuid4())
+    path = f"/api/cascades/probe-transport/{run_id}/progress"
+    assert (await client.get(path)).status_code == 401
+    assert (await client.get(path, headers={"X-API-Key": "synthetic-test-key"})).status_code == 401
+    assert (await client.get(path, headers=auth_headers)).status_code == 404
+
+    async def run(*args, on_progress, **kwargs):
+        on_progress("exit", "building_image", "running")
+        on_progress("entry", "ready", "running")
+        started.set()
+        await release.wait()
+        on_progress("exit", "failed", "error")
+        return measured("awg") | {"ok": None, "status": "unavailable", "failed_side": "exit",
+                                  "error": "Не удалось подготовить образ для проверки"}
+
+    monkeypatch.setattr(cascade_probe, "run", run)
+    body = {"entry_id": entry, "exit_id": exit_, "transport": "awg",
+            "run_id": run_id, "prepare_missing_image": True}
+    task = asyncio.create_task(client.post("/api/cascades/probe-transport", headers=auth_headers, json=body))
+    await asyncio.wait_for(started.wait(), timeout=3)
+    try:
+        response = await client.get(path, headers=auth_headers)
+        assert response.status_code == 200
+        snapshot = response.json()
+        assert snapshot["status"] == "running"
+        assert snapshot["entry_server_id"] == entry and snapshot["exit_server_id"] == exit_
+        assert snapshot["sides"]["exit"]["stage"] == "building_image"
+        assert snapshot["sides"]["exit"]["started_at"]
+        assert "log" not in json.dumps(snapshot)
+        assert (await client.post("/api/cascades/probe-transport", headers=auth_headers,
+                                  json=body)).status_code == 409
+    finally:
+        release.set()
+    response = await task
+    assert response.status_code == 200
+    assert response.json()["run_id"] == run_id
+    assert response.json()["failed_side"] == "exit"
+    snapshot = (await client.get(path, headers=auth_headers)).json()
+    assert snapshot["status"] == "error"
+    assert snapshot["sides"]["exit"]["status"] == "error"
+    assert snapshot["sides"]["entry"]["status"] == "done"
+
+
+async def test_prepare_stream_accepts_only_fixed_stage_names():
+    stages, drained = [], asyncio.Event()
+    lines = iter(["not-json\n", '{"stage":["secret"]}\n', '{"stage":"remote raw output"}\n',
+                  '{"stage":"checking_image"}\n', '{"stage":"building_image"}\n',
+                  '{"stage":"cleanup"}\n', ""])
+
+    async def readline():
+        await asyncio.sleep(0)
+        value = next(lines)
+        if not value:
+            drained.set()
+        return value
+
+    async def wait_closed():
+        await drained.wait()
+
+    async def create_process(command):
+        assert "python3 -u -c" in command
+        return SimpleNamespace(stdout=SimpleNamespace(readline=readline),
+                               wait_closed=wait_closed, exit_status=0)
+
+    result = await cascade_probe._prepare(SimpleNamespace(create_process=create_process), {}, stages.append)
+    assert result == 0 and stages == ["checking_image", "building_image", "cleanup"]
+
+
+async def test_pair_progress_follows_actual_sorted_ssh_connections(monkeypatch):
+    events = []
+
+    @asynccontextmanager
+    async def locked(server):
+        assert events[-1] == ("exit" if server.id == 10 else "entry", "connecting", "running")
+        yield server.id
+
+    monkeypatch.setattr(api, "_locked", locked)
+    async with api._locked_pair(Server(id=20), Server(id=10), lambda *event: events.append(event)) as conns:
+        assert conns == (20, 10)
+    assert events == [("exit", "connecting", "running"), ("exit", "queued", "pending"),
+                      ("entry", "connecting", "running"), ("entry", "queued", "pending")]
+
+
+def test_preparation_progress_cannot_interrupt_cleanup_after_ssh_disconnect():
+    import ast
+
+    # Test the exact embedded worker function without importing Linux-only fcntl.
+    definition = next(node for node in ast.parse(cascade_probe.PREPARE_WORKER).body
+                      if isinstance(node, ast.FunctionDef) and node.name == "progress")
+
+    def broken_output(*args, **kwargs):
+        raise BrokenPipeError("closed channel")
+
+    scope = {"json": json, "print": broken_output}
+    exec(compile(ast.Module(body=[definition], type_ignores=[]), "prepare_progress", "exec"), scope)
+    scope["progress"]("cleanup")
 
 
 async def test_start_stdin_write_failure_still_drains_cleanup(monkeypatch):
@@ -726,6 +860,64 @@ async def test_occupied_requested_port_is_unavailable_without_starting_resources
     assert result["status"] == "unavailable" and result["ok"] is None
     assert result["error"] == "Для проверки нет свободного порта"
     assert result["secs"] is None and result["mbps"] is None
+
+
+async def test_occupied_exit_port_keeps_successfully_checked_entry_pending(monkeypatch):
+    from app import cascade_progress
+
+    monkeypatch.setattr(cascade_progress, "_runs", {})
+    cascade_progress.start("port-test", 1, 10, 20, "awg")
+
+    async def owner(conn, *args):
+        return "existing-service" if conn == "exit" else None
+
+    async def start(*args): pytest.fail("occupied port must not create temporary resources")
+    monkeypatch.setattr(cascade_probe.deploy, "port_owner", owner)
+    monkeypatch.setattr(cascade_probe, "_start", start)
+    result = await cascade_probe.run("exit", "entry", "203.0.113.10", "203.0.113.20", "awg",
+        43123, 43124, on_progress=lambda *value: cascade_progress.event("port-test", *value))
+    cascade_progress.finish("port-test", "error")
+    snapshot = cascade_progress.snapshot("port-test", 1)
+    assert result["status"] == "unavailable" and result["failed_side"] == "exit"
+    assert snapshot["sides"]["exit"]["status"] == "error"
+    assert snapshot["sides"]["entry"]["status"] == "pending"
+    assert snapshot["sides"]["entry"]["stage"] == "queued"
+
+
+@pytest.mark.parametrize("failure", [TimeoutError, OSError, RuntimeError])
+async def test_transfer_exception_does_not_report_successful_sides_after_cleanup(monkeypatch, failure):
+    from app import cascade_progress
+
+    monkeypatch.setattr(cascade_progress, "_runs", {})
+    cascade_progress.start("transfer-test", 1, 10, 20, "gre")
+    processes = [Process([]), Process([])]
+    pending = iter(processes)
+    closed = []
+
+    async def start(*args): return next(pending)
+
+    async def event(process):
+        if process.started.is_set():
+            raise failure("synthetic transfer failure")
+        return {"event": "ready", "receiver_port": 43123}
+
+    async def close(process):
+        closed.append(process)
+        return True
+
+    monkeypatch.setattr(cascade_probe, "_start", start)
+    monkeypatch.setattr(cascade_probe, "_event", event)
+    monkeypatch.setattr(cascade_probe, "_close", close)
+    result = await cascade_probe.run(None, None, "203.0.113.10", "203.0.113.20", "gre",
+        on_progress=lambda *value: cascade_progress.event("transfer-test", *value))
+    cascade_progress.finish("transfer-test", "error")
+    snapshot = cascade_progress.snapshot("transfer-test", 1)
+    assert result["ok"] is None and result["status"] == "unavailable"
+    assert result.get("failed_side") is None
+    assert closed == processes
+    assert all(process.started.is_set() for process in processes)
+    assert all(side["status"] == "error" and side["stage"] == "failed"
+               for side in snapshot["sides"].values())
 
 
 @pytest.mark.parametrize("reserved_exit", [False, True])

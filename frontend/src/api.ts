@@ -1083,6 +1083,25 @@ export type CascadeTransportProbe = {
   prerequisite_tcp?: { ok: boolean; error: string }
   transfer_ok?: boolean | null
   cleanup_failed?: ('entry' | 'exit')[]
+  failed_side?: 'entry' | 'exit' | null
+}
+
+export type CascadeSideProgress = {
+  status: 'pending' | 'running' | 'done' | 'error'
+  stage: string
+  started_at: string | null
+  updated_at: string | null
+}
+
+export type CascadeProbeProgress = {
+  run_id: string
+  entry_server_id: number
+  exit_server_id: number
+  transport: CascadeTransport
+  status: 'running' | 'done' | 'error' | 'cancelled'
+  started_at: string
+  updated_at: string
+  sides: { entry: CascadeSideProgress; exit: CascadeSideProgress }
 }
 
 export type CascadeRoute = { destination: string; via: 'entry' | 'exit' }
@@ -1101,6 +1120,7 @@ export type Cascade = {
   status: 'installing' | 'ready' | 'error'
   error: string
   phase: '' | 'exit' | 'entry'
+  progress?: { entry: CascadeSideProgress; exit: CascadeSideProgress }
   log: string
   entry_ip: string
   entry_country?: string
@@ -1201,14 +1221,21 @@ export function probeCascadeTransport(
   ports?: { entry_port: number | null; exit_port: number | null },
   signal?: AbortSignal,
   prepareMissingImage = false,
+  runId?: string,
 ): Promise<CascadeTransportProbe> {
   return api('/api/cascades/probe-transport', {
     method: 'POST', signal,
     body: JSON.stringify({
       entry_id: entryId, exit_id: exitId, transport, ...(transport === 'awg' ? ports : {}),
+      ...(runId ? { run_id: runId } : {}),
       ...(prepareMissingImage && transport !== 'gre' ? { prepare_missing_image: true } : {}),
     }),
   })
+}
+
+export function getCascadeProbeProgress(runId: string, signal?: AbortSignal): Promise<CascadeProbeProgress> {
+  const timeout = AbortSignal.timeout(5000)
+  return api(`/api/cascades/probe-transport/${encodeURIComponent(runId)}/progress`, { signal: signal ? AbortSignal.any([signal, timeout]) : timeout })
 }
 
 export type CascadeCreateRequest = {

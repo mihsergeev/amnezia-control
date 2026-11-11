@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import type { CascadeTransport, CascadeTransportProbe } from '../src/api.ts'
-import { cascadeMeasurement, formatProbeMetric, probeRowTone, queuedProbeRows, runTransportProbes, testedAwgPorts } from '../src/cascadeUi.ts'
+import type { CascadeProbeProgress, CascadeTransport, CascadeTransportProbe } from '../src/api.ts'
+import { cascadeMeasurement, formatProbeMetric, idleProbeRows, matchingProbeProgress, newerProbeProgress, progressElapsed, probeRowTone, queuedProbeRows, runTransportProbes, testedAwgPorts } from '../src/cascadeUi.ts'
 
 function result(transport: CascadeTransport, status: CascadeTransportProbe['status'] = 'ok'): CascadeTransportProbe {
   return { transport, measurement: transport, run_id: '0'.repeat(32), requested_bytes: 20971520,
@@ -115,4 +115,49 @@ test('legacy TCP speed is labelled TCP, while a new VLESS measurement has its ow
   assert.deepEqual(cascadeMeasurement({ transport: 'vless', probe: { tcp, vless: result('vless') } }), { label: 'VLESS', mbps: 168 })
   assert.equal(cascadeMeasurement({ transport: 'vless', probe: { tcp, vless: result('vless', 'failed') } }), null)
   assert.equal(cascadeMeasurement({ transport: 'awg', probe: { tcp } }), null)
+})
+
+test('explicit selection checks one transport while all other transports remain idle', async () => {
+  const rows = idleProbeRows(), calls: CascadeTransport[] = []
+  await runTransportProbes(async kind => { calls.push(kind); return result(kind) },
+    (kind, row) => { rows[kind] = row }, new AbortController().signal, errorText, undefined, 'vless')
+  assert.deepEqual(calls, ['vless'])
+  assert.equal(rows.vless.state, 'done')
+  assert.equal(rows.awg.state, 'idle')
+  assert.equal(rows.gre.state, 'idle')
+  assert.equal(probeRowTone(rows.awg), 'muted')
+})
+
+const progress = (): CascadeProbeProgress => ({
+  run_id: 'current-run', transport: 'awg', entry_server_id: 1, exit_server_id: 2,
+  status: 'running', started_at: '2026-01-01T00:00:00Z', updated_at: '2026-01-01T00:00:05Z',
+  sides: { entry: { status: 'pending', stage: 'queued', started_at: null, updated_at: null },
+    exit: { status: 'running', stage: 'building_image', started_at: '2026-01-01T00:00:00Z', updated_at: '2026-01-01T00:00:05Z' } },
+})
+
+test('progress must match the active run, transport and both selected servers', () => {
+  const value = progress()
+  assert.equal(matchingProbeProgress(value, 'current-run', 'awg', 1, 2), true)
+  assert.equal(matchingProbeProgress(value, 'previous-run', 'awg', 1, 2), false)
+  assert.equal(matchingProbeProgress(value, 'current-run', 'vless', 1, 2), false)
+  assert.equal(matchingProbeProgress(value, 'current-run', 'awg', 3, 2), false)
+  assert.equal(matchingProbeProgress(value, 'current-run', 'awg', 1, 3), false)
+})
+
+test('late older snapshots and running snapshots after completion cannot regress progress', () => {
+  const value = progress()
+  assert.equal(newerProbeProgress(value, { ...value, updated_at: '2026-01-01T00:00:04Z' }), value)
+  const done = { ...value, status: 'done' as const }
+  assert.equal(newerProbeProgress(done, { ...value, updated_at: '2026-01-01T00:00:06Z' }), done)
+  assert.equal(newerProbeProgress({ ...value, updated_at: '' }, value), value)
+})
+
+test('elapsed starts only after the server starts and freezes at its terminal timestamp', () => {
+  const value = progress()
+  const now = Date.parse('2026-01-01T00:00:12Z')
+  assert.equal(progressElapsed(value.sides.entry, now), null)
+  assert.equal(progressElapsed(value.sides.exit, now), 12)
+  assert.equal(progressElapsed({ ...value.sides.exit, status: 'done' }, now), 5)
+  assert.equal(progressElapsed({ ...value.sides.exit, status: 'error' }, now), 5)
+  assert.equal(progressElapsed({ ...value.sides.exit, started_at: 'invalid' }, now), null)
 })

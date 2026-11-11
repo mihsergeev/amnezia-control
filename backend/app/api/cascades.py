@@ -10,6 +10,7 @@ from contextlib import asynccontextmanager, nullcontext
 from datetime import datetime, timedelta, timezone
 from functools import wraps
 from typing import Annotated
+from uuid import UUID
 
 import asyncssh
 from fastapi import APIRouter, HTTPException, Query, Request, status
@@ -18,7 +19,7 @@ from sqlalchemy import select
 
 from app import (
     audit, cascade, cascade_awg, cascade_exit, cascade_lock, cascade_observations,
-    cascade_probe, cascade_recovery, cascadejob, deploy, geo, nodelock, server_ops,
+    cascade_probe, cascade_progress, cascade_recovery, cascadejob, deploy, geo, nodelock, server_ops,
 )
 from app.cascade_routes import Route, RouteUpdate, update_script
 from app.conflict import conflict
@@ -35,6 +36,7 @@ from app.schemas import (
     CascadeProbeOut,
     CascadeTransportProbe,
     CascadeTransportProbeOut,
+    CascadeTransportProgressOut,
 )
 
 router = APIRouter(prefix="/cascades", tags=["cascades"])
@@ -90,13 +92,22 @@ def _locked(server: Server):
 
 
 @asynccontextmanager
-async def _locked_pair(entry: Server, exit_: Server):
+async def _locked_pair(entry: Server, exit_: Server, on_connect=None):
     """Обе ноды под блокировкой, всегда в порядке id: встречные пары A-B и B-A,
     взятые как вход-выход, ждали бы друг друга. Отдает (вход, выход)."""
     first, second = sorted((entry, exit_), key=lambda s: s.id)
-    async with _locked(first) as c1, _locked(second) as c2:
-        conns = {first.id: c1, second.id: c2}
-        yield conns[entry.id], conns[exit_.id]
+    def report(server, stage, status):
+        if on_connect:
+            on_connect("entry" if server.id == entry.id else "exit", stage, status)
+
+    report(first, "connecting", "running")
+    async with _locked(first) as c1:
+        report(first, "queued", "pending")
+        report(second, "connecting", "running")
+        async with _locked(second) as c2:
+            report(second, "queued", "pending")
+            conns = {first.id: c1, second.id: c2}
+            yield conns[entry.id], conns[exit_.id]
 
 
 async def _ipv4(host: str) -> str:
@@ -136,6 +147,7 @@ def _out(c: Cascade, entry: Server | None = None) -> CascadeOut:
         error=c.error,
         phase=phase,
         log=prog.get("log", ""),
+        progress=prog.get("sides", {}),
         entry_ip=params.get("entry_ip", ""),
         entry_country=params.get("entry_country", ""),
         exit_ip=params.get("exit_ip", ""),
@@ -262,16 +274,29 @@ async def probe(body: CascadePair, _: CurrentUser, session: SessionDep) -> Casca
     )
 
 
+@router.get("/probe-transport/{run_id}/progress", response_model=CascadeTransportProgressOut)
+async def probe_transport_progress(run_id: UUID, user: CurrentUser) -> dict:
+    return cascade_progress.snapshot(str(run_id), user.id)
+
+
 @router.post("/probe-transport", response_model=CascadeTransportProbeOut)
 async def probe_transport(
-    body: CascadeTransportProbe, request: Request, _: CurrentUser, session: SessionDep,
+    body: CascadeTransportProbe, request: Request, user: CurrentUser, session: SessionDep,
 ) -> CascadeTransportProbeOut:
     entry, exit_ = await _pair(body, session)
     first, second = sorted((entry.id, exit_.id))
+    run_id = str(body.run_id) if body.run_id else None
+    if run_id:
+        cascade_progress.start(run_id, user.id, entry.id, exit_.id, body.transport)
+
+    def report(side, stage, status="running"):
+        if run_id:
+            cascade_progress.event(run_id, side, stage, status)
+
     try:
         # A repeated click must not queue another expensive remote measurement.
         async with nodelock.hold("cascade", first, wait=0.1), nodelock.hold("cascade", second, wait=0.1):
-            async with _locked_pair(entry, exit_) as (ec, xc):
+            async with _locked_pair(entry, exit_, report) as (ec, xc):
                 await _ensure_free(session, entry, exit_)
                 entry_source, exit_ip = await _addresses(ec, entry, exit_)
                 entry_ip = await _ipv4(entry.host) or entry_source
@@ -286,10 +311,13 @@ async def probe_transport(
                     "entry_nat": cascade.behind_nat(await cascade._route_src(ec, exit_ip), entry_ip),
                     "exit_nat": cascade.behind_nat(await cascade._route_src(xc, entry_ip), exit_ip),
                 }
+                report("entry", "queued", "pending")
+                report("exit", "queued", "pending")
                 task = asyncio.create_task(cascade_probe.run(
                     xc, ec, entry_ip, exit_ip, body.transport, body.entry_port, body.exit_port,
                     entry_source_ip=entry_source, prepare_missing_image=body.prepare_missing_image,
                     reserved_exit_ports=_reserved_ports(await _siblings(session, exit_.id), body.transport),
+                    on_progress=report if run_id else None,
                 ))
                 try:
                     while not task.done():
@@ -311,7 +339,17 @@ async def probe_transport(
                         except asyncio.CancelledError:
                             pass
     except Exception as exc:  # noqa: BLE001
+        if run_id:
+            cascade_progress.finish(run_id, "cancelled" if isinstance(exc, HTTPException) and
+                                    exc.status_code == 499 else "error")
         raise _ssh_error(exc) from exc
+    except asyncio.CancelledError:
+        if run_id:
+            cascade_progress.finish(run_id, "cancelled")
+        raise
+    if run_id:
+        res["run_id"] = run_id
+        cascade_progress.finish(run_id, "done" if res.get("ok") is True else "error")
     country, org = exit_.country or "", ""
     try:
         found_country, org = await geo.ip_info(exit_ip)

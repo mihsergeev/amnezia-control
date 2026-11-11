@@ -4,6 +4,14 @@ All notable changes to Amnezia Control are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.84.43] - 2026-11-11
+
+- Redesign cascade setup with separate entry and exit progress, actual operation stages, elapsed time, and a clear indication of the failing endpoint. Support narrow screens and both themes.
+- Check only the selected transport on request instead of automatically running every transport check when opening the connection step.
+- Show image preparation and transport checks as distinct operations, with independent endpoint progress and an explicit action to prepare missing images.
+- Keep cascade installation running when the wizard is closed. Restore its current progress when reopened, and make detailed logs available without crowding the main view.
+- Protect progress polling with authenticated, user-scoped operation identifiers and bounded retention. Preserve temporary tunnel cleanup, cancellation handling, existing VPN configurations, and client credentials.
+
 ## [0.84.42] - 2026-11-11
 
 - Add an optional server name to cascade setup. When left blank, use the verified SSH hostname after a successful check, and resolve the country flag immediately.

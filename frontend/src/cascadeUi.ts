@@ -1,4 +1,4 @@
-import type { Cascade, CascadeEncryption, CascadeImageTransport, CascadeRoute, CascadeTransport, CascadeTransportProbe, Server } from './api'
+import type { Cascade, CascadeEncryption, CascadeImageTransport, CascadeProbeProgress, CascadeRoute, CascadeSideProgress, CascadeTransport, CascadeTransportProbe, Server } from './api'
 
 export const DEFAULT_CASCADE_TRANSPORT: CascadeTransport = 'awg'
 
@@ -76,7 +76,7 @@ export function formatProbeMetric(value: number, lang: string, kind: 'secs' | 'm
 
 export const PROBE_TRANSPORTS = ['awg', 'vless', 'gre'] as const
 export type TransportProbeRow = {
-  state: 'queued' | 'running' | 'preparing' | 'done' | 'error' | 'unavailable'
+  state: 'idle' | 'queued' | 'running' | 'preparing' | 'done' | 'error' | 'unavailable'
   result: CascadeTransportProbe | null
   error: string
 }
@@ -86,9 +86,31 @@ export function queuedProbeRows(): TransportProbeRows {
   return Object.fromEntries(PROBE_TRANSPORTS.map(k => [k, { state: 'queued', result: null, error: '' }])) as TransportProbeRows
 }
 
+export function idleProbeRows(): TransportProbeRows {
+  return Object.fromEntries(PROBE_TRANSPORTS.map(k => [k, { state: 'idle', result: null, error: '' }])) as TransportProbeRows
+}
+
+export function matchingProbeProgress(progress: CascadeProbeProgress, runId: string, transport: CascadeTransport, entryId: number, exitId: number): boolean {
+  return progress.run_id === runId && progress.transport === transport && progress.entry_server_id === entryId && progress.exit_server_id === exitId
+}
+
+export function newerProbeProgress(current: CascadeProbeProgress | null, next: CascadeProbeProgress): CascadeProbeProgress {
+  if (!current || current.run_id !== next.run_id) return next
+  if (current.status !== 'running' && next.status === 'running') return current
+  if (!Number.isFinite(Date.parse(current.updated_at))) return next
+  return Date.parse(next.updated_at) >= Date.parse(current.updated_at) ? next : current
+}
+
+export function progressElapsed(side: CascadeSideProgress | undefined, now: number): number | null {
+  if (!side?.started_at) return null
+  const start = Date.parse(side.started_at)
+  const end = side.status === 'running' ? now : Date.parse(side.updated_at ?? '')
+  return Number.isFinite(start) && Number.isFinite(end) ? Math.max(0, Math.floor((end - start) / 1000)) : null
+}
+
 export function probeRowTone(row: TransportProbeRow): 'ok' | 'bad' | 'run' | 'muted' {
   if (row.state === 'running' || row.state === 'preparing') return 'run'
-  if (row.state === 'unavailable' || row.state === 'queued') return 'muted'
+  if (row.state === 'unavailable' || row.state === 'queued' || row.state === 'idle') return 'muted'
   if (row.state === 'error') return 'bad'
   return row.result?.status === 'ok' && row.result.ok === true ? 'ok' : 'bad'
 }
@@ -101,8 +123,9 @@ export async function runTransportProbes(
   signal: AbortSignal,
   errorText: (error: unknown) => string,
   prepareTransport?: CascadeImageTransport,
+  selectedTransport?: CascadeTransport,
 ): Promise<void> {
-  for (const transport of prepareTransport ? [prepareTransport] : PROBE_TRANSPORTS) {
+  for (const transport of prepareTransport ? [prepareTransport] : selectedTransport ? [selectedTransport] : PROBE_TRANSPORTS) {
     if (signal.aborted) return
     update(transport, { state: prepareTransport ? 'preparing' : 'running', result: null, error: '' })
     try {

@@ -15,7 +15,7 @@ from datetime import datetime, timezone
 
 from fastapi import HTTPException
 
-from app import alerts, cascade, cascade_exit, cascade_lock, deploy, geo, nodelock, server_ops, sshops
+from app import alerts, cascade, cascade_exit, cascade_lock, cascade_progress, deploy, geo, nodelock, server_ops, sshops
 from app.config import get_settings
 from app import debug_context
 from app.models import Cascade, Server
@@ -28,7 +28,7 @@ _POLL_SECONDS = 4
 _MAX_SECONDS = 20 * 60
 
 _tasks: dict[int, asyncio.Task] = {}
-# id каскада -> {"phase": exit|entry, "log": ...}, только пока идет установка
+# id каскада -> текущая фаза, лог и отдельные реальные этапы двух сторон
 _progress: dict[int, dict] = {}
 
 PHASE_LABEL = {"exit": "выход", "entry": "вход"}
@@ -41,6 +41,12 @@ def running(cascade_id: int) -> bool:
 
 def progress(cascade_id: int) -> dict:
     return _progress.get(cascade_id, {})
+
+
+def _side_progress(cid: int, phase: str, stage: str, status: str = "running") -> None:
+    item = _progress.setdefault(cid, {"phase": "", "log": "", "sides": cascade_progress.pending()})
+    sides = item.setdefault("sides", cascade_progress.pending())
+    cascade_progress.update(sides, phase, stage, status)
 
 
 def connect(server: Server, settings=None):
@@ -70,7 +76,8 @@ async def _side(
     await debug_context.arecord(operation="cascade", level="info", code="started",
                          server_id=server.id, stage=phase)
     logs[phase] = (server.name, "")
-    _progress[cid] = {"phase": phase, "log": _joined(logs)}
+    _side_progress(cid, phase, "connecting")
+    _progress[cid].update(phase=phase, log=_joined(logs))
     # шаг SSH без своего срока: зависшая нода иначе держала бы установку вечно
     step = max(settings.ssh_connect_timeout * 4, 30)
     async with asyncio.timeout(step), connect(server, settings) as conn:
@@ -78,9 +85,11 @@ async def _side(
             generation = secrets.token_hex(16)
             armed = await conn.run(cascade_lock.arm_command(cid, owner, generation), check=False, timeout=20)
             if armed.exit_status != 0 or "CASCADE_OPERATION_ARMED" not in (armed.stdout or ""):
+                _side_progress(cid, phase, "failed", "error")
                 return "error", "DEPLOY_ERROR: previous cascade operation is still active or ownership is unknown"
             script = cascade_lock.wrap(cid, script, owner, generation=generation)
         await deploy.launch(conn, script, tag=tag or cascade.TAG)
+        _side_progress(cid, phase, "installing")
     st: dict = {"state": "unknown", "log": ""}
     reported_poll_error = False
     try:
@@ -97,14 +106,18 @@ async def _side(
                         reported_poll_error = True
                     continue
                 logs[phase] = (server.name, st.get("log", ""))
-                _progress[cid] = {"phase": phase, "log": _joined(logs)}
+                _progress[cid].update(phase=phase, log=_joined(logs))
+                _side_progress(cid, phase, "installing")
                 if st.get("state") in ("done", "error"):
+                    _side_progress(cid, phase, "completed" if st["state"] == "done" else "failed",
+                                   "done" if st["state"] == "done" else "error")
                     if st["state"] == "done":
                         await debug_context.arecord(operation="cascade", level="info", code="completed",
                                              server_id=server.id, stage=phase)
                     return st["state"], st.get("log", "")
     except TimeoutError:
         await debug_context.arecord(operation="cascade", code="timeout", server_id=server.id, stage=phase)
+    _side_progress(cid, phase, "failed", "error")
     return "error", st.get("log", "") + "\nDEPLOY_ERROR: не дождался конца установки"
 
 
@@ -157,6 +170,7 @@ async def _run_locked(cid: int, factory, settings) -> None:
         return
     country = await _entry_country(entry, params)
     if not country:
+        _side_progress(cid, "entry", "failed", "error")
         await _finish(factory, cid, "error",
                       "Не удалось определить страну входа. Укажите ее вручную и повторите установку.",
                       "", {"error_code": "cascade_entry_country_unknown"})
@@ -182,6 +196,7 @@ async def _run_locked(cid: int, factory, settings) -> None:
                                       tag=f"{cascade.TAG}-{cid}" if cascade_exit.scoped(params) else None,
                                       owner=params["runtime_owner"] if cascade_exit.scoped(params) else "")
         except Exception as exc:  # noqa: BLE001 — SSH при запуске
+            _side_progress(cid, phase, "failed", "error")
             await debug_context.arecord(operation="cascade", protocol=transport, exc=exc,
                                         server_id=server.id, stage=phase)
             state, tail = "error", f"DEPLOY_ERROR: SSH: {exc or type(exc).__name__}"
@@ -257,7 +272,10 @@ async def _finish(factory, cid: int, status: str, error: str, text: str, result:
                 c.result = json.dumps(result)
             await session.commit()
     # последний лог оставляем: мастер покажет его на шаге «Готово» или при ошибке
-    _progress[cid] = {"phase": result.get("failed_phase", ""), "log": text}
+    if status == "error" and result.get("failed_phase"):
+        _side_progress(cid, result["failed_phase"], "failed", "error")
+    item = _progress.setdefault(cid, {"sides": cascade_progress.pending()})
+    item.update(phase=result.get("failed_phase", ""), log=text)
     await debug_context.arecord(operation="cascade", **metadata, level="error" if status == "error" else "info",
                          code=None if status == "error" else "completed", text=error + "\n" + text,
                          stage=result.get("failed_phase") or "completed")
@@ -267,7 +285,7 @@ def spawn(app, cascade_id: int) -> None:
     factory = getattr(app.state, "session_factory", None)
     if factory is None or running(cascade_id):
         return
-    _progress[cascade_id] = {"phase": "exit", "log": ""}
+    _progress[cascade_id] = {"phase": "exit", "log": "", "sides": cascade_progress.pending()}
     with debug_context.bind(store=getattr(app.state, "debug_logs", None), operation="cascade"):
         task = asyncio.create_task(_run(cascade_id, factory, get_settings()))
     _tasks[cascade_id] = task

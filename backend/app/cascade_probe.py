@@ -6,6 +6,7 @@ import json
 import secrets
 import shlex
 import uuid
+from collections.abc import Callable
 
 from app import cascade, cascade_awg, deploy
 
@@ -405,6 +406,13 @@ class Stopped(Exception): pass
 def stop(*args):
     raise Stopped()
 
+def progress(stage):
+    try:
+        print(json.dumps({'stage':stage}),flush=True)
+    except (OSError,ValueError):
+        # Progress cannot interrupt cleanup when the caller's SSH channel dies.
+        pass
+
 def prepare(config):
     if not shutil.which('docker'):
         return 6
@@ -457,15 +465,18 @@ def locked_prepare(config):
 
     status=0
     try:
+        progress('checking_image')
         image,_=local_image(config['images'],config['xray_version'],command,check_legacy_xray)
         if image is None:
             status=2
             if config['build_script']:
+                progress('building_image')
                 build=tempfile.TemporaryDirectory(prefix='acontrol-probe-build-',dir='/run')
                 builder_used=True
                 env=dict(os.environ,BUILD=build.name,BUILDER=name,BUILDER_LABEL=label)
                 status=2 if command(['bash','-c',config['build_script']],False,env).returncode else 0
             else:
+                progress('pulling_image')
                 status=2 if command(['docker','pull',config['images'][0]],False).returncode else 0
     except Stopped:
         status=7
@@ -474,6 +485,7 @@ def locked_prepare(config):
     except (Unavailable,OSError,ValueError,KeyError,IndexError):
         status=6
     finally:
+        progress('cleanup')
         if builder_used:
             # A killed Docker client can leave a daemon-side build container.
             # Only containers carrying this invocation's random label are ours.
@@ -534,8 +546,8 @@ async def _stop_preparation(process) -> None:
         process.close()
 
 
-async def _prepare(conn, config: dict) -> int:
-    command = "sudo -n python3 -c " + shlex.quote(PREPARE_WORKER) + " " + shlex.quote(json.dumps(config))
+async def _prepare(conn, config: dict, on_stage: Callable[[str], None] | None = None) -> int:
+    command = "sudo -n python3 -u -c " + shlex.quote(PREPARE_WORKER) + " " + shlex.quote(json.dumps(config))
     opening = asyncio.ensure_future(asyncio.wait_for(conn.create_process(command), timeout=10))
     try:
         process = await asyncio.shield(opening)
@@ -547,11 +559,30 @@ async def _prepare(conn, config: dict) -> int:
         else:
             await _stop_preparation(process)
         raise
+    async def read_stages():
+        # The worker emits only these fixed names. Never forward remote output.
+        for _ in range(16):
+            line = await process.stdout.readline()
+            if not line:
+                return
+            try:
+                stage = json.loads(line).get("stage")
+            except (ValueError, AttributeError, TypeError):
+                continue
+            if isinstance(stage, str) and stage in {"checking_image", "building_image", "pulling_image", "cleanup"}:
+                on_stage(stage)
+
+    reader = asyncio.create_task(read_stages()) if on_stage else None
     try:
         await asyncio.wait_for(process.wait_closed(), timeout=PREPARE_SECONDS + 15)
     except (asyncio.CancelledError, TimeoutError):
         await _stop_preparation(process)
         raise
+    finally:
+        if reader:
+            if not reader.done():
+                reader.cancel()
+            await asyncio.gather(reader, return_exceptions=True)
     return process.exit_status
 
 
@@ -665,7 +696,8 @@ async def _close(process) -> bool:
 async def run(exit_conn, entry_conn, entry_ip: str, exit_ip: str, transport: str,
               entry_port: int | None = None, exit_port: int | None = None,
               entry_source_ip: str | None = None, *, prepare_missing_image: bool = False,
-              reserved_exit_ports=()) -> dict:
+              reserved_exit_ports=(),
+              on_progress: Callable[[str, str, str], None] | None = None) -> dict:
     """One measurement with two independently expiring remote leases."""
     if transport not in {"awg", "vless", "gre"}:
         raise ValueError("Unknown transport")
@@ -690,22 +722,49 @@ async def run(exit_conn, entry_conn, entry_ip: str, exit_ip: str, transport: str
               "bytes": 0, "secs": None, "mbps": None, "error": "Проверка не запущена"}
     cleanup_failed = []
     starting_role = "exit"
+    transferring = cancelled = False
+
+    def report(role, stage, status="running"):
+        if on_progress:
+            on_progress(role, stage, status)
+
     try:
         if transport != "gre":
+            starting_role = "entry"
+            report("entry", "preparing")
             protocol = "udp" if transport == "awg" else "tcp"
             entry_port = await _port(entry_conn, entry_port if transport == "awg" else None, protocol,
                                      cascade_awg.PORTS if transport == "awg" else ())
+            report("entry", "queued", "pending")
+            starting_role = "exit"
+            report("exit", "preparing")
             exit_port = await _port(exit_conn, exit_port if transport == "awg" else None, protocol,
                                     cascade.VLESS_PORTS if transport == "vless" else cascade_awg.PORTS,
                                     reserved_exit_ports)
+            report("exit", "queued", "pending")
         if prepare_missing_image:
             prepare_config = _prepare_config(transport, images, xray_version)
-            statuses = await asyncio.gather(_prepare(exit_conn, prepare_config), _prepare(entry_conn, prepare_config),
-                                            return_exceptions=True)
+
+            async def prepare_side(role, conn):
+                report(role, "checking_image")
+                try:
+                    if on_progress:
+                        code = await _prepare(conn, prepare_config, lambda stage: report(role, stage))
+                    else:
+                        code = await _prepare(conn, prepare_config)
+                except Exception:
+                    report(role, "failed", "error")
+                    raise
+                report(role, "ready" if code == 0 else "failed", "running" if code == 0 else "error")
+                return code
+
+            statuses = await asyncio.gather(prepare_side("exit", exit_conn), prepare_side("entry", entry_conn),
+                                           return_exceptions=True)
             codes = [status if isinstance(status, int) else 3 if isinstance(status, TimeoutError) else 6
                      for status in statuses]
             code = 4 if 4 in codes else next((code for code in codes if code != 0), 0)
             if code != 0:
+                result["failed_side"] = "exit" if codes[0] == code else "entry"
                 result["error"], result["reason"] = PREPARE_ERRORS.get(code, PREPARE_ERRORS[6])
                 if code == 4:
                     result.update(status="failed", ok=False)
@@ -742,18 +801,26 @@ async def run(exit_conn, entry_conn, entry_ip: str, exit_ip: str, transport: str
                 cfg["xray_config"] = exit_config if role == "exit" else entry_config
                 cfg["peer_port"] = exit_port if role == "entry" else entry_port
             configs.append(cfg)
+        starting_role = "exit"
+        report("exit", "preparing")
         exit_process = await _start(exit_conn, configs[0]); processes.append(("exit", exit_process))
         ready = await _event(exit_process)
         if ready.get("event") != "ready":
+            result["failed_side"] = "exit"
+            report("exit", "failed", "error")
             result["error"] = REASONS.get(ready.get("error"), "Выход не готов к проверке")
             if ready.get("error") == LOCAL_IMAGE_MISSING:
                 result["reason"] = LOCAL_IMAGE_MISSING
             return result
         configs[1]["receiver_port"] = ready["receiver_port"]
+        report("exit", "ready")
         starting_role = "entry"
+        report("entry", "preparing")
         entry_process = await _start(entry_conn, configs[1]); processes.append(("entry", entry_process))
         ready = await _event(entry_process)
         if ready.get("event") != "ready":
+            result["failed_side"] = "entry"
+            report("entry", "failed", "error")
             result["error"] = REASONS.get(ready.get("error"), "Вход не готов к проверке")
             if ready.get("error") == LOCAL_IMAGE_MISSING:
                 result["reason"] = LOCAL_IMAGE_MISSING
@@ -761,6 +828,10 @@ async def run(exit_conn, entry_conn, entry_ip: str, exit_ip: str, transport: str
         if transport == "vless": result["prerequisite_tcp"] = ready.get("prerequisite_tcp")
         if result.get("prerequisite_tcp") and result["prerequisite_tcp"].get("error"):
             result["prerequisite_tcp"]["error"] = "Не удалось подключиться к TCP-порту VLESS"
+        report("entry", "ready")
+        report("exit", "transferring")
+        report("entry", "transferring")
+        transferring = True
         exit_process.stdin.write("go\n")
         entry_process.stdin.write("go\n")
         sent, received = await asyncio.gather(_event(entry_process), _event(exit_process))
@@ -773,8 +844,17 @@ async def run(exit_conn, entry_conn, entry_ip: str, exit_ip: str, transport: str
         result["error"] = str(exc)
     except (OSError, ValueError, RuntimeError, TimeoutError):
         result["error"] = "Не удалось подготовить или завершить временную проверку"
+    except asyncio.CancelledError:
+        cancelled = True
+        for role in ("entry", "exit"):
+            report(role, "cancelled", "error")
+        raise
     finally:
+        if not transferring and not cancelled and result.get("ok") is not True and not result.get("failed_side"):
+            result["failed_side"] = starting_role
         if processes:
+            for role, _ in processes:
+                report(role, "cleanup", "error" if role == result.get("failed_side") else "running")
             cleanup = asyncio.gather(*(_close(process) for _, process in processes))
             try:
                 confirmed = await asyncio.shield(cleanup)
@@ -782,6 +862,11 @@ async def run(exit_conn, entry_conn, entry_ip: str, exit_ip: str, transport: str
                 await cleanup
                 raise
             cleanup_failed.extend(role for (role, _), ok in zip(processes, confirmed) if not ok)
+            for (role, _), ok in zip(processes, confirmed):
+                failed = (cancelled or not ok or role == result.get("failed_side") or
+                          result.get("status") == "failed" or transferring and result.get("ok") is not True)
+                report(role, "cancelled" if cancelled else "failed" if failed else "completed",
+                       "error" if failed else "done")
         if cleanup_failed:
             result.update(status="failed", transfer_ok=result["ok"], ok=False, reason=None,
                           cleanup_failed=cleanup_failed, error=result["error"] or CLEANUP_ERROR)

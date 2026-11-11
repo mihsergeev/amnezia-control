@@ -318,6 +318,45 @@ async def test_install_wait_includes_unresponsive_ssh_poll(monkeypatch):
     assert result == "error" and "не дождался конца установки" in log
 
 
+async def test_install_progress_tracks_real_launch_and_completed_peer(monkeypatch):
+    launching, release = asyncio.Event(), asyncio.Event()
+
+    @asynccontextmanager
+    async def connect(*args):
+        yield object()
+
+    async def launch(*args, **kwargs):
+        launching.set()
+        await release.wait()
+
+    states = iter(["done", "error"])
+    snapshots = []
+
+    async def read_status(*args, **kwargs):
+        snapshots.append(json.loads(json.dumps(cascadejob.progress(1))))
+        return {"state": next(states), "log": "synthetic result"}
+
+    monkeypatch.setattr(cascadejob, "connect", connect)
+    monkeypatch.setattr(cascadejob, "_progress", {})
+    monkeypatch.setattr(cascadejob, "_POLL_SECONDS", 0)
+    monkeypatch.setattr(cascadejob.deploy, "launch", launch)
+    monkeypatch.setattr(cascadejob.deploy, "read_status", read_status)
+    logs, settings = {}, SimpleNamespace(ssh_connect_timeout=10)
+    task = asyncio.create_task(cascadejob._side(1, "exit", Server(name="exit"), "", logs, settings))
+    await asyncio.wait_for(launching.wait(), timeout=2)
+    snapshot = cascadejob.progress(1)["sides"]
+    assert snapshot["exit"]["stage"] == "connecting"
+    assert snapshot["exit"]["started_at"]
+    assert snapshot["entry"]["status"] == "pending" and snapshot["entry"]["started_at"] is None
+    release.set()
+    assert (await task)[0] == "done"
+    assert snapshots[0]["sides"]["exit"]["stage"] == "installing"
+    await cascadejob._side(1, "entry", Server(name="entry"), "", logs, settings)
+    snapshot = cascadejob.progress(1)["sides"]
+    assert snapshot["exit"]["status"] == "done"
+    assert snapshot["entry"]["stage"] == "failed" and snapshot["entry"]["status"] == "error"
+
+
 @pytest.mark.parametrize(("cached_country", "explicit_country", "entry_ip", "lookup_ip"), [
     ("", "", VLESS["entry_ip"], "entry.example.com"),
     ("", "", "1.1.1.1", "1.1.1.1"),
