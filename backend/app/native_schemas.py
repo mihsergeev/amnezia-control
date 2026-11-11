@@ -6,13 +6,15 @@ from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
+from app.metadata_schemas import ClientLabels
+
 
 class NativeDeployRequest(BaseModel):
     port: int | None = Field(default=None, ge=1, le=65535)
     transport: Literal["udp", "tcp"] = "udp"
 
 
-class NativeCreateRequest(BaseModel):
+class NativeCreateRequest(ClientLabels):
     name: str = Field(min_length=1, max_length=128)
     note: str = Field(default="", max_length=512)
     expires_at: datetime | None = None

@@ -127,6 +127,8 @@ async def _revoker(conn, server: Server, protocol: str):
 
 
 async def cleanup_client_db(session: AsyncSession, server_id, protocol, client_id) -> None:
+    from app import client_metadata
+    await client_metadata.clear(session, server_id, protocol, client_id)
     await bulk_issue_state.cancel_clients(session, server_id, protocol, [client_id])
     if protocol in native_vpn.PROTOCOLS:
         await session.execute(delete(NativeVpnConfig).where(

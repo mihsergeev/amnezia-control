@@ -90,6 +90,10 @@ def _jsonable(value):
 def _coerce_row(model, row: dict) -> dict:
     """Значения из JSON — к типам колонок: даты приезжают ISO-строками, а
     SQLAlchemy ждёт datetime (иначе вставка падает уже на приёме)."""
+    if model.__tablename__ == "client_metadata":
+        from app.metadata_schemas import ClientMetadataRequest
+        clean = ClientMetadataRequest.model_validate(row).model_dump()
+        row = {**row, **clean}
     out = {}
     for col in model.__table__.columns:
         if col.name not in row:

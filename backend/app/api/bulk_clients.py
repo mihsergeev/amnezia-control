@@ -18,7 +18,7 @@ from app.bulk_schemas import ExportProtocol, ExportRequest, IssueProtocol, Issue
 from app.config import get_settings
 from app.deps import CurrentUser, SessionDep
 from app.models import (
-    AuditLog, AwgConfig, AwgNote, BulkClientIssue, ClientLimit, ClientName,
+    AuditLog, AwgConfig, AwgNote, ClientMetadata, BulkClientIssue, ClientLimit, ClientName,
     NativeVpnConfig, OvpnConfig, PausedClient, Server,
 )
 from app.schemas import RevokeBulkResult, RevokeBulkResultItem
@@ -318,6 +318,7 @@ async def _xray_revoke_metadata_ids(session, server_id: int, ids: list[str]) -> 
     stored_ids = await session.scalars(union(*(
         select(column).where(model.server_id == server_id, model.protocol == "xray")
         for model, column in (
+            (ClientMetadata, ClientMetadata.client_id),
             (AwgNote, AwgNote.public_key), (ClientLimit, ClientLimit.client_id),
             (ClientName, ClientName.client_id), (PausedClient, PausedClient.client_id),
         )

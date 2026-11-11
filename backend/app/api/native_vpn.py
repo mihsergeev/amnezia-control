@@ -7,7 +7,7 @@ from contextlib import asynccontextmanager
 from fastapi import APIRouter, HTTPException, Request, status
 from sqlalchemy import delete, select
 
-from app import audit, bulk_issue_state, client_endpoint, deploy, deploywatch, expiry, limits, native_deploy, native_snapshots, native_vpn, nodelock, notes, pausestore, sshops
+from app import client_metadata, audit, bulk_issue_state, client_endpoint, deploy, deploywatch, expiry, limits, native_deploy, native_snapshots, native_vpn, nodelock, notes, pausestore, sshops
 from app.config import get_settings
 from app.deps import CurrentUser, SessionDep
 from app.models import NativeVpnConfig, Server
@@ -118,6 +118,7 @@ def build_router(protocol: str) -> APIRouter:
             cid = client[key]
             client.update(has_config=cid in stored, note=note_map.get(cid, ""),
                           expires_at=limit_map.get(cid), paused=cid in paused)
+        await client_metadata.enrich(session, server_id, protocol, result["clients"])
         result["format"] = "wireguard" if protocol == "wireguard" else "openvpn"
         result["capabilities"] = {"native_config": True, "amnezia_export": False,
             "pause": True, "reissue": True, "notes": True, "limits": True,
@@ -145,11 +146,12 @@ def build_router(protocol: str) -> APIRouter:
             await notes.set_note(session, server_id, protocol, cid, body.note)
         if body.expires_at:
             await limits.set_limit(session, server_id, protocol, cid, body.name, body.expires_at)
+        await client_metadata.set_labels(session, server_id, protocol, cid, body.group_name, body.device_name)
         await session.commit()
         await audit.record(session, user.username, f"{protocol}_issue", server.name, body.name)
         config = client_endpoint.peer_config(config, endpoint)
         return export(protocol, body.name, config, cid) | {"client": client | {
-            "has_config": True, "note": body.note, "expires_at": body.expires_at, "paused": False}}
+            "has_config": True, "note": body.note, "expires_at": body.expires_at, "paused": False, "group_name": body.group_name, "device_name": body.device_name}}
 
     @router.post("/config", response_model=NativeConfigResponse)
     async def config(server_id: int, body: NativeClientRequest, _: CurrentUser, session: SessionDep):
@@ -234,6 +236,7 @@ def build_router(protocol: str) -> APIRouter:
         cid = identifier(protocol, body)
         if cid in await pausestore.list_paused(session, server_id, protocol):
             raise HTTPException(409, "Сначала возобновите клиента или отзовите его")
+        old_labels = (await client_metadata.labels_map(session, server_id, protocol)).get(cid, {})
         old_note = (await notes.notes_map(session, server_id, protocol)).get(cid, "")
         old_limit = (await limits.limits_map(session, server_id, protocol)).get(cid)
         try:
@@ -254,6 +257,7 @@ def build_router(protocol: str) -> APIRouter:
         new_id = client["public_key" if protocol == "wireguard" else "client_id"]
         await expiry.cleanup_client_db(session, server_id, protocol, cid)
         await notes.clear_note(session, server_id, protocol, cid)
+        await client_metadata.set_labels(session, server_id, protocol, new_id, **old_labels)
         await store(session, server_id, protocol, new_id, target["name"], text)
         if old_note:
             await notes.set_note(session, server_id, protocol, new_id, old_note)
@@ -263,7 +267,7 @@ def build_router(protocol: str) -> APIRouter:
         await audit.record(session, user.username, f"{protocol}_reissue", server.name, target["name"])
         text = client_endpoint.peer_config(text, endpoint)
         return export(protocol, target["name"], text, new_id) | {"client": client | {
-            "has_config": True, "note": old_note, "expires_at": old_limit, "paused": False}}
+            "has_config": True, "note": old_note, "expires_at": old_limit, "paused": False, **old_labels}}
 
     async def install(server_id, body, user, session, request, updating=False):
         server = await server_or_404(session, server_id)

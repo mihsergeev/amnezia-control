@@ -11,11 +11,12 @@ from datetime import datetime
 
 from sqlalchemy import delete, select
 
-from app.models import AppSetting, AwgNote, ClientLimit, ClientName, NativeVpnConfig, PausedClient, Server
+from app.models import ClientMetadata, AppSetting, AwgNote, ClientLimit, ClientName, NativeVpnConfig, PausedClient, Server
 
 PROTOCOLS = ("wireguard", "openvpn-native")
 _SNAP_ID = re.compile(r"\d{8}-\d{6}\Z")
 _TABLES = {
+    "labels": (ClientMetadata, ("client_id", "group_name", "device_name")),
     "profiles": (NativeVpnConfig, ("client_id", "name", "config", "created_at")),
     "notes": (AwgNote, ("public_key", "note", "updated_at")),
     "limits": (ClientLimit, ("client_id", "name", "expires_at", "created_at")),
@@ -77,6 +78,8 @@ async def save(session, server, protocol: str, snapshot_id: str, listener: dict)
 
 def _validated_rows(manifest: dict) -> dict:
     raw = manifest.get("rows") if isinstance(manifest, dict) else None
+    if isinstance(raw, dict) and "labels" not in raw:
+        raw = {**raw, "labels": []}  # schema-1 archives before optional labels
     if not isinstance(raw, dict) or set(raw) != set(_TABLES):
         raise ValueError("Неполные метаданные снимка")
     parsed = {}
@@ -103,6 +106,12 @@ def _validated_rows(manifest: dict) -> dict:
                         raise ValueError("Повреждена дата снимка") from None
                 elif not isinstance(entry, str):
                     raise ValueError("Повреждены метаданные снимка")
+            if label == "labels":
+                from app.metadata_schemas import ClientLabels
+                try:
+                    ClientLabels(group_name=item["group_name"], device_name=item["device_name"])
+                except ValueError:
+                    raise ValueError("Invalid client display labels") from None
             identifier = item.get("client_id", item.get("public_key"))
             if not identifier or identifier in seen:
                 raise ValueError("Повреждены идентификаторы клиентов снимка")

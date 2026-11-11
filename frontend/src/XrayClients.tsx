@@ -14,7 +14,9 @@ import {
   type XrayVariant,
   type XrayVersion,
 } from './api'
-import { ExpiryCell, ExpirySelect } from './Expiry'
+import { ExpiryCell } from './Expiry'
+import { QuickIssueForm } from './QuickIssueForm'
+import { groupClients } from './clientGrouping'
 import { BulkRevokeBar, SelectAllCell, SelectCell } from './BulkActions'
 import { useSelection } from './useSelection'
 import { Menu } from './Menu'
@@ -80,14 +82,32 @@ export function XrayClients({
 
   const [addOpen, setAddOpen] = useState(false)
   const [newName, setNewName] = useState('')
+  const [newGroup, setNewGroup] = useState('')
+  const [newDevice, setNewDevice] = useState('')
+  const [grouped, setGrouped] = useState(false)
+  const [allColumns, setAllColumns] = useState(false)
+  const [metadataFor, setMetadataFor] = useState<XrayClient | null>(null)
+  const [savingMetadata, setSavingMetadata] = useState(false)
+  const savingMetadataRef = useRef(false)
   const [newExpiry, setNewExpiry] = useState<string | null>(null)
   const [creating, setCreating] = useState(false)
   // повторный Enter до ответа не выдает второго клиента (state обновится позже)
   const creatingRef = useRef(false)
 
+  const configGeneration = useRef(0)
+  useEffect(() => () => { configGeneration.current += 1 }, [])
+  const loadSeq = useRef(0)
+  useEffect(() => () => { loadSeq.current += 1 }, [])
+
   const [view, setView] = useState<ConfigView | null>(null)
-  // Escape в окне конфига закрывает его, а не все окно клиентов
-  useModalLayer(view !== null, () => setView(null))
+  const resultHeading = useRef<HTMLHeadingElement>(null)
+  useEffect(() => {
+    if (!view) return
+    resultHeading.current?.focus({ preventScroll: true })
+    resultHeading.current?.scrollIntoView({ block: 'nearest' })
+  }, [view])
+  // Escape скрывает готовый конфиг, сохраняя список клиентов
+  useModalLayer(view !== null, closeConfig)
   const [variantIdx, setVariantIdx] = useState(0)
   const [format, setFormat] = useState<ConfigFormat>('amnezia')
   const [statsFor, setStatsFor] = useState<{ id: string; name: string } | null>(
@@ -112,13 +132,16 @@ export function XrayClients({
 
   const load = useCallback(async () => {
     setLoading(true)
+    const seq = ++loadSeq.current
     try {
-      setState(await api<XrayState>(`/api/servers/${serverId}/xray`))
+      const result = await api<XrayState>(`/api/servers/${serverId}/xray`)
+      if (seq !== loadSeq.current) return
+      setState(result)
       setError(null)
     } catch (err) {
-      handleError(err)
+      if (seq === loadSeq.current) handleError(err)
     } finally {
-      setLoading(false)
+      if (seq === loadSeq.current) setLoading(false)
     }
   }, [serverId, handleError])
 
@@ -132,10 +155,32 @@ export function XrayClients({
       .catch(() => setVersion(null))
   }, [serverId])
 
+  function closeConfig() {
+    configGeneration.current += 1
+    setBusy(null)
+    setView(null)
+  }
+
   function showConfig(name: string, variants: XrayVariant[]) {
+    setMetadataFor(null)
+    setAddOpen(false)
     setView({ name, variants })
     setVariantIdx(0)
+    setFormat('amnezia')
     setCopied(false)
+  }
+
+  function openAdd() {
+    setMetadataFor(null)
+    configGeneration.current += 1
+    setBusy(null)
+    setView(null)
+    setError(null)
+    setNewName('')
+    setNewGroup('')
+    setNewDevice('')
+    setNewExpiry(null)
+    setAddOpen(true)
   }
 
   async function addClient() {
@@ -143,21 +188,23 @@ export function XrayClients({
     creatingRef.current = true
     setCreating(true)
     setError(null)
+    const generation = ++configGeneration.current
     try {
       const result = await api<XrayCreated>(
         `/api/servers/${serverId}/xray/clients`,
         {
           method: 'POST',
-          body: JSON.stringify({ name: newName.trim(), expires_at: newExpiry }),
+          body: JSON.stringify({ name: newName.trim(), expires_at: newExpiry, group_name: newGroup.trim(), device_name: newDevice.trim() }),
         },
       )
+      if (generation !== configGeneration.current) return
       setAddOpen(false)
       setNewName('')
       setNewExpiry(null)
       showConfig(result.client.name, variantsOf(result))
       await load()
     } catch (err) {
-      handleError(err)
+      if (generation === configGeneration.current) handleError(err)
     } finally {
       creatingRef.current = false
       setCreating(false)
@@ -167,16 +214,51 @@ export function XrayClients({
   async function viewConfig(clientId: string) {
     setBusy(clientId)
     setError(null)
+    const generation = ++configGeneration.current
     try {
       const result = await api<XrayConfig>(
         `/api/servers/${serverId}/xray/config`,
         { method: 'POST', body: JSON.stringify({ client_id: clientId }) },
       )
+      if (generation !== configGeneration.current) return
       showConfig(result.name, variantsOf(result))
     } catch (err) {
-      handleError(err)
+      if (generation === configGeneration.current) handleError(err)
     } finally {
-      setBusy(null)
+      if (generation === configGeneration.current) setBusy(null)
+    }
+  }
+
+  function editMetadata(client: XrayClient) {
+    configGeneration.current += 1
+    setView(null)
+    setAddOpen(false)
+    setError(null)
+    setNewGroup(client.group_name ?? '')
+    setNewDevice(client.device_name ?? '')
+    setMetadataFor(client)
+  }
+
+  async function saveMetadata() {
+    const client = metadataFor
+    if (!client || savingMetadataRef.current) return
+    savingMetadataRef.current = true
+    setSavingMetadata(true)
+    setError(null)
+    const generation = configGeneration.current
+    try {
+      await api<void>(`/api/servers/${serverId}/client-metadata`, {
+        method: 'POST',
+        body: JSON.stringify({ protocol: 'xray', client_id: client.client_id, group_name: newGroup.trim(), device_name: newDevice.trim() }),
+      })
+      if (generation !== configGeneration.current) return
+      setMetadataFor(null)
+      await load()
+    } catch (err) {
+      if (generation === configGeneration.current) handleError(err)
+    } finally {
+      savingMetadataRef.current = false
+      setSavingMetadata(false)
     }
   }
 
@@ -226,17 +308,19 @@ export function XrayClients({
       return
     setBusy(clientId)
     setError(null)
+    const generation = ++configGeneration.current
     try {
       const result = await api<XrayCreated>(
         `/api/servers/${serverId}/xray/reissue`,
         { method: 'POST', body: JSON.stringify({ client_id: clientId }) },
       )
+      if (generation !== configGeneration.current) return
       showConfig(result.client.name, variantsOf(result))
       await load()
     } catch (err) {
-      handleError(err)
+      if (generation === configGeneration.current) handleError(err)
     } finally {
-      setBusy(null)
+      if (generation === configGeneration.current) setBusy(null)
     }
   }
 
@@ -368,172 +452,15 @@ export function XrayClients({
         />
       )}
 
-      {state && !loading && (
-        <>
-          {addOpen ? (
-            <div className="add-form">
-              <input
-                autoFocus
-                placeholder={t('Имя клиента (например, phone-max)')}
-                value={newName}
-                onChange={(e) => setNewName(e.target.value)}
-                onKeyDown={(e) => e.key === 'Enter' && addClient()}
-              />
-              <label className="expiry-row">
-                <span className="muted small">{t('Срок действия:')}</span>
-                <ExpirySelect value={newExpiry} onChange={setNewExpiry} />
-              </label>
-              <div className="add-form-actions">
-                <button className="ghost" onClick={() => setAddOpen(false)}>
-                  {t('Отмена')}
-                </button>
-                <button onClick={addClient} disabled={creating || !newName.trim()}>
-                  {creating ? t('Создание…') : t('Создать конфиг')}
-                </button>
-              </div>
-            </div>
-          ) : (
-            <div className="toolbar">
-              <button
-                onClick={() => {
-                  setNewName('')
-                  setAddOpen(true)
-                }}
-              >
-                {t('+ Выдать конфиг')}
-              </button>
-            </div>
-          )}
-
-          <BulkRevokeBar
-            serverId={serverId}
-            serverName={serverName}
-            protocol="xray"
-            protocolLabel="XRay/REALITY"
-            sel={sel}
-            onDone={load}
-            onUnauthorized={onUnauthorized}
-          />
-
-          <div className="table-card">
-            {state.clients.length === 0 ? (
-              <p className="muted">{t('Клиентов пока нет.')}</p>
-            ) : (
-              <table>
-                <thead>
-                  <tr>
-                    <SelectAllCell sel={sel} />
-                    <th>{t('Имя')}</th>
-                    <th>{t('Создан')}</th>
-                    <th>{t('Трафик (↓ / ↑)')}</th>
-                    <th>{t('Срок')}</th>
-                    <th></th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {state.clients
-                    .filter((c) => !focusClient || c.client_id === focusClient)
-                    .map((c) => (
-                    <tr key={c.client_id}>
-                      <SelectCell sel={sel} id={c.client_id} />
-                      <td className="name-cell">
-                        <NoteCell
-                          name={c.paused ? `${c.name} ⏸` : c.name}
-                          note={c.note || ''}
-                          onSave={(note) => saveNote(c.client_id, note)}
-                        />
-                      </td>
-                      <td className="muted">{c.creation_date || '—'}</td>
-                      <td className="muted mono traffic-cell">
-                        <div>↓ {formatBytes(c.tx_bytes ?? 0)}</div>
-                        <div>↑ {formatBytes(c.rx_bytes ?? 0)}</div>
-                      </td>
-                      <td>
-                        <ExpiryCell
-                          value={c.expires_at}
-                          disabled={busy === c.client_id}
-                          onSave={(iso) => changeLimit(c.client_id, c.name, iso)}
-                        />
-                      </td>
-                      <td className="row-actions">
-                        {c.paused ? (
-                          <button
-                            disabled={busy === c.client_id}
-                            onClick={() => togglePause(c)}
-                            title={t('Вернуть клиента на сервер')}
-                          >
-                            {busy === c.client_id ? '…' : t('Возобновить')}
-                          </button>
-                        ) : (
-                          <button
-                            className="ghost"
-                            disabled={busy === c.client_id}
-                            onClick={() => viewConfig(c.client_id)}
-                          >
-                            {busy === c.client_id ? '…' : t('Конфиг')}
-                          </button>
-                        )}
-                        <Menu
-                          fixed
-                          align="right"
-                          className="ghost icon-btn"
-                          caret={false}
-                          title={t('Ещё')}
-                          label="⋯"
-                          items={
-                            c.paused
-                              ? [
-                                  {
-                                    label: t('Переименовать'),
-                                    onClick: () => rename(c.client_id, c.name),
-                                  },
-                                  {
-                                    label: t('Отозвать'),
-                                    danger: true,
-                                    onClick: () => revoke(c.client_id, c.name),
-                                  },
-                                ]
-                              : [
-                                  {
-                                    label: t('Перевыпустить'),
-                                    onClick: () => reissue(c.client_id, c.name),
-                                  },
-                                  {
-                                    label: t('Трафик клиента'),
-                                    onClick: () =>
-                                      setStatsFor({ id: c.client_id, name: c.name }),
-                                  },
-                                  {
-                                    label: t('Переименовать'),
-                                    onClick: () => rename(c.client_id, c.name),
-                                  },
-                                  {
-                                    label: t('Пауза'),
-                                    onClick: () => togglePause(c),
-                                  },
-                                  { divider: true },
-                                  {
-                                    label: t('Отозвать'),
-                                    danger: true,
-                                    onClick: () => revoke(c.client_id, c.name),
-                                  },
-                                ]
-                          }
-                        />
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            )}
-          </div>
-        </>
-      )}
+      {metadataFor && <QuickIssueForm metadataOnly name={metadataFor.name} onName={() => {}}
+        expiry={null} onExpiry={() => {}}
+        group={newGroup} onGroup={setNewGroup} device={newDevice} onDevice={setNewDevice}
+        creating={savingMetadata} onCreate={saveMetadata} onCancel={() => setMetadataFor(null)} />}
 
       {view && variant && (
-        <div className="modal-backdrop">
-          <div className="card modal modal-config" onClick={(e) => e.stopPropagation()}>
-            <h3>{t('Конфиг клиента «{name}»', { name: view.name })}</h3>
+        <section className="quick-issue-result" aria-label={t('Готовый конфиг')}>
+          <div className="quick-issue-result-content">
+            <h3 tabIndex={-1} ref={resultHeading}>{t('Конфиг клиента «{name}»', { name: view.name })}</h3>
             <div className="modal-config-body">
               {view.variants.length > 1 && (
                 <div className="tabs">
@@ -590,16 +517,17 @@ export function XrayClients({
 
               <div className="qr-wrap">
                 {format === 'uri' && variant.uri ? (
-                  <PlainQr text={variant.uri} />
+                  <PlainQr key={variant.uri} text={variant.uri} />
                 ) : (
-                  <AmneziaQr text={variant.amnezia} format="vpn" />
+                  <AmneziaQr key={variant.amnezia} text={variant.amnezia} format="vpn" />
                 )}
               </div>
               <pre className="script-box">{shownText}</pre>
               {shareLink.result}
             </div>
             <div className="modal-actions">
-              <button className="ghost" onClick={() => setView(null)}>
+              <button onClick={openAdd} disabled={creating}>{t('Создать следующего')}</button>
+              <button className="ghost" onClick={closeConfig}>
                 {t('Готово')}
               </button>
               <button className="ghost" onClick={downloadConfig}>
@@ -611,7 +539,167 @@ export function XrayClients({
               </button>
             </div>
           </div>
-        </div>
+        </section>
+      )}
+
+      {state && !loading && (
+        <>
+          {addOpen ? (
+            <QuickIssueForm name={newName} onName={setNewName}
+              expiry={newExpiry} onExpiry={setNewExpiry}
+              group={newGroup} onGroup={setNewGroup} device={newDevice} onDevice={setNewDevice}
+              creating={creating} onCreate={addClient} onCancel={() => setAddOpen(false)} />
+          ) : (
+            <div className="toolbar">
+              <button
+                onClick={openAdd}
+              >
+                {t('+ Выдать конфиг')}
+              </button>
+            </div>
+          )}
+
+          <label className="client-group-toggle small">
+            <input type="checkbox" checked={grouped} onChange={(event) => setGrouped(event.target.checked)} />
+            {t('Группировать по клиенту')}
+          </label>
+
+          <BulkRevokeBar
+            serverId={serverId}
+            serverName={serverName}
+            protocol="xray"
+            protocolLabel="XRay/REALITY"
+            sel={sel}
+            onDone={load}
+            onUnauthorized={onUnauthorized}
+          />
+
+          <details className="client-table-options">
+            <summary>{t('Столбцы таблицы')}</summary>
+            <label className="small"><input type="checkbox" checked={allColumns} onChange={(event) => setAllColumns(event.target.checked)} /> {t('Показать все столбцы')}</label>
+          </details>
+          <div className={`table-card client-table client-table-other${allColumns ? ' client-details-visible' : ''}`}>
+            {state.clients.length === 0 ? (
+              <p className="muted">{t('Клиентов пока нет.')}</p>
+            ) : (
+              <table>
+                <thead>
+                  <tr>
+                    <SelectAllCell sel={sel} />
+                    <th>{t('Имя')}</th>
+                    <th>{t('Создан')}</th>
+                    <th>{t('Трафик (↓ / ↑)')}</th>
+                    <th>{t('Срок')}</th>
+                    <th></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {groupClients(state.clients.filter((c) => !focusClient || c.client_id === focusClient), grouped)
+                    .map((c, index, rows) => (
+                    <tr key={`xray:${c.client_id}`}>
+                      <SelectCell sel={sel} id={c.client_id} />
+                      <td className="name-cell">
+                        {grouped && c.group_name && (index === 0 || rows[index - 1]?.group_name !== c.group_name) && <div className="client-group-heading">{c.group_name}</div>}
+                        {(c.group_name || c.device_name) && <div className="client-device-label muted small">{[!grouped && c.group_name, c.device_name].filter(Boolean).join(' · ')}</div>}
+                        <NoteCell
+                          name={c.paused ? `${c.name} ⏸` : c.name}
+                          note={c.note || ''}
+                          onSave={(note) => saveNote(c.client_id, note)}
+                        />
+                      </td>
+                      <td className="muted">{c.creation_date || '—'}</td>
+                      <td className="muted mono traffic-cell">
+                        <div>↓ {formatBytes(c.tx_bytes ?? 0)}</div>
+                        <div>↑ {formatBytes(c.rx_bytes ?? 0)}</div>
+                      </td>
+                      <td>
+                        <ExpiryCell
+                          value={c.expires_at}
+                          disabled={busy === c.client_id}
+                          onSave={(iso) => changeLimit(c.client_id, c.name, iso)}
+                        />
+                      </td>
+                      <td className="row-actions">
+                        {c.paused ? (
+                          <button
+                            disabled={busy === c.client_id}
+                            onClick={() => togglePause(c)}
+                            title={t('Вернуть клиента на сервер')}
+                          >
+                            {busy === c.client_id ? '…' : t('Возобновить')}
+                          </button>
+                        ) : (
+                          <button
+                            className="ghost"
+                            disabled={busy === c.client_id}
+                            onClick={() => viewConfig(c.client_id)}
+                          >
+                            {busy === c.client_id ? '…' : t('Конфиг')}
+                          </button>
+                        )}
+                        <Menu
+                          fixed
+                          align="right"
+                          className="ghost icon-btn"
+                          caret={false}
+                          title={t('Ещё')}
+                          label="⋯"
+                          items={
+                            c.paused
+                              ? [
+                                  {
+                                    label: t('Клиент и устройство'),
+                                    onClick: () => editMetadata(c),
+                                  },
+                                  {
+                                    label: t('Переименовать'),
+                                    onClick: () => rename(c.client_id, c.name),
+                                  },
+                                  {
+                                    label: t('Отозвать'),
+                                    danger: true,
+                                    onClick: () => revoke(c.client_id, c.name),
+                                  },
+                                ]
+                              : [
+                                  {
+                                    label: t('Перевыпустить'),
+                                    onClick: () => reissue(c.client_id, c.name),
+                                  },
+                                  {
+                                    label: t('Трафик клиента'),
+                                    onClick: () =>
+                                      setStatsFor({ id: c.client_id, name: c.name }),
+                                  },
+                                  {
+                                    label: t('Клиент и устройство'),
+                                    onClick: () => editMetadata(c),
+                                  },
+                                  {
+                                    label: t('Переименовать'),
+                                    onClick: () => rename(c.client_id, c.name),
+                                  },
+                                  {
+                                    label: t('Пауза'),
+                                    onClick: () => togglePause(c),
+                                  },
+                                  { divider: true },
+                                  {
+                                    label: t('Отозвать'),
+                                    danger: true,
+                                    onClick: () => revoke(c.client_id, c.name),
+                                  },
+                                ]
+                          }
+                        />
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+          </div>
+        </>
       )}
 
       {statsFor && (

@@ -139,6 +139,7 @@ async def remove(conn, protocol: str) -> RemoveResult:
 
 async def cleanup_db(session: AsyncSession, server_id: int, protocols: set[str]) -> None:
     """Стирает в панели все следы клиентов этих протоколов на сервере."""
+    from app.models import ClientMetadata
     for proto in protocols:
         await bulk_issue_state.cancel_protocol(session, server_id, proto)
         if proto in native_vpn.PROTOCOLS:
@@ -149,7 +150,7 @@ async def cleanup_db(session: AsyncSession, server_id: int, protocols: set[str])
                 AwgConfig.server_id == server_id, AwgConfig.protocol == proto))
         if proto == "openvpn":
             await session.execute(delete(OvpnConfig).where(OvpnConfig.server_id == server_id))
-        for model in (AwgNote, ClientLimit, ClientName, PausedClient, TorrentHit):
+        for model in (ClientMetadata, AwgNote, ClientLimit, ClientName, PausedClient, TorrentHit):
             await session.execute(delete(model).where(
                 model.server_id == server_id, model.protocol == proto))
 

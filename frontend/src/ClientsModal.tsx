@@ -23,7 +23,9 @@ import { RollbackMenu } from './RollbackMenu'
 import { OpenVpnClients } from './OpenVpnClients'
 import { XrayClients } from './XrayClients'
 import { AmneziaQr } from './AmneziaQr'
-import { ExpiryCell, ExpirySelect } from './Expiry'
+import { ExpiryCell } from './Expiry'
+import { QuickIssueForm } from './QuickIssueForm'
+import { groupClients } from './clientGrouping'
 import { ClientStatsModal } from './ClientStatsModal'
 import { BulkRevokeBar, SelectAllCell, SelectCell } from './BulkActions'
 import { BulkClientsModal } from './BulkClientsModal'
@@ -95,6 +97,13 @@ export function ClientsModal({
   const [clientListRevision, setClientListRevision] = useState(0)
   const [addOpen, setAddOpen] = useState(false)
   const [newName, setNewName] = useState('')
+  const [newGroup, setNewGroup] = useState('')
+  const [newDevice, setNewDevice] = useState('')
+  const [grouped, setGrouped] = useState(false)
+  const [allColumns, setAllColumns] = useState(false)
+  const [metadataFor, setMetadataFor] = useState<AwgClient | null>(null)
+  const [savingMetadata, setSavingMetadata] = useState(false)
+  const savingMetadataRef = useRef(false)
   const [newNote, setNewNote] = useState('')
   const [newExpiry, setNewExpiry] = useState<string | null>(null)
   const [creating, setCreating] = useState(false)
@@ -102,8 +111,14 @@ export function ClientsModal({
 
   const [statsFor, setStatsFor] = useState<AwgClient | null>(null)
   const [view, setView] = useState<ConfigView | null>(null)
-  // Escape в окне конфига закрывает его, а не все окно клиентов
-  useModalLayer(view !== null, () => setView(null))
+  const resultHeading = useRef<HTMLHeadingElement>(null)
+  useEffect(() => {
+    if (!view) return
+    resultHeading.current?.focus({ preventScroll: true })
+    resultHeading.current?.scrollIntoView({ block: 'nearest' })
+  }, [view])
+  // Escape скрывает готовый конфиг, сохраняя список клиентов
+  useModalLayer(view !== null, closeConfig)
   // по умолчанию открываем формат «Для приложения AmneziaVPN» (vpn://) — он нужен
   // чаще; .conf вторичен (для WireGuard/AmneziaWG-приложений)
   const [cfgFormat, setCfgFormat] = useState<CfgFormat>('amnezia')
@@ -180,7 +195,16 @@ export function ClientsModal({
     }
   }, [load, server.id, isAwg, proto])
 
+  function closeConfig() {
+    configGeneration.current += 1
+    setBusyKey(null)
+    setView(null)
+  }
+
   function showConfig(name: string, config: string, amnezia: string | undefined, filename?: string) {
+    setMetadataFor(null)
+    setAddOpen(false)
+    setQr(null)
     setView({ name, config, amnezia: amnezia || '', native: nativeWireguard, filename })
     setCfgFormat(nativeWireguard ? 'conf' : 'amnezia')
     setCopied(false)
@@ -213,6 +237,13 @@ export function ClientsModal({
   }, [view, cfgFormat])
 
   function openAdd() {
+    setMetadataFor(null)
+    configGeneration.current += 1
+    setBusyKey(null)
+    setView(null)
+    setError(null)
+    setNewGroup('')
+    setNewDevice('')
     setNewName('')
     setNewNote('')
     setNewExpiry(null)
@@ -224,7 +255,7 @@ export function ClientsModal({
     creatingRef.current = true
     setCreating(true)
     setError(null)
-    const generation = configGeneration.current
+    const generation = ++configGeneration.current
     try {
       const result = await api<CreatedClient | NativeCreatedClient<AwgClient>>(
         `/api/servers/${server.id}/${awgBase}/clients`,
@@ -232,6 +263,8 @@ export function ClientsModal({
           method: 'POST',
           body: JSON.stringify({
             name: newName.trim(),
+            group_name: newGroup.trim(),
+            device_name: newDevice.trim(),
             note: newNote.trim(),
             expires_at: newExpiry,
           }),
@@ -282,7 +315,7 @@ export function ClientsModal({
   async function viewConfig(client: AwgClient) {
     setBusyKey(client.public_key)
     setError(null)
-    const generation = configGeneration.current
+    const generation = ++configGeneration.current
     try {
       const result = await api<NativeClientConfig | {
         config: string
@@ -312,7 +345,7 @@ export function ClientsModal({
       return
     setBusyKey(client.public_key)
     setError(null)
-    const generation = configGeneration.current
+    const generation = ++configGeneration.current
     try {
       const result = await api<CreatedClient | NativeCreatedClient<AwgClient>>(
         `/api/servers/${server.id}/${awgBase}/reissue`,
@@ -347,6 +380,39 @@ export function ClientsModal({
       handleError(err)
     } finally {
       setBusyKey(null)
+    }
+  }
+
+  function editMetadata(client: AwgClient) {
+    configGeneration.current += 1
+    setView(null)
+    setAddOpen(false)
+    setError(null)
+    setNewGroup(client.group_name ?? '')
+    setNewDevice(client.device_name ?? '')
+    setMetadataFor(client)
+  }
+
+  async function saveMetadata() {
+    const client = metadataFor
+    if (!client || savingMetadataRef.current) return
+    savingMetadataRef.current = true
+    setSavingMetadata(true)
+    setError(null)
+    const generation = configGeneration.current
+    try {
+      await api<void>(`/api/servers/${server.id}/client-metadata`, {
+        method: 'POST',
+        body: JSON.stringify({ protocol: limitProto, client_id: client.public_key, group_name: newGroup.trim(), device_name: newDevice.trim() }),
+      })
+      if (generation !== configGeneration.current) return
+      setMetadataFor(null)
+      await loadRef.current()
+    } catch (err) {
+      if (generation === configGeneration.current) handleError(err)
+    } finally {
+      savingMetadataRef.current = false
+      setSavingMetadata(false)
     }
   }
 
@@ -428,7 +494,7 @@ export function ClientsModal({
       : q
       ? state.clients.filter(
           (c) =>
-            c.name.toLowerCase().includes(q) || c.address.toLowerCase().includes(q),
+            [c.name, c.address, c.group_name, c.device_name].some((value) => value?.toLowerCase().includes(q)),
         )
       : state.clients.slice()
     filtered.sort((a, b) => {
@@ -474,9 +540,11 @@ export function ClientsModal({
                   configGeneration.current += 1
                   setView(null)
                   setAddOpen(false)
+                  setMetadataFor(null)
                   setBusyKey(null)
                   setProto(p.key)
                   setFocus(null)
+                  sel.clear()
                 }}
               >
                 {p.label}
@@ -657,37 +725,82 @@ export function ClientsModal({
         {error && <p className="form-error">{error}</p>}
         {loading && <p className="muted">{t('загрузка…')}</p>}
 
+        {metadataFor && <QuickIssueForm metadataOnly name={metadataFor.name} onName={() => {}}
+          expiry={null} onExpiry={() => {}}
+          group={newGroup} onGroup={setNewGroup} device={newDevice} onDevice={setNewDevice}
+          creating={savingMetadata} onCreate={saveMetadata} onCancel={() => setMetadataFor(null)} />}
+
+        {view && (
+          <section className="quick-issue-result" aria-label={t('Готовый конфиг')}>
+            <div className="quick-issue-result-content">
+              <h3 tabIndex={-1} ref={resultHeading}>{t('Конфиг клиента «{name}»', { name: view.name })}</h3>
+              <div className="modal-config-body">
+
+              {!view.native && <div className="tabs">
+                <button
+                  className={cfgFormat === 'amnezia' ? 'tab tab-active' : 'tab'}
+                  onClick={() => {
+                    setCfgFormat('amnezia')
+                    setCopied(false)
+                  }}
+                >
+                  {t('Для приложения AmneziaVPN')}
+                </button>
+                <button
+                  className={cfgFormat === 'conf' ? 'tab tab-active' : 'tab'}
+                  onClick={() => {
+                    setCfgFormat('conf')
+                    setCopied(false)
+                  }}
+                >
+                  {t('AmneziaWG (.conf)')}
+                </button>
+              </div>}
+
+              <p className="muted small">
+                {view.native ? t('Обычная конфигурация WireGuard. Импортируйте .conf или отсканируйте QR в приложении WireGuard.') : cfgFormat === 'conf'
+                  ? t('Конфигурация для приложения AmneziaWG. Для обычного WireGuard используйте отдельный протокол WireGuard.')
+                  : t('Ссылка vpn:// — вставьте её в приложение AmneziaVPN («+» → вставить из буфера) или отсканируйте QR.')}
+              </p>
+
+              <div className="qr-wrap">
+                {!view.native && cfgFormat === 'amnezia' ? (
+                  <AmneziaQr key={view.amnezia} text={view.amnezia} format="vpn" />
+                ) : qr ? (
+                  <img src={qr} alt={t('QR конфига')} width={240} height={240} />
+                ) : (
+                  <span className="muted small">{t('генерация QR…')}</span>
+                )}
+              </div>
+              <pre className="script-box">{currentText}</pre>
+              {shareLink.result}
+              </div>
+              <div className="modal-actions">
+                <button onClick={openAdd} disabled={creating}>{t('Создать следующего')}</button>
+                <button className="ghost" onClick={closeConfig}>
+                  {t('Готово')}
+                </button>
+                <button className="ghost" onClick={downloadConfig}>
+                  {t('Скачать')} {view.native || cfgFormat === 'conf' ? '.conf' : '.txt'}
+                </button>
+                {shareLink.control}
+                <button onClick={copyConfig}>
+                  {copied ? t('Скопировано ✓') : t('Скопировать')}
+                </button>
+              </div>
+            </div>
+          </section>
+        )}
+
+        {addOpen && <QuickIssueForm name={newName} onName={setNewName}
+          expiry={newExpiry} onExpiry={setNewExpiry}
+          group={newGroup} onGroup={setNewGroup} device={newDevice} onDevice={setNewDevice}
+          note={newNote} onNote={setNewNote}
+          creating={creating} onCreate={addClient} onCancel={() => setAddOpen(false)} />}
+
         {state && !loading && (
           <>
-            {addOpen ? (
-              <div className="add-form">
-                <input
-                  autoFocus
-                  placeholder={t('Имя клиента (например, phone-max)')}
-                  value={newName}
-                  onChange={(e) => setNewName(e.target.value)}
-                  onKeyDown={(e) => e.key === 'Enter' && addClient()}
-                />
-                <input
-                  placeholder={t('Заметка (необязательно): кому выдан, устройство…')}
-                  value={newNote}
-                  onChange={(e) => setNewNote(e.target.value)}
-                  onKeyDown={(e) => e.key === 'Enter' && addClient()}
-                />
-                <label className="expiry-row">
-                  <span className="muted small">{t('Срок действия:')}</span>
-                  <ExpirySelect value={newExpiry} onChange={setNewExpiry} />
-                </label>
-                <div className="add-form-actions">
-                  <button className="ghost" onClick={() => setAddOpen(false)}>
-                    {t('Отмена')}
-                  </button>
-                  <button onClick={addClient} disabled={creating || !newName.trim()}>
-                    {creating ? t('Создание…') : t('Создать конфиг')}
-                  </button>
-                </div>
-              </div>
-            ) : (
+            {!addOpen && (
               <div className="toolbar">
                 <button onClick={openAdd}>{t('+ Выдать конфиг')}</button>
                 {state.clients.length > 0 && (
@@ -701,6 +814,11 @@ export function ClientsModal({
               </div>
             )}
 
+          <label className="client-group-toggle small">
+            <input type="checkbox" checked={grouped} onChange={(event) => setGrouped(event.target.checked)} />
+            {t('Группировать по клиенту')}
+          </label>
+
             <BulkRevokeBar
               serverId={server.id}
               serverName={server.name}
@@ -711,10 +829,14 @@ export function ClientsModal({
               onUnauthorized={onUnauthorized}
             />
 
+          <details className="client-table-options">
+            <summary>{t('Столбцы таблицы')}</summary>
+            <label className="small"><input type="checkbox" checked={allColumns} onChange={(event) => setAllColumns(event.target.checked)} /> {t('Показать все столбцы')}</label>
+          </details>
             {state.clients.length === 0 ? (
               <p className="muted">{t('Клиентов пока нет.')}</p>
             ) : (
-              <div className="table-card clients-scroll">
+              <div className={`table-card clients-scroll client-table client-table-awg${allColumns ? ' client-details-visible' : ''}`}>
                 <table>
                   <thead>
                     <tr>
@@ -734,13 +856,15 @@ export function ClientsModal({
                     </tr>
                   </thead>
                   <tbody>
-                    {visibleClients.map((c) => {
+                    {groupClients(visibleClients, grouped).map((c, index, rows) => {
                       const busy = busyKey === c.public_key
                       const editing = editKey === c.public_key
                       return (
-                        <tr key={c.public_key}>
+                        <tr key={`${limitProto}:${c.public_key}`}>
                           <SelectCell sel={sel} id={c.public_key} />
                           <td className="name-cell">
+                            {grouped && c.group_name && (index === 0 || rows[index - 1]?.group_name !== c.group_name) && <div className="client-group-heading">{c.group_name}</div>}
+                            {(c.group_name || c.device_name) && <div className="client-device-label muted small">{[!grouped && c.group_name, c.device_name].filter(Boolean).join(' · ')}</div>}
                             <div className="client-row-name">
                               <span
                                 className={`dot ${
@@ -859,6 +983,10 @@ export function ClientsModal({
                                           }]
                                         : []),
                                       {
+                                        label: t('Клиент и устройство'),
+                                        onClick: () => editMetadata(c),
+                                      },
+                                      {
                                         label: t('Переименовать'),
                                         onClick: () => rename(c),
                                       },
@@ -880,6 +1008,10 @@ export function ClientsModal({
                                       {
                                         label: t('Трафик клиента'),
                                         onClick: () => setStatsFor(c),
+                                      },
+                                      {
+                                        label: t('Клиент и устройство'),
+                                        onClick: () => editMetadata(c),
                                       },
                                       {
                                         label: t('Переименовать'),
@@ -914,67 +1046,6 @@ export function ClientsModal({
               </div>
             )}
           </>
-        )}
-
-        {view && (
-          <div className="modal-backdrop">
-            <div className="card modal modal-config" onClick={(e) => e.stopPropagation()}>
-              <h3>{t('Конфиг клиента «{name}»', { name: view.name })}</h3>
-              <div className="modal-config-body">
-
-              {!view.native && <div className="tabs">
-                <button
-                  className={cfgFormat === 'amnezia' ? 'tab tab-active' : 'tab'}
-                  onClick={() => {
-                    setCfgFormat('amnezia')
-                    setCopied(false)
-                  }}
-                >
-                  {t('Для приложения AmneziaVPN')}
-                </button>
-                <button
-                  className={cfgFormat === 'conf' ? 'tab tab-active' : 'tab'}
-                  onClick={() => {
-                    setCfgFormat('conf')
-                    setCopied(false)
-                  }}
-                >
-                  {t('AmneziaWG (.conf)')}
-                </button>
-              </div>}
-
-              <p className="muted small">
-                {view.native ? t('Обычная конфигурация WireGuard. Импортируйте .conf или отсканируйте QR в приложении WireGuard.') : cfgFormat === 'conf'
-                  ? t('Конфигурация для приложения AmneziaWG. Для обычного WireGuard используйте отдельный протокол WireGuard.')
-                  : t('Ссылка vpn:// — вставьте её в приложение AmneziaVPN («+» → вставить из буфера) или отсканируйте QR.')}
-              </p>
-
-              <div className="qr-wrap">
-                {!view.native && cfgFormat === 'amnezia' ? (
-                  <AmneziaQr text={view.amnezia} format="vpn" />
-                ) : qr ? (
-                  <img src={qr} alt={t('QR конфига')} width={240} height={240} />
-                ) : (
-                  <span className="muted small">{t('генерация QR…')}</span>
-                )}
-              </div>
-              <pre className="script-box">{currentText}</pre>
-              {shareLink.result}
-              </div>
-              <div className="modal-actions">
-                <button className="ghost" onClick={() => setView(null)}>
-                  {t('Готово')}
-                </button>
-                <button className="ghost" onClick={downloadConfig}>
-                  {t('Скачать')} {view.native || cfgFormat === 'conf' ? '.conf' : '.txt'}
-                </button>
-                {shareLink.control}
-                <button onClick={copyConfig}>
-                  {copied ? t('Скопировано ✓') : t('Скопировать')}
-                </button>
-              </div>
-            </div>
-          </div>
         )}
 
         {statsFor && (

@@ -3,7 +3,7 @@ from fastapi import APIRouter, HTTPException, Request, status
 from sqlalchemy import delete, select
 
 from app import (
-    audit, awg, deploy, deploywatch, limits, nodelock, notes, openvpn, pausestore, sshops,
+    audit, client_metadata, awg, deploy, deploywatch, limits, nodelock, notes, openvpn, pausestore, sshops,
     torrent,
 )
 from app.config import get_settings
@@ -127,6 +127,7 @@ async def get_openvpn(
                 "paused": c.client_id in paused,
             }
         )
+    await client_metadata.enrich(session, server_id, "openvpn", out_clients)
     return OvpnStateOut(container=container, clients=out_clients)
 
 
@@ -161,10 +162,11 @@ async def create_client(
             session, server_id, "openvpn", client.client_id, client.name,
             body.expires_at,
         )
+    await client_metadata.set_labels(session, server_id, "openvpn", client.client_id, body.group_name, body.device_name)
     await audit.record(session, user.username, "openvpn_issue", server.name, body.name)
     return OvpnCreateResponse(
         client=OvpnClientOut(
-            **client.__dict__, has_config=True, expires_at=body.expires_at
+            **client.__dict__, has_config=True, expires_at=body.expires_at, group_name=body.group_name, device_name=body.device_name
         ),
         config_amnezia=link,
     )
@@ -221,12 +223,13 @@ async def reissue_client(
         await limits.set_limit(
             session, server_id, "openvpn", client.client_id, client.name, old_exp
         )
+    await client_metadata.move(session, server_id, "openvpn", body.client_id, client.client_id)
     await audit.record(
         session, user.username, "openvpn_reissue", server.name, client.name
     )
     return OvpnCreateResponse(
         client=OvpnClientOut(
-            **client.__dict__, has_config=True, expires_at=old_exp, note=old_note
+            **client.__dict__, has_config=True, expires_at=old_exp, note=old_note, **(await client_metadata.labels_map(session, server_id, "openvpn")).get(client.client_id, {})
         ),
         config_amnezia=link,
     )

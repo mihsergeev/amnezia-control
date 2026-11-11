@@ -11,6 +11,7 @@ from pydantic import AfterValidator, BaseModel, ConfigDict, Field, computed_fiel
 from app.cascade_routes import Route, RouteUpdate
 from app.client_endpoint import normalize as normalize_client_endpoint
 from app.geo import normalize_country_code
+from app.metadata_schemas import ClientLabels
 from app.xray import STATS_API_PORT
 
 
@@ -175,7 +176,7 @@ class ConfigOut(BaseModel):
     version: str = ""
 
 
-class AwgClientOut(BaseModel):
+class AwgClientOut(ClientLabels):
     name: str
     public_key: str
     address: str
@@ -211,7 +212,7 @@ class AwgStateOut(BaseModel):
 _DNS_PATTERN = r"^[0-9A-Fa-f:.]+(\s*,\s*[0-9A-Fa-f:.]+){0,3}$"
 
 
-class CreateClientRequest(BaseModel):
+class CreateClientRequest(ClientLabels):
     name: str = Field(min_length=1, max_length=128)
     dns: str | None = Field(default=None, max_length=200, pattern=_DNS_PATTERN)
     note: str = Field(default="", max_length=512)
@@ -416,7 +417,7 @@ class ClientNoteRequest(BaseModel):
     note: str = Field(default="", max_length=512)
 
 
-class OvpnClientOut(BaseModel):
+class OvpnClientOut(ClientLabels):
     client_id: str
     name: str
     creation_date: str
@@ -436,7 +437,7 @@ class OvpnStateOut(BaseModel):
     clients: list[OvpnClientOut]
 
 
-class OvpnCreateRequest(BaseModel):
+class OvpnCreateRequest(ClientLabels):
     name: str = Field(min_length=1, max_length=128)
     expires_at: datetime | None = None
 
@@ -468,7 +469,7 @@ class OvpnDeployRequest(BaseModel):
     site: str = Field(default="tile.openstreetmap.org", max_length=253)
 
 
-class XrayClientOut(BaseModel):
+class XrayClientOut(ClientLabels):
     client_id: str
     name: str
     creation_date: str
@@ -485,7 +486,7 @@ class XrayStateOut(BaseModel):
     clients: list[XrayClientOut]
 
 
-class XrayCreateRequest(BaseModel):
+class XrayCreateRequest(ClientLabels):
     name: str = Field(min_length=1, max_length=128)
     expires_at: datetime | None = None
 

@@ -2,7 +2,7 @@ import asyncssh
 from fastapi import APIRouter, HTTPException, Request, status
 from sqlalchemy import delete
 
-from app import audit, awg, bulk_issue_state, deploy, deploywatch, limits, nodelock, notes, pausestore, sshops, xray, xray_reality
+from app import client_metadata, audit, awg, bulk_issue_state, deploy, deploywatch, limits, nodelock, notes, pausestore, sshops, xray, xray_reality
 from app.config import get_settings
 from app.deps import CurrentUser, SessionDep
 from app.models import ClientLimit, Server
@@ -106,6 +106,7 @@ async def get_xray(server_id: int, _: CurrentUser, session: SessionDep) -> XrayS
             "rx_bytes": last.get(cid, {}).get("rx", 0),
             "tx_bytes": last.get(cid, {}).get("tx", 0), "paused": True,
         })
+    await client_metadata.enrich(session, server_id, "xray", out)
     return XrayStateOut(container=container, clients=out)
 
 
@@ -165,9 +166,10 @@ async def create_client(
             session, server_id, "xray", client.client_id, client.name,
             body.expires_at,
         )
+    await client_metadata.set_labels(session, server_id, "xray", client.client_id, body.group_name, body.device_name)
     await audit.record(session, user.username, "xray_issue", server.name, body.name)
     return XrayCreateResponse(
-        client=XrayClientOut(**client.__dict__, expires_at=body.expires_at),
+        client=XrayClientOut(**client.__dict__, expires_at=body.expires_at, group_name=body.group_name, device_name=body.device_name),
         config_amnezia=configs[0]["amnezia"],
         configs=configs,
     )
@@ -329,9 +331,10 @@ async def reissue_client(
         await limits.set_limit(
             session, server_id, "xray", client.client_id, client.name, old_exp
         )
+    await client_metadata.move(session, server_id, "xray", body.client_id, client.client_id)
     await audit.record(session, user.username, "xray_reissue", server.name, client.name)
     return XrayCreateResponse(
-        client=XrayClientOut(**client.__dict__, expires_at=old_exp, note=old_note),
+        client=XrayClientOut(**client.__dict__, expires_at=old_exp, note=old_note, **(await client_metadata.labels_map(session, server_id, "xray")).get(client.client_id, {})),
         config_amnezia=configs[0]["amnezia"],
         configs=configs,
     )

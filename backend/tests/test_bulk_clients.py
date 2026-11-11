@@ -15,7 +15,7 @@ from sqlalchemy import select
 
 from app import awg, bulk_archive, bulk_issue_state, pausestore, wg_bulk, xray_bulk
 from app.api import bulk_clients
-from app.models import AuditLog, AwgNote, BulkClientIssue, ClientLimit, ClientName, NativeVpnConfig, Server
+from app.models import AuditLog, AwgNote, BulkClientIssue, ClientLimit, ClientMetadata, ClientName, NativeVpnConfig, Server
 
 
 async def _server(client, auth):
@@ -167,6 +167,11 @@ async def test_xray_revoke_removes_paused_client_and_metadata_for_uuid_alias(
                 ClientLimit(server_id=sid, protocol="xray", client_id=cid),
                 ClientName(server_id=sid, protocol="xray", client_id=cid),
             ])
+        # A labels-only UUID spelling is absent from the other metadata tables.
+        session.add_all([
+            ClientMetadata(server_id=sid, protocol="xray", client_id=selected.urn, group_name="Selected"),
+            ClientMetadata(server_id=sid, protocol="xray", client_id=kept, group_name="Kept"),
+        ])
         await session.commit()
 
     @asynccontextmanager
@@ -194,7 +199,7 @@ async def test_xray_revoke_removes_paused_client_and_metadata_for_uuid_alias(
 
     async with session_factory() as session:
         assert await pausestore.list_paused(session, sid, "xray") == {}
-        for column in (AwgNote.public_key, ClientLimit.client_id, ClientName.client_id):
+        for column in (AwgNote.public_key, ClientLimit.client_id, ClientName.client_id, ClientMetadata.client_id):
             assert list(await session.scalars(select(column))) == [kept]
     response = await client.post(f"/api/servers/{sid}/xray/resume", headers=auth_headers,
                                  json={"client_id": str(selected)})

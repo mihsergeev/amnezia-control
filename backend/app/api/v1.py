@@ -16,7 +16,7 @@ API-ключ в заголовке `X-API-Key` (см. app/apikeys.py), НЕ по
 from fastapi import APIRouter, HTTPException, Query, status
 from sqlalchemy import delete, select
 
-from app import audit, awg, client_endpoint, limits, nodelock, pausestore
+from app import client_metadata, audit, awg, client_endpoint, limits, nodelock, pausestore
 from app.api.awg import (
     _amnezia_link,
     _connect,
@@ -121,11 +121,12 @@ async def issue_client(
         await limits.set_limit(
             session, server_id, "awg", created.public_key, created.name, body.expires_at
         )
+    await client_metadata.set_labels(session, server_id, "awg", created.public_key, body.group_name, body.device_name)
     await audit.record(session, _actor(client), "awg_issue", server.name, body.name)
     config = client_endpoint.peer_config(config, server.client_endpoint)
     return CreateClientResponse(
         client=created.__dict__
-        | {"has_config": True, "note": body.note, "expires_at": body.expires_at},
+        | {"has_config": True, "note": body.note, "expires_at": body.expires_at, "group_name": body.group_name, "device_name": body.device_name},
         config=config,
         config_amnezia=_amnezia_link(config, server),
     )
@@ -200,6 +201,7 @@ async def revoke_client(
             AwgConfig.protocol == "awg",
         )
     )
+    await client_metadata.clear(session, server_id, "awg", public_key)
     await limits.drop_limit(session, server_id, "awg", public_key)
     await session.commit()
 

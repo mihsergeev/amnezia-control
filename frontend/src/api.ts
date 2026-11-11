@@ -375,6 +375,8 @@ export type PanelConfig = {
 }
 
 export type AwgClient = {
+  group_name?: string
+  device_name?: string
   name: string
   public_key: string
   address: string
@@ -556,6 +558,8 @@ export type History = {
 }
 
 export type OvpnClient = {
+  group_name?: string
+  device_name?: string
   client_id: string
   name: string
   creation_date: string
@@ -589,6 +593,8 @@ export type OvpnConfig = {
 }
 
 export type XrayClient = {
+  group_name?: string
+  device_name?: string
   client_id: string
   name: string
   creation_date: string

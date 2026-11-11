@@ -232,6 +232,8 @@ async def delete_server(
         nodelock.hold("awg", server_id),
         nodelock.hold("wireguard", server_id),
         nodelock.hold("xray", server_id),
+        nodelock.hold("openvpn", server_id),
+        nodelock.hold("openvpn-native", server_id),
     ):
         return await _delete_server(server_id, user, session, remove_key)
 

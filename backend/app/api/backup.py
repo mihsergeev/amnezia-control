@@ -24,6 +24,7 @@ from app.models import (
     AwgNote,
     BulkClientIssue,
     Cascade,
+    ClientMetadata,
     ClientLimit,
     ClientName,
     ClientTrafficSample,
@@ -55,6 +56,7 @@ _MODELS = [
     Cascade,
     AwgConfig,
     AwgNote,
+    ClientMetadata,
     BulkClientIssue,
     OvpnConfig,
     NativeVpnConfig,
@@ -326,6 +328,9 @@ async def download_backup(
 
 def _coerce_row(model, row: dict) -> dict:
     """Приводит значения из JSON к типам колонок (ISO-строки → datetime)."""
+    if model is ClientMetadata:
+        from app.metadata_schemas import ClientMetadataRequest
+        row = {**row, **ClientMetadataRequest.model_validate(row).model_dump()}
     out = {}
     for col in model.__table__.columns:
         if col.name not in row:
@@ -483,6 +488,11 @@ async def restore_backup(
                 f"в архиве недопустимое имя SSH-пользователя: {row.get('ssh_user')!r}",
             )
     present = [m for m in _MODELS if m.__tablename__ in dump]
+    # Older archives predate display labels. Server/client IDs restored from
+    # them must not inherit labels belonging to the current database.
+    if Server in present and ClientMetadata not in present:
+        present.append(ClientMetadata)
+        prepared[ClientMetadata.__tablename__] = []
     # Panel backups do not roll back VPN nodes. Replaying an archived plan can
     # re-enable a revoked credential; IDs can also map to different users and
     # nodes after restore. Keep only retired request IDs, including IDs newer

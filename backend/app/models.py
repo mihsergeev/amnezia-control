@@ -214,6 +214,18 @@ class AuditLog(Base):
     detail: Mapped[str] = mapped_column(Text, default="")
 
 
+class ClientMetadata(Base):
+    __tablename__ = "client_metadata"
+    __table_args__ = (UniqueConstraint("server_id", "protocol", "client_id"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    server_id: Mapped[int] = mapped_column(Integer, index=True)
+    protocol: Mapped[str] = mapped_column(String(16))
+    client_id: Mapped[str] = mapped_column(String(128))
+    group_name: Mapped[str] = mapped_column(String(128), default="", server_default="")
+    device_name: Mapped[str] = mapped_column(String(128), default="", server_default="")
+
+
 class AwgNote(Base):
     """Панельная заметка к клиенту любого протокола (работает и для клиентов,
     созданных вне панели). Имя таблицы историческое (awg_notes), но protocol

@@ -3,7 +3,7 @@ import httpx
 from fastapi import APIRouter, HTTPException, Request, status
 from sqlalchemy import delete, select, update
 
-from app import audit, awg, client_endpoint, deploy, deploywatch, limits, nodelock, notes, pausestore, sshops
+from app import client_metadata, audit, awg, client_endpoint, deploy, deploywatch, limits, nodelock, notes, pausestore, sshops
 from app import bulk_issue_state
 from app.config import get_settings
 from app.deps import CurrentUser, SessionDep
@@ -126,6 +126,7 @@ async def _reissue_peer(session, server_id, protocol, conn, state, public_key, d
             await session.execute(update(model).where(
                 model.server_id == server_id, model.protocol == protocol, key == public_key,
             ).values({key: client.public_key}))
+        await client_metadata.move(session, server_id, protocol, public_key, client.public_key)
         await pausestore.drop(session, server_id, protocol, public_key)
         await session.commit()
     except Exception:
@@ -216,7 +217,7 @@ async def build_client_list(session, server_id: int, state) -> list[dict]:
             "has_config": cid in stored, "note": notes_by_pk.get(cid, ""),
             "expires_at": lim.get(cid), "paused": True,
         })
-    return clients
+    return await client_metadata.enrich(session, server_id, "awg", clients)
 
 
 @router.get("", response_model=AwgStateOut)
@@ -285,11 +286,12 @@ async def create_client(
         await limits.set_limit(
             session, server_id, "awg", client.public_key, client.name, body.expires_at
         )
+    await client_metadata.set_labels(session, server_id, "awg", client.public_key, body.group_name, body.device_name)
     await audit.record(session, user.username, "awg_issue", server.name, body.name)
     config = client_endpoint.peer_config(config, server.client_endpoint)
     return CreateClientResponse(
         client=client.__dict__
-        | {"has_config": True, "note": body.note, "expires_at": body.expires_at},
+        | {"has_config": True, "note": body.note, "expires_at": body.expires_at, "group_name": body.group_name, "device_name": body.device_name},
         config=config,
         config_amnezia=_amnezia_link(config, server),
     )
@@ -362,7 +364,7 @@ async def reissue_client(
     config = client_endpoint.peer_config(config, server.client_endpoint)
     return CreateClientResponse(
         client=client.__dict__
-        | {"has_config": True, "note": old_note, "expires_at": old_exp},
+        | {"has_config": True, "note": old_note, "expires_at": old_exp, **(await client_metadata.labels_map(session, server_id, "awg")).get(client.public_key, {})},
         config=config,
         config_amnezia=_amnezia_link(config, server),
     )

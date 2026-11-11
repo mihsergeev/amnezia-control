@@ -44,7 +44,9 @@ async def notes_map(
 async def clear_note(
     session: AsyncSession, server_id: int, protocol: str, client_id: str
 ) -> None:
-    """Удаляет заметку (при отзыве). БЕЗ commit — коммитит вызывающий."""
+    """Удаляет заметку и presentation labels при отзыве, без commit."""
+    from app import client_metadata
+    await client_metadata.clear(session, server_id, protocol, client_id)
     await session.execute(
         delete(AwgNote).where(
             AwgNote.server_id == server_id,

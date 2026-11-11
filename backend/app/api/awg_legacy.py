@@ -10,7 +10,7 @@ Amnezia на ядерном движке amnezia-wg) — только клиен
 from fastapi import APIRouter, HTTPException, status
 from sqlalchemy import delete, select
 
-from app import audit, awg, client_endpoint, limits, nodelock, notes, pausestore
+from app import client_metadata, audit, awg, client_endpoint, limits, nodelock, notes, pausestore
 from app.api.awg import (
     _amnezia_link,
     _connect,
@@ -104,6 +104,7 @@ async def get_legacy(
             "has_config": cid in stored, "note": notes_by_pk.get(cid, ""),
             "expires_at": lim.get(cid), "paused": True,
         })
+    await client_metadata.enrich(session, server_id, PROTO, clients)
     return AwgStateOut(
         container=state.container,
         interface=state.interface,
@@ -145,11 +146,12 @@ async def create_client(
         await limits.set_limit(
             session, server_id, PROTO, client.public_key, client.name, body.expires_at
         )
+    await client_metadata.set_labels(session, server_id, PROTO, client.public_key, body.group_name, body.device_name)
     await audit.record(session, user.username, "awglegacy_issue", server.name, body.name)
     config = client_endpoint.peer_config(config, server.client_endpoint)
     return CreateClientResponse(
         client=client.__dict__
-        | {"has_config": True, "note": body.note, "expires_at": body.expires_at},
+        | {"has_config": True, "note": body.note, "expires_at": body.expires_at, "group_name": body.group_name, "device_name": body.device_name},
         config=config,
         config_amnezia=_amnezia_link(config, server),
     )
@@ -215,7 +217,7 @@ async def reissue_client(
     config = client_endpoint.peer_config(config, server.client_endpoint)
     return CreateClientResponse(
         client=client.__dict__
-        | {"has_config": True, "note": old_note, "expires_at": old_exp},
+        | {"has_config": True, "note": old_note, "expires_at": old_exp, **(await client_metadata.labels_map(session, server_id, PROTO)).get(client.public_key, {})},
         config=config,
         config_amnezia=_amnezia_link(config, server),
     )
@@ -300,6 +302,7 @@ async def revoke_client(
             AwgConfig.protocol == PROTO,
         )
     )
+    await client_metadata.clear(session, server_id, PROTO, body.public_key)
     await limits.drop_limit(session, server_id, PROTO, body.public_key)
     await _set_note(session, server_id, body.public_key, "")
     await pausestore.drop(session, server_id, PROTO, body.public_key)

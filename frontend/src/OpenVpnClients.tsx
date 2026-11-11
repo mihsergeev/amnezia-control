@@ -13,7 +13,9 @@ import {
   type NativeClientConfig,
   type NativeCreatedClient,
 } from './api'
-import { ExpiryCell, ExpirySelect } from './Expiry'
+import { ExpiryCell } from './Expiry'
+import { QuickIssueForm } from './QuickIssueForm'
+import { groupClients } from './clientGrouping'
 import { BulkRevokeBar, SelectAllCell, SelectCell } from './BulkActions'
 import { useSelection } from './useSelection'
 import { ClientStatsModal } from './ClientStatsModal'
@@ -62,14 +64,32 @@ export function OpenVpnClients({
 
   const [addOpen, setAddOpen] = useState(false)
   const [newName, setNewName] = useState('')
+  const [newGroup, setNewGroup] = useState('')
+  const [newDevice, setNewDevice] = useState('')
+  const [grouped, setGrouped] = useState(false)
+  const [allColumns, setAllColumns] = useState(false)
+  const [metadataFor, setMetadataFor] = useState<OvpnClient | null>(null)
+  const [savingMetadata, setSavingMetadata] = useState(false)
+  const savingMetadataRef = useRef(false)
   const [newExpiry, setNewExpiry] = useState<string | null>(null)
   const [creating, setCreating] = useState(false)
   // повторный Enter до ответа не выдает второго клиента (state обновится позже)
   const creatingRef = useRef(false)
 
+  const configGeneration = useRef(0)
+  useEffect(() => () => { configGeneration.current += 1 }, [])
+  const loadSeq = useRef(0)
+  useEffect(() => () => { loadSeq.current += 1 }, [])
+
   const [view, setView] = useState<ConfigView | null>(null)
-  // Escape в окне конфига закрывает его, а не все окно клиентов
-  useModalLayer(view !== null, () => setView(null))
+  const resultHeading = useRef<HTMLHeadingElement>(null)
+  useEffect(() => {
+    if (!view) return
+    resultHeading.current?.focus({ preventScroll: true })
+    resultHeading.current?.scrollIntoView({ block: 'nearest' })
+  }, [view])
+  // Escape скрывает готовый конфиг, сохраняя список клиентов
+  useModalLayer(view !== null, closeConfig)
   const shareLink = useShareLink(view?.text ?? '', view?.name ?? '', groupName)
   const [statsFor, setStatsFor] = useState<{ id: string; name: string } | null>(
     null,
@@ -89,13 +109,16 @@ export function OpenVpnClients({
 
   const load = useCallback(async () => {
     setLoading(true)
+    const seq = ++loadSeq.current
     try {
-      setState(await api<OvpnState>(`/api/servers/${serverId}/${protocol}`))
+      const result = await api<OvpnState>(`/api/servers/${serverId}/${protocol}`)
+      if (seq !== loadSeq.current) return
+      setState(result)
       setError(null)
     } catch (err) {
-      handleError(err)
+      if (seq === loadSeq.current) handleError(err)
     } finally {
-      setLoading(false)
+      if (seq === loadSeq.current) setLoading(false)
     }
   }, [serverId, protocol, handleError])
 
@@ -103,9 +126,30 @@ export function OpenVpnClients({
     void load()
   }, [load])
 
+  function closeConfig() {
+    configGeneration.current += 1
+    setBusy(null)
+    setView(null)
+  }
+
   function showConfig(name: string, text: string, filename?: string) {
+    setMetadataFor(null)
+    setAddOpen(false)
     setView({ name, text, native, filename })
     setCopied(false)
+  }
+
+  function openAdd() {
+    setMetadataFor(null)
+    configGeneration.current += 1
+    setBusy(null)
+    setView(null)
+    setError(null)
+    setNewName('')
+    setNewGroup('')
+    setNewDevice('')
+    setNewExpiry(null)
+    setAddOpen(true)
   }
 
   async function addClient() {
@@ -113,21 +157,23 @@ export function OpenVpnClients({
     creatingRef.current = true
     setCreating(true)
     setError(null)
+    const generation = ++configGeneration.current
     try {
       const result = await api<OvpnCreated | NativeCreatedClient<OvpnClient>>(
         `/api/servers/${serverId}/${protocol}/clients`,
         {
           method: 'POST',
-          body: JSON.stringify({ name: newName.trim(), expires_at: newExpiry }),
+          body: JSON.stringify({ name: newName.trim(), expires_at: newExpiry, group_name: newGroup.trim(), device_name: newDevice.trim() }),
         },
       )
+      if (generation !== configGeneration.current) return
       setAddOpen(false)
       setNewName('')
       setNewExpiry(null)
       showConfig(result.client.name, 'config' in result ? result.config : result.config_amnezia, 'filename' in result ? result.filename : undefined)
       await load()
     } catch (err) {
-      handleError(err)
+      if (generation === configGeneration.current) handleError(err)
     } finally {
       creatingRef.current = false
       setCreating(false)
@@ -137,16 +183,18 @@ export function OpenVpnClients({
   async function viewConfig(clientId: string) {
     setBusy(clientId)
     setError(null)
+    const generation = ++configGeneration.current
     try {
       const result = await api<OvpnConfig | NativeClientConfig>(
         `/api/servers/${serverId}/${protocol}/config`,
         { method: 'POST', body: JSON.stringify({ client_id: clientId }) },
       )
+      if (generation !== configGeneration.current) return
       showConfig(result.name, 'config' in result ? result.config : result.config_amnezia, 'filename' in result ? result.filename : undefined)
     } catch (err) {
-      handleError(err)
+      if (generation === configGeneration.current) handleError(err)
     } finally {
-      setBusy(null)
+      if (generation === configGeneration.current) setBusy(null)
     }
   }
 
@@ -162,17 +210,52 @@ export function OpenVpnClients({
       return
     setBusy(clientId)
     setError(null)
+    const generation = ++configGeneration.current
     try {
       const result = await api<OvpnCreated | NativeCreatedClient<OvpnClient>>(
         `/api/servers/${serverId}/${protocol}/reissue`,
         { method: 'POST', body: JSON.stringify({ client_id: clientId }) },
       )
+      if (generation !== configGeneration.current) return
       showConfig(result.client.name, 'config' in result ? result.config : result.config_amnezia, 'filename' in result ? result.filename : undefined)
       await load()
     } catch (err) {
-      handleError(err)
+      if (generation === configGeneration.current) handleError(err)
     } finally {
-      setBusy(null)
+      if (generation === configGeneration.current) setBusy(null)
+    }
+  }
+
+  function editMetadata(client: OvpnClient) {
+    configGeneration.current += 1
+    setView(null)
+    setAddOpen(false)
+    setError(null)
+    setNewGroup(client.group_name ?? '')
+    setNewDevice(client.device_name ?? '')
+    setMetadataFor(client)
+  }
+
+  async function saveMetadata() {
+    const client = metadataFor
+    if (!client || savingMetadataRef.current) return
+    savingMetadataRef.current = true
+    setSavingMetadata(true)
+    setError(null)
+    const generation = configGeneration.current
+    try {
+      await api<void>(`/api/servers/${serverId}/client-metadata`, {
+        method: 'POST',
+        body: JSON.stringify({ protocol, client_id: client.client_id, group_name: newGroup.trim(), device_name: newDevice.trim() }),
+      })
+      if (generation !== configGeneration.current) return
+      setMetadataFor(null)
+      await load()
+    } catch (err) {
+      if (generation === configGeneration.current) handleError(err)
+    } finally {
+      savingMetadataRef.current = false
+      setSavingMetadata(false)
     }
   }
 
@@ -285,6 +368,45 @@ export function OpenVpnClients({
       {error && <p className="form-error">{error}</p>}
       {loading && <p className="muted">{t('загрузка…')}</p>}
 
+      {metadataFor && <QuickIssueForm metadataOnly name={metadataFor.name} onName={() => {}}
+        expiry={null} onExpiry={() => {}}
+        group={newGroup} onGroup={setNewGroup} device={newDevice} onDevice={setNewDevice}
+        creating={savingMetadata} onCreate={saveMetadata} onCancel={() => setMetadataFor(null)} />}
+
+      {view && (
+        <section className="quick-issue-result" aria-label={t('Готовый конфиг')}>
+          <div className="quick-issue-result-content">
+            <h3 tabIndex={-1} ref={resultHeading}>{t('Конфиг клиента «{name}»', { name: view.name })}</h3>
+            <div className="modal-config-body">
+            <p className="muted small">
+              {view.native ? t('Импортируйте файл .ovpn в совместимый клиент OpenVPN.') : t(
+                'Ссылка vpn:// — вставьте её в приложение AmneziaVPN («+» → вставить из буфера) или отсканируйте QR.',
+              )}
+            </p>
+
+            {!view.native && <div className="qr-wrap">
+              <AmneziaQr key={view.text} text={view.text} format="vpn" />
+            </div>}
+            <pre className="script-box">{view.text}</pre>
+            {shareLink.result}
+            </div>
+            <div className="modal-actions">
+              <button onClick={openAdd} disabled={creating}>{t('Создать следующего')}</button>
+              <button className="ghost" onClick={closeConfig}>
+                {t('Готово')}
+              </button>
+              <button className="ghost" onClick={downloadConfig}>
+                {view.native ? t('Скачать .ovpn') : t('Скачать .txt')}
+              </button>
+              {shareLink.control}
+              <button onClick={copyConfig}>
+                {copied ? t('Скопировано ✓') : t('Скопировать')}
+              </button>
+            </div>
+          </div>
+        </section>
+      )}
+
       {state && !loading && (
         <>
           {native && <div className="info-chips">
@@ -292,34 +414,14 @@ export function OpenVpnClients({
             {state.version && <span className="info-chip mono">{state.version}</span>}
           </div>}
           {addOpen ? (
-            <div className="add-form">
-              <input
-                autoFocus
-                placeholder={t('Имя клиента (например, phone-max)')}
-                value={newName}
-                onChange={(e) => setNewName(e.target.value)}
-                onKeyDown={(e) => e.key === 'Enter' && addClient()}
-              />
-              <label className="expiry-row">
-                <span className="muted small">{t('Срок действия:')}</span>
-                <ExpirySelect value={newExpiry} onChange={setNewExpiry} />
-              </label>
-              <div className="add-form-actions">
-                <button className="ghost" onClick={() => setAddOpen(false)}>
-                  {t('Отмена')}
-                </button>
-                <button onClick={addClient} disabled={creating || !newName.trim()}>
-                  {creating ? t('Создание…') : t('Создать конфиг')}
-                </button>
-              </div>
-            </div>
+            <QuickIssueForm name={newName} onName={setNewName}
+              expiry={newExpiry} onExpiry={setNewExpiry}
+              group={newGroup} onGroup={setNewGroup} device={newDevice} onDevice={setNewDevice}
+              creating={creating} onCreate={addClient} onCancel={() => setAddOpen(false)} />
           ) : (
             <div className="toolbar">
               <button
-                onClick={() => {
-                  setNewName('')
-                  setAddOpen(true)
-                }}
+                onClick={openAdd}
               >
                 {t('+ Выдать конфиг')}
               </button>
@@ -344,6 +446,11 @@ export function OpenVpnClients({
             </div>
           )}
 
+          <label className="client-group-toggle small">
+            <input type="checkbox" checked={grouped} onChange={(event) => setGrouped(event.target.checked)} />
+            {t('Группировать по клиенту')}
+          </label>
+
           <BulkRevokeBar
             serverId={serverId}
             serverName={serverName}
@@ -354,7 +461,11 @@ export function OpenVpnClients({
             onUnauthorized={onUnauthorized}
           />
 
-          <div className="table-card">
+          <details className="client-table-options">
+            <summary>{t('Столбцы таблицы')}</summary>
+            <label className="small"><input type="checkbox" checked={allColumns} onChange={(event) => setAllColumns(event.target.checked)} /> {t('Показать все столбцы')}</label>
+          </details>
+          <div className={`table-card client-table client-table-other${allColumns ? ' client-details-visible' : ''}`}>
             {state.clients.length === 0 ? (
               <p className="muted">{t('Клиентов пока нет.')}</p>
             ) : (
@@ -370,12 +481,13 @@ export function OpenVpnClients({
                   </tr>
                 </thead>
                 <tbody>
-                  {state.clients
-                    .filter((c) => !focusClient || c.client_id === focusClient)
-                    .map((c) => (
-                    <tr key={c.client_id}>
+                  {groupClients(state.clients.filter((c) => !focusClient || c.client_id === focusClient), grouped)
+                    .map((c, index, rows) => (
+                    <tr key={`${protocol}:${c.client_id}`}>
                       <SelectCell sel={sel} id={c.client_id} />
                       <td className="name-cell">
+                        {grouped && c.group_name && (index === 0 || rows[index - 1]?.group_name !== c.group_name) && <div className="client-group-heading">{c.group_name}</div>}
+                        {(c.group_name || c.device_name) && <div className="client-device-label muted small">{[!grouped && c.group_name, c.device_name].filter(Boolean).join(' · ')}</div>}
                         <NoteCell
                           name={c.paused ? `${c.name} ⏸` : c.name}
                           note={c.note || ''}
@@ -433,6 +545,10 @@ export function OpenVpnClients({
                             c.paused
                               ? [
                                   {
+                                    label: t('Клиент и устройство'),
+                                    onClick: () => editMetadata(c),
+                                  },
+                                  {
                                     label: t('Переименовать'),
                                     onClick: () => rename(c.client_id, c.name),
                                   },
@@ -456,6 +572,10 @@ export function OpenVpnClients({
                                     label: t('Трафик клиента'),
                                     onClick: () =>
                                       setStatsFor({ id: c.client_id, name: c.name }),
+                                  },
+                                  {
+                                    label: t('Клиент и устройство'),
+                                    onClick: () => editMetadata(c),
                                   },
                                   {
                                     label: t('Переименовать'),
@@ -482,39 +602,6 @@ export function OpenVpnClients({
             )}
           </div>
         </>
-      )}
-
-      {view && (
-        <div className="modal-backdrop">
-          <div className="card modal modal-config" onClick={(e) => e.stopPropagation()}>
-            <h3>{t('Конфиг клиента «{name}»', { name: view.name })}</h3>
-            <div className="modal-config-body">
-            <p className="muted small">
-              {view.native ? t('Импортируйте файл .ovpn в совместимый клиент OpenVPN.') : t(
-                'Ссылка vpn:// — вставьте её в приложение AmneziaVPN («+» → вставить из буфера) или отсканируйте QR.',
-              )}
-            </p>
-
-            {!view.native && <div className="qr-wrap">
-              <AmneziaQr text={view.text} format="vpn" />
-            </div>}
-            <pre className="script-box">{view.text}</pre>
-            {shareLink.result}
-            </div>
-            <div className="modal-actions">
-              <button className="ghost" onClick={() => setView(null)}>
-                {t('Готово')}
-              </button>
-              <button className="ghost" onClick={downloadConfig}>
-                {view.native ? t('Скачать .ovpn') : t('Скачать .txt')}
-              </button>
-              {shareLink.control}
-              <button onClick={copyConfig}>
-                {copied ? t('Скопировано ✓') : t('Скопировать')}
-              </button>
-            </div>
-          </div>
-        </div>
       )}
 
       {statsFor && (

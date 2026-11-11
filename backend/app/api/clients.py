@@ -23,6 +23,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app import audit, bulk_issue_state, expiry, nodelock, pausestore, protolabel
 from app.config import get_settings
 from app.deps import CurrentUser, SessionDep
+from app.metadata_schemas import ClientMetadataRequest
 from app.models import AwgConfig, AwgNote, ClientName, NativeVpnConfig, OvpnConfig, PausedClient, Server
 from app.schemas import (
     ClientSearchHit,
@@ -35,6 +36,57 @@ from app.sshkeys import ensure_panel_key, key_paths
 log = logging.getLogger("acontrol.clients")
 
 router = APIRouter(prefix="/clients", tags=["clients"])
+metadata_router = APIRouter(tags=["clients"])
+
+
+@metadata_router.post("/servers/{server_id}/client-metadata", status_code=204)
+async def update_client_metadata(server_id: int, body: ClientMetadataRequest,
+                                 _: CurrentUser, session: SessionDep):
+    from app import client_metadata
+
+    async with nodelock.hold(body.protocol, server_id):
+        if await session.get(Server, server_id) is None:
+            raise HTTPException(404, "Сервер не найден")
+        protocol, cid = body.protocol, body.client_id
+        models = [(ClientName, ClientName.client_id), (PausedClient, PausedClient.client_id)]
+        if protocol in ("awg", "awg3", "awglegacy"):
+            models.append((AwgConfig, AwgConfig.public_key))
+        elif protocol == "openvpn":
+            models.append((OvpnConfig, OvpnConfig.client_id))
+        elif protocol in ("wireguard", "openvpn-native"):
+            models.append((NativeVpnConfig, NativeVpnConfig.client_id))
+        found = False
+        for model, key in models:
+            query = select(key).where(model.server_id == server_id, key == cid)
+            if hasattr(model, "protocol"):
+                query = query.where(model.protocol == protocol)
+            if await session.scalar(query) is not None:
+                found = True
+                break
+        if not found:
+            # A newly issued Xray client may not have reached the collector yet;
+            # external clients likewise have no stored profile. Read the node only.
+            from app.api import awg, awg3, awg_legacy, native_vpn, openvpn, xray
+            readers = {"awg": awg.get_awg, "awg3": awg3.get_awg3,
+                       "awglegacy": awg_legacy.get_legacy, "openvpn": openvpn.get_openvpn,
+                       "xray": xray.get_xray}
+            if protocol in readers:
+                state = await readers[protocol](server_id, _, session)
+                clients = state.clients
+                found = any(getattr(c, "public_key", getattr(c, "client_id", None)) == cid for c in clients)
+            else:
+                server = await session.get(Server, server_id)
+                try:
+                    async with native_vpn.connection(server, protocol) as conn:
+                        state = await native_vpn.native_vpn.state(conn, protocol, server.host)
+                except Exception as exc:
+                    raise native_vpn.failure(exc) from None
+                found = any(c.get("public_key", c.get("client_id")) == cid for c in state["clients"])
+        if not found:
+            raise HTTPException(404, "Клиент не найден")
+        await client_metadata.set_labels(session, server_id, protocol, cid,
+                                         body.group_name, body.device_name)
+        await session.commit()
 
 # Отзываем ноды ПАРАЛЛЕЛЬНО, но с потолком: массовая чистка по десятку серверов
 # иначе растянулась бы на минуты, а без потолка — открыла бы столько SSH-сессий,

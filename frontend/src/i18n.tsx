@@ -11,6 +11,19 @@ export type Lang = 'ru' | 'en'
 // Ключ = русская строка (дефолт). Значение = английский перевод.
 // Отсутствующий ключ → возвращается русский (мягкий фолбэк).
 const EN: Record<string, string> = {
+  'Имя клиента': 'Client name',
+  'Срок задан': 'Expiry set',
+  'Дополнительно': 'Advanced',
+  'Клиент / человек': 'Client / person',
+  'Устройство': 'Device',
+  'Необязательно': 'Optional',
+  'Например, ноутбук или рабочий компьютер': 'For example, laptop or work computer',
+  'Готовый конфиг': 'Ready configuration',
+  'Создать следующего': 'Create next client',
+  'Группировать по клиенту': 'Group by client',
+  'Клиент и устройство': 'Client and device',
+  'Столбцы таблицы': 'Table columns',
+  'Показать все столбцы': 'Show all columns',
   'Завершено': 'Completed',
   'Еще не проверен': 'Not checked yet',
   'Подключение по SSH': 'Connecting over SSH',
