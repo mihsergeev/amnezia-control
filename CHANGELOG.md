@@ -4,6 +4,12 @@ All notable changes to Amnezia Control are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.84.42] - 2026-11-11
+
+- Add an optional server name to cascade setup. When left blank, use the verified SSH hostname after a successful check, and resolve the country flag immediately.
+- Preserve explicit names, country overrides, and existing server records during onboarding. Prevent delayed checks from overwriting concurrent server edits.
+- Start temporary AmneziaWG and GRE transfer checks only after both endpoints are ready, avoiding false failures when one endpoint takes longer to prepare. Preserve cleanup safeguards and existing VPN configurations.
+
 ## [0.84.41] - 2026-11-10
 
 - Add Debug logs to the settings menu, with operation and severity filters, expandable error details, and a downloadable support ZIP.

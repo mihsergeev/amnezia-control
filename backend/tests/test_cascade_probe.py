@@ -79,6 +79,90 @@ def test_reality_receiver_final_rule_and_routing_bind_same_actual_port():
         {"action": "allow", "network": "tcp", "ip": ["127.0.0.1/32"], "port": "43199"}]
 
 
+@pytest.mark.parametrize("release", ["go", "close", ""])
+def test_exit_receiver_deadline_starts_after_delayed_entry_preparation(tmp_path, release):
+    worker = worker_namespace()
+    config = {"tag": "a" * 32, "interface": "acp1234567890", "container": "probe-test",
+              "transport": "gre", "role": "exit", "peer_ip": "203.0.113.20", "peer_source": "203.0.113.20",
+              "inner": "198.51.100.1", "peer_inner": "198.51.100.2", "total": 4, "token": "test-token",
+              "network": "198.51.100.0/30", "lease": 100, "cleanup_rules": [], "gre_key": 123456}
+    events, deadlines, stopped = [], [], []
+    clock = {"now": 0}
+
+    class Connection:
+        def __init__(self):
+            self.parts = iter([b"test-token", b"data"])
+
+        def __enter__(self): return self
+        def __exit__(self, *args): return False
+        def settimeout(self, _seconds): pass
+        def recv(self, _size): return next(self.parts)
+        def sendall(self, _data): pass
+
+    class Listener:
+        closed = False
+
+        def setsockopt(self, *_args): pass
+        def bind(self, _address): pass
+        def listen(self, _backlog): pass
+        def getsockname(self): return (config["inner"], 43123)
+        def settimeout(self, seconds): deadlines.append((clock["now"], seconds))
+        def accept(self): return Connection(), (config["peer_inner"], 12345)
+        def close(self): self.closed = True
+
+    listener = Listener()
+
+    class Input:
+        count = 0
+
+        def readline(self):
+            self.count += 1
+            if self.count == 1:
+                return json.dumps(config) + "\n"
+            if self.count == 2:
+                assert events[-1]["event"] == "ready"
+                assert deadlines == []
+                # Entry preparation takes longer than the old 25-second accept
+                # deadline; virtual time advances without any real sleeping.
+                clock["now"] = 31
+                return release + "\n" if release else ""
+            return "close\n"
+
+    def command(args, required=True):
+        data, code = b"", 0
+        if args[:4] == ["ip", "link", "show", "dev"]:
+            code = 1
+        elif args[:4] == ["ip", "-j", "-4", "route"]:
+            data = json.dumps([{"prefsrc": "203.0.113.10"}] if "get" in args else []).encode()
+        elif args[:4] == ["ip", "-j", "-4", "address"]:
+            data = b"[]"
+        elif args[:4] == ["ip", "-j", "-d", "link"]:
+            data = json.dumps([{"ifindex": 42, "ifalias": config["tag"]}] if "dev" in args else []).encode()
+        elif args[:4] == ["ip", "-j", "link", "show"]:
+            data = b'[{"ifindex":42}]'
+        return subprocess.CompletedProcess(args, code, data, b"")
+
+    worker["command"] = command
+    worker["Path"] = lambda _value: tmp_path
+    worker["shutil"] = SimpleNamespace(which=lambda _: "/test/tool")
+    worker["sys"] = SimpleNamespace(stdin=Input())
+    worker["os"] = SimpleNamespace(umask=lambda _: None, fork=lambda: 123,
+        kill=lambda *args: stopped.append(args), waitpid=lambda *args: (123, 0))
+    worker["signal"] = SimpleNamespace(SIGTERM=15, SIGALRM=14, signal=lambda *args: None, alarm=lambda _: None)
+    worker["socket"] = SimpleNamespace(socket=lambda: listener, SOL_SOCKET=1, SO_REUSEADDR=2)
+    worker["time"] = SimpleNamespace(monotonic_ns=lambda: clock["now"] * 1_000_000_000)
+    worker["emit"] = lambda **value: events.append(value)
+    worker["main"]()
+    results = [event for event in events if event["event"] == "result"]
+    assert bool(results) is (release == "go")
+    assert deadlines == ([(31, 25)] if release == "go" else [])
+    if results:
+        assert results[0]["bytes"] == 4
+    assert listener.closed and stopped == [(123, 15)]
+    assert events[-1] == {"event": "cleanup", "ok": True}
+    assert not list(tmp_path.iterdir())
+
+
 @pytest.mark.parametrize("occupied,alias_failure,delete_failure,atomic_failure,create_interrupt", [
     (False, False, False, False, False), (False, True, False, False, False),
     (True, False, False, False, False), (False, True, True, False, False),
@@ -258,9 +342,21 @@ class Process:
         self.events = asyncio.Queue()
         for event in events:
             self.events.put_nowait(json.dumps(event) + "\n")
-        self.stdout = SimpleNamespace(readline=self.events.get)
+        self.started = asyncio.Event()
+        self.stdout = SimpleNamespace(readline=self.readline)
         self.writes = []
-        self.stdin = SimpleNamespace(write=self.writes.append, write_eof=lambda: None)
+        self.stdin = SimpleNamespace(write=self.write, write_eof=lambda: None)
+
+    async def readline(self):
+        line = await self.events.get()
+        if json.loads(line).get("event") == "result":
+            await self.started.wait()
+        return line
+
+    def write(self, value):
+        self.writes.append(value)
+        if value == "go\n":
+            self.started.set()
 
 
 async def test_setup_unavailable_is_not_a_fake_transport_measurement(monkeypatch):
@@ -360,6 +456,12 @@ async def test_cleanup_failure_retains_full_measurement_and_identifies_side(monk
     entry = Process([{"event": "ready"}, {"event": "result", "bytes": size,
                        "sent": size, "secs": 0.2, "digest_matches": True},
                      {"event": "cleanup", "ok": True}])
+    writes = []
+    for role, process in (("exit", exit_), ("entry", entry)):
+        def write(value, role=role, process=process):
+            writes.append((role, value))
+            process.write(value)
+        process.stdin.write = write
     processes = iter([exit_, entry])
     async def start(*args): return next(processes)
     monkeypatch.setattr(cascade_probe, "_start", start)
@@ -368,7 +470,9 @@ async def test_cleanup_failure_retains_full_measurement_and_identifies_side(monk
     assert result["error"] == cascade_probe.CLEANUP_ERROR
     assert result["transfer_ok"] is True and result["bytes"] == size
     assert result["cleanup_failed"] == ["exit"]
+    assert exit_.writes[0] == "go\n"
     assert entry.writes[0] == "go\n"
+    assert writes[:2] == [("exit", "go\n"), ("entry", "go\n")]
 
 
 async def test_gre_probe_uses_routed_entry_address_for_exit_peer_and_firewall(monkeypatch):

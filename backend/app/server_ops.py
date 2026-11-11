@@ -3,8 +3,10 @@
 import asyncio
 import ipaddress
 import json
+import re
 from datetime import datetime, timedelta, timezone
 
+from sqlalchemy import update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import cascade_alias, geo, sshops
@@ -14,6 +16,12 @@ from app.sshkeys import ensure_panel_key, key_paths
 
 # как часто сборщик переспрашивает адрес выхода клиентов (кнопка «Проверить» - сразу)
 EGRESS_TTL = timedelta(hours=1)
+ONBOARDING_NAME_PENDING = "onboarding_name_pending"
+_CHECK_RESULT_FIELDS = (
+    "name", "country", "last_check_ok", "last_check_at", "last_check_info",
+    "egress_ip", "egress_country", "egress_org", "egress_at",
+)
+_CHECK_GUARD_FIELDS = ("host", "ssh_port", "ssh_user", "client_endpoint", *_CHECK_RESULT_FIELDS)
 
 
 def egress_due(server: Server, now: datetime) -> bool:
@@ -68,6 +76,8 @@ async def store_check_info(session: AsyncSession, server: Server, info: dict) ->
     The caller owns the transaction.
     """
     info = dict(info)
+    if cascade_alias.check_info(server).get(ONBOARDING_NAME_PENDING) is True:
+        info[ONBOARDING_NAME_PENDING] = True
     peer = info.get("manual_cascade")
     if isinstance(peer, dict):
         peer = dict(peer)
@@ -88,6 +98,11 @@ async def store_check_info(session: AsyncSession, server: Server, info: dict) ->
 async def run_check(session: AsyncSession, server: Server, settings: Settings) -> None:
     from app import debug_context
 
+    current = server
+    original = {field: getattr(current, field) for field in _CHECK_GUARD_FIELDS}
+    # Network awaits must never flush a partially prepared observation or
+    # overwrite a manual edit made while SSH/GeoIP/egress checks were running.
+    server = Server(id=current.id, **original)
     ensure_panel_key(settings.data_dir)
     key_path, _pub = key_paths(settings.data_dir)
     result = await sshops.check_server(
@@ -102,7 +117,19 @@ async def run_check(session: AsyncSession, server: Server, settings: Settings) -
     now = datetime.now(timezone.utc)
     server.last_check_ok = result.ok
     server.last_check_at = now
-    await store_check_info(session, server, result.as_dict())
+    info = result.as_dict()
+    if result.ok and cascade_alias.check_info(server).get(ONBOARDING_NAME_PENDING) is True:
+        # Only new, unnamed wizard endpoints opt in. An existing label, even
+        # one equal to an IP address, must never be renamed by a normal check.
+        hostname = result.hostname.strip()
+        if server.name == server.host and re.fullmatch(r"[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}", hostname):
+            server.name = hostname
+        previous = cascade_alias.check_info(server)
+        previous.pop(ONBOARDING_NAME_PENDING, None)
+        server.last_check_info = json.dumps(previous, ensure_ascii=False)
+    await store_check_info(session, server, info)
+    if result.ok and not server.country:
+        server.country = geo.normalize_country_code(await geo.country_code(server.host))
     if result.ok and result.amnezia_containers:
         egress = None
         try:
@@ -115,8 +142,15 @@ async def run_check(session: AsyncSession, server: Server, settings: Settings) -
             egress = None
         if egress is not None:
             apply_egress(server, await describe_egress(server.host, egress), now)
+    await session.execute(
+        update(Server).where(
+            Server.id == current.id,
+            *(getattr(Server, field) == value for field, value in original.items()),
+        ).values(**{field: getattr(server, field) for field in _CHECK_RESULT_FIELDS})
+        .execution_options(synchronize_session=False)
+    )
     await session.commit()
-    await session.refresh(server)
+    await session.refresh(current)
 
 
 async def bootstrap_and_check(

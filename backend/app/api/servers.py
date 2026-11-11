@@ -62,6 +62,7 @@ async def list_servers(_: CurrentUser, session: SessionDep) -> list[Server]:
 async def create_server(
     body: ServerCreate, response: Response, user: CurrentUser, session: SessionDep,
     reuse_ssh_endpoint: bool = False,
+    name_from_hostname: bool = False,
 ) -> Server:
     await client_endpoint.require_resolvable(body.client_endpoint)
     async with nodelock.hold("server-registration", 0):
@@ -79,6 +80,8 @@ async def create_server(
         # новый сервер — в конец списка
         max_pos = await session.scalar(select(func.max(Server.position)))
         server = Server(**body.model_dump(), position=(max_pos or 0) + 1)
+        if reuse_ssh_endpoint and name_from_hostname:
+            server.last_check_info = json.dumps({server_ops.ONBOARDING_NAME_PENDING: True})
         session.add(server)
         await session.commit()
     await session.refresh(server)
@@ -142,6 +145,10 @@ async def update_server(
     )
     for field, value in changes.items():
         setattr(server, field, value)
+    if any(field in changes for field in ("name", "host", "ssh_port", "ssh_user")):
+        info = cascade_alias.check_info(server)
+        if info.pop(server_ops.ONBOARDING_NAME_PENDING, None) is not None:
+            server.last_check_info = json.dumps(info, ensure_ascii=False)
     if host_changed:
         await cascade_alias.remove(session, server_id)
         info = cascade_alias.check_info(server)

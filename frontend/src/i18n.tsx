@@ -366,6 +366,8 @@ const EN: Record<string, string> = {
   'Кому выдан (напр. billing-panel)': 'Issued to (e.g. billing-panel)',
   'Копировать': 'Copy',
   'Название': 'Name',
+  'Автоматически по имени сервера': 'Use the server hostname automatically',
+  'Если оставить пустым, панель возьмет имя из SSH-проверки, а если оно недоступно - адрес сервера.': 'Leave blank to use the hostname from the SSH check, or the server address if unavailable.',
   'Новый ключ': 'New key',
   'Отозван API-ключ': 'API key revoked',
   'Изменен API-ключ': 'API key changed',

@@ -58,7 +58,7 @@ const STEPS: { key: Step; label: string }[] = [
   { key: 'install', label: '4. Установка' },
 ]
 
-const EMPTY_SERVER_FORM = { host: '', port: 22, user: 'root', password: '' }
+const EMPTY_SERVER_FORM = { name: '', host: '', port: 22, user: 'root', password: '' }
 
 function TransportProbeStatus({ row }: { row: TransportProbeRow }) {
   const { t, lang } = useI18n()
@@ -245,9 +245,10 @@ export function CascadeWizard({
     const target = { host: nf.host.trim(), ssh_port: nf.port, ssh_user: nfMode === 'password' ? nf.user.trim() : defaultUser }
     let server: Server | null = null
     try {
-      server = await api<Server>('/api/servers?reuse_ssh_endpoint=true', {
+      const name = nf.name.trim()
+      server = await api<Server>(`/api/servers?reuse_ssh_endpoint=true${name ? '' : '&name_from_hostname=true'}`, {
         method: 'POST',
-        body: JSON.stringify({ ...target, name: target.host, note: '', group_name: groupName }),
+        body: JSON.stringify({ ...target, name: name || target.host, note: '', group_name: groupName }),
       })
       const currentCascades = await listCascades()
       if (!eligibleServer(server, currentCascades)) return null
@@ -637,6 +638,17 @@ export function CascadeWizard({
           </>
         ) : (
           <>
+            <label>
+              {t('Название')}
+              <input
+                value={nf.name}
+                maxLength={128}
+                disabled={busy}
+                placeholder={t('Автоматически по имени сервера')}
+                onChange={(e) => setNf({ ...nf, name: e.target.value })}
+              />
+            </label>
+            <p className="muted small">{t('Если оставить пустым, панель возьмет имя из SSH-проверки, а если оно недоступно - адрес сервера.')}</p>
             <div className="cas-row2">
               <label>
                 {t('Хост (IP или домен)')}

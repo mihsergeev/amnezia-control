@@ -49,12 +49,12 @@ async def test_alias_survives_checks_only_for_same_endpoint(client, auth_headers
     observed["exit_port"] = 8443
     response = await client.post(url + "/check", headers=auth_headers)
     assert "exit_name" not in json.loads(response.json()["last_check_info"])["manual_cascade"]
-    assert looked_up == ["203.0.113.20"]
+    assert looked_up == ["203.0.113.20", "198.51.100.10"]
     observed["exit_host"] = "203.0.113.21"
     response = await client.post(url + "/check", headers=auth_headers)
     peer = json.loads(response.json()["last_check_info"])["manual_cascade"]
     assert peer["exit_country"] == "FI" and "exit_name" not in peer
-    assert looked_up == ["203.0.113.20", "203.0.113.21"]
+    assert looked_up == ["203.0.113.20", "198.51.100.10", "203.0.113.21"]
 
 
 async def test_alias_clear_null_and_delete(client, auth_headers):

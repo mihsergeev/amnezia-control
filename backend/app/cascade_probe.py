@@ -365,8 +365,10 @@ def main():
                 prerequisite={'ok':True,'error':''}
             except OSError: prerequisite={'ok':False,'error':'TCP connection to the Reality listener failed'}
         emit(event='ready',receiver_port=receiver_port,prerequisite_tcp=prerequisite)
+        # Preparation of the other node must not consume the receiver's
+        # accept deadline. Both sides start only after the panel releases them.
+        if sys.stdin.readline().strip()!='go': raise TimeoutError()
         if role=='entry':
-            if sys.stdin.readline().strip()!='go': raise TimeoutError()
             host='127.0.0.1' if transport=='vless' else peer
             port=cfg['port'] if transport=='vless' else receiver_port
             result=send(host,port,cfg['token'].encode(),cfg['total'],iface if transport!='vless' else None,own)
@@ -759,6 +761,7 @@ async def run(exit_conn, entry_conn, entry_ip: str, exit_ip: str, transport: str
         if transport == "vless": result["prerequisite_tcp"] = ready.get("prerequisite_tcp")
         if result.get("prerequisite_tcp") and result["prerequisite_tcp"].get("error"):
             result["prerequisite_tcp"]["error"] = "Не удалось подключиться к TCP-порту VLESS"
+        exit_process.stdin.write("go\n")
         entry_process.stdin.write("go\n")
         sent, received = await asyncio.gather(_event(entry_process), _event(exit_process))
         result.update(verdict(sent, received))
