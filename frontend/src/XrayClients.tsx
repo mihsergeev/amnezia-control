@@ -522,7 +522,10 @@ export function XrayClients({
                   <AmneziaQr key={variant.amnezia} text={variant.amnezia} format="vpn" />
                 )}
               </div>
-              <pre className="script-box">{shownText}</pre>
+              <details className="quick-issue-text" key={shownText}>
+                <summary>{t('Текст конфига')}</summary>
+                <pre className="script-box">{shownText}</pre>
+              </details>
               {shareLink.result}
             </div>
             <div className="modal-actions">

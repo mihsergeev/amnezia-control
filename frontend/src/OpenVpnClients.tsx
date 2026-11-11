@@ -374,7 +374,7 @@ export function OpenVpnClients({
         creating={savingMetadata} onCreate={saveMetadata} onCancel={() => setMetadataFor(null)} />}
 
       {view && (
-        <section className="quick-issue-result" aria-label={t('Готовый конфиг')}>
+        <section className={`quick-issue-result${view.native ? ' quick-issue-result-no-qr' : ''}`} aria-label={t('Готовый конфиг')}>
           <div className="quick-issue-result-content">
             <h3 tabIndex={-1} ref={resultHeading}>{t('Конфиг клиента «{name}»', { name: view.name })}</h3>
             <div className="modal-config-body">
@@ -387,7 +387,10 @@ export function OpenVpnClients({
             {!view.native && <div className="qr-wrap">
               <AmneziaQr key={view.text} text={view.text} format="vpn" />
             </div>}
-            <pre className="script-box">{view.text}</pre>
+            <details className="quick-issue-text" key={view.text}>
+                <summary>{t('Текст конфига')}</summary>
+                <pre className="script-box">{view.text}</pre>
+              </details>
             {shareLink.result}
             </div>
             <div className="modal-actions">

@@ -772,7 +772,10 @@ export function ClientsModal({
                   <span className="muted small">{t('генерация QR…')}</span>
                 )}
               </div>
-              <pre className="script-box">{currentText}</pre>
+              <details className="quick-issue-text" key={currentText}>
+                <summary>{t('Текст конфига')}</summary>
+                <pre className="script-box">{currentText}</pre>
+              </details>
               {shareLink.result}
               </div>
               <div className="modal-actions">
