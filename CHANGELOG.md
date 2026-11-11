@@ -4,6 +4,15 @@ All notable changes to Amnezia Control are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.84.44] - Unreleased
+
+- Add inline client profile issuance for supported VPN protocols, with profile download and QR access after creation.
+- Default new clients to unlimited access and keep optional expiry in Advanced settings.
+- Add optional person and device labels stored separately from VPN configurations, with each device retaining its own client credentials.
+- Preserve existing clients, keys, and configuration contents when creating profiles or editing labels.
+- Preserve client metadata through backup and restore.
+- Prevent duplicate UI submissions and ignore stale configuration and metadata responses.
+
 ## [0.84.43] - 2026-11-11
 
 - Redesign cascade setup with separate entry and exit progress, actual operation stages, elapsed time, and a clear indication of the failing endpoint. Support narrow screens and both themes.
