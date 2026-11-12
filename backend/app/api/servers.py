@@ -5,7 +5,7 @@ from fastapi import APIRouter, HTTPException, Response, status
 from sqlalchemy import delete as sa_delete
 from sqlalchemy import func, select, update as sa_update
 
-from app import audit, cascade_alias, cascadejob, client_endpoint, egresscheck, geo, limits, native_snapshots, nodelock, server_ops, sshops, torrent
+from app import audit, cascade_alias, cascade_http, cascadejob, client_endpoint, egresscheck, geo, limits, native_snapshots, nodelock, server_ops, sshops, torrent
 from app.config import get_settings
 from app.db import Base
 from app.deps import CurrentUser, SessionDep
@@ -26,6 +26,12 @@ from app.schemas import (
 from app.sshkeys import ensure_panel_key, key_paths
 
 router = APIRouter(prefix="/servers", tags=["servers"])
+
+
+@router.post("/{server_id}/site-check", response_model=cascade_http.SiteCheckOut)
+async def check_server_sites(server_id: int, body: cascade_http.SiteCheck, _: CurrentUser, session: SessionDep):
+    server = await _get_or_404(server_id, session)
+    return await cascade_http.diagnose(session, server, body, get_settings())
 
 
 def _server_scoped_models() -> list:

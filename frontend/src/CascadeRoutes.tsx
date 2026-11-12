@@ -1,10 +1,12 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react'
-import { ApiError, previewCascadeRoutes, updateCascadeRoutes, type CascadeRouteDestinationResult, type Cascade, type CascadeRoute, type Server } from './api'
+import { ApiError, checkCascadeRoutesHttp, previewCascadeRoutes, type CascadeRouteHttpResult, type SiteCheckScheme, updateCascadeRoutes, type CascadeRouteDestinationResult, type Cascade, type CascadeRoute, type Server } from './api'
 import { cascadeEntryCountry } from './cascadeUi'
 import { countryFlag } from './format'
 import { useI18n } from './i18n'
+import { siteCheckRetryDestinations } from './siteCheckUi'
+import { SiteCheckResult } from './SiteCheckResult'
 import { useModalDismiss } from './useModalDismiss'
-import { MAX_CASCADE_ROUTES, appendRouteBatch, moveRoute, previewRouteBatch, routeBatchInput, routeOverlap, routeSignature, type RouteOverlap, type BatchRouteLine } from './cascadeRouteDraft'
+import { MAX_CASCADE_ROUTES, appendRouteBatch, moveRoute, previewRouteBatch, routeBatchInput, routeHttpDestinations, routeOverlap, routeSignature, type RouteOverlap, type BatchRouteLine } from './cascadeRouteDraft'
 
 type Props = {
   cascade: Cascade
@@ -15,6 +17,7 @@ type Props = {
   onUnauthorized: () => void
 }
 type Row = CascadeRoute & { id: number }
+type HttpBatch = { via: CascadeRoute['via']; scheme: SiteCheckScheme; requested: number; results: Record<string, CascadeRouteHttpResult>; pending: boolean; error?: string; timeoutSeconds?: number; budgetSeconds?: number }
 type Editor = { id: number | null; destination: string; via: CascadeRoute['via']; priority: string }
 
 // Remount drafts when the actual cascade or its gateway identity changes.
@@ -37,8 +40,12 @@ function CascadeRoutesEditor({ cascade, entry, exit, onClose, onSaved, onUnautho
   const [bulkVia, setBulkVia] = useState<CascadeRoute['via']>('exit')
   const [batch, setBatch] = useState('')
   const [batchVia, setBatchVia] = useState<CascadeRoute['via']>('exit')
+  const [batchScheme, setBatchScheme] = useState<SiteCheckScheme>('https')
   const [checkedBatch, setCheckedBatch] = useState<{ text: string; results: CascadeRouteDestinationResult[] } | null>(null)
   const [lastReport, setLastReport] = useState<BatchRouteLine[] | null>(null)
+  const [httpBatch, setHttpBatch] = useState<HttpBatch | null>(null)
+  const httpSequence = useRef(0)
+  const httpAbort = useRef<AbortController | null>(null)
   const [validating, setValidating] = useState<'batch' | 'editor' | null>(null)
   const validationBusy = useRef(false)
   const validationRevision = useRef(0)
@@ -57,13 +64,56 @@ function CascadeRoutesEditor({ cascade, entry, exit, onClose, onSaved, onUnautho
     { via: 'exit', label: t('Выход'), server: exit, address: cascade.exit_ip, country: exit?.country ?? '' },
   ] as const
 
-  useEffect(() => { alive.current = true; return () => { alive.current = false } }, [])
+  useEffect(() => { alive.current = true; return () => { alive.current = false; httpAbort.current?.abort() } }, [])
   useEffect(() => {
     function warn(event: BeforeUnloadEvent) { if (pending) { event.preventDefault(); event.returnValue = '' } }
     window.addEventListener('beforeunload', warn)
     return () => window.removeEventListener('beforeunload', warn)
   }, [pending])
 
+  function clearHttpCheck() {
+    httpSequence.current++
+    httpAbort.current?.abort()
+    httpAbort.current = null
+    setHttpBatch(null)
+  }
+  async function checkHttp(lines: BatchRouteLine[], via: CascadeRoute['via'], scheme: SiteCheckScheme, previous?: HttpBatch) {
+    if (previous && httpAbort.current) return
+    const destinations = previous ? siteCheckRetryDestinations(previous.results) : routeHttpDestinations(lines)
+    const retained = previous ? { ...previous.results } : {}
+    destinations.forEach((destination) => { delete retained[destination] })
+    clearHttpCheck()
+    if (!destinations.length) return
+    const sequence = httpSequence.current
+    const serverId = via === 'entry' ? cascade.entry_server_id : cascade.exit_server_id
+    const current: HttpBatch = { via, scheme, requested: destinations.length, results: retained, pending: true }
+    if (destinations.length > MAX_CASCADE_ROUTES) {
+      setHttpBatch({ ...current, pending: false, error: t('HTTP-проверка доступна для пакета до 100 уникальных адресов. Уменьшите пакет.'), results: Object.fromEntries(destinations.map((destination) => [destination, { destination, status: 'not_checked' }])) })
+      return
+    }
+    const controller = new AbortController()
+    httpAbort.current = controller
+    setHttpBatch(current)
+    try {
+      const checked = await checkCascadeRoutesHttp(cascade.id, via, destinations, scheme, controller.signal)
+      if (!alive.current || sequence !== httpSequence.current || controller.signal.aborted) return
+      if (checked.source.via !== via || checked.source.server_id !== serverId || checked.draft_applied !== false) {
+        setHttpBatch({ ...current, results: previous?.results ?? retained, pending: false, error: t('Контекст HTTP-проверки изменился. Повторите проверку.') })
+        return
+      }
+      const results = Object.fromEntries(destinations.map((destination, index) => {
+        const result = checked.results[index]
+        return [destination, result?.destination === destination ? result : { destination, status: 'not_checked' as const }]
+      }))
+      setHttpBatch({ ...current, results: { ...retained, ...results }, pending: false, timeoutSeconds: checked.timeout_seconds, budgetSeconds: checked.budget_seconds })
+    } catch (err) {
+      if (!alive.current || sequence !== httpSequence.current || controller.signal.aborted) return
+      if (err instanceof ApiError && err.status === 401) onUnauthorized()
+      setHttpBatch({ ...current, results: previous?.results ?? retained, pending: false, error: err instanceof ApiError && err.status === 429 ? t('HTTP-проверка уже выполняется. Повторите попытку чуть позже.') : err instanceof ApiError && err.status === 409 ? t('Контекст HTTP-проверки изменился. Повторите проверку.') : t('Не удалось выполнить HTTP-проверку. Маршруты можно добавить.') })
+    } finally {
+      if (httpAbort.current === controller) httpAbort.current = null
+    }
+  }
   function close() {
     if (!busy.current && (!pending || window.confirm(t('Закрыть без сохранения? Несохраненные изменения будут потеряны.')))) onClose()
   }
@@ -84,6 +134,7 @@ function CascadeRoutesEditor({ cascade, entry, exit, onClose, onSaved, onUnautho
   function reset() {
     validationRevision.current++
     if (pending && !window.confirm(t('Отменить изменения? Несохраненные изменения будут потеряны.'))) return
+    clearHttpCheck()
     changed(initial.current)
     setSelected(new Set())
     setBatch('')
@@ -98,13 +149,17 @@ function CascadeRoutesEditor({ cascade, entry, exit, onClose, onSaved, onUnautho
     if (input.length > 200 || input.some((line) => line.raw.length > 1024)) {
       setError(t('За одну проверку можно отправить до 200 адресов, не больше 1024 символов в строке.')); return
     }
+    clearHttpCheck()
     const revision = ++validationRevision.current
     validationBusy.current = true
     setValidating('batch')
     setError('')
     try {
       const result = await previewCascadeRoutes(input.map((line) => line.raw))
-      if (alive.current && revision === validationRevision.current) setCheckedBatch({ text: batch, results: result.results })
+      if (alive.current && revision === validationRevision.current) {
+        setCheckedBatch({ text: batch, results: result.results })
+        void checkHttp(previewRouteBatch(batch, rows, result.results), batchVia, batchScheme)
+      }
     } catch (err) {
       if (alive.current && revision === validationRevision.current) {
         if (err instanceof ApiError && err.status === 401) onUnauthorized()
@@ -192,13 +247,14 @@ function CascadeRoutesEditor({ cascade, entry, exit, onClose, onSaved, onUnautho
             <h4 id="cascade-route-batch-title">{t('Пакетное добавление')}</h4>
             <div className="cascade-route-batch-inputs">
               <label>{t('По одному адресу на строку')}<textarea rows={4} value={batch} placeholder={'service.example.com\n192.0.2.0/24'}
-                onChange={(event) => { validationRevision.current++; setBatch(event.target.value); setCheckedBatch(null); setLastReport(null); setMessage('') }} /></label>
-              <label>{t('Направление новых правил')}<select value={batchVia} onChange={(event) => { validationRevision.current++; setBatchVia(event.target.value as CascadeRoute['via']); setCheckedBatch(null) }}>
+                onChange={(event) => { clearHttpCheck(); validationRevision.current++; setBatch(event.target.value); setCheckedBatch(null); setLastReport(null); setMessage('') }} /></label>
+              <label>{t('Направление новых правил')}<select value={batchVia} onChange={(event) => { clearHttpCheck(); validationRevision.current++; setBatchVia(event.target.value as CascadeRoute['via']); setCheckedBatch(null) }}>
                 <option value="entry">{t('Вход')}</option><option value="exit">{t('Выход')}</option>
               </select></label>
+              <label>{t('Протокол HTTP-проверки')}<select value={batchScheme} onChange={(event) => { clearHttpCheck(); validationRevision.current++; setBatchScheme(event.target.value as SiteCheckScheme); setCheckedBatch(null) }}><option value="https">HTTPS</option><option value="http">HTTP</option></select></label>
             </div>
             <div className="cascade-route-toolbar">
-              <button type="button" className="ghost" disabled={!batch.trim() || !!validating} onClick={validateBatch}>{validating === 'batch' ? t('Проверяем…') : t('Проверить адреса')}</button>
+              <button type="button" className="ghost" disabled={!batch.trim() || !!validating || !!httpBatch?.pending} onClick={validateBatch}>{validating === 'batch' ? t('Проверяем…') : t('Проверить адреса')}</button>
               <button type="button" disabled={!preview || !valid.length || tooMany || !!validating || !!editor} onClick={() => {
                 if (!preview || tooMany) return
                 const updated = appendRouteBatch(rows, preview, batchVia)
@@ -210,15 +266,25 @@ function CascadeRoutesEditor({ cascade, entry, exit, onClose, onSaved, onUnautho
                 setCheckedBatch(null)
                 setMessage(t('Добавлено в конец списка: {n}. Изменения еще не сохранены.', { n: added.length }))
               }}>{t('Добавить {n}', { n: valid.length })}</button>
-              {batch && <button type="button" className="ghost" onClick={() => { validationRevision.current++; setBatch(''); setCheckedBatch(null) }}>{t('Очистить ввод')}</button>}
+              {batch && <button type="button" className="ghost" onClick={() => { clearHttpCheck(); validationRevision.current++; setBatch(''); setCheckedBatch(null) }}>{t('Очистить ввод')}</button>}
               <span className="muted small">{t('Новые правила добавляются в конец списка')}</span>
             </div>
             {report && <div className="cascade-route-preview" aria-live="polite">
               <p className="small">{preview ? t('К добавлению: {valid}, пропущено: {skipped}', { valid: valid.length, skipped: preview.length - valid.length }) : t('Добавлено: {valid}, пропущено: {skipped}', { valid: report.filter((line) => line.status === 'valid').length, skipped: report.filter((line) => line.status !== 'valid').length })}</p>
               {tooMany && <p className="err-text small" role="alert">{t('Лимит 100 правил. Свободно: {n}. Уменьшите пакет, адреса не будут обрезаны.', { n: MAX_CASCADE_ROUTES - rows.length })}</p>}
+              {httpBatch && <div className="cascade-route-http-summary">
+                <p className="small">{t('Проверка с сервера: {source}', { source: `${httpBatch.via === 'entry' ? t('Вход') : t('Выход')} · ${(httpBatch.via === 'entry' ? entry : exit)?.name || (httpBatch.via === 'entry' ? cascade.entry_ip : cascade.exit_ip)}` })}</p>
+                <p className="muted small">{httpBatch.pending ? t('HTTP-проверка выполняется: {n} адресов', { n: httpBatch.requested }) : t('HTTP-проверка завершена')}
+                  {httpBatch.timeoutSeconds !== undefined && ` · ${t('До {n} с на адрес', { n: httpBatch.timeoutSeconds })}`}
+                  {httpBatch.budgetSeconds !== undefined && ` · ${t('До {n} с на пакет', { n: httpBatch.budgetSeconds })}`}</p>
+                <p className="muted small">{t('HTTP-ответ справочный и не мешает добавлению. Проверка не применяет черновик маршрутов; ответ в браузере может отличаться.')}</p>
+                {httpBatch.error && <p className="cascade-route-http-error small" role="status">{httpBatch.error}</p>}
+                {!httpBatch.pending && siteCheckRetryDestinations(httpBatch.results).length > 0 && <button type="button" className="ghost" onClick={() => { void checkHttp([], httpBatch.via, httpBatch.scheme, httpBatch) }}>{t('Повторить непроверенные ({n})', { n: siteCheckRetryDestinations(httpBatch.results).length })}</button>}
+              </div>}
               <ol>{report.map((line) => <li key={line.line} className={line.status === 'valid' ? '' : 'err-text'} value={line.line}>
-                <span className="mono">{line.destination || line.raw}</span><span className="small">{line.status === 'valid' ? (preview ? t('Готово к добавлению') : t('Добавлено в список')) : line.status === 'duplicate' ? t('Пропуск: адрес уже есть в списке или пакете') : line.status === 'reserved' ? t('Пропуск: домен зарезервирован для проверки каскада') : t('Пропуск: неверный домен, IPv4 или подсеть')}
-                  {line.overlap && <span className="cascade-route-warning">{overlapText(line.overlap)}</span>}</span>
+                <span className="mono">{line.destination || line.raw}</span><div className="small">{line.status === 'valid' ? (preview ? t('Готово к добавлению') : t('Добавлено в список')) : line.status === 'duplicate' ? t('Пропуск: адрес уже есть в списке или пакете') : line.status === 'reserved' ? t('Пропуск: домен зарезервирован для проверки каскада') : t('Пропуск: неверный домен, IPv4 или подсеть')}
+                  {line.destination && httpBatch && <SiteCheckResult result={httpBatch.results[line.destination]} pending={httpBatch.pending} scheme={httpBatch.scheme} />}
+                  {line.overlap && <span className="cascade-route-warning">{overlapText(line.overlap)}</span>}</div>
               </li>)}</ol>
             </div>}
           </section>

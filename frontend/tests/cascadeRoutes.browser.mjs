@@ -4,7 +4,7 @@ import { existsSync } from 'node:fs'
 import { mkdir, writeFile } from 'node:fs/promises'
 import { createServer } from 'vite'
 import { chromium } from 'playwright'
-const artifacts = process.env.CASCADE_TEST_ARTIFACTS || 'C:/tmp/acontrol-cascade-batch-08446'
+const artifacts = process.env.CASCADE_TEST_ARTIFACTS || 'C:/tmp/acontrol-site-check-08447'
 await mkdir(artifacts, { recursive: true })
 const server = await createServer({ server: { host: '127.0.0.1', port: 0 } })
 await server.listen()
@@ -29,18 +29,24 @@ async function fixture(count = 16, width = 1100, theme = 'dark', language = 'ru'
   page.on('pageerror', (error) => errors.push(error.message))
   await page.addInitScript(({ theme, language }) => { localStorage.setItem('acontrol_lang', language); localStorage.setItem('acontrol_theme', theme) }, { theme, language })
   const calls = []
-  const control = { saveStatus: 200, previewStatus: 200, saveDelay: 0, previewDelay: 0 }
+  const control = { saveStatus: 200, previewStatus: 200, saveDelay: 0, previewDelay: 0, httpStatus: 200, httpDelay: 0, httpResults: null, httpSource: null }
   await page.route('**/api/cascades/**', async (route) => {
     const request = route.request()
     const body = request.postDataJSON()
     const path = new URL(request.url()).pathname
     calls.push({ path, method: request.method(), body })
     const preview = path.endsWith('/preview')
-    const status = preview ? control.previewStatus : control.saveStatus
-    const delay = preview ? control.previewDelay : control.saveDelay
+    const http = path.endsWith('/http-check')
+    const status = http ? control.httpStatus : preview ? control.previewStatus : control.saveStatus
+    const delay = http ? control.httpDelay : preview ? control.previewDelay : control.saveDelay
+    const data = status === 200 ? http ? {
+      source: control.httpSource || { via: body.via, server_id: body.via === 'entry' ? 1 : 2 },
+      results: body.destinations.map((destination, index) => ({ destination, scheme: body.scheme, ...(control.httpResults?.[index] || (destination.includes('/') ? { status: 'not_applicable', reason: 'cidr_not_http' } : { status: 'response', http_status: 200 })), timings_ms: { dns: 1.2, tcp: 4.1, tls: 8.3, total: 15.6 } })),
+      timeout_seconds: 3, budget_seconds: 12, draft_applied: false,
+    } : preview ? { results: body.destinations.map(canonical) } : { id: Number(path.split('/')[3]), entry_server_id: 1, exit_server_id: 2, entry_ip: '192.0.2.10', exit_ip: '198.51.100.20', routes: body.routes } : { detail: 'Synthetic route failure' }
     if (delay) await new Promise((resolve) => setTimeout(resolve, delay))
-    const data = status === 200 ? preview ? { results: body.destinations.map(canonical) } : { id: Number(path.split('/')[3]), entry_server_id: 1, exit_server_id: 2, entry_ip: '192.0.2.10', exit_ip: '198.51.100.20', routes: body.routes } : { detail: 'Synthetic route failure' }
-    await route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(data) })
+    if (page.isClosed()) return
+    await route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(data) }).catch((error) => { if (!page.isClosed()) throw error })
   })
   await page.goto(`${server.resolvedUrls.local[0]}tests/fixtures/cascade-routes.html?count=${count}`)
   await page.getByRole('dialog').waitFor()
@@ -221,6 +227,108 @@ try {
     assert.doesNotMatch(await page.getByRole('dialog').textContent(), /[а-яА-ЯёЁ]/)
     await page.screenshot({ path: `${artifacts}/routes-390-light-en.png` })
     checks.push('English UI has translated labels, preview statuses and actions')
+    await page.close()
+  }
+  {
+    const { page, calls, control } = await fixture(0, 390, 'light')
+    control.httpDelay = 350
+    control.httpResults = [{ status: 'response', http_status: 200 }, { status: 'response', http_status: 403 }, { status: 'response', http_status: 302 }, { status: 'timeout', reason: 'target_timeout' }, { status: 'node_unreachable', reason: 'node_unreachable' }, { status: 'not_applicable', reason: 'cidr_not_http' }]
+    await validate(page, 'ok.example\ndenied.example\nredirect.example\nslow.example\nssh.example\n192.0.2.0/24')
+    assert.equal(await page.getByRole('button', { name: 'Добавить 6', exact: true }).isEnabled(), true, 'HTTP pending does not block valid additions')
+    assert.equal(await page.locator('[data-http-status="checking"]').count(), 6)
+    assert.match(await page.locator('.cascade-route-http-summary').textContent(), /Проверка с сервера: Выход · Exit server/)
+    await page.locator('[data-http-status="timeout"]').waitFor()
+    assert.equal(await page.locator('.cascade-route-http-success').filter({ hasText: 'HTTP 200' }).count(), 1)
+    assert.equal(await page.locator('.cascade-route-http-error').filter({ hasText: 'HTTP 403' }).count(), 1)
+    assert.equal(await page.locator('.cascade-route-http-warning').filter({ hasText: 'HTTP 302' }).count(), 1)
+    assert.match(await page.locator('[data-http-status="timeout"]').textContent(), /Таймаут ответа сайта/)
+    assert.match(await page.locator('[data-http-status="node_unreachable"]').textContent(), /недоступен по SSH/)
+    assert.doesNotMatch(await page.locator('[data-http-status="not_applicable"]').textContent(), /200/)
+    assert.equal(await page.getByRole('button', { name: 'Добавить 6', exact: true }).isEnabled(), true)
+    await page.screenshot({ path: `${artifacts}/batch-http-390-light.png` })
+    await page.getByRole('button', { name: 'Добавить 6', exact: true }).click()
+    assert.equal(await save(page).isEnabled(), true)
+    assert.equal(await input(page).inputValue(), '')
+    await agree(page, () => save(page).click())
+    await waitAttribute(page, 'data-saved', '1')
+    const payload = calls.find(({ method }) => method === 'PUT').body.routes
+    assert.equal(payload.length, 6)
+    assert.deepEqual(Object.keys(payload[1]).sort(), ['destination', 'via'])
+    checks.push('HTTP exact codes/colors; separate site timeout and SSH errors; CIDR has no fake200; errors are informational and atomic Add/Save still work')
+    await page.close()
+  }
+  {
+    const { page, calls, control } = await fixture(0)
+    control.httpDelay = 750
+    control.httpResults = [{ status: 'response', http_status: 201 }]
+    await validate(page, 'old.example')
+    await page.getByRole('combobox', { name: 'Направление новых правил', exact: true }).selectOption('entry')
+    assert.equal(await page.locator('.cascade-route-http').count(), 0)
+    control.httpDelay = 20
+    control.httpResults = [{ status: 'response', http_status: 403 }]
+    await page.getByRole('combobox', { name: 'Протокол HTTP-проверки', exact: true }).selectOption('http')
+    await page.getByRole('button', { name: 'Проверить адреса', exact: true }).click()
+    await page.locator('[data-http-status="response"]').waitFor()
+    assert.match(await page.locator('.cascade-route-http').textContent(), /HTTP 403HTTP/)
+    await page.waitForTimeout(800)
+    assert.doesNotMatch(await page.locator('.cascade-route-http').textContent(), /201/)
+    const request = calls.filter(({ path }) => path.endsWith('/http-check')).at(-1)
+    assert.equal(request.body.via, 'entry')
+    assert.equal(request.body.scheme, 'http')
+    control.httpResults = [{ status: 'timeout', reason: 'target_timeout' }]
+    await page.getByRole('button', { name: 'Проверить адреса', exact: true }).click()
+    await page.locator('[data-http-status="timeout"]').waitFor()
+    control.httpResults = [{ status: 'response', http_status: 204 }]
+    await page.getByRole('button', { name: 'Проверить адреса', exact: true }).click()
+    await page.locator('.cascade-route-http-success').waitFor()
+    assert.match(await page.locator('.cascade-route-http').textContent(), /204/)
+    checks.push('HTTP direction/scheme changes invalidate stale replies; explicitHTTP request; timeout can be rerun and replaced')
+    await page.close()
+  }
+  {
+    const { page, calls, control } = await fixture(0)
+    control.httpResults = [{ status: 'response', http_status: 200 }, { status: 'response', http_status: 403 }, { status: 'not_checked', reason: 'batch_deadline' }, { status: 'not_checked', reason: 'batch_deadline' }]
+    await validate(page, 'ok.example\ndenied.example\nqueued.example\nlast.example')
+    const retry = page.getByRole('button', { name: 'Повторить непроверенные (2)', exact: true })
+    await retry.waitFor()
+    control.httpDelay = 100
+    control.httpResults = [{ status: 'response', http_status: 204 }, { status: 'timeout', reason: 'target_timeout' }]
+    await retry.evaluate((button) => { button.click(); button.click() })
+    await page.locator('[data-http-status="timeout"]').waitFor()
+    const requests = calls.filter(({ path }) => path.endsWith('/http-check'))
+    assert.equal(requests.length, 2, 'double retry sends only one extra request')
+    assert.deepEqual(requests[1].body.destinations, ['queued.example', 'last.example'])
+    for (const code of [200, 403, 204]) assert.match(await page.locator('.cascade-route-preview').textContent(), new RegExp(`HTTP ${code}`))
+    assert.equal(await page.getByRole('button', { name: 'Добавить 4', exact: true }).isEnabled(), true)
+    checks.push('partial deadline retries only queued destinations once, preserves prior200/403 and keeps Add available')
+    await page.close()
+  }
+  {
+    const { page, control } = await fixture(0)
+    control.httpSource = { via: 'exit', server_id: 999 }
+    await validate(page, 'source.example')
+    await page.locator('.cascade-route-http-summary').getByRole('status').filter({ hasText: 'Контекст HTTP-проверки изменился' }).waitFor()
+    assert.doesNotMatch(await page.locator('.cascade-route-preview').textContent(), /HTTP 200/)
+    control.httpSource = { via: 'entry', server_id: 2 }
+    await page.getByRole('button', { name: 'Проверить адреса', exact: true }).click()
+    await page.locator('.cascade-route-http-summary').getByRole('status').filter({ hasText: 'Контекст HTTP-проверки изменился' }).waitFor()
+    assert.doesNotMatch(await page.locator('.cascade-route-preview').textContent(), /HTTP 200/)
+    checks.push('server-ID and direction source mismatches never display a success under the requested header')
+    await page.close()
+  }
+  {
+    const { page, calls, control } = await fixture(0)
+    control.httpDelay = 900
+    await validate(page, 'pending.example')
+    await page.getByRole('button', { name: 'Добавить 1', exact: true }).click()
+    assert.equal(await save(page).isEnabled(), true, 'saving remains available while informationalHTTP is in flight')
+    await agree(page, () => save(page).click())
+    await waitAttribute(page, 'data-saved', '1')
+    assert.equal(calls.filter(({ method }) => method === 'PUT').length, 1)
+    await page.evaluate(() => window.dispatchEvent(new Event('switch-cascade')))
+    await page.waitForTimeout(950)
+    assert.equal(await page.locator('.cascade-route-http').count(), 0)
+    checks.push('Add/Save whileHTTP pending; context switch discards delayedHTTP results')
     await page.close()
   }
   for (const width of [320, 390, 1100]) for (const theme of ['light', 'dark']) {

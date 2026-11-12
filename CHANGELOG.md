@@ -4,6 +4,15 @@ All notable changes to Amnezia Control are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.84.47] - 2026-11-12
+
+- Add informational HTTP and HTTPS checks for batch cascade addresses from the selected entry or exit server. Show exact response codes and separate destination errors from an unreachable check server, without blocking valid route additions.
+- Add Check website to the server menu, with HTTP results and DNS, TCP, TLS, and total timings from that server's network.
+- Make the protocol explicit, with HTTPS selected by default. Send GET / and inspect response headers without reading response bodies, following redirects, or switching protocols automatically.
+- Limit each address to three seconds and run checks in parallel within a twelve-second request budget. Mark addresses left unchecked by the deadline and retry only those addresses while retaining earlier results.
+- Authenticate and bound read-only checks using existing SSH host trust, pinned public DNS answers, and verified TLS. Preserve VPN clients, configurations, and ordered cascade routes.
+- Ignore stale results after input, protocol, source, or dialog changes, and verify response source identity. Support Russian and English, narrow screens, and both themes.
+
 ## [0.84.46] - 2026-11-12
 
 - Replace cascade route cards with a compact ordered list, a shared entry/exit summary, address search that retains global priorities, and bulk direction changes.

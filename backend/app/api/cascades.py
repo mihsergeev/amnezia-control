@@ -18,7 +18,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select
 
 from app import (
-    audit, cascade, cascade_awg, cascade_exit, cascade_lock, cascade_observations,
+    audit, cascade, cascade_awg, cascade_exit, cascade_http, cascade_lock, cascade_observations,
     cascade_probe, cascade_progress, cascade_recovery, cascadejob, deploy, geo, nodelock, server_ops,
 )
 from app.cascade_routes import (
@@ -47,6 +47,18 @@ router = APIRouter(prefix="/cascades", tags=["cascades"])
 @router.post("/routes/preview", response_model=RoutePreviewOut)
 async def preview_routes(body: RoutePreview, _: CurrentUser) -> RoutePreviewOut:
     return preview_destinations(body.destinations)
+
+
+@router.post("/{cascade_id}/routes/http-check", response_model=cascade_http.SiteCheckOut)
+async def check_route_sites(cascade_id: int, body: cascade_http.CascadeSiteCheck, _: CurrentUser, session: SessionDep):
+    current = await _get_or_404(cascade_id, session)
+    if current.status != "ready" or cascadejob.running(current.id):
+        raise HTTPException(409, "Проверка доступна после установки каскада")
+    server_id = current.entry_server_id if body.via == "entry" else current.exit_server_id
+    server = await session.get(Server, server_id)
+    if server is None:
+        raise HTTPException(404, "Сервер не найден")
+    return await cascade_http.diagnose(session, server, body, get_settings(), cascade=current, via=body.via)
 
 
 # последняя проверка канала по паре (вход, выход): ее показывает карточка

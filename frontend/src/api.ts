@@ -1287,6 +1287,38 @@ export function previewCascadeRoutes(destinations: string[]): Promise<{ results:
   })
 }
 
+export type CascadeRouteHttpResult = {
+  destination?: string | null
+  status: 'response' | 'timeout' | 'error' | 'not_applicable' | 'blocked' | 'invalid' | 'not_checked' | 'node_unreachable' | 'unavailable'
+  http_status?: number | null
+  scheme?: 'https' | 'http' | null
+  reason?: string | null
+  timings_ms?: { dns?: number | null; tcp?: number | null; tls?: number | null; total: number }
+}
+export type SiteCheckScheme = 'https' | 'http'
+export type SiteHttpCheck = {
+  source: { via?: CascadeRoute['via'] | null; server_id: number }
+  results: CascadeRouteHttpResult[]
+  timeout_seconds: number
+  budget_seconds: number
+}
+export type CascadeRouteHttpCheck = SiteHttpCheck & { source: { via: CascadeRoute['via']; server_id: number }; draft_applied: false }
+export function checkCascadeRoutesHttp(id: number, via: CascadeRoute['via'], destinations: string[], scheme: SiteCheckScheme = 'https', signal?: AbortSignal): Promise<CascadeRouteHttpCheck> {
+  return api(`/api/cascades/${id}/routes/http-check`, {
+    method: 'POST',
+    body: JSON.stringify({ via, destinations, scheme }),
+    signal,
+  })
+}
+
+export function checkServerSites(id: number, destinations: string[], scheme: SiteCheckScheme = 'https', signal?: AbortSignal): Promise<SiteHttpCheck> {
+  return api(`/api/servers/${id}/site-check`, {
+    method: 'POST',
+    body: JSON.stringify({ destinations, scheme }),
+    signal,
+  })
+}
+
 export function updateCascadeRoutes(id: number, routes: CascadeRoute[]): Promise<Cascade> {
   return api<Cascade>(`/api/cascades/${id}/routes`, {
     method: 'PUT',

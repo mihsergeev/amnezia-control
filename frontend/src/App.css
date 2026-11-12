@@ -4034,7 +4034,7 @@ tr.row-link:hover td {
 .cascade-route-node .server-flag { flex-shrink: 0; }
 .cascade-route-batch { background: var(--hover); border: 1px solid var(--border); border-radius: 12px; padding: 14px; margin: 12px 0; }
 .cascade-route-batch h4 { margin: 0 0 12px; }
-.cascade-route-batch-inputs { display: grid; grid-template-columns: minmax(0, 1fr) 170px; gap: 12px; align-items: end; }
+.cascade-route-batch-inputs { display: grid; grid-template-columns: minmax(0, 1fr) 140px 135px; gap: 12px; align-items: end; }
 .cascade-route-toolbar { display: flex; align-items: end; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
 .cascade-route-toolbar button, .cascade-route-selection button, .cascade-route-row button { padding: 7px 10px; font-size: .82rem; }
 .cascade-route-search { flex: 1; }
@@ -4111,4 +4111,36 @@ tr.row-link:hover td {
   .client-table .row-actions > .menu { order: 2; }
   .quick-issue-form input, .client-group-form input { width: 100%; min-width: 0; }
   .client-group-form .add-form-actions { flex-wrap: wrap; }
+}
+
+/* Informational website checks do not change route eligibility or VPN settings. */
+.cascade-route-http { display: inline-flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-top: 5px; padding: 4px 8px; border: 1px solid currentColor; border-radius: 7px; font-size: .82rem; background: color-mix(in srgb, currentColor 8%, transparent); }
+.cascade-route-http-success { color: #80d69a; }
+.cascade-route-http-warning { color: #f0c06a; }
+.cascade-route-http-error, .cascade-route-http-error.small { color: #ff9d9d; }
+.cascade-route-http-pending, .cascade-route-http-muted { color: var(--text-muted); }
+:root[data-theme='light'] .cascade-route-http-success { color: #166534; }
+:root[data-theme='light'] .cascade-route-http-warning { color: #854d0e; }
+:root[data-theme='light'] .cascade-route-http-error { color: #b42318; }
+.site-check-scheme { font-size: .72rem; opacity: .85; }
+.cascade-route-http-summary { padding: 8px 0; }
+.cascade-route-http-summary p { margin: 4px 0; }
+.site-check-modal { width: min(660px, 100%); max-height: calc(100dvh - 32px); overflow: hidden; }
+.site-check-modal .clients-head, .site-check-modal > .modal-actions { flex-shrink: 0; }
+.site-check-body { min-height: 0; overflow-y: auto; overflow-wrap: anywhere; }
+.site-check-source { display: flex; align-items: center; gap: 8px; }
+.site-check-inputs { display: grid; grid-template-columns: minmax(0, 1fr) 150px; gap: 12px; }
+.site-check-inputs label { display: grid; gap: 5px; min-width: 0; }
+.site-check-inputs input, .site-check-inputs select { min-width: 0; width: 100%; border: 1px solid var(--border); background: var(--bg-card); color: var(--text); border-radius: 8px; padding: 9px; font: inherit; }
+.site-check-inputs input:focus-visible, .site-check-inputs select:focus-visible { outline: 2px solid #3563e9; outline-offset: 2px; }
+.site-check-output { border: 1px solid var(--border); border-radius: 10px; padding: 12px; margin-top: 16px; }
+.site-check-output > strong { overflow-wrap: anywhere; }
+.site-check-timings { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; margin: 14px 0 0; }
+.site-check-timings > div { min-width: 0; padding: 9px; background: var(--hover); border-radius: 8px; }
+.site-check-timings dt { font-size: .75rem; color: var(--text-muted); }
+.site-check-timings dd { margin: 4px 0 0; font-size: .85rem; }
+@media (max-width: 620px) {
+  .site-check-modal { max-height: calc(100dvh - 16px); padding: 14px 12px; }
+  .site-check-inputs { grid-template-columns: minmax(0, 1fr); gap: 8px; }
+  .site-check-timings { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }

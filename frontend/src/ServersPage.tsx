@@ -36,6 +36,7 @@ import { countryFlag, formatBytes, formatUptime } from './format'
 import { CascadeWizard } from './CascadeWizard'
 import { CascadeCheckModal } from './CascadeCheck'
 import { CascadeRoutesModal } from './CascadeRoutes'
+import { SiteCheckModal } from './SiteCheck'
 import { cascadeEntryCountry, cascadeTransportLabel, latestCascadeHealth } from './cascadeUi'
 import { EgressCheckModal } from './EgressCheck'
 import { TorrentLine } from './Torrent'
@@ -661,6 +662,7 @@ export function ServersPage({ onUnauthorized }: Props) {
   // окно проверки канала каскада
   const [casCheck, setCasCheck] = useState<Cascade | null>(null)
   const [egressCheck, setEgressCheck] = useState<Server | null>(null)
+  const [siteCheckFor, setSiteCheckFor] = useState<Server | null>(null)
 
   useEffect(() => {
     const state = window.history.state && typeof window.history.state === 'object' ? window.history.state : {}
@@ -1077,7 +1079,7 @@ export function ServersPage({ onUnauthorized }: Props) {
       info?.protocols ?? {},
     )
     const online = s.last_check_ok === true
-    const items: MenuItem[] = []
+    const items: MenuItem[] = [{ label: t('Проверить сайт'), onClick: () => setSiteCheckFor(s) }]
     if (online && protocols.length === 0) {
       items.push({
         label: t('Развернуть AmneziaWG'),
@@ -1972,6 +1974,7 @@ export function ServersPage({ onUnauthorized }: Props) {
         </div>
       )}
 
+      {siteCheckFor && <SiteCheckModal server={servers.find((server) => server.id === siteCheckFor.id) || siteCheckFor} onClose={() => setSiteCheckFor(null)} onUnauthorized={onUnauthorized} />}
       {egressCheck && (
         <EgressCheckModal
           server={egressCheck}

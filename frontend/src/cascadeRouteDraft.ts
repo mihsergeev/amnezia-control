@@ -63,3 +63,8 @@ export function moveRoute<T>(routes: readonly T[], from: number, to: number): T[
 export function routeSignature(routes: readonly CascadeRoute[]): string {
   return JSON.stringify(routes.map(({ destination, via }) => ({ destination, via })))
 }
+
+/** Probe each canonical address once; duplicate rows share the informational result. */
+export function routeHttpDestinations(lines: readonly BatchRouteLine[]): string[] {
+  return [...new Set(lines.filter((line) => line.destination && (line.status === 'valid' || line.status === 'duplicate')).map((line) => line.destination!))]
+}
