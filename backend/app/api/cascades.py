@@ -21,7 +21,9 @@ from app import (
     audit, cascade, cascade_awg, cascade_exit, cascade_lock, cascade_observations,
     cascade_probe, cascade_progress, cascade_recovery, cascadejob, deploy, geo, nodelock, server_ops,
 )
-from app.cascade_routes import Route, RouteUpdate, update_script
+from app.cascade_routes import (
+    Route, RoutePreview, RoutePreviewOut, RouteUpdate, preview_destinations, update_script,
+)
 from app.conflict import conflict
 from app.config import get_settings
 from app import debug_context
@@ -40,6 +42,12 @@ from app.schemas import (
 )
 
 router = APIRouter(prefix="/cascades", tags=["cascades"])
+
+
+@router.post("/routes/preview", response_model=RoutePreviewOut)
+async def preview_routes(body: RoutePreview, _: CurrentUser) -> RoutePreviewOut:
+    return preview_destinations(body.destinations)
+
 
 # последняя проверка канала по паре (вход, выход): ее показывает карточка
 _last_probe: dict[tuple[int, int], dict] = {}

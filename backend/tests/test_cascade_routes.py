@@ -126,3 +126,55 @@ def test_retry_after_config_replace_reloads_the_gateway(tmp_path, monkeypatch, r
     exec(cascade_routes._UPDATE, {})
     assert restarts == ([[new_base, *rules]] if reinstalled else [original, original + rules])
     assert not (tmp_path / ".routes-pending").exists()
+
+
+@pytest.mark.parametrize("failure", ["candidate", "restart", "recovery"])
+def test_failed_route_update_retains_last_working_configuration(tmp_path, monkeypatch, failure):
+    path = tmp_path / "config.json"
+    original = json.dumps({"inbounds": [{"tag": "preserved-client"}], "routing": {"rules": [
+        {"ip": ["geoip:private"], "outboundTag": "block"},
+        {"domain": ["domain:example.com"], "outboundTag": "exit"},
+    ]}}).encode()
+    path.write_bytes(original)
+    monkeypatch.setattr(sys, "argv", ["-c", json.dumps([
+        str(tmp_path), "gateway", "owner", 1080, cascade_routes.RULE_TAG,
+        cascade_routes.xray_rules([{"destination": "example.org", "via": "entry"}]),
+    ])])
+    restarts = []
+
+    def docker(args, **_kwargs):
+        if args[1] == "inspect":
+            return SimpleNamespace(stdout=json.dumps([{
+                "Id": "a" * 64, "Config": {"Labels": {"org.amnezia.control.owner": "owner"}},
+                "State": {"Running": True},
+                "Mounts": [{"Source": str(tmp_path), "Destination": "/usr/local/etc/xray"}],
+            }]))
+        if args[1] == "exec" and failure == "candidate":
+            raise subprocess.CalledProcessError(1, args)
+        if args[1] == "restart":
+            restarts.append(path.read_bytes())
+            if len(restarts) == 1 or failure == "recovery":
+                raise subprocess.CalledProcessError(1, args)
+        return SimpleNamespace(stdout="")
+
+    lstat = Path.lstat
+
+    def config_stat(self, *args, **kwargs):
+        meta = lstat(self, *args, **kwargs)
+        return (SimpleNamespace(st_mode=meta.st_mode, st_size=meta.st_size, st_uid=0)
+                if self == path else meta)
+
+    monkeypatch.setattr(Path, "lstat", config_stat)
+    monkeypatch.setattr(subprocess, "run", docker)
+    monkeypatch.setattr(socket, "create_connection", lambda *_args, **_kwargs: nullcontext())
+    if failure == "candidate":
+        with pytest.raises(subprocess.CalledProcessError):
+            exec(cascade_routes._UPDATE, {})
+        assert not restarts
+    else:
+        with pytest.raises(SystemExit) as error:
+            exec(cascade_routes._UPDATE, {})
+        assert error.value.code == (74 if failure == "recovery" else 75)
+        assert len(restarts) == 2 and restarts[-1] == original
+    assert path.read_bytes() == original
+    assert (tmp_path / ".routes-pending").exists() == (failure == "recovery")

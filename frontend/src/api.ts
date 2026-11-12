@@ -1279,6 +1279,14 @@ export function createCascade(request: CascadeCreateRequest): Promise<Cascade> {
   })
 }
 
+export type CascadeRouteDestinationResult = { valid: true; destination: string } | { valid: false; error: 'invalid_destination' | 'reserved_destination' }
+export function previewCascadeRoutes(destinations: string[]): Promise<{ results: CascadeRouteDestinationResult[] }> {
+  return api('/api/cascades/routes/preview', {
+    method: 'POST',
+    body: JSON.stringify({ destinations }),
+  })
+}
+
 export function updateCascadeRoutes(id: number, routes: CascadeRoute[]): Promise<Cascade> {
   return api<Cascade>(`/api/cascades/${id}/routes`, {
     method: 'PUT',

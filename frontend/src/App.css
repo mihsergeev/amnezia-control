@@ -4001,94 +4001,83 @@ tr.row-link:hover td {
   border-radius: 12px;
 }
 
+/* Cascade route drafts keep global priorities while search only changes visibility. */
+.cascade-routes-backdrop { padding: 16px; overflow: hidden; }
 .cascade-routes-modal {
-  width: min(720px, 100%);
-}
-
-.cascade-route-list {
-  display: grid;
-  gap: 10px;
-  max-height: 48vh;
-  overflow-y: auto;
-  padding: 2px;
-}
-
-.cascade-route-empty,
-.cascade-route-row {
-  margin: 0;
-  min-width: 0;
-  padding: 12px;
-  border: 1px solid var(--border);
-  border-radius: 12px;
-}
-
-.cascade-route-row legend {
-  padding-inline: 5px;
-  font-weight: 600;
-}
-
-.cascade-route-address,
-.cascade-route-options {
-  display: grid;
-  gap: 8px;
-}
-
-.cascade-route-address {
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: end;
-}
-
-.cascade-route-address label {
-  display: grid;
-  gap: 4px;
-  min-width: 0;
-}
-
-.cascade-route-address input {
-  width: 100%;
-  min-width: 0;
-}
-
-.cascade-route-options {
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  margin-top: 12px;
-}
-
-.cascade-route-option {
+  width: min(980px, 100%);
   display: flex;
-  align-items: flex-start;
-  gap: 8px;
-  padding: 9px;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  overflow-wrap: anywhere;
-  cursor: pointer;
+  flex-direction: column;
+  max-height: calc(100dvh - 32px);
+  overflow: hidden;
+  padding-bottom: 0;
 }
-
-.cascade-route-option:has(input:checked) {
-  border-color: #3563e9;
-  background: var(--hover);
+.cascade-routes-modal .clients-head { flex-shrink: 0; }
+.cascade-routes-scroll { flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
+.cascade-routes-body {
+  border: 0; margin: 0; padding: 0 3px 14px; min-width: 0;
 }
-
-.cascade-route-option input {
-  width: auto;
-  margin: 3px 0 0;
-  accent-color: #3563e9;
+.cascade-routes-modal label { display: grid; gap: 5px; min-width: 0; font-size: .85rem; }
+.cascade-routes-modal input:not([type="checkbox"]),
+.cascade-routes-modal textarea, .cascade-routes-modal select {
+  width: 100%; min-width: 0; max-width: 100%; font: inherit; font-size: .9rem;
+  border: 1px solid var(--border); border-radius: 8px;
+  color: var(--text); background: var(--bg-card); padding: 8px;
 }
-
-.cascade-route-node {
-  display: block;
-  margin-block: 2px;
-}
-
-.cascade-route-node .server-flag {
-  margin-inline-end: 5px;
-}
-
-@media (max-width: 480px) {
-  .cascade-route-options {
-    grid-template-columns: minmax(0, 1fr);
-  }
+.cascade-routes-modal input[type="checkbox"] { width: 16px; height: 16px; margin: 0; flex-shrink: 0; accent-color: #3563e9; }
+.cascade-routes-modal input:focus-visible, .cascade-routes-modal textarea:focus-visible,
+.cascade-routes-modal select:focus-visible { outline: 2px solid #3563e9; outline-offset: 2px; }
+.cascade-routes-modal textarea { resize: vertical; min-height: 88px; max-height: 260px; }
+.cascade-route-nodes { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.cascade-route-node { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 10px; min-width: 0; }
+.cascade-route-node > div { min-width: 0; overflow-wrap: anywhere; }
+.cascade-route-node .mono { display: block; margin-top: 4px; }
+.cascade-route-node .server-flag { flex-shrink: 0; }
+.cascade-route-batch { background: var(--hover); border: 1px solid var(--border); border-radius: 12px; padding: 14px; margin: 12px 0; }
+.cascade-route-batch h4 { margin: 0 0 12px; }
+.cascade-route-batch-inputs { display: grid; grid-template-columns: minmax(0, 1fr) 170px; gap: 12px; align-items: end; }
+.cascade-route-toolbar { display: flex; align-items: end; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+.cascade-route-toolbar button, .cascade-route-selection button, .cascade-route-row button { padding: 7px 10px; font-size: .82rem; }
+.cascade-route-search { flex: 1; }
+.cascade-route-preview { margin-top: 12px; }
+.cascade-route-preview > p { margin: 6px 0; }
+.cascade-route-preview ol { max-height: 240px; overflow-y: auto; padding-left: 30px; margin: 8px 0 0; }
+.cascade-route-preview li { padding: 5px 0; overflow-wrap: anywhere; }
+.cascade-route-preview li > span { display: block; }
+.cascade-route-warning { display: block; color: var(--text-muted); margin-top: 3px; }
+.cascade-route-summary { display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap; margin: 16px 0 8px; }
+.cascade-routes-modal .cascade-route-check { display: flex; flex-direction: row; align-items: center; gap: 8px; }
+.cascade-route-selection { display: flex; align-items: end; flex-wrap: wrap; gap: 10px; background: var(--hover); border-radius: 8px; padding: 10px; margin-bottom: 8px; }
+.cascade-route-selection > span { align-self: center; }
+.cascade-route-list { border-top: 1px solid var(--border); }
+.cascade-route-empty { padding: 16px 4px; }
+.cascade-route-row { display: grid; grid-template-columns: 18px 28px minmax(0, 1fr) 92px auto; align-items: center; gap: 9px; min-width: 0; padding: 9px 2px; border-bottom: 1px solid var(--border); }
+.cascade-route-destination { min-width: 0; overflow-wrap: anywhere; font-size: .9rem; }
+.cascade-route-priority { text-align: center; font-size: .8rem; }
+.cascade-route-row-actions { display: flex; gap: 4px; }
+.cascade-route-editor { display: grid; grid-template-columns: minmax(0, 1fr) 130px 95px; gap: 10px; background: var(--hover); border: 1px solid var(--border); border-radius: 10px; padding: 12px; margin-top: 12px; }
+.cascade-route-editor .cascade-route-toolbar, .cascade-route-editor > p { grid-column: 1 / -1; margin: 0; }
+.cascade-route-footer { flex-shrink: 0; border-top: 1px solid var(--border); padding: 10px 0 16px; }
+.cascade-route-footer p { margin: 0 0 6px; }
+.cascade-route-footer .modal-actions { margin-top: 10px; }
+@media (max-width: 620px) {
+  .cascade-routes-backdrop { padding: 8px; }
+  .cascade-routes-modal { max-height: calc(100dvh - 16px); padding: 14px 12px 0; }
+  .cascade-route-nodes, .cascade-route-batch-inputs { grid-template-columns: minmax(0, 1fr); gap: 8px; }
+  .cascade-route-node { padding: 8px 10px; }
+  .cascade-route-batch { padding: 10px; }
+  .cascade-route-toolbar > button { flex-grow: 1; }
+  .cascade-route-search { flex-basis: 100%; }
+  .cascade-route-row { grid-template-columns: 16px 24px minmax(0, 1fr) auto; gap: 6px; }
+  .cascade-route-row-check, .cascade-route-priority { grid-row: 1 / 3; }
+  .cascade-route-destination { grid-column: 3; grid-row: 1; }
+  .cascade-route-row > select { grid-column: 3; grid-row: 2; max-width: 110px; }
+  .cascade-route-row-actions { grid-column: 4; grid-row: 1 / 3; flex-direction: column; }
+  .cascade-route-row button { font-size: .75rem; padding: 6px; }
+  .cascade-route-editor { grid-template-columns: minmax(0, 1fr) 85px; }
+  .cascade-route-editor-address { grid-column: 1 / -1; }
+  .cascade-route-selection label { flex: 1; }
+  .cascade-route-footer .modal-actions { gap: 6px; }
+  .cascade-route-footer button { font-size: .82rem; padding: 8px; }
 }
 
 /* People are metadata containers; these controls keep the existing config table. */

@@ -4,6 +4,15 @@ All notable changes to Amnezia Control are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.84.46] - 2026-11-12
+
+- Replace cascade route cards with a compact ordered list, a shared entry/exit summary, address search that retains global priorities, and bulk direction changes.
+- Add batch route entry with per-address validation, visible reasons for skipped invalid or duplicate addresses, domain and IPv4 subnet overlap warnings, and an explicit 100-rule limit without truncation.
+- Normalize domains, IDNA names, IPv4 addresses, and strict subnets through a bounded authenticated preview endpoint using the existing server validator, without SSH or gateway changes during validation.
+- Support individual route creation, editing, deletion, and explicit priority changes while retaining the order of other routes. Append valid unique batch addresses to the end of the list.
+- Save the complete ordered draft through the existing atomic route update after confirming the brief gateway restart. Guard unsaved drafts, duplicate submissions, stale responses, and failed saves.
+- Support Russian and English, narrow screens, and both themes, with the editor header and save actions kept visible while the route list scrolls.
+
 ## [0.84.45] - 2026-11-12
 
 - Group existing VPN profiles by person in one action while retaining each device label, client credentials, and configuration.

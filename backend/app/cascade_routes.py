@@ -4,9 +4,9 @@ import ipaddress
 import json
 import re
 import shlex
-from typing import Literal
+from typing import Annotated, Literal
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, Field, ValidationError, field_validator, model_validator
 
 RULE_TAG = "acontrol-manual-route-"
 HEALTH_HOST = "api.ipify.org"
@@ -50,6 +50,40 @@ class RouteUpdate(BaseModel):
         if len({route.destination for route in self.routes}) != len(self.routes):
             raise ValueError("Each destination can have only one route")
         return self
+
+
+class RoutePreview(BaseModel):
+    destinations: list[Annotated[str, Field(strict=True, max_length=1024)]] = Field(max_length=200)
+
+
+class ValidDestination(BaseModel):
+    valid: Literal[True] = True
+    destination: str
+
+
+class InvalidDestination(BaseModel):
+    valid: Literal[False] = False
+    error: Literal["invalid_destination", "reserved_destination"]
+
+
+class RoutePreviewOut(BaseModel):
+    results: list[ValidDestination | InvalidDestination]
+
+
+def preview_destinations(destinations: list[str]) -> RoutePreviewOut:
+    results: list[ValidDestination | InvalidDestination] = []
+    for destination in destinations:
+        try:
+            route = Route(destination=destination, via="entry")
+        except ValidationError as exc:
+            # Return stable validation codes, never echo the raw input or
+            # Pydantic details. Route remains the sole destination validator.
+            reserved = any(str(error.get("ctx", {}).get("error", "")) ==
+                           "This domain is reserved for cascade health checks" for error in exc.errors())
+            results.append(InvalidDestination(error="reserved_destination" if reserved else "invalid_destination"))
+        else:
+            results.append(ValidDestination(destination=route.destination))
+    return RoutePreviewOut(results=results)
 
 
 def xray_rules(routes: list[dict]) -> list[dict]:
