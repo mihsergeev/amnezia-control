@@ -4,6 +4,13 @@ All notable changes to Amnezia Control are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.84.45] - Unreleased
+
+- Group existing VPN profiles by person in one action while retaining each device label, client credentials, and configuration.
+- Add devices to an existing person directly from their group.
+- Apply group changes atomically, with validation for all selected profiles before saving.
+- Preserve person and device labels across Xray UUID aliases, label edits, and reissuance, and remove all matching labels when a client is revoked.
+
 ## [0.84.44] - Unreleased
 
 - Add inline client profile issuance for supported VPN protocols, with profile download and QR access after creation.

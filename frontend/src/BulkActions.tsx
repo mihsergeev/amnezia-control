@@ -83,6 +83,7 @@ export function BulkRevokeBar({
     <>
       {n > 0 && (
         <div className="bulk-bar">
+          <strong className="small">{t('Действия с конфигами')}</strong>
           <span className="muted">{t('выбрано: {n}', { n: String(n) })}</span>
           <button className="ghost" onClick={sel.clear} disabled={busy}>
             {t('Снять все')}

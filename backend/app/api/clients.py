@@ -23,7 +23,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app import audit, bulk_issue_state, expiry, nodelock, pausestore, protolabel
 from app.config import get_settings
 from app.deps import CurrentUser, SessionDep
-from app.metadata_schemas import ClientMetadataRequest
+from app.metadata_schemas import BulkClientMetadataRequest, ClientMetadataRequest, metadata_identity
 from app.models import AwgConfig, AwgNote, ClientName, NativeVpnConfig, OvpnConfig, PausedClient, Server
 from app.schemas import (
     ClientSearchHit,
@@ -37,6 +37,77 @@ log = logging.getLogger("acontrol.clients")
 
 router = APIRouter(prefix="/clients", tags=["clients"])
 metadata_router = APIRouter(tags=["clients"])
+
+
+async def _metadata_client_ids(server, protocol, client_ids, user, session):
+    """Resolve all identities before any labels change; fetch node state at most once."""
+    models = [(ClientName, ClientName.client_id), (PausedClient, PausedClient.client_id)]
+    if protocol in ("awg", "awg3", "awglegacy"):
+        models.append((AwgConfig, AwgConfig.public_key))
+    elif protocol == "openvpn":
+        models.append((OvpnConfig, OvpnConfig.client_id))
+    elif protocol in ("wireguard", "openvpn-native"):
+        models.append((NativeVpnConfig, NativeVpnConfig.client_id))
+    requested = {metadata_identity(protocol, cid) for cid in client_ids}
+    found = {}
+    for model, key in models:
+        query = select(key).where(model.server_id == server.id)
+        if hasattr(model, "protocol"):
+            query = query.where(model.protocol == protocol)
+        if protocol != "xray":
+            query = query.where(key.in_(requested))
+        for cid in await session.scalars(query):
+            identity = metadata_identity(protocol, cid)
+            if identity in requested:
+                found.setdefault(identity, cid)
+        if found.keys() >= requested:
+            break
+    if found.keys() < requested:
+        from app.api import awg, awg3, awg_legacy, native_vpn, openvpn, xray
+        readers = {"awg": awg.get_awg, "awg3": awg3.get_awg3,
+                   "awglegacy": awg_legacy.get_legacy, "openvpn": openvpn.get_openvpn,
+                   "xray": xray.get_xray}
+        try:
+            if protocol in readers:
+                state = await readers[protocol](server.id, user, session)
+                ids = (getattr(c, "public_key", getattr(c, "client_id", None)) for c in state.clients)
+            else:
+                async with native_vpn.connection(server, protocol) as conn:
+                    state = await native_vpn.native_vpn.state(conn, protocol, server.host)
+                ids = (c.get("public_key", c.get("client_id")) for c in state["clients"])
+        except Exception as exc:
+            # Reader errors may contain SSH output. Grouping needs only a safe
+            # failure category, never node output or configuration contents.
+            failure = exc if isinstance(exc, HTTPException) else native_vpn.failure(exc)
+            raise HTTPException(failure.status_code, "Не удалось проверить клиентов на ноде") from None
+        for cid in ids:
+            if cid is not None:
+                identity = metadata_identity(protocol, cid)
+                if identity in requested:
+                    found.setdefault(identity, cid)
+    if found.keys() < requested:
+        raise HTTPException(404, "Клиент не найден")
+    return client_ids
+
+
+@metadata_router.post("/servers/{server_id}/client-metadata/bulk", status_code=204)
+async def update_client_metadata_bulk(server_id: int, body: BulkClientMetadataRequest,
+                                      user: CurrentUser, session: SessionDep):
+    from app import client_metadata
+
+    async with nodelock.hold(body.protocol, server_id):
+        try:
+            server = await session.get(Server, server_id)
+            if server is None:
+                raise HTTPException(404, "Сервер не найден")
+            ids = await _metadata_client_ids(server, body.protocol, body.client_ids, user, session)
+            await client_metadata.set_group(session, server_id, body.protocol, ids, body.group_name)
+            await session.commit()
+        except Exception:
+            await session.rollback()
+            raise
+        await audit.record(session, user.username, "clients_bulk_group",
+                           f"server_id={server_id};protocol={body.protocol}", f"count={len(ids)}")
 
 
 @metadata_router.post("/servers/{server_id}/client-metadata", status_code=204)

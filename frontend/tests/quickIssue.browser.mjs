@@ -1,7 +1,7 @@
 // Runs actual React components with an in-memory API. No VPN host is contacted.
 import assert from 'node:assert/strict'
 import { existsSync } from 'node:fs'
-import { readFile } from 'node:fs/promises'
+import { mkdir, readFile } from 'node:fs/promises'
 import { createServer } from 'vite'
 import { chromium } from 'playwright'
 
@@ -15,13 +15,13 @@ const awgLike = (protocol) => ['awg', 'awg3', 'awglegacy', 'wireguard'].includes
 const canonical = (path) => path === 'awg-legacy' ? 'awglegacy' : path
 const errors = []
 
-async function fixture(protocol = 'awg', width = 1100) {
+async function fixture(protocol = 'awg', width = 1100, options = {}) {
   const page = await browser.newPage({ viewport: { width, height: 1000 }, acceptDownloads: true })
   page.setDefaultTimeout(10000)
   page.on('pageerror', (error) => errors.push(error.message))
   const clients = new Map()
   const calls = []
-  const control = { failCreate: false, failMetadata: false, failList: false, delayCreate: 0, delayConfig: 0, delayMetadata: 0 }
+  const control = { failCreate: false, failMetadata: false, failList: false, delayCreate: 0, delayConfig: 0, delayMetadata: 0, failBulk: false, delayBulk: 0 }
   const list = (key) => { if (!clients.has(key)) clients.set(key, []); return clients.get(key) }
   const response = (key, client) => {
     const conf = `[Interface]\n# synthetic ${client.public_key}\nAddress = ${client.address}\n`
@@ -34,6 +34,8 @@ async function fixture(protocol = 'awg', width = 1100) {
         { key: 'xhttp', label: 'XHTTP', amnezia: amnezia + 'AA', uri: `vless://synthetic-${client.client_id}@vpn.example.test:443?type=xhttp` },
       ] } : {}) }
   }
+  if (options.clients) clients.set(protocol, structuredClone(options.clients))
+  if (options.server2Clients) clients.set(`2:${protocol}`, structuredClone(options.server2Clients))
   await page.route('**/api/**', async (route) => {
     const request = route.request()
     const url = new URL(request.url()).pathname
@@ -44,18 +46,31 @@ async function fixture(protocol = 'awg', width = 1100) {
     if (url === '/api/share') return fulfill({ url: 'https://share.example.test/one-time', ttl_days: 1 })
     if (url.endsWith('/torrent')) return fulfill({ clients: [] })
     if (url.endsWith('/version')) return fulfill({ deployed: true, current_version: 'test', update_available: false })
+    if (url.endsWith('/client-metadata/bulk')) {
+      if (control.delayBulk) await new Promise((resolve) => setTimeout(resolve, control.delayBulk))
+      if (control.failBulk) return fulfill({ detail: 'Synthetic grouping failure' }, 500)
+      assert.ok(body.client_ids.length <= 100)
+      const key = url.includes('/servers/2/') ? `2:${body.protocol}` : body.protocol
+      const selected = body.client_ids.map((id) => list(key).find((client) => client.client_id === id || client.public_key === id))
+      assert.ok(selected.every(Boolean), 'all selected stable IDs must exist')
+      selected.forEach((client) => { client.group_name = body.group_name })
+      return fulfill(null, 204)
+    }
     if (url.endsWith('/client-metadata')) {
+      if (control.metadataWait) await control.metadataWait
       if (control.delayMetadata) await new Promise((resolve) => setTimeout(resolve, control.delayMetadata))
       if (control.failMetadata) return fulfill({ detail: 'Synthetic metadata failure' }, 500)
-      const client = list(body.protocol).find((client) => client.client_id === body.client_id || client.public_key === body.client_id)
+      const metadataKey = url.includes('/servers/2/') ? `2:${body.protocol}` : body.protocol
+      const client = list(metadataKey).find((client) => client.client_id === body.client_id || client.public_key === body.client_id)
       assert.ok(client)
       Object.assign(client, { group_name: body.group_name, device_name: body.device_name })
       return fulfill(null, 204)
     }
-    const match = url.match(/^\/api\/servers\/1\/([^/]+)(?:\/(clients|config))?$/)
+    const match = url.match(/^\/api\/servers\/(1|2)\/([^/]+)(?:\/(clients|config))?$/)
     if (!match) return fulfill([])
-    const key = canonical(match[1])
-    if (match[2] === 'clients') {
+    const protocolKey = canonical(match[2])
+    const key = match[1] === '2' ? `2:${protocolKey}` : protocolKey
+    if (match[3] === 'clients') {
       if (control.delayCreate) await new Promise((resolve) => setTimeout(resolve, control.delayCreate))
       if (control.failCreate) return fulfill({ detail: 'Synthetic create failure' }, 500)
       const id = `${key}-${list(key).length + 1}`
@@ -63,7 +78,7 @@ async function fixture(protocol = 'awg', width = 1100) {
       list(key).push(client)
       return fulfill(response(key, client))
     }
-    if (match[2] === 'config') {
+    if (match[3] === 'config') {
       if (control.delayConfig) await new Promise((resolve) => setTimeout(resolve, control.delayConfig))
       const client = list(key).find((client) => client.client_id === body.client_id || client.public_key === body.public_key)
       assert.ok(client, 'configuration is requested by the existing stable ID')
@@ -72,7 +87,7 @@ async function fixture(protocol = 'awg', width = 1100) {
     if (control.failList) return fulfill({ detail: 'Synthetic list failure' }, 500)
     return fulfill({ clients: list(key), interface: 'wg0', endpoint: 'vpn.example.test:51820', address: '10.8.0.0/24', params_v31: true, capabilities: {} })
   })
-  await page.goto(`${base}tests/fixtures/quick-issue.html?protocol=${protocol}`)
+  await page.goto(`${base}tests/fixtures/quick-issue.html?protocol=${protocol}${options.controls ? '&controls=1' : ''}`)
   await page.getByRole('button', { name: '+ Выдать конфиг', exact: true }).waitFor()
   return { page, calls, clients, control }
 }
@@ -93,6 +108,7 @@ async function create(page, name) {
 }
 
 try {
+  if (!process.env.CLIENT_PEOPLE_ONLY && !process.env.CLIENT_PEOPLE_VISUAL_ONLY) {
   for (const protocol of Object.keys(labels)) {
     const { page, calls, clients } = await fixture(protocol)
     await openForm(page)
@@ -153,13 +169,14 @@ try {
     await openForm(page)
     await page.getByRole('textbox', { name: 'Имя клиента', exact: true }).fill('retry-name')
     await page.locator('.quick-issue-form summary').click()
-    await page.getByRole('textbox', { name: 'Клиент / человек' }).fill('Person')
+    await page.getByRole('button', { name: 'Устройство клиента', exact: true }).click()
+    await page.getByRole('textbox', { name: 'Имя нового клиента', exact: true }).fill('Person')
     await page.getByRole('textbox', { name: 'Устройство', exact: true }).fill('Laptop')
-    await page.locator('.quick-issue-form select').selectOption('7')
+    await page.locator('.expiry-select select').selectOption('7')
     control.failCreate = true
     await page.getByRole('button', { name: 'Создать конфиг', exact: true }).click()
     await page.getByText('Synthetic create failure', { exact: true }).waitFor()
-    assert.equal(await page.getByRole('textbox', { name: 'Имя клиента', exact: true }).inputValue(), 'retry-name')
+    assert.equal(await page.getByRole('textbox', { name: 'Имя конфига', exact: true }).inputValue(), 'retry-name')
     assert.equal(await page.getByRole('textbox', { name: 'Устройство', exact: true }).inputValue(), 'Laptop')
     control.failCreate = false
     control.delayCreate = 150
@@ -174,14 +191,12 @@ try {
     assert.equal(createCalls(calls)[2].body.expires_at, null)
     assert.equal(createCalls(calls)[2].body.group_name, '')
     await ready(page).getByRole('button', { name: 'Готово', exact: true }).click()
-    await page.getByRole('checkbox', { name: 'Группировать по клиенту' }).check()
-    const groupingBox = await page.getByRole('checkbox', { name: 'Группировать по клиенту' }).boundingBox()
-    assert.deepEqual([groupingBox.width, groupingBox.height], [16, 16], 'grouping checkbox keeps its visible square size')
-    assert.equal(await page.locator('.client-group-heading').innerText(), 'Person')
+    await page.getByRole('button', { name: 'По клиентам', exact: true }).click()
+    assert.equal(await page.locator('.client-person-row strong').first().innerText(), 'Person')
     await page.getByPlaceholder('Поиск по имени или адресу…').fill('Laptop')
-    assert.equal(await page.locator('.client-table tbody tr').count(), 1)
+    assert.equal(await page.locator('.client-table tbody tr:not(.client-person-row)').count(), 1)
     await page.getByPlaceholder('Поиск по имени или адресу…').fill('')
-    await page.locator('.client-table tbody tr').first().getByRole('button', { name: 'Ещё', exact: true }).click()
+    await page.locator('.client-table tbody tr:not(.client-person-row)').first().getByRole('button', { name: 'Ещё', exact: true }).click()
     await page.getByRole('button', { name: 'Клиент и устройство', exact: true }).click()
     control.failMetadata = true
     await page.getByRole('textbox', { name: 'Устройство', exact: true }).fill('Work computer')
@@ -253,11 +268,15 @@ try {
     await rows.nth(0).getByRole('button', { name: 'Ещё', exact: true }).click()
     await page.getByRole('button', { name: 'Клиент и устройство', exact: true }).click()
     await page.getByRole('textbox', { name: 'Устройство', exact: true }).fill('First device')
-    control.delayMetadata = 250
+    let releaseMetadata
+    control.metadataWait = new Promise((resolve) => { releaseMetadata = resolve })
     await page.getByRole('button', { name: 'Сохранить', exact: true }).click()
     await rows.nth(1).getByRole('button', { name: 'Ещё', exact: true }).click()
     await page.getByRole('button', { name: 'Клиент и устройство', exact: true }).click()
-    await page.waitForTimeout(350)
+    const firstMetadataResponse = page.waitForResponse((response) => response.url().endsWith('/client-metadata'))
+    releaseMetadata()
+    await firstMetadataResponse
+    control.metadataWait = null
     assert.match(await page.locator('.quick-issue-form h4').innerText(), /second-person/)
     assert.equal(await page.getByRole('textbox', { name: 'Устройство', exact: true }).inputValue(), '')
     control.delayMetadata = 0
@@ -272,7 +291,195 @@ try {
     console.log(`PASS ${protocol}: late config and metadata responses preserve selected client identity`)
   }
 
-  for (const width of [320, 390]) {
+
+  }
+
+  const seeded = (id, name, group_name = '', device_name = '') => ({
+    client_id: id, public_key: `public-${id}`, name, group_name, device_name,
+    address: '10.8.0.2/32', has_config: true, note: '', latest_handshake: null,
+    rx_bytes: 0, tx_bytes: 0, creation_date: '2026-01-01', expires_at: null,
+  })
+  const rowFor = (page, name) => page.locator('.client-table tbody tr:not(.client-person-row)').filter({ has: page.getByText(name, { exact: true }) })
+  const bulkCalls = (calls) => calls.filter((call) => call.url.endsWith('/client-metadata/bulk'))
+  const selectedCount = async (page) => page.locator('.client-table tbody input:checked').count()
+  async function groupForm(page, target) {
+    await page.getByRole('button', { name: /^(Объединить в клиента|Перенести в другого клиента)$/ }).click()
+    const form = page.locator('.client-group-form')
+    await form.getByRole('combobox', { name: 'Клиент / человек' }).selectOption(target ? `group:${target}` : 'new')
+    return form
+  }
+  if (!process.env.CLIENT_PEOPLE_VISUAL_ONLY) {
+  for (const protocol of Object.keys(labels)) {
+    const source = [seeded('solo', 'solo-one', '', 'Original device'), seeded('other', 'other-one', '', 'Existing device'), seeded('person', 'person-phone', 'Person', 'Phone')]
+    const { page, calls, clients, control } = await fixture(protocol, 1100, { clients: source })
+    await openForm(page)
+    await page.locator('.client-person-row', { hasText: 'Person' }).getByRole('button', { name: 'Добавить устройство' }).click()
+    assert.equal(await page.getByRole('button', { name: 'Устройство клиента', exact: true }).getAttribute('aria-pressed'), 'true', 'opening a group resets an already-open single form')
+    assert.equal(await page.getByRole('combobox', { name: 'Клиент / человек' }).inputValue(), 'group:Person')
+    assert.equal(await page.getByRole('textbox', { name: 'Устройство', exact: true }).isVisible(), true)
+    await page.locator('.quick-issue-form').getByRole('button', { name: 'Отмена' }).click()
+    control.failMetadata = true
+    await rowFor(page, 'solo-one').getByRole('button', { name: 'Добавить устройство' }).click()
+    await page.getByText('Synthetic metadata failure', { exact: true }).waitFor()
+    assert.equal(await page.locator('.quick-issue-form').count(), 0, 'failed promotion opens no issuance form')
+    assert.equal(createCalls(calls).length, 0)
+    assert.equal(clients.get(protocol)[0].group_name, '')
+    control.failMetadata = false
+    control.delayMetadata = 100
+    await rowFor(page, 'solo-one').getByRole('button', { name: 'Добавить устройство' }).evaluate((button) => { button.click(); button.click() })
+    await page.getByRole('textbox', { name: 'Устройство', exact: true }).waitFor()
+    assert.equal(calls.filter((call) => call.url.endsWith('/client-metadata')).length, 2, 'failed promotion + exactly one successful promotion')
+    assert.equal(createCalls(calls).length, 0, 'adding a device first assigns only origin metadata')
+    assert.equal(clients.get(protocol)[0].group_name, 'solo-one')
+    assert.equal(clients.get(protocol)[0].device_name, 'Original device')
+    assert.equal(clients.get(protocol)[1].group_name, '', 'only the origin is promoted')
+    assert.equal(await page.getByRole('combobox', { name: 'Клиент / человек' }).inputValue(), 'group:solo-one')
+    await page.getByRole('textbox', { name: 'Устройство', exact: true }).fill('New laptop')
+    await page.getByRole('button', { name: 'Создать конфиг', exact: true }).click()
+    await ready(page).waitFor()
+    assert.deepEqual(createCalls(calls)[0].body, { name: 'New laptop', expires_at: null, group_name: 'solo-one', device_name: 'New laptop', ...(awgLike(protocol) ? { note: '' } : {}) })
+    await ready(page).getByRole('button', { name: 'Готово', exact: true }).click()
+    const groupHeader = page.locator('.client-person-row', { hasText: 'solo-one' })
+    await groupHeader.getByText('Устройств: 2', { exact: true }).waitFor()
+    await rowFor(page, 'solo-one').getByRole('checkbox').check()
+    await rowFor(page, 'other-one').getByRole('checkbox').check()
+    const form = await groupForm(page, 'Person')
+    control.failBulk = true
+    await form.getByRole('button', { name: 'Сохранить', exact: true }).click()
+    await page.getByText('Synthetic grouping failure', { exact: true }).waitFor()
+    assert.equal(await selectedCount(page), 2, 'failure retains the exact selected configs')
+    assert.equal(clients.get(protocol)[0].group_name, 'solo-one', 'failure makes no partial assignment')
+    control.failBulk = false
+    control.delayBulk = 100
+    await form.getByRole('button', { name: 'Сохранить', exact: true }).evaluate((button) => { button.click(); button.click() })
+    await page.locator('.client-person-row', { hasText: 'Person' }).getByText('Устройств: 3', { exact: true }).waitFor()
+    assert.equal(bulkCalls(calls).length, 2, 'one failure + one atomic success, double click cannot duplicate')
+    assert.deepEqual(bulkCalls(calls)[1].body, { protocol, client_ids: awgLike(protocol) ? ['public-solo', 'public-other'] : ['solo', 'other'], group_name: 'Person' })
+    assert.equal(await selectedCount(page), 0)
+    assert.deepEqual(clients.get(protocol).slice(0, 2).map((client) => client.device_name), ['Original device', 'Existing device'])
+    for (const name of ['solo-one', 'other-one']) await rowFor(page, name).getByRole('checkbox').check()
+    const again = await groupForm(page, 'Person')
+    await again.getByRole('button', { name: 'Сохранить', exact: true }).click()
+    await page.locator('.client-group-form').waitFor({ state: 'detached' })
+    assert.equal(bulkCalls(calls).length, 3, 'same-group assignment remains one idempotent request')
+    for (const name of ['solo-one', 'other-one']) await rowFor(page, name).getByRole('checkbox').check()
+    await page.getByRole('button', { name: 'Убрать из клиента', exact: true }).click()
+    await page.locator('.client-group-actions').waitFor({ state: 'detached' })
+    assert.deepEqual(clients.get(protocol).slice(0, 2).map((client) => client.group_name), ['', ''])
+    for (const name of ['solo-one', 'other-one']) await rowFor(page, name).getByRole('checkbox').check()
+    const newPerson = await groupForm(page, '')
+    await newPerson.getByRole('textbox', { name: 'Имя нового клиента' }).fill('Another person')
+    await newPerson.getByRole('button', { name: 'Сохранить', exact: true }).click()
+    await page.locator('.client-person-row', { hasText: 'Another person' }).getByText('Устройств: 2', { exact: true }).waitFor()
+    assert.equal(clients.get(protocol).length, 4)
+    assert.equal(createCalls(calls).length, 1, 'all regrouping retains the original credentials and config count')
+    assert.deepEqual(clients.get(protocol).slice(0, 2).map((client) => client.device_name), ['Original device', 'Existing device'])
+    assert.equal(calls.some((call) => /\/(pause|rename|revoke|reissue|note)$/.test(call.url)), false, 'grouping never invokes node config operations')
+    await page.close()
+    console.log(`PASS ${protocol}: visible people/device modes, promote existing, atomic group/move/remove, failure selection, double submit`)
+  }
+
+  {
+    const source = [seeded('a', 'one'), seeded('b', 'two'), seeded('c', 'three')]
+    const { page, calls, clients, control } = await fixture('awg', 1100, { clients: source })
+    for (const name of ['one', 'two']) await rowFor(page, name).getByRole('checkbox').check()
+    const form = await groupForm(page, '')
+    await form.getByRole('textbox', { name: 'Имя нового клиента' }).fill('Saved person')
+    control.delayBulk = 800
+    await form.getByRole('button', { name: 'Сохранить', exact: true }).click()
+    await rowFor(page, 'two').getByRole('checkbox').uncheck()
+    await rowFor(page, 'three').getByRole('checkbox').check()
+    await page.locator('.client-person-row', { hasText: 'Saved person' }).waitFor()
+    assert.equal(await rowFor(page, 'one').getByRole('checkbox').isChecked(), true)
+    assert.equal(await rowFor(page, 'two').getByRole('checkbox').isChecked(), false)
+    assert.equal(await rowFor(page, 'three').getByRole('checkbox').isChecked(), true, 'late success cannot clear a newer selection')
+    assert.deepEqual(clients.get('awg').map((client) => client.group_name), ['Saved person', 'Saved person', ''])
+    assert.equal(bulkCalls(calls).length, 1)
+    await page.close()
+  }
+  for (const change of ['protocol', 'server']) {
+    const source = [seeded('a', 'first-source'), seeded('b', 'second-source')]
+    const { page, calls, control } = await fixture('awg', 1100, { clients: source, controls: true,
+      server2Clients: [seeded('a', 'other-server-one'), seeded('b', 'other-server-two')] })
+    await page.locator('.client-table thead input').check()
+    const form = await groupForm(page, '')
+    await form.getByRole('textbox', { name: 'Имя нового клиента' }).fill('Old context person')
+    control.delayBulk = 800
+    await form.getByRole('button', { name: 'Сохранить', exact: true }).click()
+    if (change === 'server') {
+      await page.getByRole('button', { name: 'Switch test server' }).click()
+      await rowFor(page, 'other-server-one').waitFor()
+      await rowFor(page, 'other-server-one').getByRole('checkbox').check()
+    } else await page.getByRole('button', { name: 'WireGuard', exact: true }).click()
+    await page.waitForTimeout(900)
+    assert.equal(await page.locator('.client-person-row', { hasText: 'Old context person' }).count(), 0, `late bulk response cannot change the current ${change}`)
+    if (change === 'server') assert.equal(await rowFor(page, 'other-server-one').getByRole('checkbox').isChecked(), true)
+    assert.equal(bulkCalls(calls).length, 1)
+    await page.close()
+  }
+  {
+    const { page, calls } = await fixture('awg', 1100, { clients: Array.from({ length: 101 }, (_, i) => seeded(String(i), `config-${i}`)) })
+    await page.locator('.client-table thead input').check()
+    await page.getByText('Выберите не больше 100 конфигов.', { exact: true }).waitFor()
+    assert.equal(await page.getByRole('button', { name: 'Объединить в клиента' }).isDisabled(), true)
+    assert.equal(bulkCalls(calls).length, 0)
+    await page.close()
+  }
+  {
+    const { page, calls, control } = await fixture('awg', 1100, { clients: [seeded('a', 'one'), seeded('b', 'two')] })
+    await page.locator('.client-table thead input').check()
+    const form = await groupForm(page, '')
+    await form.getByRole('textbox', { name: 'Имя нового клиента' }).fill('Saved once')
+    control.failList = true
+    await form.getByRole('button', { name: 'Сохранить', exact: true }).click()
+    await page.getByText('Synthetic list failure', { exact: true }).waitFor()
+    assert.equal(bulkCalls(calls).length, 1, 'failed list refresh does not retry a successful metadata mutation')
+    assert.equal(createCalls(calls).length, 0)
+    await page.close()
+  }
+  console.log('PASS delayed grouping context/selection protection, >100 guard, metadata success followed by refresh failure')
+
+  }
+
+  const screenshotDir = process.env.CLIENT_PEOPLE_SCREENSHOTS
+  if (screenshotDir) await mkdir(screenshotDir, { recursive: true })
+  for (const width of [1100, 320, 390]) {
+    for (const theme of ['light', 'dark']) {
+      const { page } = await fixture('awg', width, { clients: [
+        seeded('a', 'phone-config', 'Person', 'Phone'), seeded('b', 'laptop-config', 'Person', 'Laptop'), seeded('c', 'single-config'),
+      ] })
+      await page.evaluate((theme) => { document.documentElement.dataset.theme = theme }, theme)
+      await page.locator('.client-person-row', { hasText: 'Person' }).getByText('Устройств: 2', { exact: true }).waitFor()
+      const table = page.locator('.client-table')
+      const capture = screenshotDir && ((width === 1100 && theme === 'dark') || (width === 390 && theme === 'light'))
+      if (capture) await page.locator('.modal-clients').evaluate((node) => { node.scrollTop = 0 })
+      if (capture) await page.screenshot({ path: `${screenshotDir}/people-list-${width}-${theme}.png`, fullPage: true, animations: 'disabled' })
+      assert.ok(await table.evaluate((node) => node.scrollWidth <= node.clientWidth + 1), `people table fits ${width}/${theme}`)
+      assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), `people page fits ${width}/${theme}`)
+      const header = page.locator('.client-person-row', { hasText: 'Person' })
+      const box = await header.getByRole('button', { name: 'Добавить устройство' }).boundingBox()
+      assert.ok(box && box.x >= 0 && box.x + box.width <= width, `group action visible ${width}/${theme}`)
+      await header.getByRole('button', { name: 'Добавить устройство' }).click()
+      assert.equal(await page.getByRole('combobox', { name: 'Клиент / человек' }).inputValue(), 'group:Person')
+      if (capture) await page.locator('.modal-clients').evaluate((node) => { node.scrollTop = 0 })
+      if (capture) await page.screenshot({ path: `${screenshotDir}/people-device-${width}-${theme}.png`, fullPage: true, animations: 'disabled' })
+      assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), `device form fits ${width}/${theme}`)
+      await page.locator('.quick-issue-form').getByRole('button', { name: 'Отмена' }).click()
+      await openForm(page)
+      if (capture) await page.locator('.modal-clients').evaluate((node) => { node.scrollTop = 0 })
+      if (capture) await page.screenshot({ path: `${screenshotDir}/people-single-${width}-${theme}.png`, fullPage: true, animations: 'disabled' })
+      await page.locator('.quick-issue-form').getByRole('button', { name: 'Отмена' }).click()
+      await rowFor(page, 'phone-config').getByRole('checkbox').check()
+      await rowFor(page, 'single-config').getByRole('checkbox').check()
+      await groupForm(page, 'Person')
+      if (capture) await page.locator('.modal-clients').evaluate((node) => { node.scrollTop = 0 })
+      if (capture) await page.screenshot({ path: `${screenshotDir}/people-bulk-${width}-${theme}.png`, fullPage: true, animations: 'disabled' })
+      assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), `group form fits ${width}/${theme}`)
+      await page.close()
+    }
+  }
+
+  if (!process.env.CLIENT_PEOPLE_VISUAL_ONLY) for (const width of [320, 390]) {
     for (const protocol of ['awg', 'xray', 'openvpn-native']) {
       const { page } = await fixture(protocol, width)
       await openForm(page)

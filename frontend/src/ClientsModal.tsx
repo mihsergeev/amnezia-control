@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import QRCode from 'qrcode'
 import {
   api,
@@ -25,7 +25,9 @@ import { XrayClients } from './XrayClients'
 import { AmneziaQr } from './AmneziaQr'
 import { ExpiryCell } from './Expiry'
 import { QuickIssueForm } from './QuickIssueForm'
-import { groupClients } from './clientGrouping'
+import { groupClients, clientGroupNames, clientGroupHeader } from './clientGrouping'
+import { ClientGroupHeader, ClientGroupingBar, ClientViewSwitch } from './ClientPeople'
+import { useAddClientDevice } from './useAddClientDevice'
 import { ClientStatsModal } from './ClientStatsModal'
 import { BulkRevokeBar, SelectAllCell, SelectCell } from './BulkActions'
 import { BulkClientsModal } from './BulkClientsModal'
@@ -96,10 +98,11 @@ export function ClientsModal({
   const [bulkOpen, setBulkOpen] = useState(false)
   const [clientListRevision, setClientListRevision] = useState(0)
   const [addOpen, setAddOpen] = useState(false)
+  const [addRevision, setAddRevision] = useState(0)
   const [newName, setNewName] = useState('')
   const [newGroup, setNewGroup] = useState('')
   const [newDevice, setNewDevice] = useState('')
-  const [grouped, setGrouped] = useState(false)
+  const [grouped, setGrouped] = useState(true)
   const [allColumns, setAllColumns] = useState(false)
   const [metadataFor, setMetadataFor] = useState<AwgClient | null>(null)
   const [savingMetadata, setSavingMetadata] = useState(false)
@@ -237,6 +240,7 @@ export function ClientsModal({
   }, [view, cfgFormat])
 
   function openAdd() {
+    setAddRevision((revision) => revision + 1)
     setMetadataFor(null)
     configGeneration.current += 1
     setBusyKey(null)
@@ -250,8 +254,24 @@ export function ClientsModal({
     setAddOpen(true)
   }
 
+  function openGroup(group: string) {
+    openAdd()
+    setNewGroup(group)
+    setGrouped(true)
+  }
+
+  const addDevice = useAddClientDevice({
+    serverId: server.id, protocol: limitProto, generation: configGeneration,
+    onOpen: openGroup,
+    onApplied: (id, group) => setState((previous) => previous ? { ...previous,
+      clients: previous.clients.map((client) => client.public_key === id ? { ...client, group_name: group } : client),
+    } : previous),
+    onError: handleError,
+  })
+
   async function addClient() {
-    if (!newName.trim() || creatingRef.current) return
+    const configName = newName.trim() || newDevice.trim()
+    if (!configName || creatingRef.current) return
     creatingRef.current = true
     setCreating(true)
     setError(null)
@@ -262,7 +282,7 @@ export function ClientsModal({
         {
           method: 'POST',
           body: JSON.stringify({
-            name: newName.trim(),
+            name: configName,
             group_name: newGroup.trim(),
             device_name: newDevice.trim(),
             note: newNote.trim(),
@@ -725,7 +745,7 @@ export function ClientsModal({
         {error && <p className="form-error">{error}</p>}
         {loading && <p className="muted">{t('загрузка…')}</p>}
 
-        {metadataFor && <QuickIssueForm metadataOnly name={metadataFor.name} onName={() => {}}
+        {metadataFor && <QuickIssueForm key="metadata" metadataOnly name={metadataFor.name} onName={() => {}}
           expiry={null} onExpiry={() => {}}
           group={newGroup} onGroup={setNewGroup} device={newDevice} onDevice={setNewDevice}
           creating={savingMetadata} onCreate={saveMetadata} onCancel={() => setMetadataFor(null)} />}
@@ -795,7 +815,7 @@ export function ClientsModal({
           </section>
         )}
 
-        {addOpen && <QuickIssueForm name={newName} onName={setNewName}
+        {addOpen && <QuickIssueForm key={`create:${addRevision}`} groups={clientGroupNames(state?.clients ?? [])} name={newName} onName={setNewName}
           expiry={newExpiry} onExpiry={setNewExpiry}
           group={newGroup} onGroup={setNewGroup} device={newDevice} onDevice={setNewDevice}
           note={newNote} onNote={setNewNote}
@@ -817,10 +837,15 @@ export function ClientsModal({
               </div>
             )}
 
-          <label className="client-group-toggle small">
-            <input type="checkbox" checked={grouped} onChange={(event) => setGrouped(event.target.checked)} />
-            {t('Группировать по клиенту')}
-          </label>
+          <ClientViewSwitch grouped={grouped} onChange={setGrouped} />
+          <ClientGroupingBar key={`${server.id}:${limitProto}`} serverId={server.id} protocol={limitProto}
+            clients={(state?.clients ?? []).map((client) => ({ ...client, id: client.public_key }))} sel={sel}
+            onDone={(ids, group) => {
+              setState((previous) => previous ? { ...previous, clients: previous.clients.map((client) =>
+                ids.includes(client.public_key) ? { ...client, group_name: group } : client) } : previous)
+              setGrouped(true)
+              void loadRef.current()
+            }} onUnauthorized={onUnauthorized} />
 
             <BulkRevokeBar
               serverId={server.id}
@@ -863,10 +888,13 @@ export function ClientsModal({
                       const busy = busyKey === c.public_key
                       const editing = editKey === c.public_key
                       return (
-                        <tr key={`${limitProto}:${c.public_key}`}>
+                        <Fragment key={`${limitProto}:${c.public_key}`}>
+                          {grouped && (() => { const heading = clientGroupHeader(rows, index, state.clients); return heading &&
+                            <ClientGroupHeader {...heading} columns={7} onAdd={() => openGroup(heading.name)} disabled={addDevice.busy} /> })()}
+                        <tr>
                           <SelectCell sel={sel} id={c.public_key} />
                           <td className="name-cell">
-                            {grouped && c.group_name && (index === 0 || rows[index - 1]?.group_name !== c.group_name) && <div className="client-group-heading">{c.group_name}</div>}
+
                             {(c.group_name || c.device_name) && <div className="client-device-label muted small">{[!grouped && c.group_name, c.device_name].filter(Boolean).join(' · ')}</div>}
                             <div className="client-row-name">
                               <span
@@ -944,6 +972,8 @@ export function ClientsModal({
                             />
                           </td>
                           <td className="row-actions">
+                        {!c.group_name && <button className="ghost client-add-device" disabled={addDevice.busy}
+                          onClick={() => void addDevice.add({ ...c, id: c.public_key })}>{t('Добавить устройство')}</button>}
                             {c.paused ? (
                               <button
                                 disabled={busy}
@@ -1035,6 +1065,7 @@ export function ClientsModal({
                             />
                           </td>
                         </tr>
+                        </Fragment>
                       )
                     })}
                     {visibleClients.length === 0 && (

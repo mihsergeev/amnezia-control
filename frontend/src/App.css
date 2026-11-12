@@ -4090,3 +4090,36 @@ tr.row-link:hover td {
     grid-template-columns: minmax(0, 1fr);
   }
 }
+
+/* People are metadata containers; these controls keep the existing config table. */
+.client-view-switch { display: flex; flex-wrap: wrap; gap: .35rem; }
+.client-view-switch button { font-size: .85rem; padding: .4rem .65rem; }
+.client-person-fields { padding: 0; }
+.quick-issue-form select, .client-group-form select {
+  appearance: none; width: 100%; min-width: 0; max-width: 100%;
+  border: 1px solid var(--border); border-radius: 8px; background-color: var(--bg-card); color: var(--text);
+  padding: .5rem 2rem .5rem .7rem; font: inherit; font-size: .95rem;
+}
+.client-person-select { display: block; position: relative; min-width: 0; }
+.client-person-select::after { content: ''; position: absolute; right: 14px; top: calc(50% - 4px); width: 6px; height: 6px; border-right: 1.5px solid var(--text-muted); border-bottom: 1.5px solid var(--text-muted); transform: rotate(45deg); pointer-events: none; }
+.quick-issue-form select:focus-visible, .client-group-form select:focus-visible { outline: 2px solid #3563e9; outline-offset: 2px; }
+.client-person-heading { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: .5rem; }
+.client-person-heading > div { display: flex; align-items: baseline; flex-wrap: wrap; gap: .6rem; min-width: 0; }
+.client-person-heading strong { overflow-wrap: anywhere; }
+.client-table .client-person-row > td { background: var(--hover); border-top: 1px solid var(--border-strong); padding: .6rem; }
+.client-person-heading button { font-size: .8rem; padding: .35rem .6rem; }
+.client-group-actions { border: 1px solid var(--border); border-radius: 8px; padding: .6rem; min-width: 0; }
+.client-group-actions .bulk-bar { margin: 0; justify-content: flex-start; }
+.client-group-actions p { margin: .45rem 0 0; }
+.client-group-form { margin-top: .6rem; }
+.client-group-form label { display: flex; flex-direction: column; gap: .4rem; min-width: 0; }
+.client-group-form label > span { font-size: .85rem; }
+.client-add-device { font-size: .8rem; }
+@media (max-width: 600px) {
+  .client-table:not(.client-details-visible) .client-person-row { display: block; }
+  .client-table:not(.client-details-visible) .client-person-row > td { display: block; }
+  .client-table .client-add-device { max-width: 100px; white-space: normal; font-size: .72rem; padding: .35rem .4rem; order: 1; }
+  .client-table .row-actions > .menu { order: 2; }
+  .quick-issue-form input, .client-group-form input { width: 100%; min-width: 0; }
+  .client-group-form .add-form-actions { flex-wrap: wrap; }
+}
