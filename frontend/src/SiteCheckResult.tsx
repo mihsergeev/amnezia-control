@@ -2,11 +2,12 @@ import type { CascadeRouteHttpResult, SiteCheckScheme } from './api'
 import { siteCheckTone, siteTimingValue } from './siteCheckUi'
 import { useI18n } from './i18n'
 
-export function SiteCheckResult({ result, pending = false, scheme, detailed = false }: {
+export function SiteCheckResult({ result, pending = false, scheme, detailed = false, compact = false }: {
   result?: CascadeRouteHttpResult
   pending?: boolean
   scheme: SiteCheckScheme
   detailed?: boolean
+  compact?: boolean
 }) {
   const { t } = useI18n()
   function text() {
@@ -25,11 +26,16 @@ export function SiteCheckResult({ result, pending = false, scheme, detailed = fa
     return t('Ошибка HTTP-проверки')
   }
   const tone = !result && !pending ? 'muted' : siteCheckTone(result)
-  const timings = result?.timings_ms
   return <div className="site-check-result">
-    <span className={`cascade-route-http cascade-route-http-${tone}`} data-http-status={result?.status || (pending ? 'checking' : 'not_checked')}>{text()}<span className="site-check-scheme">{(result?.scheme || scheme).toUpperCase()}</span></span>
-    {detailed && result && <dl className="site-check-timings">
-      {([['DNS', timings?.dns], ['TCP', timings?.tcp], ['TLS', timings?.tls], [t('Всего'), timings?.total]] as const).map(([label, value]) => <div key={label}><dt>{label}</dt><dd>{siteTimingValue(value) === null ? '—' : t('{n} мс', { n: siteTimingValue(value)! })}</dd></div>)}
-    </dl>}
+    <span className={`cascade-route-http cascade-route-http-${tone}`} data-http-status={result?.status || (pending ? 'checking' : 'not_checked')}>{text()}{!compact && <span className="site-check-scheme">{(result?.scheme || scheme).toUpperCase()}</span>}</span>
+    {detailed && result && <SiteCheckTimings result={result} />}
   </div>
+}
+
+export function SiteCheckTimings({ result }: { result: CascadeRouteHttpResult }) {
+  const { t } = useI18n()
+  const timings = result.timings_ms
+  return <dl className="site-check-timings">
+    {([['DNS', timings?.dns], ['TCP', timings?.tcp], ['TLS', timings?.tls], [t('Всего'), timings?.total]] as const).map(([label, value]) => <div key={label}><dt>{label}</dt><dd>{siteTimingValue(value) === null ? '—' : t('{n} мс', { n: siteTimingValue(value)! })}</dd></div>)}
+  </dl>
 }

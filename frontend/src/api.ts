@@ -1311,7 +1311,7 @@ export function checkCascadeRoutesHttp(id: number, via: CascadeRoute['via'], des
   })
 }
 
-export function checkServerSites(id: number, destinations: string[], scheme: SiteCheckScheme = 'https', signal?: AbortSignal): Promise<SiteHttpCheck> {
+export function checkServerSites(id: number, destinations: string[], scheme?: SiteCheckScheme, signal?: AbortSignal): Promise<SiteHttpCheck> {
   return api(`/api/servers/${id}/site-check`, {
     method: 'POST',
     body: JSON.stringify({ destinations, scheme }),

@@ -1079,7 +1079,7 @@ export function ServersPage({ onUnauthorized }: Props) {
       info?.protocols ?? {},
     )
     const online = s.last_check_ok === true
-    const items: MenuItem[] = [{ label: t('Проверить сайт'), onClick: () => setSiteCheckFor(s) }]
+    const items: MenuItem[] = [{ label: t('Проверить сайты'), onClick: () => setSiteCheckFor(s) }]
     if (online && protocols.length === 0) {
       items.push({
         label: t('Развернуть AmneziaWG'),

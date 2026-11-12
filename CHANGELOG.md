@@ -4,6 +4,13 @@ All notable changes to Amnezia Control are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.84.48] - 2026-11-12
+
+- Redesign the server website check as a compact list with multiline input, per-address results, and timing details.
+- Select HTTPS automatically for bare domains and IPv4 addresses, preserve explicit HTTP or HTTPS origins, and check different protocols for the same host separately.
+- Check up to 100 input addresses in one parallel SSH batch, normalize names on the server, retain input order, identify duplicates, and retry only unchecked addresses.
+- Reject paths, ports, credentials, queries, fragments, and unsupported URL schemes per row while retaining existing time limits, public-address checks, TLS verification, and read-only VPN behavior.
+
 ## [0.84.47] - 2026-11-12
 
 - Add informational HTTP and HTTPS checks for batch cascade addresses from the selected entry or exit server. Show exact response codes and separate destination errors from an unreachable check server, without blocking valid route additions.

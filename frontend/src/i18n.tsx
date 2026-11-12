@@ -11,6 +11,24 @@ export type Lang = 'ru' | 'en'
 // Ключ = русская строка (дефолт). Значение = английский перевод.
 // Отсутствующий ключ → возвращается русский (мягкий фолбэк).
 const EN: Record<string, string> = {
+  "Время": "Time",
+  "Очистить": "Clear",
+  "Проверить сайты": "Check websites",
+
+  "Проверка сайтов": "Website checks",
+  "Адреса сайтов": "Website addresses",
+  "По одному адресу на строку. Без протокола добавим https://. Для HTTP укажите http://.": "One address per line. We add https:// when no protocol is given. Use http:// for HTTP.",
+  "Только домен или IPv4, без пути, порта и параметров. Проверка из сети сервера, без подключения клиента по VPN.": "Domains or IPv4 only, without paths, ports or parameters. Checks run from the server network, without a VPN client connection.",
+  "Лимит 100 строк. Уменьшите список, адреса не будут обрезаны.": "The limit is 100 lines. Reduce the list; addresses will not be truncated.",
+  "Повтор строки {n}": "Duplicate of line {n}",
+  "Не больше 1024 символов в строке": "No more than 1024 characters per line",
+  "Подробности строки {n}": "Line {n} details",
+  "Проверка адресов: {n}": "Checking addresses: {n}",
+  "Обработано: {done} из {total}": "Processed: {done} of {total}",
+  "Повторов: {n}": "Duplicates: {n}",
+  "До 100 адресов за одну проверку": "Up to 100 addresses per check",
+  "Проверить список": "Check list",
+
   'Повторить непроверенные ({n})': 'Retry unchecked ({n})',
   "HTTP не проверен": "HTTP not checked",
   "HTTP-ответ справочный и не мешает добавлению. Проверка не применяет черновик маршрутов; ответ в браузере может отличаться.": "HTTP results are informational and do not prevent adding routes. This check does not apply draft routes; your browser may receive a different response.",

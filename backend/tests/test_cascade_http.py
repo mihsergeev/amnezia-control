@@ -105,7 +105,8 @@ async def test_invalid_and_cidr_skip_ssh_and_duplicates_probe_once(tmp_path, mon
         async def run(self, command, **kwargs):
             data = json.loads(kwargs["input"]);calls.append(data)
             assert "example.com" not in command and "sudo" not in command
-            return SimpleNamespace(exit_status=0, stdout=json.dumps({"results": {d: {"status": "response", "http_status": 200, "scheme": "https"} for d in data["destinations"]}}))
+            targets = data.get("targets") or [{"destination": d, "scheme": data["scheme"]} for d in data["destinations"]]
+            return SimpleNamespace(exit_status=0, stdout=json.dumps({"results": {(t["scheme"]+"://"+t["destination"] if "targets" in data else t["destination"]): {"status": "response", "http_status": 200, "scheme": t["scheme"]} for t in targets}}))
         def close(self):pass
     async def connect(*a, **kw):
         assert kw["known_hosts"] and kw["connect_timeout"] == 2
@@ -119,15 +120,60 @@ async def test_invalid_and_cidr_skip_ssh_and_duplicates_probe_once(tmp_path, mon
     assert not calls
     body = cascade_http.SiteCheck(destinations=["Example.com.", "example.com"])
     result = await cascade_http.run_check(server, body, [], settings)
-    assert calls[0]["destinations"] == ["example.com"] and result[0] == result[1]
+    assert calls[0]["targets"] == [{"destination": "example.com", "scheme": "https"}] and result[0] == result[1]
     cascade_http._recent.clear()
     body = cascade_http.SiteCheck(destinations=["API.IPIFY.ORG."])
     assert (await cascade_http.run_check(server, body, [], settings))[0].http_status == 200
-    assert calls[-1]["destinations"] == ["api.ipify.org"]
+    assert calls[-1]["targets"] == [{"destination": "api.ipify.org", "scheme": "https"}]
     before = len(calls)
     body = cascade_http.CascadeSiteCheck(destinations=["api.ipify.org"], via="entry")
     assert (await cascade_http.run_check(server, body, [], settings))[0].reason == "reserved_destination"
     assert len(calls) == before
+    cascade_http._recent.clear()
+    body = cascade_http.SiteCheck(destinations=["HTTP://Example.com/", "example.com", "https://example.com/", "https://faß.example", "https://fass.example", "https://example.com/a?secret-value"], scheme="http")
+    result = await cascade_http.run_check(server, body, [], settings)
+    assert len(calls) == before+1 and len(calls[-1]["targets"]) == 3
+    assert result[0] == result[1] and result[3] == result[4]
+    assert result[0].scheme == "http" and result[2].scheme == "https"
+    assert result[5].status == "invalid" and result[5].destination is None and result[5].scheme is None
+    assert "secret-value" not in json.dumps(calls[-1])
+    cascade_http._recent.clear()
+    result = await cascade_http.run_check(server, cascade_http.CascadeSiteCheck(destinations=["example.com", "https://example.com"], scheme="http", via="entry"), [], settings)
+    assert calls[-1]["destinations"] == ["example.com"] and calls[-1]["scheme"] == "http" and "targets" not in calls[-1]
+    assert result[0].scheme == "http" and result[1].status == "invalid"
+
+
+@pytest.mark.parametrize("raw", ["https://example.com/path", "https://example.com?secret", "https://example.com?", "https://example.com#", "https://user:secret@example.com", "https://example.com:443", "http://example.com:80/", "//example.com", "ftp://example.com", "https:// example.com", "https://exam\nple.com", "https://example.com\\@other.example", "example.com//", "example.com/path", "198.51.100.1//", "httpſ://example.com"])
+def test_standalone_origin_rejects_entire_unsafe_input(raw):
+    result = cascade_http.normalize_targets(cascade_http.SiteCheck(destinations=[raw]))[0]
+    assert result.status == "invalid" and result.reason == "invalid_destination"
+    assert result.destination is None and result.scheme is None
+
+
+def test_standalone_origin_normalization_default_legacy_and_route_idna():
+    body = cascade_http.SiteCheck(destinations=["Example.com.", "http://EXAMPLE.com./", "HTTPS://faß.example/", "https://API.IPIFY.ORG/", "198.51.100.0/24", "example.com/", "198.51.100.1/"])
+    results = cascade_http.normalize_targets(body)
+    assert [(r.destination,r.scheme) for r in results[:4]] == [("example.com","https"),("example.com","http"),("fass.example","https"),("api.ipify.org","https")]
+    assert results[4].status == "not_applicable"
+    assert [(r.destination,r.scheme) for r in results[5:]] == [("example.com","https"),("198.51.100.1","https")]
+
+
+async def test_mixed_api_rejects_unicode_scheme_per_row_without_unsafe_ssh(client, inventory, tmp_path, monkeypatch):
+    key=tmp_path/'id_ed25519';key.write_text('fixture');calls=[]
+    class Connection:
+        async def run(self,command,**kwargs):
+            payload=json.loads(kwargs['input']);calls.append(payload)
+            assert payload['targets']==[{'destination':'example.com','scheme':'https'}]
+            return SimpleNamespace(exit_status=0,stdout=json.dumps({'results':{'https://example.com':{'status':'response','http_status':200,'scheme':'https'}}}))
+        def close(self):pass
+    async def connect(*a,**kw):return Connection()
+    monkeypatch.setattr(cascade_http,'key_paths',lambda data:(key,key.with_suffix('.pub')))
+    monkeypatch.setattr(cascade_http.sshops,'_host_known',lambda *a:True)
+    monkeypatch.setattr(cascade_http.asyncssh,'connect',connect)
+    response=await client.post('/api/servers/1/site-check',headers=inventory,json={'destinations':['https://example.com','httpſ://example.com']})
+    assert response.status_code==200 and len(calls)==1
+    results=response.json()['results']
+    assert results[0]['http_status']==200 and results[1]['status']=='invalid' and results[1]['destination'] is None and results[1]['scheme'] is None
 
 
 @pytest.mark.parametrize("failure,expected", [("python", "python_missing"), ("malformed", "worker_failed"), ("timeout", "batch_deadline"), ("ssh", "node_unreachable")])
@@ -164,12 +210,14 @@ socket.getaddrinfo=dns
 class Sock:
  def __init__(self,*a):self.stopped=False
  def settimeout(self,value):assert 0<value<=3
- def connect(self,target):assert target[0]=='8.8.8.8' and target[1] in (80,443)
+ def connect(self,target):
+  assert target[0]=='8.8.8.8' and target[1] in (80,443);self.port=target[1];self.tls=False
  def shutdown(self,*a):self.stopped=True
  def close(self):pass
 socket.socket=Sock
 class TLS:
  def wrap_socket(self,sock,server_hostname):
+  assert sock.port==443;sock.tls=True
   if server_hostname=='tls.example':raise ssl.SSLError('private exception details')
   assert server_hostname.endswith('.example');return sock
 ssl.create_default_context=lambda:TLS()
@@ -177,13 +225,15 @@ class Response:
  def __init__(self,status):self.status=status
  def read(self,*a):raise AssertionError('Response body must never be read')
 class HTTP:
- def __init__(self,host,port):self.host=host
- def request(self,method,path,headers):assert method=='GET' and path=='/' and headers['Host']==self.host
+ def __init__(self,host,port):self.host=host;self.port=port
+ def request(self,method,path,headers):
+  assert method=='GET' and path=='/' and headers['Host']==self.host
+  assert self.sock.port==self.port and self.sock.tls==(self.port==443)
  def getresponse(self):
   if self.host=='headers.example':
    while not self.sock.stopped:time.sleep(.005)
    raise OSError('interrupted slow headers')
-  return Response(999 if self.host=='badstatus.example' else 403 if self.host=='forbidden.example' else 302 if self.host=='redirect.example' else 200)
+  return Response(999 if self.host=='badstatus.example' else 403 if self.host=='forbidden.example' or self.host=='scheme.example' and self.port==80 else 302 if self.host=='redirect.example' else 200)
  def close(self):self.sock.close()
 http.client.HTTPConnection=HTTP
 os.environ['HTTPS_PROXY']='http://127.0.0.1:1'
@@ -192,7 +242,8 @@ os.environ['HTTPS_PROXY']='http://127.0.0.1:1'
 
 def worker(hosts, scheme="https", management=None, resolution=None):
     code = FAKE_NETWORK + "\n" + cascade_http.WORKER
-    cfg = {"destinations": hosts, "scheme": scheme, "management": management or []}
+    cfg = {"management": management or []}
+    cfg.update(targets=hosts) if hosts and isinstance(hosts[0],dict) else cfg.update(destinations=hosts,scheme=scheme)
     if resolution is not None:cfg["resolve_management"] = resolution
     # A file avoids WSL's inherited stdin/argument handling on Windows. The
     # measured deadline starts inside Linux, excluding distribution startup.
@@ -218,6 +269,15 @@ def test_worker_http_response_tls_error_redirect_no_body_and_proxy():
     assert results["badstatus.example"]["reason"] == "http_error"
     assert "private exception details" not in json.dumps(results)
     assert all(k in results["ok.example"]["timings_ms"] for k in ("dns", "tcp", "tls", "total"))
+
+
+def test_worker_mixed_schemes_share_one_batch_and_keep_independent_sockets():
+    results, elapsed = worker([{"destination": "scheme.example", "scheme": "http"}, {"destination": "scheme.example", "scheme": "https"}, {"destination": "tls.example", "scheme": "https"}, {"destination": "tls.example", "scheme": "http"}, {"destination": "private.example", "scheme": "http"}, {"destination": "headers.example", "scheme": "http"}, {"destination": "headers.example", "scheme": "https"}])
+    assert elapsed < 5
+    assert results["http://scheme.example"]["http_status"] == 403 and results["https://scheme.example"]["http_status"] == 200
+    assert results["https://tls.example"]["reason"] == "tls_error" and results["http://tls.example"]["http_status"] == 200
+    assert results["http://private.example"]["status"] == "blocked"
+    assert results["http://headers.example"]["reason"] == results["https://headers.example"]["reason"] == "target_timeout"
 
 
 def test_worker_ssrf_all_answers_transition_and_management_blocked():

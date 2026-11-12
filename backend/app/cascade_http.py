@@ -2,6 +2,7 @@
 import asyncio
 from contextlib import asynccontextmanager
 import json
+import re
 import shlex
 import time
 from typing import Annotated, Literal
@@ -88,11 +89,12 @@ async def bounded_node(server):
 WORKER = r'''
 import concurrent.futures as futures,http.client,ipaddress,json,os,signal,socket,ssl,sys,threading,time
 cfg=json.load(sys.stdin);started=time.monotonic();end=started+8.0
-hosts=cfg['destinations'];scheme=cfg['scheme'];results={};began={};sockets={};timings={};guard=threading.Lock()
+checks={t['scheme']+'://'+t['destination']:(t['destination'],t['scheme']) for t in cfg['targets']} if 'targets' in cfg else {h:(h,cfg['scheme']) for h in cfg['destinations']}
+hosts=list(checks);results={};began={};sockets={};timings={};guard=threading.Lock()
 pool=futures.ThreadPoolExecutor(max_workers=24)
 def finish():
  for host in hosts:
-  results.setdefault(host,{'status':'not_checked','reason':'batch_deadline','scheme':scheme,'timings_ms':{'total':0}})
+  results.setdefault(host,{'status':'not_checked','reason':'batch_deadline','scheme':checks[host][1],'timings_ms':{'total':0}})
  try:print(json.dumps({'results':results}),flush=True)
  finally:os._exit(0)
 signal.signal(signal.SIGALRM,lambda *_:finish());signal.alarm(9)
@@ -128,9 +130,10 @@ def public(value):
  a=ipaddress.ip_address(value)
  return (a.is_global and not(a.is_private or a.is_reserved or a.is_loopback or a.is_link_local or a.is_multicast or a.is_unspecified)
          and not(a.version==6 and (a.ipv4_mapped or any(a in n for n in transition))))
-def probe(host):
+def probe(key):
+ host,scheme=checks[key]
  start=time.monotonic();deadline=min(start+3,end);timing={};connection=None;raw=None;phase='dns'
- with guard:began[host]=start;timings[host]=timing
+ with guard:began[key]=start;timings[key]=timing
  def left():
   value=deadline-time.monotonic()
   if value<=0:raise TimeoutError()
@@ -145,11 +148,11 @@ def probe(host):
   if values & forbidden:return result('blocked','management_address')
   target=sorted(values,key=lambda a:(':' in a,a))[0];family=socket.AF_INET6 if ':' in target else socket.AF_INET
   phase='tcp';stamp=time.monotonic();raw=socket.socket(family,socket.SOCK_STREAM)
-  with guard:sockets[host]=raw
+  with guard:sockets[key]=raw
   raw.settimeout(left());raw.connect((target,443 if scheme=='https' else 80));timing['tcp']=round((time.monotonic()-stamp)*1000);left()
   if scheme=='https':
    phase='tls';stamp=time.monotonic();raw.settimeout(left());raw=ssl.create_default_context().wrap_socket(raw,server_hostname=host)
-   with guard:sockets[host]=raw
+   with guard:sockets[key]=raw
    timing['tls']=round((time.monotonic()-stamp)*1000);left()
   phase='http';raw.settimeout(left());connection=http.client.HTTPConnection(host,443 if scheme=='https' else 80);connection.sock=raw
   connection.request('GET','/',headers={'Host':host,'User-Agent':'Website-Diagnostics/1','Connection':'close'})
@@ -161,7 +164,7 @@ def probe(host):
  except socket.gaierror:return result('error','dns_failed')
  except (OSError,http.client.HTTPException,ValueError):return result('error','dns_failed' if phase=='dns' else 'connect_error' if phase=='tcp' else 'tls_error' if phase=='tls' else 'http_error')
  finally:
-  with guard:sockets.pop(host,None)
+  with guard:sockets.pop(key,None)
   if connection:connection.close()
   elif raw:raw.close()
 jobs={pool.submit(probe,h):h for h in hosts}
@@ -170,7 +173,7 @@ while jobs and time.monotonic()<end:
  for future in done:
   host=jobs.pop(future)
   try:results[host]=future.result()
-  except Exception:results[host]={'status':'unavailable','reason':'worker_failed','scheme':scheme}
+  except Exception:results[host]={'status':'unavailable','reason':'worker_failed','scheme':checks[host][1]}
  now=time.monotonic()
  for future,host in list(jobs.items()):
   with guard:since=began.get(host);sock=sockets.get(host)
@@ -179,7 +182,7 @@ while jobs and time.monotonic()<end:
     try:sock.shutdown(socket.SHUT_RDWR)
     except OSError:pass
    with guard:partial=dict(timings.get(host,{}))
-   results[host]={'status':'timeout','reason':'target_timeout','scheme':scheme,'timings_ms':dict(partial,total=3000)}
+   results[host]={'status':'timeout','reason':'target_timeout','scheme':checks[host][1],'timings_ms':dict(partial,total=3000)}
    jobs.pop(future)
 finish()
 '''
@@ -205,16 +208,46 @@ def management_resolution(server, servers, settings):
     return sorted(names)
 
 
+def normalize_targets(body: SiteCheck) -> list[SiteResult]:
+    """Only standalone checks accept origins; Route owns canonical host IDNA."""
+    legacy = isinstance(body, CascadeSiteCheck)
+    results = []
+    for raw in body.destinations:
+        host, scheme = raw, body.scheme
+        if not legacy:
+            value = raw.strip()
+            # Reject the whole origin instead of silently discarding a path,
+            # credentials, port or query. Controls must not be removed by a URL parser.
+            invalid = any(ord(c) < 32 or ord(c) == 127 for c in raw) or any(c.isspace() for c in value)
+            if "://" in value:
+                origin = re.fullmatch(r"(https?)://([^/?#]+)(/?)", value, re.IGNORECASE | re.ASCII)
+                if not origin or any(c in origin[2] for c in ":@\\"):
+                    invalid = True
+                else:
+                    scheme, host = origin[1].lower(), origin[2]
+            else:
+                host = value[:-1] if value.endswith("/") and value.count("/") == 1 else value
+            if invalid:
+                results.append(SiteResult(status="invalid", reason="invalid_destination"))
+                continue
+        item = preview_destinations([host]).results[0]
+        if not legacy and not item.valid and item.error == "reserved_destination":
+            item = ValidDestination(destination=HEALTH_HOST)
+        if not item.valid:
+            results.append(SiteResult(status="invalid", reason=item.error))
+        elif "/" in item.destination:
+            results.append(SiteResult(destination=item.destination, status="not_applicable", reason="cidr_not_http"))
+        else:
+            results.append(SiteResult(destination=item.destination, scheme=scheme, status="not_checked"))
+    return results
+
+
 async def run_check(server, body: SiteCheck, management: list[str], settings, *, resolution=None) -> list[SiteResult]:
-    canonical = preview_destinations(body.destinations).results
-    if not isinstance(body, CascadeSiteCheck):
-        # Health destinations are reserved for editing routes, not for a
-        # standalone website diagnostic. Reuse the validator's exact match.
-        canonical = [ValidDestination(destination=HEALTH_HOST) if not item.valid and item.error == "reserved_destination" else item for item in canonical]
-    ready = {}
-    for item in canonical:
-        if item.valid and "/" not in item.destination:
-            ready[item.destination] = None
+    canonical = normalize_targets(body)
+    legacy = isinstance(body, CascadeSiteCheck)
+    def identity(item):
+        return item.destination if legacy else item.scheme + "://" + item.destination
+    ready = {identity(item): item for item in canonical if item.status == "not_checked"}
     outcomes = {}
     if ready:
         key, _ = key_paths(settings.data_dir)
@@ -232,7 +265,12 @@ async def run_check(server, body: SiteCheck, management: list[str], settings, *,
                         )
                         try:
                             command = "if command -v python3 >/dev/null 2>&1; then exec python3 -c " + shlex.quote(WORKER) + "; else printf '%s' '{\"unavailable\":\"python_missing\"}'; fi"
-                            result = await connection.run(command, input=json.dumps({"destinations": list(ready), "scheme": body.scheme, "management": management, "resolve_management": resolution if resolution is not None else [server.host]}), check=False, timeout=9.5)
+                            payload = {"management": management, "resolve_management": resolution if resolution is not None else [server.host]}
+                            if legacy:
+                                payload.update(destinations=list(ready), scheme=body.scheme)
+                            else:
+                                payload["targets"] = [{"destination": item.destination, "scheme": item.scheme} for item in ready.values()]
+                            result = await connection.run(command, input=json.dumps(payload), check=False, timeout=9.5)
                             if result.exit_status or len(result.stdout) > 100000:
                                 raise ValueError()
                             value = json.loads(result.stdout)
@@ -242,7 +280,7 @@ async def run_check(server, body: SiteCheck, management: list[str], settings, *,
                                 outcomes = value["results"]
                                 if set(outcomes) != set(ready):
                                     raise ValueError()
-                                outcomes = {d: SiteResult.model_validate(item).model_dump(exclude={"destination"}) for d, item in outcomes.items()}
+                                outcomes = {d: SiteResult.model_validate(item).model_dump(exclude={"destination", "scheme"}) for d, item in outcomes.items()}
                         finally:
                             connection.close()
                 except TimeoutError:
@@ -253,12 +291,10 @@ async def run_check(server, body: SiteCheck, management: list[str], settings, *,
                     outcomes = {d: {"status": "unavailable", "reason": "worker_failed"} for d in ready}
     results = []
     for item in canonical:
-        if not item.valid:
-            results.append(SiteResult(status="invalid", reason=item.error))
-        elif "/" in item.destination:
-            results.append(SiteResult(destination=item.destination, status="not_applicable", reason="cidr_not_http"))
+        if item.status != "not_checked":
+            results.append(item)
         else:
-            results.append(SiteResult(destination=item.destination, **outcomes[item.destination]))
+            results.append(SiteResult(destination=item.destination, scheme=item.scheme, **outcomes[identity(item)]))
     return results
 
 
