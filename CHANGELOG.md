@@ -4,7 +4,7 @@ All notable changes to Amnezia Control are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [0.84.49] - 2026-11-16
 
 - Add an optional manual server country with automatic detection by the SSH address and the managed host's public egress as a fallback for private management addresses. Keep manual countries during periodic checks and preserve SSH targets.
 - Apply cascade country GeoIP/GeoSite rules in place after explicit confirmation, preserving transport resources, keys, client profiles, other parameters, and custom gateway settings. Validate the candidate and restore the previous configuration if the gateway cannot restart.
