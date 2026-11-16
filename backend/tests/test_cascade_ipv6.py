@@ -156,16 +156,19 @@ async def test_api_persists_ipv6_and_binds_replay_to_family_and_endpoints(
     monkeypatch.setattr(cascade, "_route_src", route)
     payload = {"entry_id": entry, "exit_id": exit_, "transport": transport,
                "address_family": "ipv6", "entry_endpoint": ENTRY, "exit_endpoint": EXIT,
+               "entry_country": "FI",
                "request_id": "da93395d-a562-46b5-8f4a-515cf9bdffbe"}
     first = await client.post('/api/cascades', headers=auth_headers, json=payload)
     assert first.status_code == 202, first.text
     result = first.json()
     assert result["address_family"] == "ipv6"
+    assert result["entry_country"] == result["entry_country_override"] == "FI"
     assert result["entry_ip"] == ENTRY and result["exit_ip"] == EXIT
     async with session_factory() as session:
         row = await session.get(Cascade, result["id"])
         saved = json.loads(row.params)
         assert saved["address_family"] == "ipv6" and saved["entry_ip"] == ENTRY and saved["exit_ip"] == EXIT
+        assert saved["entry_country"] == saved["entry_country_override"] == "FI"
         assert (await session.get(Server, entry)).host == "192.0.2.10"
         assert (await session.get(Server, exit_)).host == "192.0.2.11"
     retry = await client.post('/api/cascades', headers=auth_headers, json=payload)

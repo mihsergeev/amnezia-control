@@ -204,9 +204,10 @@ def test_read_state_only_accepts_a_confirmed_running_config(tmp_path, monkeypatc
 
 
 @pytest.mark.parametrize("transport", ["gre", "awg", "vless"])
-def test_country_update_preserves_entire_transport_config_and_custom_rules(tmp_path, monkeypatch, transport):
+@pytest.mark.parametrize("peer", ["203.0.113.20", "2001:db8::20"])
+def test_country_update_preserves_entire_transport_config_and_custom_rules(tmp_path, monkeypatch, transport, peer):
     params = {"port": 443, "uuid": "fixture-id", "sni": "example.com", "public_key": "fixture-public", "short_id": "fixture"}
-    original = json.loads(cascade.entry_gateway_config(transport, "203.0.113.20", params, country="RU"))
+    original = json.loads(cascade.entry_gateway_config(transport, peer, params, country="RU"))
     original["customRootSetting"] = {"preserve": [1, 2, 3]}
     custom = {"domain": ["domain:custom.example"], "outboundTag": "exit"}
     original["routing"]["rules"].insert(3, custom)
@@ -244,12 +245,15 @@ def test_country_update_preserves_entire_transport_config_and_custom_rules(tmp_p
     assert [args for args in calls if args[1] == "restart"] == [["docker", "restart", "gateway"]]
 
 
-async def test_routes_apply_and_live_state_preserve_params_and_fail_closed(client, auth_headers, session_factory, monkeypatch):
+@pytest.mark.parametrize("family", ["ipv4", "ipv6"])
+async def test_routes_apply_and_live_state_preserve_params_and_fail_closed(client, auth_headers, session_factory, monkeypatch, family):
     from app.api import cascades as api
 
     params = {"entry_ip": "192.0.2.10", "exit_ip": "203.0.113.20", "entry_country": "RU",
               "entry_country_override": "", "runtime_owner": "a" * 32, "runtime_layout": 2,
               "entry_port": 12345, "exit_port": 23456, "keys": {"keep": "fixture"}}
+    if family == "ipv6":
+        params.update(address_family="ipv6", entry_ip="2001:db8::10", exit_ip="2001:db8::20")
     async with session_factory() as session:
         entry = Server(name="entry", host="192.0.2.10", country="FI")
         exit_ = Server(name="exit", host="203.0.113.20")
@@ -261,7 +265,7 @@ async def test_routes_apply_and_live_state_preserve_params_and_fail_closed(clien
         await session.commit()
         cid = row.id
 
-    live = json.loads(cascade.entry_gateway_config("gre", "203.0.113.20", params, country="RU"))["routing"]["rules"]
+    live = json.loads(cascade.entry_gateway_config("gre", params["exit_ip"], params, country="RU"))["routing"]["rules"]
     status = 0
 
     class Connection:
