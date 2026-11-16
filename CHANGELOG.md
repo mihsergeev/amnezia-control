@@ -4,6 +4,13 @@ All notable changes to Amnezia Control are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.84.52] - 2026-11-16
+
+- Verify current AmneziaWG configuration, live port and interface address before resolving restored recovery journals. Reject incomplete original-state fingerprints before restoring a backup, and block stale profile exports when the node no longer matches the saved operation.
+- Guard interrupted AmneziaWG rollback against newer node configurations and, for new transactions, unrelated containers. Replace configuration files atomically, preserve server and client keys, and keep ambiguous recovery states blocked with an explicit explanation.
+- Correct the IPv4 keyed GRE tunnel MTU and repair a mismatched entry MTU without recreating its interface. Preserve unkeyed GRE and existing IPv6 MTU behavior.
+- Update the frontend runtime's libxslt and zlib packages to Alpine security fixes.
+
 ## [0.84.51] - 2026-11-16
 
 - Add an explicit IPv6 choice for the interserver AWG, VLESS Reality and GRE channel, with optional endpoint selection, IPv6 link measurements and matching firewall cleanup. Preserve SSH management addresses, IPv4 VPN client profiles and existing IPv4 cascade behavior; do not fall back silently when IPv6 is unavailable.
