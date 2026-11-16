@@ -167,7 +167,7 @@ def test_operation_wrapper_is_valid_shell_and_keeps_config_out_of_python_argv():
 def test_first_gre_exit_start_brings_device_up_before_peer_route(tmp_path,monkeypatch):
     bin_=tmp_path/'bin';bin_.mkdir();created=tmp_path/'created';up=tmp_path/'up'
     (tmp_path/'exit.env').write_text('TRANSPORT=gre\nOWNER='+('a'*32)+'\nIF=acgx7\nLOCAL=192.0.2.10\nPEER=198.51.100.20\nKEY=123456\nINNER=10.99.30.2\nPEER_INNER=10.99.30.1\nEGRESS=eth0\n',encoding='utf-8',newline='\n')
-    ip='#!/bin/sh\ncase "$*" in\n"link show acgx7") test -f '+shlex.quote(created.as_posix())+';;\n"link add acgx7 "*) touch '+shlex.quote(created.as_posix())+';;\n"link set acgx7 mtu 1476 up") touch '+shlex.quote(up.as_posix())+';;\n"route replace "*) test -f '+shlex.quote(up.as_posix())+' || { echo "Device for nexthop is not up" >&2; exit 2; };;\n*) exit 0;;\nesac\n'
+    ip='#!/bin/sh\ncase "$*" in\n"link show acgx7") test -f '+shlex.quote(created.as_posix())+';;\n"link add acgx7 "*) touch '+shlex.quote(created.as_posix())+';;\n"link set acgx7 mtu 1472 up") touch '+shlex.quote(up.as_posix())+';;\n"route replace "*) test -f '+shlex.quote(up.as_posix())+' || { echo "Device for nexthop is not up" >&2; exit 2; };;\n*) exit 0;;\nesac\n'
     for name,text in {'ip':ip,'flock':'#!/bin/sh\nexit 0\n','docker':'#!/bin/sh\nexit 1\n','sysctl':'#!/bin/sh\nexit 0\n','iptables':'#!/bin/sh\nexit 0\n'}.items():
         path=bin_/name;path.write_text(text,encoding='utf-8',newline='\n');path.chmod(0o755)
     monkeypatch.setenv('PATH',str(bin_)+os.pathsep+os.environ['PATH'])

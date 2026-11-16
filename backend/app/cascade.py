@@ -59,7 +59,7 @@ TAG = "cascade"  # каталог деплоя на нодах ($HOME/.acontrol/
 TRANSPORTS = ("vless", "gre", "awg")
 # ревизия скриптов входа: проверка видит старую и обновляет их на месте
 # (upgrade_entry), без переустановки каскада
-SCRIPTS_REV = "5"
+SCRIPTS_REV = "6"
 
 # проверка канала: сколько отправляем со входа на выход и сколько ждем
 PROBE_BYTES = 20 * 1024 * 1024
@@ -117,6 +117,10 @@ _GRE_TUN_SH = r"""#!/bin/sh
 set -u
 . @DEFAULTS@
 case "$REMOTE" in *:*) PEER_IPTABLES=ip6tables;; *) PEER_IPTABLES=iptables;; esac
+# The optional GRE key adds four bytes to the outer IP + GRE header.
+MTU=1476
+[ "$PEER_IPTABLES" != ip6tables ] || MTU=1456
+[ -z "${KEY:-}" ] || MTU=$((MTU-4))
 
 rule() { t=$1; shift; iptables -t "$t" -C "$@" 2>/dev/null || iptables -t "$t" -I "$@"; }
 unrule() { t=$1; shift; while iptables -t "$t" -D "$@" 2>/dev/null; do :; done; }
@@ -134,8 +138,6 @@ up() {
     else ip tunnel add "$IF" mode gre local "$LOCAL" remote "$REMOTE" ttl 64 || exit 1; fi
   fi
   ip addr replace "$INNER" dev "$IF"
-  MTU=1476
-  if [ "$PEER_IPTABLES" = ip6tables ]; then MTU=1456; [ -z "${KEY:-}" ] || MTU=1452; fi
   ip link set "$IF" mtu "$MTU" up
   # ответы из туннеля приходят с внешних адресов, строгий rp_filter их бы выкинул
   sysctl -qw "net.ipv4.conf.$IF.rp_filter=2"
@@ -161,7 +163,7 @@ up() {
 
 # вызывается таймером: все на месте - ничего не трогаем, иначе ставим заново
 heal() {
-  if ip link show "$IF" >/dev/null 2>&1; then
+  if ip -o link show "$IF" 2>/dev/null | grep -q " mtu $MTU "; then
     [ "$ROLE" = exit ] && return 0
     ip rule show | grep -q "fwmark $MARK lookup $TABLE" \
       && ip rule show | grep -q "fwmark $MARK unreachable" \

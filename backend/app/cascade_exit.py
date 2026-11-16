@@ -170,7 +170,7 @@ up() {
     fi
     ip link set dev "$IF" alias "$OWNER"
     ip addr replace "$INNER/32" dev "$IF"
-    MTU=1476; [ "$GRE_KIND" != ip6gre ] || MTU=1452
+    MTU=1472; [ "$GRE_KIND" != ip6gre ] || MTU=1452
     ip link set "$IF" mtu "$MTU" up
     ip route replace "$PEER_INNER/32" dev "$IF" src "$INNER"
     sysctl -qw "net.ipv4.conf.$IF.rp_filter=2" net.ipv4.ip_forward=1
