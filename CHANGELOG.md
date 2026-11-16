@@ -4,6 +4,13 @@ All notable changes to Amnezia Control are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.84.50] - 2026-11-16
+
+- Add automatic or manual AmneziaWG UDP port, private IPv4 subnet and interface address selection during deployment, with checks for local network overlaps and port conflicts.
+- Add version-aware advanced settings for AmneziaWG 2.0, existing 3.0 installations and 3.1, with generated defaults, input validation and only the parameters supported by the installed engine.
+- Allow settings changes for standard standalone AmneziaWG containers after explicit disconnect confirmation. Preserve server and client keys, update saved profiles and paused client addresses, and instruct administrators to redistribute the updated profiles.
+- Validate candidates with the installed engine before switching, keep configuration backups and a durable recovery journal, and restore or reconcile interrupted changes. Guard cascades, custom container settings and unfinished bulk issuance, serialize profile exports and policy updates, and preserve torrent blocking during apply, rollback and restart.
+
 ## [0.84.49] - 2026-11-16
 
 - Add an optional manual server country with automatic detection by the SSH address and the managed host's public egress as a fallback for private management addresses. Keep manual countries during periodic checks and preserve SSH targets.
