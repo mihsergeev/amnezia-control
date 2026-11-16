@@ -425,7 +425,8 @@ async def test_old_backup_discards_only_terminal_journal_when_replacing_servers(
 
 
 @pytest.mark.parametrize('invalid', ['missing_table', 'wrong_server', 'wrong_protocol', 'mixed_snapshot',
-                                    'bad_id', 'bad_phase', 'bad_payload', 'bad_items', 'bad_profile_id'])
+                                    'bad_id', 'bad_phase', 'bad_payload', 'bad_items', 'bad_profile_id',
+                                    'omitted_profile', 'omitted_paused'])
 async def test_restore_rejects_unbound_or_mixed_pending_journal_before_mutation(client, auth_headers, invalid):
     await _make_state(client, auth_headers)
     dump = {'servers': [{'id': 1, 'name': 'archived', 'host': '192.0.2.20', 'ssh_user': 'service'}],
@@ -440,6 +441,12 @@ async def test_restore_rejects_unbound_or_mixed_pending_journal_before_mutation(
     elif invalid == 'bad_phase': dump['awg_settings_changes'][0]['phase'] = 'future'
     elif invalid == 'bad_payload': dump['awg_settings_changes'][0]['payload'] = []
     elif invalid == 'bad_profile_id': dump['awg_configs'][0]['id'] = []
+    elif invalid in ('omitted_profile', 'omitted_paused'):
+        dump['awg_settings_changes'][0]['phase'] = 'applied'
+        dump['awg_configs'][0]['config'] = 'new'
+        if invalid == 'omitted_profile': dump['awg_settings_changes'][0]['payload']['profiles'] = []
+        else: dump['paused_clients'] = [{'id': 1, 'server_id': 1, 'protocol': 'awg3',
+            'client_id': 'synthetic-paused', 'data': 'new-paused'}]
     else: dump['awg_settings_changes'][0]['payload']['profiles'] = 'invalid'
     response = await client.post('/api/backup/restore', content=_tar({'db.json': json.dumps(dump).encode()}),
         headers=auth_headers | {'X-Confirm-Password': 'testpass'})

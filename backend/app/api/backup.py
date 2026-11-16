@@ -409,6 +409,10 @@ def _validate_awg_journal(prepared: dict[str, list[dict]]) -> None:
                 if (row.get("server_id") != sid or row.get("protocol") != protocol
                         or row.get(field) != item["new" if phase == "applied" else "old"]):
                     raise ValueError("Журнал AmneziaWG не согласован с профилями в архиве")
+            expected = {row_id for row_id, row in rows.items()
+                        if row.get("server_id") == sid and row.get("protocol") == protocol}
+            if ids != expected:
+                raise ValueError("Журнал AmneziaWG не согласован с профилями в архиве")
 
 
 async def _reset_sequences(session, models) -> None:
