@@ -35,6 +35,16 @@ def normalize_country_code(value: object) -> str:
     return code if code in _COUNTRY_CODES else ""
 
 
+def country_override(value: str) -> str:
+    """An empty value restores automatic detection; reject invalid manual codes."""
+    if value == "":
+        return ""
+    code = normalize_country_code(value)
+    if not code:
+        raise ValueError("Expected a supported two-letter country code or an empty string")
+    return code
+
+
 async def ip_info(ip: str) -> tuple[str, str]:
     """(страна, провайдер) для адреса выхода клиентов, ('', '') если не определить."""
     try:

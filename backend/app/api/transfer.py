@@ -27,7 +27,7 @@ from fastapi import APIRouter, HTTPException, Request, status
 from fastapi.responses import Response
 from sqlalchemy import DateTime, func, insert, select
 
-from app import alerts, audit, client_endpoint, native_snapshots, sshops, stepup
+from app import alerts, audit, client_endpoint, geo, native_snapshots, sshops, stepup
 from app.clientip import client_ip
 from app.config import get_settings
 from app.db import Base
@@ -59,7 +59,7 @@ _HISTORY_TABLES = {"traffic_samples", "client_traffic_samples"}
 # поля сервера, которые имеет смысл переносить: адрес, доступ и то, как карточка
 # выглядит. id/position/результаты последней проверки — местные, их не берём
 _SERVER_FIELDS = ("name", "host", "client_endpoint", "ssh_port", "ssh_user", "note", "group_name",
-                  "country", "torrent_block", "torrent_autopause", "alerts_enabled")
+                  "country", "country_override", "torrent_block", "torrent_autopause", "alerts_enabled")
 
 _MAX_IMPORT_BYTES = 200 * 1024 * 1024
 
@@ -230,6 +230,7 @@ async def import_server_file(
         if not isinstance(endpoint, str) or len(endpoint) > 255:
             raise ValueError(client_endpoint.INVALID)
         endpoint = client_endpoint.normalize(endpoint)
+        override = geo.country_override(spec.get("country_override") or "")
     except ValueError as exc:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from None
     ssh_port = int(spec.get("ssh_port") or 22)
@@ -254,7 +255,8 @@ async def import_server_file(
         ssh_user=ssh_user,
         note=spec.get("note") or "",
         group_name=(spec.get("group_name") or "")[:64],
-        country=(spec.get("country") or "")[:2],
+        country=override or geo.normalize_country_code(spec.get("country")),
+        country_override=override,
         torrent_block=bool(spec.get("torrent_block")),
         torrent_autopause=bool(spec.get("torrent_autopause")),
         # Уведомления новой панели включаются только в настройках сервера.

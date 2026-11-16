@@ -21,7 +21,7 @@ _CHECK_RESULT_FIELDS = (
     "name", "country", "last_check_ok", "last_check_at", "last_check_info",
     "egress_ip", "egress_country", "egress_org", "egress_at",
 )
-_CHECK_GUARD_FIELDS = ("host", "ssh_port", "ssh_user", "client_endpoint", *_CHECK_RESULT_FIELDS)
+_CHECK_GUARD_FIELDS = ("host", "ssh_port", "ssh_user", "client_endpoint", "country_override", *_CHECK_RESULT_FIELDS)
 
 
 def egress_due(server: Server, now: datetime) -> bool:
@@ -128,16 +128,21 @@ async def run_check(session: AsyncSession, server: Server, settings: Settings) -
         previous.pop(ONBOARDING_NAME_PENDING, None)
         server.last_check_info = json.dumps(previous, ensure_ascii=False)
     await store_check_info(session, server, info)
-    if result.ok and not server.country:
+    if result.ok and not server.country and not server.country_override:
         server.country = geo.normalize_country_code(await geo.country_code(server.host))
-    if result.ok and result.amnezia_containers:
+    if result.ok and (result.amnezia_containers or not server.country):
         egress = None
         try:
             async with sshops.connect(
                 server.host, server.ssh_port, server.ssh_user, key_path,
                 settings.ssh_connect_timeout,
             ) as conn:
-                egress = await sshops.probe_egress(conn)
+                if not server.country and not server.country_override:
+                    public_ip = await sshops.probe_host_egress(conn)
+                    if public_ip:
+                        server.country = geo.normalize_country_code(await geo.country_code(public_ip))
+                if result.amnezia_containers:
+                    egress = await sshops.probe_egress(conn)
         except Exception:  # noqa: BLE001 — адрес выхода не критичен для проверки
             egress = None
         if egress is not None:

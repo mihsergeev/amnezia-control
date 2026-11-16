@@ -86,6 +86,7 @@ async def create_server(
         # новый сервер — в конец списка
         max_pos = await session.scalar(select(func.max(Server.position)))
         server = Server(**body.model_dump(), position=(max_pos or 0) + 1)
+        server.country = body.country_override
         if reuse_ssh_endpoint and name_from_hostname:
             server.last_check_info = json.dumps({server_ops.ONBOARDING_NAME_PENDING: True})
         session.add(server)
@@ -149,8 +150,17 @@ async def update_server(
         "alerts_enabled" in changes
         and changes["alerts_enabled"] != server.alerts_enabled
     )
+    country_override_changed = (
+        "country_override" in changes and changes["country_override"] != server.country_override
+    )
     for field, value in changes.items():
         setattr(server, field, value)
+    if country_override_changed:
+        # Clearing the override also clears its cached value. A subsequent
+        # successful observation discovers the automatic country again.
+        server.country = server.country_override
+    elif host_changed and not server.country_override:
+        server.country = ""
     if any(field in changes for field in ("name", "host", "ssh_port", "ssh_user")):
         info = cascade_alias.check_info(server)
         if info.pop(server_ops.ONBOARDING_NAME_PENDING, None) is not None:

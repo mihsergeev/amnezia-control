@@ -67,6 +67,7 @@ function emptyForm(defaultUser: string): ServerForm {
     name: '',
     host: '',
     client_endpoint: '',
+    country_override: '',
     ssh_port: 22,
     ssh_user: defaultUser,
     note: '',
@@ -458,9 +459,9 @@ function ServerDetail({
           <div>
             <strong>{t('Маршруты каскада')}</strong>
             <div className="muted small">
-              {cascade.routes?.length ? t('Ручные маршруты: {n}', { n: cascade.routes.length }) : cascadeEntryCountry(cascade, server)
-                ? t('Сайты страны входа напрямую с этого сервера, остальное через выход.')
-                : t('Весь трафик клиентов идет через выход: страна этого сервера неизвестна.')}
+              {t('Сохраненная страна маршрутов: {country}', { country: cascade.entry_country || '—' })}
+              {cascade.desired_entry_country !== cascade.entry_country && ` · ${t('Изменения страны ожидают применения')}`}
+              {` · ${t('Фактические правила доступны в настройках маршрутов')}`}
             </div>
           </div>
           <button className="ghost" onClick={() => onCascadeRoutes(cascade)}>{t('Настроить маршруты')}</button>
@@ -756,6 +757,7 @@ export function ServersPage({ onUnauthorized }: Props) {
       name: server.name,
       host: server.host,
       client_endpoint: server.client_endpoint ?? '',
+      country_override: server.country_override ?? '',
       ssh_port: server.ssh_port,
       ssh_user: server.ssh_user,
       note: server.note,
@@ -1537,6 +1539,13 @@ export function ServersPage({ onUnauthorized }: Props) {
               <small className="muted" id="server-client-endpoint-help">
                 {t('Домен или IP без порта для AmneziaWG и WireGuard. Если поле пустое, новые профили используют хост SSH, а у сохраненных остается исходный адрес.')}
               </small>
+            </label>
+            <label>
+              {t('Страна сервера')}
+              <input className="mono" value={form.country_override ?? ''} maxLength={2} pattern="[A-Za-z]{2}"
+                placeholder={t('Автоматически')} autoCapitalize="characters" spellCheck={false}
+                onChange={event => setForm({ ...form, country_override: event.target.value.toUpperCase() })} />
+              <small className="muted">{t('Пусто — авто по адресу SSH или публичному выходу самого сервера. Изменение страны не применяет маршруты действующего каскада.')}</small>
             </label>
             <label>
               {t('Заметка')}

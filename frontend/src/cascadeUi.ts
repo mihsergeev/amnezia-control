@@ -42,7 +42,7 @@ export function cascadeLocalRoute(result: { ru?: string; direct?: string; egress
 }
 
 export function cascadeEntryCountry(cascade: Pick<Cascade, 'entry_country'>, entry?: Pick<Server, 'country'> | null): string {
-  return (cascade.entry_country || entry?.country || '').toUpperCase()
+  return (cascade.entry_country !== undefined ? cascade.entry_country : entry?.country || '').toUpperCase()
 }
 
 export function cascadeLocalExpected(routes: CascadeRoute[] = []): CascadeRoute['via'] {

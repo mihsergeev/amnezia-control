@@ -305,6 +305,9 @@ async def _sample_server(
                     if check is not None:
                         _checked_at[server.id] = mono
                 # адрес выхода клиентов - раз в EGRESS_TTL (ходит во внешний сервис)
+                host_egress = ""
+                if not server.country and not server.country_override:
+                    host_egress = await sshops.probe_host_egress(conn)
                 egress = None
                 if (
                     check is not None
@@ -335,6 +338,7 @@ async def _sample_server(
         "known": known,  # все клиенты на ноде, не только с трафиком
         "check": check,  # CheckResult | None (None = docker не ответил, не трогаем список)
         "egress": egress,  # str | None (None = в этот раз не спрашивали)
+        "host_egress": host_egress,
         "torrent": torrent_hits,  # [{protocol, client_id, name, hits}]
     }
 
@@ -440,11 +444,17 @@ async def collect_once(
             log.exception("ошибка записи торрент-попаданий")
 
     # страна по IP (для флажка на карточке) — разово для серверов без country
-    need_geo = [s for s in servers if not (s.country or "")]
+    need_geo = [s for s in servers if not (s.country or "") and not s.country_override]
+    public_hosts = {sample["server_id"]: sample.get("host_egress", "") for sample in samples}
+
+    async def detect_country(server):
+        return await geo.country_code(server.host) or (
+            await geo.country_code(public_hosts[server.id]) if public_hosts.get(server.id) else ""
+        )
     geo_map: dict[int, str] = {}
     if need_geo:
         codes = await asyncio.gather(
-            *[geo.country_code(s.host) for s in need_geo], return_exceptions=True
+            *[detect_country(s) for s in need_geo], return_exceptions=True
         )
         geo_map = {
             s.id: c for s, c in zip(need_geo, codes) if isinstance(c, str) and c
@@ -488,7 +498,8 @@ async def collect_once(
                 for srv in rows:
                     srv.last_check_ok = online_map[srv.id]
                     srv.last_check_at = now
-                    if geo_map.get(srv.id):
+                    if (geo_map.get(srv.id) and not srv.country_override and not srv.country
+                            and srv.host == host_of.get(srv.id)):
                         srv.country = geo_map[srv.id]
                     if srv.id in check_map:
                         await server_ops.store_check_info(session, srv, check_map[srv.id])

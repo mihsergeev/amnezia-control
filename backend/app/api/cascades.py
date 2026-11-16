@@ -22,7 +22,7 @@ from app import (
     cascade_probe, cascade_progress, cascade_recovery, cascadejob, deploy, geo, nodelock, server_ops,
 )
 from app.cascade_routes import (
-    Route, RoutePreview, RoutePreviewOut, RouteUpdate, preview_destinations, update_script,
+    Route, RoutePreview, RoutePreviewOut, RouteUpdate, preview_destinations, read_script, routing_state, update_script,
 )
 from app.conflict import conflict
 from app.config import get_settings
@@ -170,6 +170,8 @@ def _out(c: Cascade, entry: Server | None = None) -> CascadeOut:
         progress=prog.get("sides", {}),
         entry_ip=params.get("entry_ip", ""),
         entry_country=params.get("entry_country", ""),
+        entry_country_override=params.get("entry_country_override", params.get("entry_country", "")),
+        desired_entry_country=_desired_country(params, entry),
         exit_ip=params.get("exit_ip", ""),
         routes=params.get("routes", []),
         entry_port=params.get("entry_port"),
@@ -179,6 +181,11 @@ def _out(c: Cascade, entry: Server | None = None) -> CascadeOut:
         result=result,
         created_at=c.created_at,
     )
+
+
+def _desired_country(params: dict, entry: Server | None) -> str:
+    return (geo.normalize_country_code(params.get("entry_country_override", params.get("entry_country")))
+            or geo.normalize_country_code(entry.country if entry else ""))
 
 
 async def _settle(session, c: Cascade) -> None:
@@ -508,6 +515,7 @@ async def _create_cascade(body: CascadeCreate, request: Request, user: CurrentUs
             entry_ip, exit_ip = await _addresses(ec, entry, exit_)
             siblings = await _siblings(session, exit_.id)
             params.update(entry_ip=entry_ip, exit_ip=exit_ip, inner_net=_inner_reservation(siblings))
+            params["entry_country_override"] = body.entry_country or ""
             if body.entry_country:
                 params["entry_country"] = body.entry_country.upper()
             if body.routes:
@@ -578,7 +586,13 @@ async def update_routes(
     params = json.loads(c.params or "{}")
     routes = [rule.model_dump() for rule in body.routes]
     owner = params.get("runtime_owner", "")
-    script = update_script(f"{cascade.DIR}/config", cascade.GATEWAY, cascade.SOCKS_PORT, owner, routes)
+    if body.entry_country is not None:
+        params["entry_country_override"] = body.entry_country
+    country = _desired_country(params, entry)
+    if not country:
+        raise conflict("cascade_entry_country_unknown", "Укажите страну входа перед применением маршрутов",
+                       cascade_id=cascade_id)
+    script = update_script(f"{cascade.DIR}/config", cascade.GATEWAY, cascade.SOCKS_PORT, owner, routes, country)
     command = cascade_lock.wrap(c.id, script, owner, edit=True)
     try:
         async with _locked(entry) as conn:
@@ -592,10 +606,38 @@ async def update_routes(
             75: "Шлюз занят или предыдущие маршруты восстановлены",
         }.get(result.exit_status, "Не удалось применить маршруты")
         raise HTTPException(status.HTTP_502_BAD_GATEWAY, detail)
-    c.params = json.dumps(params | {"routes": routes})
+    c.params = json.dumps(params | {"routes": routes, "entry_country": country})
+    # Old country-dependent health evidence must not survive a routing change.
+    observed = json.loads(c.result or "{}")
+    for field in ("health", "manual_check", "ru", "local", "checked_at"):
+        observed.pop(field, None)
+    c.result = json.dumps(observed)
     await session.commit()
     await audit.record(session, user.username, "cascade_routes", entry.name, str(len(routes)))
     return _out(c, entry)
+
+
+@router.get("/{cascade_id}/routes/state")
+@_pair_operation
+async def route_state(cascade_id: int, _: CurrentUser, session: SessionDep) -> dict:
+    c = await _get_or_404(cascade_id, session)
+    entry = await session.get(Server, c.entry_server_id)
+    params = json.loads(c.params or "{}")
+    country = _desired_country(params, entry)
+    unknown = {"state": "unknown", "applied_country": None, "desired_country": country}
+    if entry is None or c.status != "ready" or cascadejob.running(c.id):
+        return unknown
+    owner = params.get("runtime_owner", "")
+    command = cascade_lock.wrap(c.id, read_script(f"{cascade.DIR}/config", cascade.GATEWAY, owner), owner, edit=True)
+    try:
+        async with _locked(entry) as conn:
+            result = await conn.run(command, check=False, timeout=35)
+        if result.exit_status != 0:
+            return unknown
+        rules = json.loads(result.stdout)
+        return routing_state(rules, country, params.get("routes", [])) | {"desired_country": country}
+    except (asyncssh.Error, OSError, TimeoutError, ValueError, TypeError, KeyError, AttributeError):
+        return unknown
 
 
 @router.post("/{cascade_id}/install", response_model=CascadeOut,
@@ -629,7 +671,8 @@ async def reinstall(
                 if not scoped:
                     await _external_preflight(xc)
             if body and body.entry_country:
-                c.params = json.dumps(params | {"entry_country": body.entry_country.upper()})
+                c.params = json.dumps(params | {"entry_country": body.entry_country.upper(),
+                                               "entry_country_override": body.entry_country.upper()})
             c.status = "installing"
             c.error = ""
             await session.commit()

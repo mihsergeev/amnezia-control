@@ -11,6 +11,21 @@ export type Lang = 'ru' | 'en'
 // Ключ = русская строка (дефолт). Значение = английский перевод.
 // Отсутствующий ключ → возвращается русский (мягкий фолбэк).
 const EN: Record<string, string> = {
+  'Страна сервера': 'Server country',
+  'Пусто — авто по адресу SSH или публичному выходу самого сервера. Изменение страны не применяет маршруты действующего каскада.': 'Leave empty to detect from the SSH address or the host public egress. Changing the country does not apply routes to an active cascade.',
+  'Желаемая страна: {country}': 'Desired country: {country}',
+  'Читаем правила шлюза…': 'Reading gateway rules…',
+  'Фактические правила неизвестны: шлюз недоступен или конфигурация не подтверждена': 'Actual rules unknown: gateway unavailable or configuration unconfirmed',
+  'Страна в работающем шлюзе: {country}': 'Country in the running gateway: {country}',
+  'Нужно применить изменения': 'Changes need to be applied',
+  'Правила синхронизированы': 'Rules are synchronized',
+  'Применяются только правила GeoIP/GeoSite и ручные маршруты. Транспорт, ключи и профили клиентов сохраняются.': 'Only GeoIP/GeoSite rules and manual routes are applied. Transport, keys and client profiles are preserved.',
+  'Проверить состояние правил': 'Check rule status',
+  'Применить маршруты': 'Apply routes',
+  'Сохраненная страна маршрутов: {country}': 'Saved routing country: {country}',
+  'Изменения страны ожидают применения': 'Country changes need to be applied',
+  'Фактические правила доступны в настройках маршрутов': 'View actual rules in route settings',
+  'Укажите страну входа перед применением маршрутов': 'Specify the entry country before applying routes',
   "Время": "Time",
   "Очистить": "Clear",
   "Проверить сайты": "Check websites",

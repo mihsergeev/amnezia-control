@@ -10,7 +10,7 @@ from pydantic import AfterValidator, BaseModel, ConfigDict, Field, computed_fiel
 
 from app.cascade_routes import Route, RouteUpdate
 from app.client_endpoint import normalize as normalize_client_endpoint
-from app.geo import normalize_country_code
+from app.geo import country_override as validate_country_override, normalize_country_code
 from app.metadata_schemas import ClientLabels
 from app.xray import STATS_API_PORT
 
@@ -67,6 +67,7 @@ ClientEndpoint = Annotated[str, Field(max_length=255), AfterValidator(normalize_
 
 
 class ServerCreate(BaseModel):
+    country_override: Annotated[str, AfterValidator(validate_country_override)] = ""
     name: str = Field(min_length=1, max_length=128)
     host: str = Field(min_length=1, max_length=255)
     client_endpoint: ClientEndpoint = ""
@@ -81,6 +82,7 @@ class ServerCreate(BaseModel):
 
 
 class ServerUpdate(BaseModel):
+    country_override: Annotated[str, AfterValidator(validate_country_override)] = ""
     name: str | None = Field(default=None, min_length=1, max_length=128)
     host: str | None = Field(default=None, min_length=1, max_length=255)
     client_endpoint: ClientEndpoint = ""
@@ -121,6 +123,7 @@ class ServerOut(BaseModel):
     group_name: str
     position: int = 0
     country: str = ""
+    country_override: str = ""
     egress_ip: str = ""
     egress_country: str = ""
     egress_org: str = ""
@@ -913,6 +916,8 @@ class CascadeOut(BaseModel):
     progress: dict[Literal["entry", "exit"], CascadeSideProgress] = Field(default_factory=dict)
     entry_ip: str = ""
     entry_country: str = ""
+    entry_country_override: str = ""
+    desired_entry_country: str = ""
     exit_ip: str = ""
     entry_port: int | None = None
     exit_port: int | None = None

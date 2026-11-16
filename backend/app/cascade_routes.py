@@ -8,7 +8,10 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, Field, ValidationError, field_validator, model_validator
 
+from app import geo
+
 RULE_TAG = "acontrol-manual-route-"
+COUNTRY_TAG = "acontrol-country-route-"
 HEALTH_HOST = "api.ipify.org"
 HEALTH_FALLBACK_HOST = "ipv4.icanhazip.com"
 
@@ -44,6 +47,12 @@ class Route(BaseModel):
 
 class RouteUpdate(BaseModel):
     routes: list[Route] = Field(max_length=100)
+    entry_country: str | None = None
+
+    @field_validator("entry_country")
+    @classmethod
+    def country(cls, value):
+        return geo.country_override(value) if value is not None else None
 
     @model_validator(mode="after")
     def unique_destinations(self):
@@ -121,7 +130,9 @@ def xray_rules(routes: list[dict]) -> list[dict]:
 _UPDATE = r"""
 import json, os, pathlib, socket, stat, subprocess, sys, tempfile, time
 
-directory, gateway, owner, port, prefix, rules = json.loads(sys.argv[1])
+payload = json.loads(sys.argv[1])
+directory, gateway, owner, port, prefix, rules = payload[:6]
+country_rules, legacy_groups = payload[6:] if len(payload) > 6 else (None, [])
 directory = pathlib.Path(directory)
 path = directory / 'config.json'
 pending = directory / '.routes-pending'
@@ -189,9 +200,17 @@ current = config['routing']['rules']
 if not current or current[0].get('outboundTag') != 'block' or 'geoip:private' not in current[0].get('ip', []):
     sys.exit(73)
 base = [rule for rule in current if not rule.get('ruleTag', '').startswith(prefix)]
+if country_rules is not None:
+    base = [rule for rule in base if not rule.get('ruleTag', '').startswith('acontrol-country-route-')]
+    # Older versions generated untagged country rules as the exact suffix.
+    # Never remove arbitrary GeoIP rules or another administrator's rules.
+    for group in legacy_groups:
+        if group and base[-len(group):] == group:
+            base = base[:-len(group)]
+            break
 updated = base[:1] + rules + base[1:]
-if current == updated:
-    sys.exit(0)
+if country_rules is not None:
+    updated += country_rules
 config['routing']['rules'] = updated
 
 with tempfile.TemporaryDirectory(prefix='.routes-test-', dir=directory) as staging:
@@ -210,6 +229,80 @@ with tempfile.TemporaryDirectory(prefix='.routes-test-', dir=directory) as stagi
 """
 
 
-def update_script(directory: str, gateway: str, port: int, owner: str, routes: list[dict]) -> str:
+def country_rules(country: str) -> list[dict]:
+    from app.cascade import local_rules
+    return [rule | {"ruleTag": f"{COUNTRY_TAG}{index}"}
+            for index, rule in enumerate(local_rules(country))]
+
+
+def update_script(directory: str, gateway: str, port: int, owner: str, routes: list[dict],
+                  country: str | None = None) -> str:
     payload = [directory, gateway, owner, port, RULE_TAG, xray_rules(routes)]
+    if country is not None:
+        from app.cascade import local_rules
+        payload += [country_rules(country), [local_rules(code) for code in sorted(geo._COUNTRY_CODES)]]
     return "sudo -n python3 -c " + shlex.quote(_UPDATE) + " " + shlex.quote(json.dumps(payload))
+
+
+_READ = r"""
+import datetime, json, pathlib, stat, subprocess, sys
+directory, gateway, owner = json.loads(sys.argv[1])
+directory = pathlib.Path(directory)
+result = subprocess.run(['docker', 'inspect', '--type=container', gateway],
+                        capture_output=True, check=True, timeout=15)
+container, = json.loads(result.stdout)
+entrypoint = container['Config'].get('Entrypoint')
+cmd = container['Config'].get('Cmd')
+approved = [
+    ['-confdir', '/usr/local/etc/xray'],
+    ['-confdir', '/usr/local/etc/xray/'],
+    ['run', '-confdir', '/usr/local/etc/xray'],
+    ['run', '-confdir', '/usr/local/etc/xray/'],
+    ['run', '-config', '/usr/local/etc/xray/config.json'],
+    ['run', '-c', '/usr/local/etc/xray/config.json'],
+]
+if ((container['Config'].get('Labels') or {}).get('org.amnezia.control.owner', '') != owner
+    or entrypoint not in (['/usr/local/bin/xray'], ['xray']) or cmd not in approved
+    or not container['State']['Running']
+    or not any(item['Source'] == str(directory) and item['Destination'] == '/usr/local/etc/xray'
+               for item in container['Mounts'])):
+    sys.exit(73)
+path = directory / 'config.json'
+meta = path.lstat()
+if (not stat.S_ISREG(meta.st_mode) or meta.st_uid != 0 or meta.st_size > 1024 * 1024
+    or (directory / '.routes-pending').exists()
+    or sorted(item.name for item in directory.glob('*.json')) != ['config.json']):
+    sys.exit(73)
+started = datetime.datetime.fromisoformat(container['State']['StartedAt'].replace('Z', '+00:00')).timestamp()
+if meta.st_mtime > started:
+    # A disk edit newer than the running process is not proof of a reload.
+    sys.exit(73)
+# Rules contain destination metadata only. Never emit the transport config.
+print(json.dumps(json.loads(path.read_bytes())['routing']['rules']))
+"""
+
+
+def read_script(directory: str, gateway: str, owner: str) -> str:
+    return "sudo -n python3 -c " + shlex.quote(_READ) + " " + shlex.quote(json.dumps([directory, gateway, owner]))
+
+
+def routing_state(rules: list[dict], country: str, routes: list[dict]) -> dict:
+    """Describe a live file observation without confusing desired metadata with it."""
+    from app.cascade import local_rules
+    if not isinstance(rules, list) or not rules or rules[0] != {"ip": ["geoip:private"], "outboundTag": "block"}:
+        return {"state": "unknown", "applied_country": None}
+    tail = [rule for rule in rules[1:] if not rule.get("ruleTag", "").startswith(RULE_TAG)]
+    def without_country_tag(rule):
+        return ({key: value for key, value in rule.items() if key != "ruleTag"}
+                if rule.get("ruleTag", "").startswith(COUNTRY_TAG) else rule)
+
+    plain = [without_country_tag(rule) for rule in tail]
+    applied = next((code for code in sorted(geo._COUNTRY_CODES) if plain == local_rules(code)), None)
+    if not plain:
+        applied = ""
+    expected_manual = xray_rules(routes)
+    if applied is None:
+        return {"state": "unknown", "applied_country": None}
+    expected = [rules[0], *expected_manual, *local_rules(country)]
+    return {"state": "synced" if [without_country_tag(rule) for rule in rules] == expected else "pending",
+            "applied_country": applied}

@@ -1,6 +1,12 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { cascadeClientExitConfirmed, cascadeEntryOwnershipError, cascadeLocalExpected, cascadeLocalRoute, cascadePort, cascadeRequestId, cascadeSecurityState, DEFAULT_CASCADE_TRANSPORT, latestCascadeHealth } from '../src/cascadeUi.ts'
+import { cascadeClientExitConfirmed, cascadeEntryCountry, cascadeEntryOwnershipError, cascadeLocalExpected, cascadeLocalRoute, cascadePort, cascadeRequestId, cascadeSecurityState, DEFAULT_CASCADE_TRANSPORT, latestCascadeHealth } from '../src/cascadeUi.ts'
+
+test('changed server metadata never replaces the saved gateway country, including unknown', () => {
+  assert.equal(cascadeEntryCountry({ entry_country: 'RU' }, { country: 'FI' }), 'RU')
+  assert.equal(cascadeEntryCountry({ entry_country: '' }, { country: 'FI' }), '')
+  assert.equal(cascadeEntryCountry({}, { country: 'FI' }), 'FI')
+})
 
 test('the new default is AWG, not an unencrypted transport recommendation', () => {
   assert.equal(DEFAULT_CASCADE_TRANSPORT, 'awg')

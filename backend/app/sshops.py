@@ -117,6 +117,24 @@ async def probe_egress(conn: "asyncssh.SSHClientConnection") -> str | None:
     return _parse_egress_output(output)
 
 
+# This observes the managed host, never the client container or cascade exit.
+# URLs are fixed, proxies and redirects disabled, output and time are bounded.
+HOST_EGRESS_COMMAND = (
+    "for u in https://api.ipify.org https://ipv4.icanhazip.com; do "
+    "ip=$(curl -q -4 -fsS --noproxy '*' --connect-timeout 3 --max-time 6 --max-filesize 64 \"$u\" 2>/dev/null) || continue; "
+    'printf "EGRESS=%s\\n" "$ip"; break; done'
+)
+
+
+async def probe_host_egress(conn: "asyncssh.SSHClientConnection") -> str:
+    try:
+        result = await conn.run(HOST_EGRESS_COMMAND, check=False, timeout=15)
+        value = _parse_egress_output(result.stdout if isinstance(result.stdout, str) else "")
+        return value if value and ipaddress.ip_address(value).is_global else ""
+    except (OSError, asyncssh.Error, TimeoutError):
+        return ""
+
+
 @dataclass
 class CheckResult:
     ok: bool

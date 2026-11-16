@@ -244,7 +244,8 @@ async def _run_locked(cid: int, factory, settings) -> None:
 
 async def _entry_country(entry: Server, params: dict) -> str:
     country = (
-        geo.normalize_country_code(params.get("entry_country")) or geo.normalize_country_code(entry.country)
+        geo.normalize_country_code(params.get("entry_country_override", params.get("entry_country")))
+        or geo.normalize_country_code(entry.country)
     )
     if country:
         return country
@@ -257,7 +258,15 @@ async def _entry_country(entry: Server, params: dict) -> str:
             host = str(address)
     except ValueError:
         pass
-    return geo.normalize_country_code(await geo.country_code(host))
+    country = geo.normalize_country_code(await geo.country_code(host))
+    if country:
+        return country
+    try:
+        async with connect(entry) as conn:
+            public_ip = await sshops.probe_host_egress(conn)
+        return geo.normalize_country_code(await geo.country_code(public_ip)) if public_ip else ""
+    except Exception:  # noqa: BLE001 - manual country remains available
+        return ""
 
 
 async def _finish(factory, cid: int, status: str, error: str, text: str, result: dict) -> None:

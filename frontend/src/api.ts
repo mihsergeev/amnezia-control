@@ -280,6 +280,7 @@ export type Server = {
   group_name: string
   position: number
   country: string
+  country_override?: string
   // адрес выхода клиентов в интернет, если он не совпадает с host (вход каскада)
   egress_ip: string
   egress_country: string
@@ -334,6 +335,7 @@ export function reorderServers(
 }
 
 export type ServerForm = {
+  country_override?: string
   name: string
   host: string
   client_endpoint: string
@@ -1130,6 +1132,8 @@ export type Cascade = {
   log: string
   entry_ip: string
   entry_country?: string
+  entry_country_override?: string
+  desired_entry_country?: string
   exit_ip: string
   probe: Partial<Omit<CascadeProbe, 'gre'>> & {
     checked_at?: string
@@ -1319,10 +1323,15 @@ export function checkServerSites(id: number, destinations: string[], scheme?: Si
   })
 }
 
-export function updateCascadeRoutes(id: number, routes: CascadeRoute[]): Promise<Cascade> {
+export type CascadeRoutingState = { state: 'synced' | 'pending' | 'unknown'; applied_country: string | null; desired_country: string }
+export function getCascadeRoutingState(id: number): Promise<CascadeRoutingState> {
+  return api(`/api/cascades/${id}/routes/state`)
+}
+
+export function updateCascadeRoutes(id: number, routes: CascadeRoute[], entryCountry?: string): Promise<Cascade> {
   return api<Cascade>(`/api/cascades/${id}/routes`, {
     method: 'PUT',
-    body: JSON.stringify({ routes }),
+    body: JSON.stringify({ routes, ...(entryCountry !== undefined ? { entry_country: entryCountry } : {}) }),
   })
 }
 

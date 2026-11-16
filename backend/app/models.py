@@ -52,6 +52,7 @@ class Server(Base):
     position: Mapped[int] = mapped_column(Integer, default=0)
     # ISO 3166-1 alpha-2 (для флажка на карточке); заполняется коллектором по IP
     country: Mapped[str] = mapped_column(String(2), default="")
+    country_override: Mapped[str] = mapped_column(String(2), default="", server_default="")
     # адрес, с которого клиенты VPN выходят в интернет, если он НЕ совпадает с
     # адресом сервера (нода - вход каскада/туннеля). Пусто - выход напрямую или
     # еще не проверяли. Снимается изнутри amnezia-контейнера (sshops.EGRESS_COMMAND)

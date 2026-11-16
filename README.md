@@ -104,6 +104,30 @@ global and use the configured channels.
 
 ---
 
+## Server country and cascade routing
+
+Leave **Server country** empty for automatic detection. The panel first looks up
+the SSH management address. If it cannot locate that address, a successful SSH
+check queries fixed public IP services from the managed host itself and looks
+up that public egress. This never changes the SSH target and never uses the VPN
+clients' cascade exit as the entry country. Enter a two-letter country code to
+keep a manual choice across checks; clear it to restore automatic detection.
+
+Changing server geography does not silently reload an active cascade. Open
+**Configure routes** to select its entry country (empty means automatic), inspect
+the actual gateway rules, and explicitly **Apply routes**. This briefly restarts
+the gateway after validating its candidate configuration. The VPN transport,
+tunnel keys, client profiles, and unrelated gateway settings are preserved.
+The previous configuration is restored if the reload fails. Legacy saved entry
+countries are retained until an administrator explicitly switches to automatic.
+
+The editor distinguishes synchronized rules, changes pending application, and
+unknown state. Unknown means the running configuration could not be confirmed
+(for example SSH failure, ownership mismatch, pending recovery, a newer disk
+edit, or custom rules that cannot be classified). Saved database geography is
+not evidence of the currently applied rules. Use **Check the cascade** after
+applying to verify the actual client path as well.
+
 ## Screenshots
 
 ![Overview dashboard](docs/screenshots/dashboard.png)

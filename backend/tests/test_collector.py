@@ -76,6 +76,37 @@ async def _info(factory, sid: int) -> dict:
         return json.loads(s.last_check_info)
 
 
+async def test_country_fallback_uses_host_egress_and_manual_country_survives_polls(factory, monkeypatch):
+    for name in ("_last_parts", "_last_clients", "_pending", "_last_xray_counters", "_pending_xray_active"):
+        monkeypatch.setattr(collector, name, {})
+    async with factory() as session:
+        server = Server(name="entry", host="192.0.2.10", country="", country_override="")
+        session.add(server)
+        await session.commit()
+        sid = server.id
+    lookups = []
+
+    async def country(host):
+        lookups.append(host)
+        return "FI" if host == "198.51.100.10" else ""
+
+    monkeypatch.setattr(collector.geo, "country_code", country)
+    sample = _sample(sid, None) | {"host_egress": "198.51.100.10"}
+    await _run(factory, monkeypatch, sample)
+    assert lookups == ["192.0.2.10", "198.51.100.10"]
+    async with factory() as session:
+        server = await session.get(Server, sid)
+        assert server.country == "FI" and server.host == "192.0.2.10"
+        server.country = server.country_override = "RU"
+        await session.commit()
+    lookups.clear()
+    await _run(factory, monkeypatch, sample)
+    assert lookups == []
+    async with factory() as session:
+        server = await session.get(Server, sid)
+        assert server.country == server.country_override == "RU"
+
+
 async def test_ssh_timeout_retries_opted_in_server_alert(factory, monkeypatch):
     enabled = await _seed(factory, ["amnezia-awg"])
     disabled = await _seed(factory, [])

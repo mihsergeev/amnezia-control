@@ -1,5 +1,5 @@
-import { useEffect, useRef, useState, type FormEvent } from 'react'
-import { ApiError, checkCascadeRoutesHttp, previewCascadeRoutes, type CascadeRouteHttpResult, type SiteCheckScheme, updateCascadeRoutes, type CascadeRouteDestinationResult, type Cascade, type CascadeRoute, type Server } from './api'
+import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react'
+import { ApiError, checkCascadeRoutesHttp, getCascadeRoutingState, previewCascadeRoutes, type CascadeRoutingState, type CascadeRouteHttpResult, type SiteCheckScheme, updateCascadeRoutes, type CascadeRouteDestinationResult, type Cascade, type CascadeRoute, type Server } from './api'
 import { cascadeEntryCountry } from './cascadeUi'
 import { countryFlag } from './format'
 import { useI18n } from './i18n'
@@ -29,6 +29,9 @@ function CascadeRoutesEditor({ cascade, entry, exit, onClose, onSaved, onUnautho
   const { t } = useI18n()
   const initial = useRef((cascade.routes ?? []).map((route, id) => ({ ...route, id })))
   const [rows, setRows] = useState<Row[]>(initial.current)
+  const [entryCountry, setEntryCountry] = useState(cascade.entry_country_override ?? '')
+  const [routing, setRouting] = useState<CascadeRoutingState | null>(null)
+  const [reading, setReading] = useState(false)
   const nextId = useRef(rows.length)
   const [saving, setSaving] = useState(false)
   const busy = useRef(false)
@@ -51,7 +54,8 @@ function CascadeRoutesEditor({ cascade, entry, exit, onClose, onSaved, onUnautho
   const validationRevision = useRef(0)
   const [editor, setEditor] = useState<Editor | null>(null)
   const [editorError, setEditorError] = useState('')
-  const dirty = routeSignature(rows) !== routeSignature(initial.current)
+  const dirty = routeSignature(rows) !== routeSignature(initial.current) || entryCountry !== (cascade.entry_country_override ?? '')
+  const needsApply = dirty || routing?.state !== 'synced'
   const pending = dirty || !!batch.trim() || !!editor
   const visible = rows.filter((row) => row.destination.toLowerCase().includes(query.trim().toLowerCase()))
   const hiddenSelected = rows.filter((row) => selected.has(row.id) && !visible.some((shown) => shown.id === row.id)).length
@@ -65,6 +69,17 @@ function CascadeRoutesEditor({ cascade, entry, exit, onClose, onSaved, onUnautho
   ] as const
 
   useEffect(() => { alive.current = true; return () => { alive.current = false; httpAbort.current?.abort() } }, [])
+  const readRouting = useCallback(async () => {
+    setReading(true)
+    try {
+      const state = await getCascadeRoutingState(cascade.id)
+      if (alive.current) setRouting(state)
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 401) onUnauthorized()
+      if (alive.current) setRouting({ state: 'unknown', applied_country: null, desired_country: cascade.desired_entry_country ?? '' })
+    } finally { if (alive.current) setReading(false) }
+  }, [cascade.id, cascade.desired_entry_country, onUnauthorized])
+  useEffect(() => { void readRouting() }, [readRouting])
   useEffect(() => {
     function warn(event: BeforeUnloadEvent) { if (pending) { event.preventDefault(); event.returnValue = '' } }
     window.addEventListener('beforeunload', warn)
@@ -136,6 +151,7 @@ function CascadeRoutesEditor({ cascade, entry, exit, onClose, onSaved, onUnautho
     if (pending && !window.confirm(t('Отменить изменения? Несохраненные изменения будут потеряны.'))) return
     clearHttpCheck()
     changed(initial.current)
+    setEntryCountry(cascade.entry_country_override ?? '')
     setSelected(new Set())
     setBatch('')
     setCheckedBatch(null)
@@ -208,13 +224,13 @@ function CascadeRoutesEditor({ cascade, entry, exit, onClose, onSaved, onUnautho
   }
   async function save(event: FormEvent) {
     event.preventDefault()
-    if (busy.current || validationBusy.current || !dirty || editor || batch.trim()) return
+    if (busy.current || validationBusy.current || !needsApply || editor || batch.trim()) return
     if (!window.confirm(t('Сохранить маршруты? Шлюз кратко перезапустится, соединение может прерваться.'))) return
     busy.current = true
     setSaving(true)
     setError('')
     try {
-      const saved = await updateCascadeRoutes(cascade.id, rows.map(({ destination, via }) => ({ destination, via })))
+      const saved = await updateCascadeRoutes(cascade.id, rows.map(({ destination, via }) => ({ destination, via })), entryCountry)
       if (alive.current) onSaved(saved)
     } catch (err) {
       if (!alive.current) return
@@ -242,6 +258,18 @@ function CascadeRoutesEditor({ cascade, entry, exit, onClose, onSaved, onUnautho
                 <span className="muted small mono">{node.address || node.server?.host || '—'}</span></div>
             </div>)}
           </div>
+          <section className="cascade-route-batch" aria-label={t('Страна входа')}>
+            <label>{t('Страна входа')}<input className="mono" maxLength={2} pattern="[A-Za-z]{2}" value={entryCountry}
+              placeholder={t('Автоматически')} autoCapitalize="characters" spellCheck={false}
+              onChange={event => setEntryCountry(event.target.value.toUpperCase())} /></label>
+            <p className="muted small">{t('Желаемая страна: {country}', { country: entryCountry || entry?.country || '—' })}</p>
+            <p className="small" role="status">{reading ? t('Читаем правила шлюза…') : routing?.state === 'unknown' || !routing
+              ? t('Фактические правила неизвестны: шлюз недоступен или конфигурация не подтверждена')
+              : t('Страна в работающем шлюзе: {country}', { country: routing.applied_country || '—' })}
+              {!reading && routing?.state !== 'unknown' && routing && ` · ${needsApply ? t('Нужно применить изменения') : t('Правила синхронизированы')}`}</p>
+            <p className="muted small">{t('Применяются только правила GeoIP/GeoSite и ручные маршруты. Транспорт, ключи и профили клиентов сохраняются.')}</p>
+            <button type="button" className="ghost" disabled={reading} onClick={() => void readRouting()}>{t('Проверить состояние правил')}</button>
+          </section>
           <p className="muted small">{t('Первое совпавшее правило задает маршрут. Домены включают поддомены. Для остальных адресов действуют настройки каскада.')}</p>
           <section className="cascade-route-batch" aria-labelledby="cascade-route-batch-title">
             <h4 id="cascade-route-batch-title">{t('Пакетное добавление')}</h4>
@@ -335,7 +363,7 @@ function CascadeRoutesEditor({ cascade, entry, exit, onClose, onSaved, onUnautho
           {error && <div className="err-text small" role="alert">{error}</div>}
           <div className="modal-actions">
             <button type="button" className="ghost" disabled={saving || !pending} onClick={reset}>{t('Отменить изменения')}</button>
-            <button type="submit" disabled={saving || !!validating || !dirty || !!editor || !!batch.trim()}>{t(saving ? 'Сохраняем…' : 'Сохранить')}</button>
+            <button type="submit" disabled={saving || reading || !!validating || !needsApply || !!editor || !!batch.trim()}>{t(saving ? 'Сохраняем…' : 'Применить маршруты')}</button>
           </div>
         </div>
       </form>
