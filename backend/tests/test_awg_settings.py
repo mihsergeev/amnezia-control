@@ -676,6 +676,7 @@ flock() { :; }
 @pytest.mark.parametrize('phase,remote_phase', [
     ('applied', 'applied'), ('applied', 'committed'), ('applied', 'rolledback'),
     ('prepared', 'prepared'), ('prepared', 'rolledback'), ('prepared', 'missing'),
+    ('prepared', 'changing'), ('prepared', 'applied'), ('prepared', 'rollback_failed'),
 ])
 async def test_archived_journal_cannot_export_profiles_after_node_drift(
         client, auth_headers, monkeypatch, protocol, phase, remote_phase):
@@ -694,11 +695,12 @@ async def test_archived_journal_cannot_export_profiles_after_node_drift(
         raise HTTPException(502, 'synthetic config mismatch')
     monkeypatch.setattr(settings, 'verify_applied', drifted)
     monkeypatch.setattr(settings, 'verify_previous', drifted)
+    monkeypatch.setattr(settings, 'verify_rollback', drifted)
     response = await client.post(f'/api/servers/{sid}/{protocol}/config',
                                 json={'public_key':public}, headers=auth_headers)
     assert response.status_code == 409
     assert checks == [('b' * 32, protocol)]
-    assert remote['actions'] == (['status'] if remote_phase in ('applied', 'committed', 'missing')
+    assert remote['actions'] == (['status'] if remote_phase not in ('prepared', 'rolledback')
                                  else ['status', 'rollback'])
     async with client.session_factory() as session:
         assert (await session.scalar(select(AwgSettingsChange))).phase == phase
@@ -721,3 +723,68 @@ async def test_legacy_missing_snapshot_cannot_claim_verified_rollback(tmp_path):
     assert 'автоматическое восстановление невозможно' in error.value.detail
     assert 'newer-node-settings' not in error.value.detail
     assert conf.read_bytes() == b'newer-node-settings'
+
+
+@pytest.mark.parametrize('stage', ['before_stop', 'stopped', 'renamed', 'config_replaced',
+                                   'candidate_created', 'candidate_started', 'superseded', 'foreign_container'])
+@pytest.mark.parametrize('legacy', [False, True])
+def test_runtime_rollback_owns_state_and_recovers_apply_boundaries(tmp_path, stage, legacy):
+    token = 'a' * 32
+    journal, config = tmp_path / 'journal', tmp_path / 'config'
+    (journal / 'config').mkdir(parents=True)
+    config.mkdir()
+    old, candidate, newer = b'old-config\n', b'candidate-config\n', b'newer-config\n'
+    (journal / 'state').write_bytes(b'changing\n')
+    (journal / 'config' / 'awg0.conf').write_bytes(old)
+    (journal / 'config' / 'clientsTable').write_bytes(b'original-table')
+    (journal / 'candidate.conf').write_bytes(candidate)
+    (journal / 'old-port').write_bytes(b'47300')
+    (journal / 'old-address').write_bytes(b'10.73.1.1/24')
+    if not legacy:
+        (journal / 'container-id').write_bytes(b'original-id')
+        (journal / 'candidate-container-id').write_bytes(b'candidate-id')
+    live = old if stage in ('before_stop', 'stopped', 'renamed') else candidate
+    if stage == 'superseded': live = newer
+    (config / 'awg0.conf').write_bytes(live)
+    (config / 'clientsTable').write_bytes(b'candidate-table')
+    if stage in ('before_stop', 'stopped'):
+        (tmp_path / 'current.id').write_bytes(b'original-id')
+    else:
+        (tmp_path / 'original.id').write_bytes(b'original-id')
+        if stage not in ('renamed', 'config_replaced'):
+            (tmp_path / 'current.id').write_bytes(b'foreign-id' if stage in ('superseded', 'foreign_container') else b'candidate-id')
+    script = settings.runtime(token, deploy.CONTAINER_V3, deploy.HOST_DIR_V3, 'awg3', 47500, '10.74.1.1/24')
+    script = script.replace('T=/opt/acontrol/settings-backups/' + token, 'T=./journal')
+    script = script.replace('D=' + deploy.HOST_DIR_V3, 'D=./config')
+    script = script.replace('exec 9>/run/lock/acontrol-awg-settings-', 'exec 9>./settings-')
+    stub = '''docker() {
+  case "$1" in
+    inspect)
+      case "$2" in *-settings-*) f=./original.id;; *) f=./current.id;; esac
+      test -f "$f" || return 1
+      if [ "$#" -gt 2 ]; then cat "$f"; fi;;
+    rm) echo remove >> ./mutations; rm -f ./current.id;;
+    rename) echo rename >> ./mutations; mv ./original.id ./current.id;;
+    start) echo start >> ./mutations;;
+    exec) case "$*" in *listen-port) echo 47300;; *'address show'*) echo 'inet 10.73.1.1/24 scope global awg0';; *) return 1;; esac;;
+    *) return 1;;
+  esac
+}
+systemctl() { :; }
+flock() { :; }
+sleep() { :; }
+'''
+    result = subprocess.run([shutil.which('bash'), '-s', '--', 'rollback'], input=stub + script,
+                            text=True, capture_output=True, cwd=tmp_path)
+    # Legacy helpers have no CID binding; exact snapshot matching remains
+    # their conservative fallback. New helpers also reject foreign containers.
+    reject = stage == 'superseded' or (stage == 'foreign_container' and not legacy)
+    if reject:
+        assert result.returncode != 0
+        assert (config / 'awg0.conf').read_bytes() == live
+        assert not (tmp_path / 'mutations').exists()
+    else:
+        assert result.returncode == 0, result.stderr
+        assert (config / 'awg0.conf').read_bytes() == old
+        assert (config / 'clientsTable').read_bytes() == b'original-table'
+        assert (journal / 'state').read_text().strip() == 'rolledback'

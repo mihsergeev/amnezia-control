@@ -47,6 +47,8 @@ async def _recover_one(conn, session, change):
         await settings.remote_action(conn, change.id, "finalize")
         change.phase = "done"
     elif remote in ("prepared", "changing", "applied", "rollback_failed", "rolledback"):
+        if remote not in ("prepared", "rolledback"):
+            await settings.verify_rollback(conn, change.id, change.protocol)
         await settings.remote_action(conn, change.id, "rollback")
         await settings.verify_previous(conn, change.id, change.protocol, change.payload)
         await _restore_db(session, change)

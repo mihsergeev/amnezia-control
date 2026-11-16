@@ -393,6 +393,25 @@ docker inspect {name} --format '{{{{json .HostConfig}}}}'
     return json.loads(await checked(conn, "sudo -n bash -s", stdin=script))
 
 
+def _rollback_guard() -> str:
+    return '''owns_rollback() {
+  # A historical helper must never overwrite a newer deployment/config.
+  cmp -s "$T/candidate.conf" "$D/awg0.conf" || cmp -s "$T/config/awg0.conf" "$D/awg0.conf" || return 1
+  if [ -f "$T/container-id" ]; then
+    if docker inspect "$OLD" >/dev/null 2>&1; then
+      [ "$(docker inspect "$OLD" --format '{{.Id}}')" = "$(cat "$T/container-id")" ] || return 1
+      if docker inspect "$C" >/dev/null 2>&1; then
+        [ -s "$T/candidate-container-id" ] || return 1
+        [ "$(docker inspect "$C" --format '{{.Id}}')" = "$(cat "$T/candidate-container-id")" ] || return 1
+      fi
+    else
+      [ "$(docker inspect "$C" --format '{{.Id}}')" = "$(cat "$T/container-id")" ] || return 1
+    fi
+  fi
+}
+'''
+
+
 def runtime(token: str, container: str, host_dir: str, proto: str, port: int, address: str, *, torrent_block: bool = False) -> str:
     """Keep the original stopped container until DB commit; rollback restores it.
 
@@ -449,11 +468,27 @@ readback() {{
   [ "$(docker exec "$C" awg show awg0 listen-port)" = "$1" ] &&
   docker exec "$C" ip -4 address show dev awg0 | grep -Fq "inet $2 "
 }}
+{_rollback_guard()}
+restore_files() {{
+  # Only these files are changed by apply. Rename within the bind mount keeps
+  # both apply and rollback recoverable at every interruption boundary.
+  for f in awg0.conf clientsTable; do
+    cp -a "$T/config/$f" "$D/.$f.rollback-{token}" || return 1
+    mv -f "$D/.$f.rollback-{token}" "$D/$f" || return 1
+  done
+  if [ -f "$T/config/.acontrol-torrent-block" ]; then
+    cp -a "$T/config/.acontrol-torrent-block" "$D/.acontrol-torrent-block" || return 1
+  else
+    rm -f "$D/.acontrol-torrent-block" || return 1
+  fi
+  rm -f "$D/.awg0.conf.next-{token}" "$D/.clientsTable.next-{token}" || return 1
+}}
 rollback() {{
   case "$(state)" in rolledback|prepared) return 0;; committed) return 1;; esac
+  owns_rollback || return 1
   if docker inspect "$OLD" >/dev/null 2>&1; then
     docker rm -f "$C" >/dev/null 2>&1 || true
-    cp -a "$T/config/." "$D/" || return 1
+    restore_files || return 1
     if [ -f "$T/unit" ]; then cp -a "$T/unit" "/etc/systemd/system/$UNIT" || return 1; fi
     systemctl daemon-reload || return 1
     docker rename "$OLD" "$C" || return 1
@@ -462,7 +497,7 @@ rollback() {{
   else
     # Failure before rename/stop must not remove the working container.
     docker inspect "$C" >/dev/null || return 1
-    cp -a "$T/config/." "$D/" || return 1
+    restore_files || return 1
 {policy_restore_start.rstrip()}
     docker start "$C" >/dev/null || return 1
   fi
@@ -485,6 +520,7 @@ case "$1" in
   docker cp "$C:/opt/amnezia/start.sh" "$T/original-start.sh"
   docker inspect "$C" --format '{{{{.Image}}}}' > "$T/image"
   docker inspect "$C" --format '{{{{.Config.Image}}}}' > "$T/image-ref"
+  docker inspect "$C" --format '{{{{.Id}}}}' > "$T/container-id"
   docker exec "$C" awg show awg0 listen-port > "$T/old-port"
   docker exec "$C" ip -4 -o addr show dev awg0 | awk '{{print $4; exit}}' > "$T/old-address"
   [ ! -f "/etc/systemd/system/$UNIT" ] || cp -a "/etc/systemd/system/$UNIT" "$T/unit"
@@ -509,8 +545,10 @@ case "$1" in
   trap 'trap - ERR; rollback || mark rollback_failed; exit 1' ERR
   docker stop "$C" >/dev/null
   docker rename "$C" "$OLD"
-  cp -f "$T/candidate.conf" "$D/awg0.conf"
-  cp -f "$T/candidate.table" "$D/clientsTable"
+  cp -f "$T/candidate.conf" "$D/.awg0.conf.next-{token}"
+  mv -f "$D/.awg0.conf.next-{token}" "$D/awg0.conf"
+  cp -f "$T/candidate.table" "$D/.clientsTable.next-{token}"
+  mv -f "$D/.clientsTable.next-{token}" "$D/clientsTable"
   chmod 600 "$D/awg0.conf" "$D/clientsTable"
   {policy_flag}
   printf '%s' {shlex.quote(base64.b64encode(start.encode()).decode())} | base64 -d > "$T/start.sh"
@@ -519,7 +557,7 @@ case "$1" in
   docker create --name "$C" --restart always --privileged \\
     --cap-add NET_ADMIN --cap-add SYS_MODULE \\
     --sysctl net.ipv4.conf.all.src_valid_mark=1 \\
-    -v "$D":/opt/amnezia/awg -p {port}:{port}/udp "$(cat "$T/image-ref")" >/dev/null
+    -v "$D":/opt/amnezia/awg -p {port}:{port}/udp "$(cat "$T/image-ref")" > "$T/candidate-container-id"
   docker cp "$T/start.sh" "$C:/opt/amnezia/start.sh"
   docker start "$C" >/dev/null
   printf '%s' {shlex.quote(base64.b64encode(unit.encode()).decode())} | base64 -d > "/etc/systemd/system/$UNIT"
@@ -553,6 +591,20 @@ case "$1" in
  *) exit 1;;
 esac
 '''
+
+
+async def verify_rollback(conn, token: str, protocol: str):
+    """Protect panel-triggered rollback when the node has a legacy helper."""
+    if not re.fullmatch(r"[a-f0-9]{32}", token) or protocol not in ("awg", "awg3"):
+        raise ValueError("Invalid transaction")
+    container = deploy.CONTAINER_V3 if protocol == "awg3" else deploy.CONTAINER
+    host_dir = deploy.HOST_DIR_V3 if protocol == "awg3" else awg.AWG_DIR
+    script = (f'set -eu\nT=/opt/acontrol/settings-backups/{token}\nD={host_dir}\n'
+              f'C={container}\nOLD={container}-settings-{token}\n' + _rollback_guard() + '\nowns_rollback\n')
+    try:
+        await checked(conn, "sudo -n bash -s", stdin=script)
+    except HTTPException as exc:
+        raise HTTPException(409, "Текущее состояние AmneziaWG не принадлежит прерванной операции. Автоматический откат заблокирован; согласуйте состояние ноды и резервной копии") from exc
 
 
 async def verify_applied(conn, token: str, protocol: str):
