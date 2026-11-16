@@ -138,9 +138,12 @@ async def run_check(session: AsyncSession, server: Server, settings: Settings) -
                 settings.ssh_connect_timeout,
             ) as conn:
                 if not server.country and not server.country_override:
-                    public_ip = await sshops.probe_host_egress(conn)
-                    if public_ip:
-                        server.country = geo.normalize_country_code(await geo.country_code(public_ip))
+                    try:
+                        public_ip = await sshops.probe_host_egress(conn)
+                        if public_ip:
+                            server.country = geo.normalize_country_code(await geo.country_code(public_ip))
+                    except Exception:  # noqa: BLE001 - geography must not suppress client egress
+                        pass
                 if result.amnezia_containers:
                     egress = await sshops.probe_egress(conn)
         except Exception:  # noqa: BLE001 — адрес выхода не критичен для проверки

@@ -115,6 +115,41 @@ async def test_host_probe_rejects_non_global_and_injected_output(value):
     assert "-L" not in sshops.HOST_EGRESS_COMMAND
 
 
+async def test_failed_host_geography_does_not_suppress_client_egress(client, auth_headers, monkeypatch):
+    @asynccontextmanager
+    async def connect(*_args):
+        yield object()
+
+    async def check(*_args):
+        return sshops.CheckResult(ok=True, amnezia_containers=["amnezia-awg"])
+
+    async def host_probe(_conn):
+        raise RuntimeError("Host discovery unavailable")
+
+    async def client_probe(_conn):
+        return "203.0.113.20"
+
+    async def country(_host):
+        return ""
+
+    async def info(_ip):
+        return "FI", "fixture"
+
+    monkeypatch.setattr(sshops, "connect", connect)
+    monkeypatch.setattr(sshops, "check_server", check)
+    monkeypatch.setattr(sshops, "probe_host_egress", host_probe)
+    monkeypatch.setattr(sshops, "probe_egress", client_probe)
+    monkeypatch.setattr(geo, "country_code", country)
+    monkeypatch.setattr(geo, "ip_info", info)
+    created = await client.post("/api/servers", headers=auth_headers,
+                                json={"name": "entry", "host": "192.0.2.10"})
+    response = await client.post(f"/api/servers/{created.json()['id']}/check", headers=auth_headers)
+    assert response.status_code == 200, response.text
+    assert response.json()["egress_ip"] == "203.0.113.20"
+    assert response.json()["egress_country"] == "FI"
+    assert response.json()["egress_at"] is not None
+
+
 def test_country_state_uses_actual_rules_not_metadata():
     config = json.loads(cascade.entry_gateway_config("gre", "203.0.113.20", {}, country="RU"))
     rules = config["routing"]["rules"]
