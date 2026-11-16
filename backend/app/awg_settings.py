@@ -316,10 +316,14 @@ async def install_runtime(conn, token: str, script: str):
     digest = hashlib.sha256(script.encode()).hexdigest()
     # A disconnected upload must leave status=missing, never a partial final
     # script that cannot report or recover its prepared journal.
-    await checked(conn,
-        f"sudo -n mkdir -p /lib65/scripts && sudo -n install -m 700 /dev/stdin {path}.next && "
-        f"printf '%s\\n' '{digest}  {path}.next' | sudo -n sha256sum --check --status && "
-        f"sudo -n mv -f {path}.next {path}", stdin=script)
+    stage = (
+        f"umask 077; mkdir -p /lib65/scripts && cat > {path}.next && chmod 700 {path}.next && "
+        f"printf '%s\\n' '{digest}  {path}.next' | sha256sum --check --status && "
+        f"mv -f {path}.next {path}"
+    )
+    # Stream directly: uutils install cannot reliably overwrite an existing
+    # target from /dev/stdin. A retry must replace its own partial staging file.
+    await checked(conn, "sudo -n sh -c " + shlex.quote(stage), stdin=script)
 
 
 def managed(info: dict, container: str, proto: str, image_info: dict | None = None, canonical_host: dict | None = None):

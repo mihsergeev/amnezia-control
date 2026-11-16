@@ -560,12 +560,6 @@ async def test_partial_runtime_upload_is_unpublished_and_retry_is_atomic(tmp_pat
             # This truncated prefix is valid shell. A syntax-only check would
             # publish it and strand a prepared journal with an empty status.
             payload = '#!/bin/bash\n' if self.truncated else input
-            if tmp_path.drive:
-                # Git Bash's install.exe cannot open /dev/stdin on Windows.
-                # Supply the same uploaded bytes through a regular file; the
-                # production checksum and atomic publish command stay intact.
-                (tmp_path / 'upload-input').write_bytes(payload.encode())
-                command = command.replace('/dev/stdin', './upload-input')
             result = subprocess.run([shutil.which('bash'), '-c', command], input=payload.encode(), capture_output=True, cwd=tmp_path)
             self.stderr = result.stderr.decode()
             return SimpleNamespace(exit_status=result.returncode, stdout=result.stdout.decode(), stderr=result.stderr.decode())
