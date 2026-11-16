@@ -13,13 +13,18 @@ _restoring = False
 
 
 def guard(*, restore: bool = False):
-    """Exclude restores and issuance, without serializing unrelated nodes."""
+    """Exclude full-panel snapshots/restores and active protocol transactions.
+
+    Issuance, AWG settings and recovery may run on unrelated nodes together.
+    A snapshot/restore excludes all of them until its last table/file is read
+    or replaced, preserving the settings journal and its profile snapshot.
+    """
     def decorate(handler):
         @wraps(handler)
         async def wrapped(*args, **kwargs):
             global _issuing, _restoring
             if _restoring or (restore and _issuing):
-                raise HTTPException(409, "Дождитесь завершения групповой выдачи или восстановления панели")
+                raise HTTPException(409, "Дождитесь завершения резервного копирования, восстановления, групповой выдачи или изменения настроек AmneziaWG")
             if restore:
                 _restoring = True
             else:

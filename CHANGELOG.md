@@ -10,6 +10,7 @@ All notable changes to Amnezia Control are documented here. The format is based 
 - Add version-aware advanced settings for AmneziaWG 2.0, existing 3.0 installations and 3.1, with generated defaults, input validation and only the parameters supported by the installed engine.
 - Allow settings changes for standard standalone AmneziaWG containers after explicit disconnect confirmation. Preserve server and client keys, update saved profiles and paused client addresses, and instruct administrators to redistribute the updated profiles.
 - Validate candidates with the installed engine before switching, keep configuration backups and a durable recovery journal, and restore or reconcile interrupted changes. Guard cascades, custom container settings and unfinished bulk issuance, serialize profile exports and policy updates, and preserve torrent blocking during apply, rollback and restart.
+- Include the AmneziaWG recovery journal in consistent panel backups, validate its profile references before restore, refuse replacement of unresolved live changes, and reseed only numeric PostgreSQL IDs.
 
 ## [0.84.49] - 2026-11-16
 

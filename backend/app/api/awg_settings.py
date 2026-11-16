@@ -61,6 +61,7 @@ async def _recover_one(conn, session, change):
     await session.commit()
 
 
+@bulk_issue_state.guard()
 async def recover(server, session):
     """Called before AWG requests so a crash cannot export stale profiles."""
     from app.api.awg import _connect
@@ -119,6 +120,7 @@ async def defaults(server_id: int, protocol: str, _: CurrentUser, session: Sessi
 @router.put("/{protocol}/settings")
 @nodelock.operation("cascade")
 @nodelock.operation("awg")
+@bulk_issue_state.guard()
 async def update_settings(server_id: int, protocol: str, body: AwgSettingsRequest,
                           user: CurrentUser, session: SessionDep):
     from app.api.awg import _connect, _get_or_404

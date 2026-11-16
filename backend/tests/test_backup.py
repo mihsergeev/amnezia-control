@@ -6,12 +6,16 @@ import gzip
 import io
 import json
 import tarfile
+import asyncio
+from types import SimpleNamespace
 
 import httpx
 import pytest
 
 from app import apikeys
 from app.api.backup import _skip_data_dir, verify_archive
+from sqlalchemy import delete, select
+from app.models import AwgConfig, AwgSettingsChange, PausedClient, Server
 
 
 def _mk_archive(manifest_tables, dump, with_key=True):
@@ -324,3 +328,195 @@ async def test_backup_restores_cascades_and_skips_secrets(client, auth_headers, 
     assert "cascades" not in r.json()["restored"]
     async with client.session_factory() as s:
         assert sorted(await s.scalars(select(Cascade.id))) == [7, 8]
+
+
+@pytest.mark.parametrize("phase,outcome", [("prepared", "rolledback"), ("applied", "rolledback"),
+    ("applied", "committed"), ("done", None), ("rolledback", None)])
+async def test_awg_journal_backup_restore_roundtrip_and_recovery(client, auth_headers, monkeypatch, phase, outcome):
+    from test_awg_settings import prepare_case
+    sid, _, remote, _, old = await prepare_case(client, auth_headers, monkeypatch)
+    new = old.replace('10.73.1.7', '10.74.1.7')
+    async with client.session_factory() as session:
+        profile = await session.scalar(select(AwgConfig))
+        paused = await session.scalar(select(PausedClient))
+        old_paused = paused.data
+        new_paused = old_paused.replace('10.73.1.8', '10.74.1.8')
+        payload = {'profiles': [{'id': profile.id, 'old': old, 'new': new}],
+                   'paused': [{'id': paused.id, 'old': old_paused, 'new': new_paused}]}
+        profile.config = new if phase in ('applied', 'done') else old
+        paused.data = new_paused if phase in ('applied', 'done') else old_paused
+        session.add(AwgSettingsChange(id='a' * 32, server_id=sid, protocol='awg3', phase=phase,
+                                      payload=payload if phase in ('prepared', 'applied') else {}))
+        await session.commit()
+    response = await client.post('/api/backup/download', headers=auth_headers, json={'password': 'testpass'})
+    assert response.status_code == 200
+    archive = response.content
+    dump = _read_db_json(archive)
+    assert dump['awg_settings_changes'][0]['phase'] == phase
+    assert dump['awg_settings_changes'][0]['payload'] == (payload if phase in ('prepared', 'applied') else {})
+    # Restore onto a clean target, rather than overwriting a live pending change.
+    async with client.session_factory() as session:
+        await session.execute(delete(AwgSettingsChange))
+        await session.execute(delete(AwgConfig))
+        await session.execute(delete(PausedClient))
+        await session.commit()
+    response = await client.post('/api/backup/restore', content=archive,
+        headers=auth_headers | {'X-Confirm-Password': 'testpass'})
+    assert response.status_code == 200, response.status_code
+    assert response.json()['restored']['awg_settings_changes'] == 1
+    headers = {'Authorization': 'Bearer ' + response.json()['access_token']}
+    async with client.session_factory() as session:
+        change = await session.get(AwgSettingsChange, 'a' * 32)
+        assert change.phase == phase
+        assert change.payload == (payload if phase in ('prepared', 'applied') else {})
+    if phase in ('prepared', 'applied'):
+        # An archived prepared operation must not undo a remotely committed
+        # change. Unknown SSH also keeps an applied operation durable.
+        remote['phase'] = 'committed' if phase == 'prepared' else 'missing'
+        response = await client.get(f'/api/servers/{sid}/awg3/settings', headers=headers)
+        assert response.status_code == 409
+        assert 'rollback' not in remote['actions']
+        async with client.session_factory() as session:
+            change = await session.get(AwgSettingsChange, 'a' * 32)
+            assert change.phase == phase and change.payload == payload
+        remote['phase'] = outcome
+        response = await client.get(f'/api/servers/{sid}/awg3/settings', headers=headers)
+        assert response.status_code == 200
+        async with client.session_factory() as session:
+            assert (await session.scalar(select(AwgConfig))).config == (new if outcome == 'committed' else old)
+            assert (await session.scalar(select(PausedClient))).data == (new_paused if outcome == 'committed' else old_paused)
+            change = await session.get(AwgSettingsChange, 'a' * 32)
+            assert change.phase == ('done' if outcome == 'committed' else 'rolledback') and change.payload == {}
+
+
+@pytest.mark.parametrize('phase', ['prepared', 'applied', 'unrecognized'])
+async def test_old_backup_cannot_erase_live_unresolved_awg_journal(client, auth_headers, tmp_path, phase):
+    async with client.session_factory() as session:
+        session.add(Server(id=1, name='original', host='192.0.2.10'))
+        session.add(AwgSettingsChange(id='b' * 32, server_id=1, protocol='awg3', phase=phase,
+                                      payload={'profiles': [], 'paused': []}))
+        await session.commit()
+    marker = tmp_path / 'data' / 'marker'
+    marker.parent.mkdir(exist_ok=True)
+    marker.write_bytes(b'before')
+    archive = _tar({'db.json': b'{"servers": []}', 'data/marker': b'after'})
+    response = await client.post('/api/backup/restore', content=archive,
+        headers=auth_headers | {'X-Confirm-Password': 'testpass'})
+    assert response.status_code == 409
+    assert marker.read_bytes() == b'before'
+    async with client.session_factory() as session:
+        assert (await session.get(Server, 1)).name == 'original'
+        assert (await session.get(AwgSettingsChange, 'b' * 32)).phase == phase
+
+
+async def test_old_backup_discards_only_terminal_journal_when_replacing_servers(client, auth_headers):
+    async with client.session_factory() as session:
+        session.add(Server(id=1, name='original', host='192.0.2.10'))
+        session.add(AwgSettingsChange(id='c' * 32, server_id=1, protocol='awg3', phase='done', payload={}))
+        await session.commit()
+    archive = _tar({'db.json': json.dumps({'servers': [{'id': 1, 'name': 'replacement',
+        'host': '192.0.2.20', 'ssh_user': 'service'}]}).encode()})
+    response = await client.post('/api/backup/restore', content=archive,
+        headers=auth_headers | {'X-Confirm-Password': 'testpass'})
+    assert response.status_code == 200
+    async with client.session_factory() as session:
+        assert (await session.get(Server, 1)).name == 'replacement'
+        assert not list(await session.scalars(select(AwgSettingsChange)))
+
+
+@pytest.mark.parametrize('invalid', ['missing_table', 'wrong_server', 'wrong_protocol', 'mixed_snapshot',
+                                    'bad_id', 'bad_phase', 'bad_payload', 'bad_items', 'bad_profile_id'])
+async def test_restore_rejects_unbound_or_mixed_pending_journal_before_mutation(client, auth_headers, invalid):
+    await _make_state(client, auth_headers)
+    dump = {'servers': [{'id': 1, 'name': 'archived', 'host': '192.0.2.20', 'ssh_user': 'service'}],
+            'awg_configs': [{'id': 1, 'server_id': 1, 'protocol': 'awg3', 'config': 'old'}], 'paused_clients': [],
+            'awg_settings_changes': [{'id': 'd' * 32, 'server_id': 1, 'protocol': 'awg3', 'phase': 'prepared',
+                'payload': {'profiles': [{'id': 1, 'old': 'old', 'new': 'new'}], 'paused': []}}]}
+    if invalid == 'missing_table': dump.pop('awg_configs')
+    elif invalid == 'wrong_server': dump['awg_configs'][0]['server_id'] = 2
+    elif invalid == 'wrong_protocol': dump['awg_configs'][0]['protocol'] = 'awg'
+    elif invalid == 'mixed_snapshot': dump['awg_configs'][0]['config'] = 'new'
+    elif invalid == 'bad_id': dump['awg_settings_changes'][0]['id'] = 'invalid'
+    elif invalid == 'bad_phase': dump['awg_settings_changes'][0]['phase'] = 'future'
+    elif invalid == 'bad_payload': dump['awg_settings_changes'][0]['payload'] = []
+    elif invalid == 'bad_profile_id': dump['awg_configs'][0]['id'] = []
+    else: dump['awg_settings_changes'][0]['payload']['profiles'] = 'invalid'
+    response = await client.post('/api/backup/restore', content=_tar({'db.json': json.dumps(dump).encode()}),
+        headers=auth_headers | {'X-Confirm-Password': 'testpass'})
+    assert response.status_code == 400
+    async with client.session_factory() as session:
+        assert (await session.get(Server, 1)).name == 'srv-bkp'
+        assert not list(await session.scalars(select(AwgSettingsChange)))
+
+
+@pytest.mark.parametrize('operation', ['update', 'recovery'])
+async def test_backup_and_restore_exclude_live_awg_transactions(client, auth_headers, monkeypatch, operation):
+    from test_awg_settings import prepare_case
+    from app import awg_settings
+    sid, body, remote, _, old = await prepare_case(client, auth_headers, monkeypatch)
+    entered, release = asyncio.Event(), asyncio.Event()
+    action = awg_settings.remote_action
+    async def blocked(conn, token, verb):
+        if verb == ('finalize' if operation == 'update' else 'status'):
+            entered.set()
+            await release.wait()
+        return await action(conn, token, verb)
+    monkeypatch.setattr(awg_settings, 'remote_action', blocked)
+    if operation == 'recovery':
+        async with client.session_factory() as session:
+            profile = await session.scalar(select(AwgConfig))
+            session.add(AwgSettingsChange(id='e' * 32, server_id=sid, protocol='awg3', phase='prepared',
+                payload={'profiles': [{'id': profile.id, 'old': old, 'new': old}], 'paused': []}))
+            await session.commit()
+        task = asyncio.create_task(client.get(f'/api/servers/{sid}/awg3/settings', headers=auth_headers))
+    else:
+        task = asyncio.create_task(client.put(f'/api/servers/{sid}/awg3/settings', headers=auth_headers, json=body))
+    try:
+        await asyncio.wait_for(entered.wait(), 5)
+        response = await client.post('/api/backup/download', headers=auth_headers, json={'password': 'testpass'})
+        assert response.status_code == 409
+        response = await client.post('/api/backup/restore', content=_tar({'db.json': b'{"servers": []}'}),
+            headers=auth_headers | {'X-Confirm-Password': 'testpass'})
+        assert response.status_code == 409
+    finally:
+        release.set()
+        await asyncio.wait_for(task, 5)
+    response = await client.post('/api/backup/download', headers=auth_headers, json={'password': 'testpass'})
+    assert response.status_code == 200
+    dump = _read_db_json(response.content)
+    assert dump['awg_settings_changes'][0]['phase'] in ('done', 'rolledback')
+
+
+async def test_awg_writer_cannot_change_tables_mid_backup_snapshot(client, auth_headers, monkeypatch):
+    from test_awg_settings import prepare_case
+    from app.api import backup
+    sid, body, remote, _, _ = await prepare_case(client, auth_headers, monkeypatch)
+    entered, release = asyncio.Event(), asyncio.Event()
+    async with client.session_factory() as session:
+        scalars = session.scalars
+        async def paused(query, *args, **kwargs):
+            if query.column_descriptions[0]['entity'] is AwgConfig:
+                entered.set()
+                await release.wait()
+            return await scalars(query, *args, **kwargs)
+        monkeypatch.setattr(session, 'scalars', paused)
+        task = asyncio.create_task(backup._build_archive(session, '', 'test'))
+        try:
+            await asyncio.wait_for(entered.wait(), 5)
+            response = await client.put(f'/api/servers/{sid}/awg3/settings', headers=auth_headers, json=body)
+            assert response.status_code == 409 and remote['actions'] == []
+        finally:
+            release.set()
+            archive = await asyncio.wait_for(task, 5)
+    assert not _read_db_json(archive)['awg_settings_changes']
+
+
+async def test_postgres_restore_reseeds_integer_ids_but_not_journal_tokens():
+    from app.api.backup import _MODELS, _reset_sequences
+    queries = []
+    class Session:
+        bind = SimpleNamespace(dialect=SimpleNamespace(name='postgresql'))
+        async def execute(self, query): queries.append(str(query))
+    await _reset_sequences(Session(), _MODELS)
+    assert any("'servers'" in query for query in queries)
+    assert all('awg_settings_changes' not in query for query in queries)

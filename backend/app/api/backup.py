@@ -3,6 +3,7 @@
 import io
 import json
 import os
+import re
 import tarfile
 import uuid
 from datetime import date, datetime, timezone
@@ -10,7 +11,7 @@ from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Request, status
 from fastapi.responses import Response
-from sqlalchemy import DateTime, delete, insert, select, text, update
+from sqlalchemy import DateTime, Integer, delete, insert, select, text, update
 
 from app import alerts, audit, bulk_issue_state, sshops, stepup
 from app.clientip import client_ip
@@ -22,6 +23,7 @@ from app.models import (
     AuditLog,
     AwgConfig,
     AwgNote,
+    AwgSettingsChange,
     BulkClientIssue,
     Cascade,
     ClientMetadata,
@@ -65,6 +67,7 @@ _MODELS = [
     AuditLog,
     ClientName,
     PausedClient,
+    AwgSettingsChange,
     ApiKey,
     ServerStatus,
     TorrentHit,
@@ -95,6 +98,15 @@ _RESTORE = """# Восстановление Amnezia Control
   пульс панель перепишет сама.
 - Архив не содержит планы групповой выдачи. Завершите или отмените текущую
   выдачу перед восстановлением. Старые запросы не запускаются повторно.
+- Журнал незавершенных изменений AmneziaWG сохраняется вместе с профилями.
+  Перед восстановлением разрешите текущие незавершенные изменения панели.
+  После восстановления архивной операции первый запрос AmneziaWG сверит ее
+  с исходной нодой по SSH. При неизвестном результате выдача профилей остается
+  заблокированной до восстановления доступа и успешной сверки. Архив панели
+  сам по себе не восстанавливает конфигурацию VPN-ноды.
+  Старый архив без журнала можно восстановить после разрешения текущих
+  операций; завершенные записи старой базы удаляются при замене серверов,
+  чтобы не привязать их к другому серверу с тем же номером.
 
 ## Как восстановить
 1. Разверните панель той же или более новой версии (docker compose up) и
@@ -228,6 +240,7 @@ def verify_archive(archive: bytes) -> list[str]:
     return errors
 
 
+@bulk_issue_state.guard(restore=True)
 async def _build_archive(
     session, data_dir: str, version: str, include_traffic: bool = False
 ) -> bytes:
@@ -348,6 +361,71 @@ def _coerce_row(model, row: dict) -> dict:
     return out
 
 
+def _validate_awg_journal(prepared: dict[str, list[dict]]) -> None:
+    """A restored pending transaction must retain its exact profile snapshot.
+
+    Never print payloads: both sides contain the same private client keys.
+    Prepared + remotely committed stays unknown in normal recovery; restoring
+    the archive must not turn that state into permission to roll back the node.
+    """
+    seen, pending_servers = set(), set()
+    for change in prepared.get(AwgSettingsChange.__tablename__, []):
+        token, phase, payload = change.get("id"), change.get("phase"), change.get("payload")
+        sid, protocol = change.get("server_id"), change.get("protocol")
+        if (not isinstance(token, str) or not re.fullmatch(r"[a-f0-9]{32}", token)
+                or token in seen or phase not in ("prepared", "applied", "done", "rolledback")
+                or type(sid) is not int or sid <= 0 or protocol not in ("awg", "awg3")
+                or not isinstance(payload, dict)):
+            raise ValueError("Неверный журнал изменения настроек AmneziaWG в архиве")
+        seen.add(token)
+        if phase in ("done", "rolledback"):
+            if payload:
+                raise ValueError("Завершенный журнал AmneziaWG содержит незавершенное состояние")
+            continue
+        if sid in pending_servers:
+            raise ValueError("Неверный журнал изменения настроек AmneziaWG в архиве")
+        pending_servers.add(sid)
+        tables = (Server.__tablename__, AwgConfig.__tablename__, PausedClient.__tablename__)
+        if any(table not in prepared for table in tables) or not any(
+                row.get("id") == sid for row in prepared[Server.__tablename__]):
+            raise ValueError("В архиве нет связанных данных незавершенного изменения AmneziaWG")
+        for key, model, field in (("profiles", AwgConfig, "config"), ("paused", PausedClient, "data")):
+            items = payload.get(key)
+            if not isinstance(items, list):
+                raise ValueError("Неверные данные восстановления AmneziaWG в архиве")
+            rows = {}
+            for row in prepared[model.__tablename__]:
+                row_id = row.get("id")
+                if type(row_id) is not int or row_id <= 0 or row_id in rows:
+                    raise ValueError("Неверные данные восстановления AmneziaWG в архиве")
+                rows[row_id] = row
+            ids = set()
+            for item in items:
+                if (not isinstance(item, dict) or type(item.get("id")) is not int
+                        or item["id"] in ids or not all(isinstance(item.get(k), str) for k in ("old", "new"))):
+                    raise ValueError("Неверные данные восстановления AmneziaWG в архиве")
+                ids.add(item["id"])
+                row = rows.get(item["id"], {})
+                if (row.get("server_id") != sid or row.get("protocol") != protocol
+                        or row.get(field) != item["new" if phase == "applied" else "old"]):
+                    raise ValueError("Журнал AmneziaWG не согласован с профилями в архиве")
+
+
+async def _reset_sequences(session, models) -> None:
+    """Explicit integer IDs need reseeding; journal tokens have no sequence."""
+    if session.bind.dialect.name != "postgresql":
+        return
+    for model in models:
+        pk = list(model.__table__.primary_key.columns)
+        if len(pk) == 1 and pk[0].name == "id" and isinstance(pk[0].type, Integer):
+            tbl = model.__tablename__
+            await session.execute(text(
+                f"SELECT setval(pg_get_serial_sequence('{tbl}', 'id'), "
+                f"COALESCE((SELECT MAX(id) FROM {tbl}), 1), "
+                f"(SELECT COUNT(*) FROM {tbl}) > 0)"
+            ))
+
+
 @router.get("/list")
 async def list_backups(_: CurrentUser) -> dict:
     from app import autobackup
@@ -465,6 +543,7 @@ async def restore_backup(
             if model is User and not rows:
                 raise ValueError("users: нет учетной записи для входа")
             prepared[model.__tablename__] = [_coerce_row(model, row) for row in rows]
+        _validate_awg_journal(prepared)
     except ValueError as exc:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
 
@@ -502,6 +581,18 @@ async def restore_backup(
     ))).all()
     if any(not complete for _, complete in live_issues):
         raise HTTPException(409, "Завершите или отмените незавершенную групповую выдачу перед восстановлением панели")
+    # An older archive may have no journal at all. Replacing its server/profile
+    # IDs must never erase or rebind a live compensation record. The restore
+    # guard also excludes writers/recovery for the entire check + replacement.
+    if await session.scalar(select(AwgSettingsChange.id).where(
+            AwgSettingsChange.phase.not_in(("done", "rolledback"))).limit(1)):
+        raise HTTPException(409, "Разрешите незавершенное изменение настроек AmneziaWG перед восстановлением панели")
+    if Server in present and AwgSettingsChange not in present:
+        # Legacy archives have no settings journal. Only terminal live rows can
+        # reach here; discard them rather than attach old transaction IDs to a
+        # different node/profile which inherits a restored inventory ID.
+        present.append(AwgSettingsChange)
+        prepared[AwgSettingsChange.__tablename__] = []
     journal = BulkClientIssue.__tablename__
     ids = {request_id for request_id, _ in live_issues}
     try:
@@ -557,22 +648,7 @@ async def restore_backup(
     # следующий INSERT упал бы на duplicate key. Догоняем sequence до max(id).
     # (На SQLite не нужно; таблицы с натуральным PK — server_status/app_settings/
     # node_metrics — пропускаем, у них нет sequence на id.)
-    try:
-        dialect = session.bind.dialect.name  # type: ignore[union-attr]
-    except AttributeError:
-        dialect = ""
-    if dialect == "postgresql":
-        for model in present:
-            pk = list(model.__table__.primary_key.columns)
-            if len(pk) == 1 and pk[0].name == "id":
-                tbl = model.__tablename__
-                await session.execute(
-                    text(
-                        f"SELECT setval(pg_get_serial_sequence('{tbl}', 'id'), "
-                        f"COALESCE((SELECT MAX(id) FROM {tbl}), 1), "
-                        f"(SELECT COUNT(*) FROM {tbl}) > 0)"
-                    )
-                )
+    await _reset_sequences(session, present)
     if retired_keys:
         await session.execute(insert(ApiKey), retired_keys)
     await session.commit()
