@@ -29,8 +29,10 @@ _PRIVATE_HEADERS = {"Cache-Control": "no-store", "Pragma": "no-cache", "X-Conten
 _EXPORT_SLOTS = asyncio.Semaphore(2)
 
 
-async def _server(session, server_id: int) -> Server:
-    return await _get_or_404(server_id, session)
+async def _server(session, server_id: int, protocol: str) -> Server:
+    # Other protocol locks may already be held here; acquiring AWG would
+    # reverse server deletion's AWG -> other-protocol order.
+    return await _get_or_404(server_id, session, recover_settings=protocol.startswith("awg"))
 
 
 @asynccontextmanager
@@ -85,7 +87,7 @@ def _result(operation) -> IssueResult:
 async def pending_issue(server_id: int, protocol: IssueProtocol, user: CurrentUser,
                         session: SessionDep, response: Response) -> PendingIssue | None:
     response.headers.update(_PRIVATE_HEADERS)
-    await _server(session, server_id)
+    await _server(session, server_id, protocol)
     operation = next((row for row in await bulk_issue_state.pending(session, server_id, protocol)
                       if row.owner_id == user.id), None)
     if operation is None:
@@ -100,7 +102,7 @@ async def pending_issue(server_id: int, protocol: IssueProtocol, user: CurrentUs
 async def issue(server_id: int, protocol: IssueProtocol, body: IssueRequest,
                 user: CurrentUser, session: SessionDep, response: Response) -> IssueResult:
     response.headers.update(_PRIVATE_HEADERS)
-    server = await _server(session, server_id)
+    server = await _server(session, server_id, protocol)
     request_id = str(body.request_id)
     username, user_id, server_name = user.username, user.id, server.name
     operation = await session.get(BulkClientIssue, request_id)
@@ -282,7 +284,7 @@ async def _xray_profiles(server, ids):
 @nodelock.operation()
 async def export(server_id: int, protocol: ExportProtocol, body: ExportRequest,
                  user: CurrentUser, session: SessionDep) -> Response:
-    server = await _server(session, server_id)
+    server = await _server(session, server_id, protocol)
     try:
         async with _EXPORT_SLOTS:
             if protocol == "xray":
@@ -329,7 +331,7 @@ async def _xray_revoke_metadata_ids(session, server_id: int, ids: list[str]) -> 
 async def revoke(server_id: int, protocol: IssueProtocol, body: RevokeRequest,
                  user: CurrentUser, session: SessionDep, response: Response) -> RevokeBulkResult:
     response.headers.update(_PRIVATE_HEADERS)
-    server = await _server(session, server_id)
+    server = await _server(session, server_id, protocol)
     username, server_name = user.username, server.name
     errors = {}
     ids = body.client_ids

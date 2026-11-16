@@ -27,12 +27,13 @@ from app.sshkeys import ensure_panel_key, key_paths
 router = APIRouter(prefix="/servers/{server_id}/awg", tags=["awg"])
 
 
-async def _get_or_404(server_id: int, session: SessionDep) -> Server:
+async def _get_or_404(server_id: int, session: SessionDep, *, recover_settings: bool = True) -> Server:
     server = await session.get(Server, server_id)
     if server is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Сервер не найден")
-    from app.api.awg_settings import recover
-    await recover(server, session)
+    if recover_settings:
+        from app.api.awg_settings import recover
+        await recover(server, session)
     return server
 
 

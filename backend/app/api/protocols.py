@@ -33,7 +33,7 @@ async def rename_client(
     name = " ".join(body.name.split())
     if not name:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Пустое имя")
-    server = await _get_or_404(server_id, session)
+    server = await _get_or_404(server_id, session, recover_settings=protocol.startswith("awg"))
     settings = get_settings()
     ensure_panel_key(settings.data_dir)
     key_path, _pub = key_paths(settings.data_dir)
@@ -82,7 +82,7 @@ async def remove_protocol(
     клиентов (снимок конфига остается на ноде), поэтому требует пароль."""
     if protocol not in protoremove.PROTOCOLS:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Неизвестный протокол")
-    server = await _get_or_404(server_id, session)
+    server = await _get_or_404(server_id, session, recover_settings=protocol.startswith("awg"))
     try:
         await stepup.verify(user, body.password, request)
     except HTTPException as exc:

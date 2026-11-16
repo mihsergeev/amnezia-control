@@ -516,3 +516,34 @@ async def test_delete_server_preserves_unresolved_settings_journal(client, auth_
     async with client.session_factory() as session:
         assert await session.get(Server, sid) is not None
         assert (await session.scalar(select(AwgSettingsChange))).phase == 'prepared'
+
+@pytest.mark.parametrize('protocol', ['wireguard', 'xray', 'openvpn'])
+async def test_other_protocols_do_not_reverse_awg_delete_lock_order(client, auth_headers, monkeypatch, protocol):
+    import asyncio
+    from app import protoremove, sshops
+    from app.api import bulk_clients
+    sid, _, _, _, _ = await prepare_case(client, auth_headers, monkeypatch)
+    async with client.session_factory() as session:
+        session.add(AwgSettingsChange(id='e'*32, server_id=sid, protocol='awg3', phase='prepared', payload={}))
+        await session.commit()
+    @asynccontextmanager
+    async def connection(*args, **kwargs):
+        yield object()
+    async def rename(*args):
+        return True, protocol
+    monkeypatch.setattr(sshops, 'connect', connection)
+    monkeypatch.setattr(protoremove, 'rename_on_node', rename)
+    async def bulk_lookup():
+        async with nodelock.hold(protocol, sid), client.session_factory() as session:
+            assert (await bulk_clients._server(session, sid, protocol)).id == sid
+    # Server deletion takes AWG before these protocol locks. Neither generic
+    # operation may wait for AWG while holding an unrelated protocol lock,
+    # even when an unresolved AWG settings journal exists.
+    async with nodelock.hold('awg', sid):
+        await asyncio.wait_for(asyncio.create_task(bulk_lookup()), 3)
+        request = asyncio.create_task(client.post(f'/api/servers/{sid}/protocols/{protocol}/rename',
+            json={'client_id':'synthetic-client','name':'renamed-test'}, headers=auth_headers))
+        response = await asyncio.wait_for(request, 3)
+        assert response.status_code == 204, response.text
+    async with client.session_factory() as session:
+        assert (await session.scalar(select(AwgSettingsChange))).phase == 'prepared'
