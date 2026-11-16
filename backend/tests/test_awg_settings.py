@@ -405,14 +405,15 @@ async def test_cancellation_never_detaches_compensation_from_request_resources(
         assert (await session.scalar(select(AwgConfig))).config == old_profile
         assert (await session.scalar(select(AwgSettingsChange))).phase == 'rolledback'
 
-async def test_installed_30_defaults_are_version_specific(client, auth_headers):
+@pytest.mark.parametrize('protocol,version', [('awg3', '3.0'), ('awg', '3.0'), ('awg', '3.1')])
+async def test_installed_defaults_are_version_specific(client, auth_headers, protocol, version):
     r = await client.post('/api/servers', json={'name':'test-node', 'host':'203.0.113.10'}, headers=auth_headers)
     sid = r.json()['id']
-    r = await client.get(f'/api/servers/{sid}/awg3/settings/defaults?protocol_version=3.0', headers=auth_headers)
+    r = await client.get(f'/api/servers/{sid}/{protocol}/settings/defaults?protocol_version={version}', headers=auth_headers)
     assert r.status_code == 200, r.text
-    assert r.json()['version'] == '3.0'
-    assert set(r.json()['params']) == set(settings.keys('3.0'))
-    assert settings.validate_params(r.json()['params'], '3.0')
+    assert r.json()['version'] == version
+    assert set(r.json()['params']) == set(settings.keys(version))
+    assert settings.validate_params(r.json()['params'], version)
 
 
 async def test_cascade_creation_gate_prevents_settings_mutations(client, auth_headers, monkeypatch):
@@ -546,4 +547,62 @@ async def test_other_protocols_do_not_reverse_awg_delete_lock_order(client, auth
         response = await asyncio.wait_for(request, 3)
         assert response.status_code == 204, response.text
     async with client.session_factory() as session:
+        assert (await session.scalar(select(AwgSettingsChange))).phase == 'prepared'
+
+@pytest.mark.skipif(shutil.which('bash') is None, reason='requires bash')
+async def test_partial_runtime_upload_is_unpublished_and_retry_is_atomic(tmp_path):
+    token = 'f'*32
+    script = '#!/bin/bash\nset -eu\nprintf ready\\n\n'
+    class Conn:
+        truncated = True
+        async def run(self, command, input=None, **kwargs):
+            command = command.replace('sudo -n ', '').replace('/lib65/scripts', '.')
+            # This truncated prefix is valid shell. A syntax-only check would
+            # publish it and strand a prepared journal with an empty status.
+            payload = '#!/bin/bash\n' if self.truncated else input
+            if tmp_path.drive:
+                # Git Bash's install.exe cannot open /dev/stdin on Windows.
+                # Supply the same uploaded bytes through a regular file; the
+                # production checksum and atomic publish command stay intact.
+                (tmp_path / 'upload-input').write_bytes(payload.encode())
+                command = command.replace('/dev/stdin', './upload-input')
+            result = subprocess.run([shutil.which('bash'), '-c', command], input=payload.encode(), capture_output=True, cwd=tmp_path)
+            self.stderr = result.stderr.decode()
+            return SimpleNamespace(exit_status=result.returncode, stdout=result.stdout.decode(), stderr=result.stderr.decode())
+    conn = Conn()
+    target = tmp_path / f'acontrol-awg-settings-{token}.sh'
+    with pytest.raises(HTTPException):
+        await settings.install_runtime(conn, token, script)
+    assert not target.exists()
+    assert target.with_suffix('.sh.next').exists(), conn.stderr
+    conn.truncated = False
+    await settings.install_runtime(conn, token, script)
+    assert target.read_text(encoding='utf-8') == script
+    assert not target.with_suffix('.sh.next').exists()
+
+async def test_ssh_repair_with_unchanged_policy_preserves_unresolved_journal(client, auth_headers, monkeypatch):
+    from app.models import Server
+    sid, _, _, _, old_profile = await prepare_case(client, auth_headers, monkeypatch)
+    async with client.session_factory() as session:
+        session.add(AwgSettingsChange(id='c'*32, server_id=sid, protocol='awg3', phase='prepared', payload={}))
+        await session.commit()
+    attempts = []
+    @asynccontextmanager
+    async def unavailable(server):
+        attempts.append(server.ssh_port)
+        raise OSError('synthetic unreachable old SSH endpoint')
+        yield
+    monkeypatch.setattr(awg_api, '_connect', unavailable)
+    response = await client.patch(f'/api/servers/{sid}', headers=auth_headers,
+        json={'name':'repaired-test', 'ssh_port':2222, 'torrent_block':False, 'torrent_autopause':False})
+    assert response.status_code == 200, response.text
+    assert response.json()['ssh_port'] == 2222 and attempts == []
+    async with client.session_factory() as session:
+        assert (await session.get(Server, sid)).ssh_port == 2222
+        assert (await session.scalar(select(AwgConfig))).config == old_profile
+        assert (await session.scalar(select(AwgSettingsChange))).phase == 'prepared'
+    response = await client.patch(f'/api/servers/{sid}', headers=auth_headers, json={'torrent_block':True})
+    assert response.status_code == 409 and attempts == [2222]
+    async with client.session_factory() as session:
+        assert (await session.get(Server, sid)).torrent_block is False
         assert (await session.scalar(select(AwgSettingsChange))).phase == 'prepared'

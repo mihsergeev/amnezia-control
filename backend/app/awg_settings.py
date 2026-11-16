@@ -309,6 +309,19 @@ async def checked(conn, command, *, stdin=None):
     return result.stdout or ""
 
 
+async def install_runtime(conn, token: str, script: str):
+    if not re.fullmatch(r"[a-f0-9]{32}", token):
+        raise ValueError("Invalid transaction")
+    path = f"/lib65/scripts/acontrol-awg-settings-{token}.sh"
+    digest = hashlib.sha256(script.encode()).hexdigest()
+    # A disconnected upload must leave status=missing, never a partial final
+    # script that cannot report or recover its prepared journal.
+    await checked(conn,
+        f"sudo -n mkdir -p /lib65/scripts && sudo -n install -m 700 /dev/stdin {path}.next && "
+        f"printf '%s\\n' '{digest}  {path}.next' | sudo -n sha256sum --check --status && "
+        f"sudo -n mv -f {path}.next {path}", stdin=script)
+
+
 def managed(info: dict, container: str, proto: str, image_info: dict | None = None, canonical_host: dict | None = None):
     """Only rebuild the exact deployment shape we know how to preserve."""
     expected = deploy.CONTAINER_V3 if proto == "awg3" else deploy.CONTAINER

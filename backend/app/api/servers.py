@@ -123,9 +123,14 @@ async def update_server(
     server_id: int, body: ServerUpdate, user: CurrentUser, session: SessionDep, request: Request
 ) -> Server:
     server = await _get_or_404(server_id, session)
-    from app.api.awg_settings import recover
-    await recover(server, session)
     changes = body.model_dump(exclude_unset=True)
+    # SSH repair and metadata edits must remain available while the old
+    # endpoint is unreachable. Only an actual policy mutation needs recovery;
+    # the UI sends unchanged policy fields along with its full form.
+    if any(changes.get(field) is not None and changes[field] != getattr(server, field)
+           for field in ("torrent_block", "torrent_autopause")):
+        from app.api.awg_settings import recover
+        await recover(server, session)
     if "client_endpoint" in changes and changes["client_endpoint"] != server.client_endpoint:
         await client_endpoint.require_resolvable(changes["client_endpoint"])
     host_changed = "host" in changes and changes["host"] != server.host

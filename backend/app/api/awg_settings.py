@@ -75,12 +75,12 @@ async def recover(server, session):
     async with nodelock.hold("awg", server.id):
         pending = (await session.scalars(query)).all()
         if pending:
-            async with _connect(server) as conn:
-                for change in pending:
-                    try:
+            try:
+                async with _connect(server) as conn:
+                    for change in pending:
                         await _recover_one(conn, session, change)
-                    except Exception as exc:
-                        raise HTTPException(409, "Незавершенное изменение настроек AmneziaWG, результат неизвестен. Повторите после восстановления SSH") from exc
+            except Exception as exc:
+                raise HTTPException(409, "Незавершенное изменение настроек AmneziaWG, результат неизвестен. Повторите после восстановления SSH") from exc
 
 
 @router.get("/{protocol}/settings")
@@ -108,7 +108,9 @@ async def defaults(server_id: int, protocol: str, _: CurrentUser, session: Sessi
     response.headers["Cache-Control"] = "no-store"
     await _get_or_404(server_id, session)
     ver = protocol_version or ("3.1" if protocol == "awg3" else "2.0")
-    if (protocol == "awg") != (ver == "2.0"):
+    # The original AWG container can be upgraded to 3.x in place. Its API
+    # protocol remains "awg"; the parameter version comes from the engine.
+    if protocol == "awg3" and ver == "2.0":
         raise HTTPException(422, "Версия не соответствует протоколу")
     params = settings.generate_defaults(ver)
     return {"version": ver, "params": settings.validate_params(params, ver), "supported_params": settings.keys(ver)}
@@ -189,11 +191,10 @@ async def update_settings(server_id: int, protocol: str, body: AwgSettingsReques
                                    phase="prepared", payload={"profiles": profiles, "paused": paused})
         session.add(change)
         await session.commit()
-        script_path = f"/lib65/scripts/acontrol-awg-settings-{token}.sh"
         script = settings.runtime(token, current.container, host_dir, protocol, port, address,
                                   torrent_block=bool(server.torrent_block))
         try:
-            await settings.checked(conn, f"sudo -n mkdir -p /lib65/scripts && sudo -n install -m 700 /dev/stdin {script_path}", stdin=script)
+            await settings.install_runtime(conn, token, script)
             await settings.remote_action(conn, token, "prepare")
             target = f"/opt/acontrol/settings-backups/{token}"
             for name, content in (("candidate.conf", candidate), ("candidate.table", json.dumps(table, ensure_ascii=False) + "\n")):
