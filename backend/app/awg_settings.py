@@ -541,14 +541,102 @@ case "$1" in
   rollback
   systemctl stop "$WATCH.timer" >/dev/null 2>&1 || true;;
  finalize)
-  case "$(state)" in committed) exit 0;; applied) :;; *) exit 1;; esac
+  case "$(state)" in applied|committed) :;; *) exit 1;; esac
+  # A restored applied journal can refer to an operation superseded by a
+  # later settings edit. Never resolve that archive using only its old token.
+  cmp -s "$T/candidate.conf" "$D/awg0.conf"
   readback {port} {address}
+  [ "$(state)" != committed ] || exit 0
   mark committed
   systemctl stop "$WATCH.timer" >/dev/null 2>&1 || true
   docker rm "$OLD" >/dev/null 2>&1 || true;;
  *) exit 1;;
 esac
 '''
+
+
+async def verify_applied(conn, token: str, protocol: str):
+    """Check recovery even when the node still has an older runtime helper.
+
+    A committed transaction is immutable history, not proof that its config
+    is still live. A mismatch must block exports without rolling back a newer
+    operation. Managed startup preserves the exact candidate bytes. External
+    edits, including SaveConfig rewrites, deliberately require reconciliation.
+    Keep both configs on the node to avoid exposing private keys.
+    """
+    if not re.fullmatch(r"[a-f0-9]{32}", token) or protocol not in ("awg", "awg3"):
+        raise ValueError("Invalid transaction")
+    container = deploy.CONTAINER_V3 if protocol == "awg3" else deploy.CONTAINER
+    host_dir = deploy.HOST_DIR_V3 if protocol == "awg3" else awg.AWG_DIR
+    script = f'''set -eu
+T=/opt/acontrol/settings-backups/{token}
+D={host_dir}
+C={container}
+cmp -s "$T/candidate.conf" "$D/awg0.conf"
+PORT=$(awk -F '[[:space:]]*=[[:space:]]*' '$1 == "ListenPort" {{print $2; exit}}' "$T/candidate.conf")
+ADDRESS=$(awk -F '[[:space:]]*=[[:space:]]*' '$1 == "Address" {{print $2; exit}}' "$T/candidate.conf")
+[ -n "$PORT" ] && [ -n "$ADDRESS" ]
+[ "$(docker exec "$C" awg show awg0 listen-port)" = "$PORT" ]
+docker exec "$C" ip -4 address show dev awg0 | grep -Fq "inet $ADDRESS "
+'''
+    try:
+        await checked(conn, "sudo -n bash -s", stdin=script)
+    except HTTPException as exc:
+        raise HTTPException(409, "Не удалось сверить примененные настройки AmneziaWG с журналом. Выдача профилей заблокирована; согласуйте состояние ноды и резервной копии") from exc
+
+
+def previous_binding(payload: dict):
+    """Optional for legacy journals; a new fingerprint must be complete."""
+    fields = ('old_revision', 'old_port', 'old_address')
+    if not any(key in payload for key in fields):
+        return None
+    expected, port, address = (payload.get(key) for key in fields)
+    try:
+        valid_address = isinstance(address, str) and len(address) <= 18 and str(ipaddress.IPv4Interface(address)) == address
+    except ValueError:
+        valid_address = False
+    if (not isinstance(expected, str) or not re.fullmatch(r"[a-f0-9]{64}", expected)
+            or type(port) is not int or not 1 <= port <= 65535 or not valid_address):
+        raise ValueError("Неверное исходное состояние AmneziaWG в журнале; автоматическое восстановление невозможно")
+    return expected, port, address
+
+
+async def verify_previous(conn, token: str, protocol: str, payload: dict):
+    """A historical rollback also needs proof before restoring old profiles."""
+    if not re.fullmatch(r"[a-f0-9]{32}", token) or protocol not in ("awg", "awg3"):
+        raise ValueError("Invalid transaction")
+    container = deploy.CONTAINER_V3 if protocol == "awg3" else deploy.CONTAINER
+    host_dir = deploy.HOST_DIR_V3 if protocol == "awg3" else awg.AWG_DIR
+    try:
+        binding = previous_binding(payload)
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    if binding is not None:
+        expected, port, address = binding
+        compare = f'[ "$(sha256sum "$D/awg0.conf" | cut -d " " -f 1)" = {shlex.quote(expected)} ]'
+        read_expected = f'PORT={port}\nADDRESS={shlex.quote(address)}'
+    else:
+        # Older journals can still prove a rollback using their node snapshot.
+        # With neither a snapshot nor a fingerprint, missing is unknown.
+        compare = 'cmp -s "$T/config/awg0.conf" "$D/awg0.conf"'
+        read_expected = 'PORT=$(cat "$T/old-port")\nADDRESS=$(cat "$T/old-address")'
+    script = f'''set -eu
+T=/opt/acontrol/settings-backups/{token}
+D={host_dir}
+C={container}
+{compare}
+{read_expected}
+[ -n "$PORT" ] && [ -n "$ADDRESS" ]
+[ "$(docker exec "$C" awg show awg0 listen-port)" = "$PORT" ]
+docker exec "$C" ip -4 address show dev awg0 | grep -Fq "inet $ADDRESS "
+'''
+    try:
+        await checked(conn, "sudo -n bash -s", stdin=script)
+    except HTTPException as exc:
+        detail = ("Не удалось сверить исходные настройки AmneziaWG с журналом. Выдача профилей заблокирована; согласуйте состояние ноды и резервной копии"
+                  if binding is not None else
+                  "Исходное состояние AmneziaWG не подтверждено. Старому журналу нужен исходный снимок на ноде; без него автоматическое восстановление невозможно")
+        raise HTTPException(409, detail) from exc
 
 
 async def remote_action(conn, token: str, action: str):

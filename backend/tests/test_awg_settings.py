@@ -600,3 +600,124 @@ async def test_ssh_repair_with_unchanged_policy_preserves_unresolved_journal(cli
     async with client.session_factory() as session:
         assert (await session.get(Server, sid)).torrent_block is False
         assert (await session.scalar(select(AwgSettingsChange))).phase == 'prepared'
+
+
+@pytest.mark.parametrize('phase', ['applied', 'committed'])
+@pytest.mark.parametrize('drift', ['none', 'config', 'port', 'address'])
+@pytest.mark.parametrize('action', ['finalize', 'verify', 'previous', 'previous-legacy'])
+async def test_finalize_checks_live_node_before_resolving_archived_journal(tmp_path, phase, drift, action):
+    """An old applied backup must not bless profiles superseded on the node."""
+    journal, config = tmp_path / 'journal', tmp_path / 'config'
+    journal.mkdir()
+    config.mkdir()
+    (journal / 'state').write_text(phase, encoding='utf-8')
+    candidate = '[Interface]\nListenPort = 47500\nAddress = 10.73.1.1/24\nH1 = 100-200\n'
+    (journal / 'candidate.conf').write_text(candidate, encoding='utf-8', newline='\n')
+    (journal / 'config').mkdir()
+    (journal / 'config' / 'awg0.conf').write_text(candidate, encoding='utf-8', newline='\n')
+    (journal / 'old-port').write_text('47500', encoding='utf-8')
+    (journal / 'old-address').write_text('10.73.1.1/24', encoding='utf-8')
+    (config / 'awg0.conf').write_text(
+        candidate.replace('100-200', '300-400') if drift == 'config' else candidate,
+        encoding='utf-8', newline='\n')
+    script = settings.runtime('a' * 32, deploy.CONTAINER_V3, deploy.HOST_DIR_V3,
+                              'awg3', 47500, '10.73.1.1/24')
+    script = script.replace('exec 9>/run/lock/acontrol-awg-settings-', 'exec 9>./settings-')
+    stub = '''docker() {
+  case "$*" in
+    *'listen-port') echo PORT;;
+    *'address show'*) echo '    inet ADDRESS scope global awg0';;
+    'rm '*) echo removed >> ./mutations;;
+    *) return 1;;
+  esac
+}
+systemctl() { echo systemctl >> ./mutations; }
+flock() { :; }
+'''.replace('PORT', '47501' if drift == 'port' else '47500').replace(
+        'ADDRESS', '10.74.1.1/24' if drift == 'address' else '10.73.1.1/24')
+    def run(script):
+        script = script.replace('T=/opt/acontrol/settings-backups/' + 'a' * 32, 'T=./journal')
+        script = script.replace('D=' + deploy.HOST_DIR_V3, 'D=./config')
+        return subprocess.run([shutil.which('bash'), '-s', '--', 'finalize'],
+                              input=stub + script, text=True, capture_output=True, cwd=tmp_path)
+    if action != 'finalize':
+        class Conn:
+            async def run(self, command, input=None, **kwargs):
+                assert command == 'sudo -n bash -s'
+                self.result = run(input)
+                return SimpleNamespace(exit_status=self.result.returncode, stdout=self.result.stdout)
+        conn = Conn()
+        async def verify():
+            if action == 'verify':
+                await settings.verify_applied(conn, 'a' * 32, 'awg3')
+            else:
+                payload = {} if action == 'previous-legacy' else {
+                    'old_revision':settings.revision(candidate), 'old_port':47500, 'old_address':'10.73.1.1/24'}
+                await settings.verify_previous(conn, 'a' * 32, 'awg3', payload)
+        if drift == 'none':
+            await verify()
+        else:
+            with pytest.raises(HTTPException) as error:
+                await verify()
+            assert '100-200' not in error.value.detail
+        result = conn.result
+    else:
+        result = run(script)
+    if drift == 'none':
+        assert result.returncode == 0, result.stderr
+        assert (journal / 'state').read_text(encoding='utf-8').strip() == ('committed' if action == 'finalize' else phase)
+    else:
+        assert result.returncode != 0
+        assert (journal / 'state').read_text(encoding='utf-8').strip() == phase
+        assert not (tmp_path / 'mutations').exists()
+
+
+@pytest.mark.parametrize('protocol', ['awg', 'awg3'])
+@pytest.mark.parametrize('phase,remote_phase', [
+    ('applied', 'applied'), ('applied', 'committed'), ('applied', 'rolledback'),
+    ('prepared', 'prepared'), ('prepared', 'rolledback'), ('prepared', 'missing'),
+])
+async def test_archived_journal_cannot_export_profiles_after_node_drift(
+        client, auth_headers, monkeypatch, protocol, phase, remote_phase):
+    sid, _, remote, _, _ = await prepare_case(client, auth_headers, monkeypatch)
+    async with client.session_factory() as session:
+        row = await session.scalar(select(AwgConfig))
+        row.protocol = protocol
+        public = row.public_key
+        session.add(AwgSettingsChange(id='b' * 32, server_id=sid, protocol=protocol,
+            phase=phase, payload={'profiles':[{'id':row.id, 'old':'old', 'new':row.config}], 'paused':[]}))
+        await session.commit()
+    remote['phase'] = remote_phase
+    checks = []
+    async def drifted(conn, token, proto, *args):
+        checks.append((token, proto))
+        raise HTTPException(502, 'synthetic config mismatch')
+    monkeypatch.setattr(settings, 'verify_applied', drifted)
+    monkeypatch.setattr(settings, 'verify_previous', drifted)
+    response = await client.post(f'/api/servers/{sid}/{protocol}/config',
+                                json={'public_key':public}, headers=auth_headers)
+    assert response.status_code == 409
+    assert checks == [('b' * 32, protocol)]
+    assert remote['actions'] == (['status'] if remote_phase in ('applied', 'committed', 'missing')
+                                 else ['status', 'rollback'])
+    async with client.session_factory() as session:
+        assert (await session.scalar(select(AwgSettingsChange))).phase == phase
+
+
+async def test_legacy_missing_snapshot_cannot_claim_verified_rollback(tmp_path):
+    class Conn:
+        async def run(self, command, input=None, **kwargs):
+            script = input.replace('/opt/acontrol/settings-backups/' + 'a' * 32, './missing')
+            script = script.replace(deploy.HOST_DIR_V3, './current')
+            result = subprocess.run([shutil.which('bash'), '-s'], input=script,
+                                    text=True, capture_output=True, cwd=tmp_path)
+            return SimpleNamespace(exit_status=result.returncode, stdout=result.stdout)
+    (tmp_path / 'current').mkdir()
+    conf = tmp_path / 'current' / 'awg0.conf'
+    conf.write_bytes(b'newer-node-settings')
+    with pytest.raises(HTTPException) as error:
+        await settings.verify_previous(Conn(), 'a' * 32, 'awg3', {})
+    assert error.value.status_code == 409
+    assert 'автоматическое восстановление невозможно' in error.value.detail
+    assert 'newer-node-settings' not in error.value.detail
+    assert conf.read_bytes() == b'newer-node-settings'

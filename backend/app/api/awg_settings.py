@@ -43,14 +43,17 @@ async def _restore_db(session, change, *, new=False):
 async def _recover_one(conn, session, change):
     remote = await settings.remote_action(conn, change.id, "status")
     if change.phase == "applied" and remote in ("applied", "committed"):
+        await settings.verify_applied(conn, change.id, change.protocol)
         await settings.remote_action(conn, change.id, "finalize")
         change.phase = "done"
     elif remote in ("prepared", "changing", "applied", "rollback_failed", "rolledback"):
         await settings.remote_action(conn, change.id, "rollback")
+        await settings.verify_previous(conn, change.id, change.protocol, change.payload)
         await _restore_db(session, change)
         change.phase = "rolledback"
     elif remote == "missing" and change.phase == "prepared":
         # Journal persisted before the remote prepare; nothing was changed.
+        await settings.verify_previous(conn, change.id, change.protocol, change.payload)
         await _restore_db(session, change)
         change.phase = "rolledback"
     else:
@@ -81,6 +84,8 @@ async def recover(server, session):
                     for change in pending:
                         await _recover_one(conn, session, change)
             except Exception as exc:
+                if isinstance(exc, HTTPException) and exc.status_code == 409:
+                    raise
                 raise HTTPException(409, "Незавершенное изменение настроек AmneziaWG, результат неизвестен. Повторите после восстановления SSH") from exc
 
 
@@ -190,7 +195,9 @@ async def update_settings(server_id: int, protocol: str, body: AwgSettingsReques
             return {"changed": False, "profiles_refreshed": 0}
         token = settings.transaction_id()
         change = AwgSettingsChange(id=token, server_id=server_id, protocol=protocol,
-                                   phase="prepared", payload={"profiles": profiles, "paused": paused})
+                                   phase="prepared", payload={"profiles": profiles, "paused": paused,
+                                       "old_revision": settings.revision(conf), "old_port": current.listen_port,
+                                       "old_address": current.address})
         session.add(change)
         await session.commit()
         script = settings.runtime(token, current.container, host_dir, protocol, port, address,

@@ -368,6 +368,7 @@ def _validate_awg_journal(prepared: dict[str, list[dict]]) -> None:
     Prepared + remotely committed stays unknown in normal recovery; restoring
     the archive must not turn that state into permission to roll back the node.
     """
+    from app.awg_settings import previous_binding
     seen, pending_servers = set(), set()
     for change in prepared.get(AwgSettingsChange.__tablename__, []):
         token, phase, payload = change.get("id"), change.get("phase"), change.get("payload")
@@ -385,6 +386,7 @@ def _validate_awg_journal(prepared: dict[str, list[dict]]) -> None:
         if sid in pending_servers:
             raise ValueError("Неверный журнал изменения настроек AmneziaWG в архиве")
         pending_servers.add(sid)
+        previous_binding(payload)
         tables = (Server.__tablename__, AwgConfig.__tablename__, PausedClient.__tablename__)
         if any(table not in prepared for table in tables) or not any(
                 row.get("id") == sid for row in prepared[Server.__tablename__]):
