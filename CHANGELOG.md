@@ -9,6 +9,7 @@ All notable changes to Amnezia Control are documented here. The format is based 
 - Add an optional manual server country with automatic detection by the SSH address and the managed host's public egress as a fallback for private management addresses. Keep manual countries during periodic checks and preserve SSH targets.
 - Apply cascade country GeoIP/GeoSite rules in place after explicit confirmation, preserving transport resources, keys, client profiles, other parameters, and custom gateway settings. Validate the candidate and restore the previous configuration if the gateway cannot restart.
 - Show the desired country separately from the rules observed in the running gateway, including pending and unknown states. Keep country-dependent health evidence from an older configuration out of new results.
+- Update the pinned OpenTelemetry API dependency to 1.45.2 to address CVE-2026-126360.
 
 ## [0.84.48] - 2026-11-12
 
