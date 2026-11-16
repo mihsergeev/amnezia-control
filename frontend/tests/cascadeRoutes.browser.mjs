@@ -35,6 +35,9 @@ async function fixture(count = 16, width = 1100, theme = 'dark', language = 'ru'
     const body = request.postDataJSON()
     const path = new URL(request.url()).pathname
     calls.push({ path, method: request.method(), body })
+    if (path.endsWith('/routes/state') && request.method() === 'GET') {
+      return route.fulfill({ contentType: 'application/json', body: JSON.stringify({ state: 'synced', applied_country: 'RU', desired_country: 'RU' }) })
+    }
     const preview = path.endsWith('/preview')
     const http = path.endsWith('/http-check')
     const status = http ? control.httpStatus : preview ? control.previewStatus : control.saveStatus
@@ -53,7 +56,7 @@ async function fixture(count = 16, width = 1100, theme = 'dark', language = 'ru'
   return { page, calls, control }
 }
 const rowList = (page) => page.locator('.cascade-route-row')
-const save = (page) => page.getByRole('button', { name: 'Сохранить', exact: true })
+const save = (page) => page.getByRole('button', { name: 'Применить маршруты', exact: true })
 const input = (page) => page.getByRole('textbox', { name: 'По одному адресу на строку', exact: true })
 async function validate(page, text) { await input(page).fill(text); await page.getByRole('button', { name: 'Проверить адреса', exact: true }).click(); await page.locator('.cascade-route-preview').waitFor() }
 async function agree(page, action) { page.once('dialog', (dialog) => dialog.accept()); await action() }
@@ -63,7 +66,7 @@ try {
     const { page, calls, control } = await fixture()
     assert.equal(await rowList(page).count(), 16)
     assert.equal(await save(page).isDisabled(), true)
-    assert.equal(calls.length, 0, 'opening a draft must not call the API')
+    assert.equal(calls.filter(({ method }) => method !== 'GET').length, 0, 'opening a draft only observes rule state, never applies routes')
     assert.equal(await page.locator('.cascade-route-node').count(), 2)
     assert.equal(await page.getByText('Entry server', { exact: false }).count(), 1)
     await page.getByRole('checkbox', { name: 'Выбрать правило 1', exact: true }).check()
@@ -335,7 +338,7 @@ try {
     const { page } = await fixture(16, width, theme)
     await page.screenshot({ path: `${artifacts}/routes-${width}-${theme}-initial.png` })
     await validate(page, 'new.example\nbad address\nchild.r1.example.com')
-    assert.equal(await page.getByRole('dialog').getByRole('status').textContent(), 'Есть незавершенный ввод')
+    assert.equal(await page.getByRole('dialog').getByRole('status').filter({ hasText: 'Есть незавершенный ввод' }).textContent(), 'Есть незавершенный ввод')
     const layout = await page.evaluate(() => {
       const modal = document.querySelector('.cascade-routes-modal')
       const footer = document.querySelector('.cascade-route-footer').getBoundingClientRect()
