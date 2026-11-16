@@ -163,7 +163,13 @@ up() {
 
 # вызывается таймером: все на месте - ничего не трогаем, иначе ставим заново
 heal() {
-  if ip -o link show "$IF" 2>/dev/null | grep -q " mtu $MTU "; then
+  if ip link show "$IF" >/dev/null 2>&1; then
+    # Repair only the old keyed IPv4 default. Lower/custom MTUs may be needed
+    # by an existing underlay and must not be raised by the periodic check.
+    if [ "$PEER_IPTABLES" = iptables ] && [ -n "${KEY:-}" ] \
+       && ip -o link show "$IF" 2>/dev/null | grep -q ' mtu 1476 '; then
+      ip link set "$IF" mtu "$MTU" || return 1
+    fi
     [ "$ROLE" = exit ] && return 0
     ip rule show | grep -q "fwmark $MARK lookup $TABLE" \
       && ip rule show | grep -q "fwmark $MARK unreachable" \
