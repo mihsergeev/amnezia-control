@@ -294,7 +294,19 @@ class ImportResponse(BaseModel):
 
 
 class DeployRequest(BaseModel):
-    port: int = Field(default=47180, ge=1, le=65535)
+    port: int | None = Field(default=None, ge=1, le=65535)
+    subnet: str | None = Field(default=None, max_length=32)
+    server_address: str | None = Field(default=None, max_length=32)
+    params: dict[str, str | int] | None = None
+
+
+class AwgSettingsRequest(BaseModel):
+    port: int = Field(ge=1, le=65535)
+    subnet: str = Field(max_length=32)
+    server_address: str = Field(max_length=32)
+    params: dict[str, str | int]
+    revision: str = Field(pattern=r"^[a-f0-9]{64}$")
+    acknowledge_disconnect: bool = False
 
 
 class DeployStatusOut(BaseModel):

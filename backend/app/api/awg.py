@@ -4,7 +4,7 @@ from fastapi import APIRouter, HTTPException, Request, status
 from sqlalchemy import delete, select, update
 
 from app import client_metadata, audit, awg, client_endpoint, deploy, deploywatch, limits, nodelock, notes, pausestore, sshops
-from app import bulk_issue_state
+from app import bulk_issue_state, awg_settings
 from app.config import get_settings
 from app.deps import CurrentUser, SessionDep
 from app.models import AwgConfig, AwgNote, ClientLimit, ClientName, Server
@@ -31,6 +31,8 @@ async def _get_or_404(server_id: int, session: SessionDep) -> Server:
     server = await session.get(Server, server_id)
     if server is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Сервер не найден")
+    from app.api.awg_settings import recover
+    await recover(server, session)
     return server
 
 
@@ -309,6 +311,7 @@ async def set_note(
 
 
 @router.post("/config", response_model=ConfigTextResponse)
+@nodelock.operation("awg")
 async def get_stored_config(
     server_id: int,
     body: PublicKeyRequest,
@@ -376,17 +379,25 @@ async def deploy_awg(
     request: Request,
 ) -> dict:
     server = await _get_or_404(server_id, session)
-    cfg = deploy.generate_server_config(body.port)
-    script = deploy.build_script("deploy", body.port, cfg)
     try:
         async with _connect(server) as conn:
             await deploy.ensure_idle(conn, tag="awg")
             await _guard_foreign_awg(conn)
             current = await deploy.existing_port(conn)
+            if current and any(v is not None for v in (body.subnet, body.server_address, body.params)):
+                raise HTTPException(409, "Для изменения установленного протокола откройте настройки AmneziaWG")
+            body = body.model_copy(update={"port": body.port or current})
             if current and current != body.port:
                 raise HTTPException(
                     status.HTTP_409_CONFLICT, deploy.port_mismatch_detail(current, body.port)
                 )
+            if current:
+                port, address, params = current, deploy.SUBNET, None
+            else:
+                port, _subnet, address, params = await awg_settings.choose(conn, body, "2.0")
+            body = body.model_copy(update={"port": port})
+            cfg = deploy.generate_server_config(port, address, params)
+            script = deploy.build_script("deploy", port, cfg)
             # Занятый порт ловим до запуска: сценарий сносит того, кто держит
             # целевой UDP-порт (так заменяется свой же контейнер), и чужой рабочий
             # протокол на этом порту погиб бы вместе с клиентами.

@@ -4175,3 +4175,11 @@ tr.row-link:hover td {
   .site-check-footer .modal-actions { justify-content: flex-start; }
   .site-check-footer button { padding: 8px 10px; }
 }
+.awg-settings-fields {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 12px;
+  margin: 14px 0;
+}
+.awg-settings-fields label { min-width: 0; display: flex; flex-direction: column; gap: 5px; }
+.awg-settings-fields input, .awg-settings-fields select { width: 100%; min-width: 0; }

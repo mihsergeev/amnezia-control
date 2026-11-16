@@ -11,7 +11,8 @@
     "check-i18n": "node scripts/check-i18n.mjs",
     "preview": "vite preview",
     "prebuild": "node scripts/copy-swagger.mjs",
-    "test:workflow": "node tests/quickIssue.browser.mjs"
+    "test:workflow": "node tests/quickIssue.browser.mjs",
+    "test:awg-settings": "node tests/awgSettings.browser.mjs"
   },
   "dependencies": {
     "qrcode": "^1.5.4",

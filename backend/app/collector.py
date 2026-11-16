@@ -251,7 +251,7 @@ async def _native_part(conn, host) -> tuple[dict, list[dict]]:
 
 
 async def _sample_server(
-    server: Server, key_path, timeout: int, hostkey_changed: set[int]
+    server: Server, key_path, timeout: int, hostkey_changed: set[int], session_factory=None
 ) -> dict | None:
     try:
         # ЖЁСТКИЙ таймаут на весь сбор с ноды: connect_timeout покрывает только
@@ -285,7 +285,7 @@ async def _sample_server(
                         xray_stats_missing = totals["xray_stats_missing"]
                 # блокировка торрентов: правила в контейнерах и кто попался
                 try:
-                    torrent_hits = await torrent.sample(conn, server, nets)
+                    torrent_hits = await torrent.sample(conn, server, nets, session_factory)
                 except Exception:  # noqa: BLE001 - не критично для метрик
                     log.warning("торренты на %s не проверены", server.name, exc_info=True)
                     torrent_hits = []
@@ -354,7 +354,7 @@ async def collect_once(
     hostkey_changed: set[int] = set()
     results = await asyncio.gather(
         *[
-            _sample_server(s, key_path, settings.ssh_connect_timeout, hostkey_changed)
+            _sample_server(s, key_path, settings.ssh_connect_timeout, hostkey_changed, session_factory)
             for s in servers
         ]
     )

@@ -82,11 +82,13 @@ def _client_nat(subnet: str) -> str:
     клиентами на awg0. Заодно снимаем старое правило с привязкой к eth0.
     """
     return (
+        "VPN_SUBNET=$(ip -4 route show dev awg0 proto kernel scope link | head -1); VPN_SUBNET=${VPN_SUBNET%% *}; "
+        f"[ -n \"$VPN_SUBNET\" ] || VPN_SUBNET={subnet}; "
         f"while iptables -t nat -D POSTROUTING -s {subnet} -o eth0 "
         "-j MASQUERADE 2>/dev/null; do :; done; "
-        f"iptables -t nat -C POSTROUTING -s {subnet} ! -o awg0 "
+        "iptables -t nat -C POSTROUTING -s \"$VPN_SUBNET\" ! -o awg0 "
         "-j MASQUERADE 2>/dev/null "
-        f"|| iptables -t nat -A POSTROUTING -s {subnet} ! -o awg0 -j MASQUERADE"
+        "|| iptables -t nat -A POSTROUTING -s \"$VPN_SUBNET\" ! -o awg0 -j MASQUERADE"
     )
 
 
@@ -333,14 +335,14 @@ _AWG_ACTIVE_ORDER = [
 _AWG_CPS_KEYS = ["I1", "I2", "I3", "I4", "I5"]
 
 
-def generate_server_config(port: int) -> dict[str, str]:
+def generate_server_config(port: int, address: str = SUBNET, params: dict | None = None) -> dict[str, str]:
     priv, pub = awg.generate_keypair()
     psk = base64.b64encode(secrets.token_bytes(32)).decode()
-    p = generate_awg_params()
+    p = params if params is not None else generate_awg_params()
     conf = (
         "[Interface]\n"
         f"PrivateKey = {priv}\n"
-        f"Address = {SUBNET}\n"
+        f"Address = {address}\n"
         f"ListenPort = {port}\n"
         + "".join(f"{k} = {p[k]}\n" for k in _AWG_ACTIVE_ORDER)
         + "".join(f"# {k} = {p[k]}\n" for k in _AWG_CPS_KEYS)
@@ -422,17 +424,17 @@ _AWG3_ACTIVE_ORDER = _AWG_ACTIVE_ORDER + [
 ]
 
 
-def generate_server_config_v3(port: int) -> dict[str, str]:
+def generate_server_config_v3(port: int, address: str = SUBNET_V3, params: dict | None = None) -> dict[str, str]:
     """Серверный awg0.conf для AmneziaWG 3.0. I1–I5, как и в 2.0, пишем
     ЗАКОММЕНТИРОВАННЫМИ: awg-quick их к серверу не применяет (это клиентский
     джанк), но они нужны, чтобы раздать их клиентам."""
     priv, pub = awg.generate_keypair()
     psk = base64.b64encode(secrets.token_bytes(32)).decode()
-    p = generate_awg3_params()
+    p = params if params is not None else generate_awg3_params()
     conf = (
         "[Interface]\n"
         f"PrivateKey = {priv}\n"
-        f"Address = {SUBNET_V3}\n"
+        f"Address = {address}\n"
         f"ListenPort = {port}\n"
         + "".join(f"{k} = {p[k]}\n" for k in _AWG3_ACTIVE_ORDER)
         + "".join(f"# {k} = {p[k]}\n" for k in _AWG_CPS_KEYS)
@@ -756,7 +758,7 @@ def _systemd_unit() -> str:
         "Description=Bring up AmneziaWG interface + NAT inside container\n"
         "After=docker.service\nRequires=docker.service\n\n"
         "[Service]\nType=oneshot\nExecStartPre=/bin/sleep 8\n"
-        f"ExecStart=/usr/bin/docker exec {CONTAINER} sh -c '{_BRINGUP}'\n"
+        f"ExecStart=/usr/bin/docker exec {CONTAINER} sh -c '{_BRINGUP.replace('$', '$$').replace('%', '%%')}'\n"
         "RemainAfterExit=yes\n\n"
         "[Install]\nWantedBy=multi-user.target\n"
     )
@@ -770,7 +772,7 @@ def _systemd_unit_v3() -> str:
         "Description=Bring up AmneziaWG 3.0 interface + NAT inside container\n"
         "After=docker.service\nRequires=docker.service\n\n"
         "[Service]\nType=oneshot\nExecStartPre=/bin/sleep 8\n"
-        f"ExecStart=/usr/bin/docker exec {CONTAINER_V3} sh -c '{_bringup(SUBNET_V3)}'\n"
+        f"ExecStart=/usr/bin/docker exec {CONTAINER_V3} sh -c '{_bringup(SUBNET_V3).replace('$', '$$').replace('%', '%%')}'\n"
         "RemainAfterExit=yes\n\n"
         "[Install]\nWantedBy=multi-user.target\n"
     )

@@ -2,6 +2,8 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { api, ApiError, type DeployStatus, type DeployProtocol } from './api'
 import { useI18n } from './i18n'
 import { useModalDismiss } from './useModalDismiss'
+import { AwgAdvanced, type AwgParameters } from './AwgSettings'
+import { awgSettingsError } from './awgSettingsError'
 
 // после стольких неудачных опросов статуса подряд перестаем опрашивать
 const MAX_POLL_FAILS = 5
@@ -29,7 +31,8 @@ export function DeployModal({
   const dismiss = useModalDismiss(onClose)
   const nativeProtocol = protocol === 'wireguard' || protocol === 'openvpn-native'
   const xraySetup = protocol === 'xray' && mode === 'deploy'
-  const needsSetup = xraySetup || (nativeProtocol && mode === 'deploy')
+  const awgSetup = (protocol === 'awg' || protocol === 'awg3') && mode === 'deploy'
+  const needsSetup = xraySetup || awgSetup || (nativeProtocol && mode === 'deploy')
   const label =
     protocol === 'xray'
       ? 'XRay'
@@ -48,6 +51,10 @@ export function DeployModal({
   const defaultPort =
     protocol === 'wireguard' ? 51820 : protocol === 'openvpn-native' ? 1194 : protocol === 'xray' ? 443 : protocol === 'openvpn' ? 8443 : protocol === 'awg3' ? 47300 : 47180
   const [port, setPort] = useState(defaultPort)
+  const [autoPort, setAutoPort] = useState(true)
+  const [subnet, setSubnet] = useState('')
+  const [serverAddress, setServerAddress] = useState('')
+  const [awgParams, setAwgParams] = useState<AwgParameters | null>(null)
   const [transport, setTransport] = useState<'udp' | 'tcp'>('udp')
   const [site, setSite] = useState('')
   const [dest, setDest] = useState('')
@@ -92,9 +99,9 @@ export function DeployModal({
           protocol === 'xray' && prev === 443 ? 8443 : prev >= 65535 ? prev : prev + 1,
         )
       }
-      setError(err instanceof Error ? err.message : t('Ошибка'))
+      setError(awgSetup ? awgSettingsError(err, t) : err instanceof Error ? err.message : t('Ошибка'))
     },
-    [t, protocol, mode],
+    [t, protocol, mode, awgSetup],
   )
 
   const poll = useCallback(async () => {
@@ -160,14 +167,15 @@ export function DeployModal({
         await api(path, {
           method: 'POST',
           body: mode === 'deploy' ? JSON.stringify({
-            port: p,
+            port: awgSetup && autoPort ? null : p,
+            ...(awgSetup ? { subnet: subnet.trim() || null, server_address: serverAddress.trim() || null, params: awgParams } : {}),
             ...(nativeProtocol ? { transport: protocol === 'wireguard' ? 'udp' : transport } : {}),
             ...(xraySetup ? { site: site.trim(), dest: dest.trim() } : {}),
           }) : undefined,
         })
       } catch (err) {
         handleError(err)
-        if (xraySetup && err instanceof ApiError && [409, 422].includes(err.status)) {
+        if ((xraySetup || awgSetup) && err instanceof ApiError && [409, 422].includes(err.status)) {
           setConfigured(false)
         }
         return
@@ -175,7 +183,7 @@ export function DeployModal({
       schedule(2500)
     },
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [serverId, mode, protocol, nativeProtocol, transport, xraySetup, site, dest, handleError],
+    [serverId, mode, protocol, nativeProtocol, transport, xraySetup, awgSetup, autoPort, subnet, serverAddress, awgParams, site, dest, handleError],
   )
 
   // установка запускается один раз за жизнь окна; остановка опроса - только
@@ -263,6 +271,15 @@ export function DeployModal({
             setConfigured(true)
             void start(port)
           }}>
+            {awgSetup && <>
+              <p className="muted small">{t('По умолчанию свободные UDP-порт, IPv4-подсеть и адрес интерфейса выбираются автоматически. Проверяются сети сервера и других VPN. Для ручного выбора заполните поля.')}</p>
+              <label className="check-row"><input type="checkbox" checked={autoPort} onChange={e => setAutoPort(e.target.checked)} />{t('Выбрать свободный UDP-порт автоматически')}</label>
+              <div className="awg-settings-fields">
+                <label>{t('IPv4-подсеть (CIDR)')}<input value={subnet} onChange={e => setSubnet(e.target.value)} placeholder={t('Автоматически')} maxLength={32} /></label>
+                <label>{t('IPv4-адрес интерфейса')}<input value={serverAddress} onChange={e => setServerAddress(e.target.value)} placeholder={t('Первый адрес подсети')} maxLength={32} /></label>
+              </div>
+              <AwgAdvanced params={awgParams} onChange={setAwgParams} loadDefaults={() => api(`/api/servers/${serverId}/${protocol}/settings/defaults`)} />
+            </>}
             {xraySetup && <div className="reality-setup">
               <label>
                 {t('Свой SNI (домен-маска)')}
@@ -285,6 +302,7 @@ export function DeployModal({
                   min={1}
                   max={65535}
                   value={port}
+                  disabled={awgSetup && autoPort}
                   onChange={(e) => setPort(Number(e.target.value))}
                   style={{ maxWidth: 140 }}
                 />
@@ -296,7 +314,7 @@ export function DeployModal({
                 type="submit"
                 disabled={!Number.isInteger(port) || port < 1 || port > 65535}
               >
-                {t('Развернуть на этом порту')}
+                {awgSetup && autoPort ? t('Развернуть') : t('Развернуть на этом порту')}
               </button>
             </div>
           </form>

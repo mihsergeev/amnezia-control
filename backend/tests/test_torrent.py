@@ -311,7 +311,7 @@ async def test_autopause_failure_still_alerts(factory, sent, monkeypatch):
 
 async def test_patch_and_get_torrent(client, auth_headers, monkeypatch):
     applied = []
-    monkeypatch.setattr(torrent, "spawn_apply", lambda server, settings: applied.append(server.id))
+    monkeypatch.setattr(torrent, "spawn_apply", lambda server, settings, factory: applied.append(server.id))
     r = await client.post("/api/servers", headers=auth_headers, json={
         "name": "vpn-a", "host": "203.0.113.10", "ssh_port": 22, "ssh_user": "root"})
     sid = r.json()["id"]

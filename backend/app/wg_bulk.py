@@ -103,6 +103,7 @@ async def plan(conn, node: NodeState, paused: dict, names: list[str],
         config = awg.build_client_config(
             client_private=private, address=ip, server_public=state.server_public_key,
             preshared=psk, endpoint=endpoint, params=state.params, dns=dns,
+            server_subnet=state.address if not native else None,
         )
         if native:
             config = config.replace("[Interface]\n", "[Interface]\nMTU = 1380\n", 1)

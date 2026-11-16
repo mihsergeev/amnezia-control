@@ -23,7 +23,7 @@ from app.api.awg import (
     _ssh_error,
     _store_config,
 )
-from app import bulk_issue_state
+from app import bulk_issue_state, awg_settings
 from app.config import get_settings
 from app.deps import CurrentUser, SessionDep
 from app.models import AwgConfig
@@ -197,6 +197,7 @@ async def set_note(
 
 
 @router.post("/config", response_model=ConfigTextResponse)
+@nodelock.operation("awg")
 async def get_stored_config(
     server_id: int, body: PublicKeyRequest, _: CurrentUser, session: SessionDep
 ) -> ConfigTextResponse:
@@ -351,16 +352,24 @@ async def deploy_awg3(
     исходников по закреплённым тегам — готового образа с бинарями 3.0 пока нет,
     поэтому первая сборка занимает несколько минут."""
     server = await _get_or_404(server_id, session)
-    cfg = deploy.generate_server_config_v3(body.port)
-    script = deploy.build_script_v3("deploy", body.port, cfg)
     try:
         async with _connect(server) as conn:
             await deploy.ensure_idle(conn, tag=PROTO)
             current = await deploy.existing_port(conn, v3=True)
+            if current and any(v is not None for v in (body.subnet, body.server_address, body.params)):
+                raise HTTPException(409, "Для изменения установленного протокола откройте настройки AmneziaWG")
+            body = body.model_copy(update={"port": body.port or current})
             if current and current != body.port:
                 raise HTTPException(
                     status.HTTP_409_CONFLICT, deploy.port_mismatch_detail(current, body.port)
                 )
+            if current:
+                port, address, params = current, deploy.SUBNET_V3, None
+            else:
+                port, _subnet, address, params = await awg_settings.choose(conn, body, "3.1")
+            body = body.model_copy(update={"port": port})
+            cfg = deploy.generate_server_config_v3(port, address, params)
+            script = deploy.build_script_v3("deploy", port, cfg)
             # Порт занят ЧУЖИМ контейнером — отказываемся: скрипт деплоя сносит
             # того, кто держит целевой порт (так он заменяет свой же при
             # пересборке), и рабочий протокол на этом порту погиб бы вместе с

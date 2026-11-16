@@ -1,7 +1,7 @@
 import json
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, HTTPException, Response, status
+from fastapi import APIRouter, HTTPException, Request, Response, status
 from sqlalchemy import delete as sa_delete
 from sqlalchemy import func, select, update as sa_update
 
@@ -118,10 +118,13 @@ async def get_server(server_id: int, _: CurrentUser, session: SessionDep) -> Ser
 
 
 @router.patch("/{server_id}", response_model=ServerOut)
+@nodelock.operation("awg")
 async def update_server(
-    server_id: int, body: ServerUpdate, user: CurrentUser, session: SessionDep
+    server_id: int, body: ServerUpdate, user: CurrentUser, session: SessionDep, request: Request
 ) -> Server:
     server = await _get_or_404(server_id, session)
+    from app.api.awg_settings import recover
+    await recover(server, session)
     changes = body.model_dump(exclude_unset=True)
     if "client_endpoint" in changes and changes["client_endpoint"] != server.client_endpoint:
         await client_endpoint.require_resolvable(changes["client_endpoint"])
@@ -216,7 +219,7 @@ async def update_server(
         )
     if block_changed:
         # правила на ноде сразу, а не через цикл коллектора
-        torrent.spawn_apply(server, get_settings())
+        torrent.spawn_apply(server, get_settings(), request.app.state.session_factory)
     return server
 
 
@@ -258,6 +261,8 @@ async def _delete_server(
     server_id: int, user: CurrentUser, session: SessionDep, remove_key: bool
 ) -> DeleteServerResult:
     server = await _get_or_404(server_id, session)
+    from app.api.awg_settings import recover
+    await recover(server, session)
     result = DeleteServerResult()
     server_name = server.name
 

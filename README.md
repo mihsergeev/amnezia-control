@@ -450,6 +450,10 @@ Issues and pull requests are welcome.
 
 For larger changes, open an issue first to discuss the direction.
 
+## AmneziaWG settings
+
+See [deployment, advanced parameters and reversible settings changes](docs/awg-settings.html) (English and Russian).
+
 ## License
 
 **GNU AGPL-3.0** — see [`LICENSE`](LICENSE). You may self-host and modify it freely; if you run a modified version as a network service, you must make your source available to its users (AGPL §13).

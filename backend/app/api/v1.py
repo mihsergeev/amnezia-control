@@ -137,6 +137,7 @@ async def issue_client(
     response_model=ConfigTextResponse,
     summary="Забрать выданный конфиг",
 )
+@nodelock.operation("awg")
 async def get_config(
     server_id: int,
     client: ApiClient,

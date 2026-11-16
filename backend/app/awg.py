@@ -142,8 +142,9 @@ def build_amnezia_link(
     client_priv = interface.get("PrivateKey", "")
     client_pub = derive_public_key(client_priv) if client_priv else ""
     client_ip = interface.get("Address", "").partition(",")[0].partition("/")[0].strip()
+    subnet_hint = re.search(r"(?m)^# ac-subnet = ([0-9./]+)$", conf_text)
     subnet = (
-        str(ipaddress.ip_network(f"{client_ip}/24", strict=False).network_address)
+        str(ipaddress.ip_network(subnet_hint[1] if subnet_hint else f"{client_ip}/24", strict=False).network_address)
         if client_ip
         else ""
     )
@@ -235,7 +236,7 @@ def build_fullaccess_awg_object(conf_text: str) -> dict:
     listen_port = int(interface.get("ListenPort", "0") or 0)
     server_ip = interface.get("Address", "").split("/")[0]
     subnet = (
-        str(ipaddress.ip_network(f"{server_ip}/24", strict=False).network_address)
+        str(ipaddress.ip_network(interface.get("Address", ""), strict=False).network_address)
         if server_ip
         else ""
     )
@@ -558,6 +559,7 @@ def build_client_config(
     endpoint: str,
     params: dict[str, str],
     dns: str,
+    server_subnet: str | None = None,
 ) -> str:
     server_public = _safe_key(server_public, "публичный ключ сервера")
     preshared = _safe_key(preshared, "PSK")
@@ -586,7 +588,8 @@ def build_client_config(
         f"Endpoint = {endpoint}",
         "PersistentKeepalive = 25",
     ]
-    return "\n".join(lines) + "\n"
+    hint = f"# ac-subnet = {ipaddress.ip_interface(server_subnet).network}\n" if server_subnet else ""
+    return hint + "\n".join(lines) + "\n"
 
 
 async def create_client(
@@ -623,6 +626,7 @@ async def create_client(
         endpoint=state.endpoint,
         params=state.params,
         dns=dns,
+        server_subnet=state.address,
     )
 
     # PSK читаем на ноде, чтобы не гонять секрет через панель

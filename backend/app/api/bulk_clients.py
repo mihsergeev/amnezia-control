@@ -12,7 +12,7 @@ from app import (
     audit, awg, bulk_archive, bulk_issue_state, client_endpoint, deploy, expiry,
     native_vpn, nodelock, pausestore, sshops, wg_bulk, xray, xray_bulk,
 )
-from app.api.awg import _amnezia_link
+from app.api.awg import _amnezia_link, _get_or_404
 from app.api.awg3 import _state as awg3_state
 from app.bulk_schemas import ExportProtocol, ExportRequest, IssueProtocol, IssueRequest, IssueResult, PendingIssue, RevokeRequest
 from app.config import get_settings
@@ -30,10 +30,7 @@ _EXPORT_SLOTS = asyncio.Semaphore(2)
 
 
 async def _server(session, server_id: int) -> Server:
-    server = await session.get(Server, server_id)
-    if server is None:
-        raise HTTPException(404, "Сервер не найден")
-    return server
+    return await _get_or_404(server_id, session)
 
 
 @asynccontextmanager
@@ -282,6 +279,7 @@ async def _xray_profiles(server, ids):
 
 
 @router.post("/export")
+@nodelock.operation()
 async def export(server_id: int, protocol: ExportProtocol, body: ExportRequest,
                  user: CurrentUser, session: SessionDep) -> Response:
     server = await _server(session, server_id)

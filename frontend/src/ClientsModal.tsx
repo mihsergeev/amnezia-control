@@ -20,6 +20,7 @@ import { copyText } from './clipboard'
 import { formatBytes, formatHandshake, isOnline } from './format'
 import { Menu } from './Menu'
 import { RollbackMenu } from './RollbackMenu'
+import { AwgSettingsModal } from './AwgSettings'
 import { OpenVpnClients } from './OpenVpnClients'
 import { XrayClients } from './XrayClients'
 import { AmneziaQr } from './AmneziaQr'
@@ -96,6 +97,7 @@ export function ClientsModal({
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [bulkOpen, setBulkOpen] = useState(false)
+  const [settingsOpen, setSettingsOpen] = useState(false)
   const [clientListRevision, setClientListRevision] = useState(0)
   const [addOpen, setAddOpen] = useState(false)
   const [addRevision, setAddRevision] = useState(0)
@@ -625,6 +627,10 @@ export function ClientsModal({
             </span>
           </div>
         )}
+
+        {state && (proto === 'awg' || proto === 'awg3') && !focus && <button className="ghost" onClick={() => setSettingsOpen(true)}>{t('Настройки AmneziaWG')}</button>}
+        {settingsOpen && (proto === 'awg' || proto === 'awg3') && <AwgSettingsModal serverId={server.id} protocol={proto}
+          onClose={() => setSettingsOpen(false)} onUnauthorized={onUnauthorized} onSaved={() => { configGeneration.current += 1; setView(null); void load() }} />}
 
         {proto === 'awg' && !focus && (version || versionFailed) && (
           <div className="version-line">

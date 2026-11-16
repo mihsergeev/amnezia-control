@@ -218,6 +218,9 @@ async def _expire_group(session_factory, settings, server_id, protocol, limit_id
     now = datetime.now(timezone.utc)
     async with session_factory() as session:
         server = await session.get(Server, server_id)
+        if server is not None and protocol.startswith("awg"):
+            from app.api.awg_settings import recover
+            await recover(server, session)
         lims = list(await session.scalars(select(ClientLimit).where(
             ClientLimit.id.in_(limit_ids), ClientLimit.server_id == server_id,
             ClientLimit.protocol == protocol, ClientLimit.expires_at.is_not(None),

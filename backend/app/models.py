@@ -103,6 +103,17 @@ class AwgConfig(Base):
     )
 
 
+class AwgSettingsChange(Base):
+    """Crash-recovery journal for an AWG node + stored-profile transaction."""
+
+    __tablename__ = "awg_settings_changes"
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    server_id: Mapped[int] = mapped_column(Integer, index=True)
+    protocol: Mapped[str] = mapped_column(String(16))
+    phase: Mapped[str] = mapped_column(String(16))
+    payload: Mapped[dict] = mapped_column(JSON)
+
+
 class OvpnConfig(Base):
     """Сохранённый vpn:// OpenVPN-клиента (приватный ключ живёт только тут)."""
 

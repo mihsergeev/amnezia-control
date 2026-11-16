@@ -3,8 +3,8 @@ from fastapi import APIRouter, HTTPException, Request, status
 
 from app import audit, native_snapshots, native_vpn, nodelock, protoremove, server_ops, sshops, stepup
 from app.config import get_settings
+from app.api.awg import _get_or_404
 from app.deps import CurrentUser, SessionDep
-from app.models import Server
 from app.schemas import ClientRenameRequest, ProtocolRemoveOut, StepUpRequest
 from app.sshkeys import ensure_panel_key, key_paths
 
@@ -33,9 +33,7 @@ async def rename_client(
     name = " ".join(body.name.split())
     if not name:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Пустое имя")
-    server = await session.get(Server, server_id)
-    if server is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Сервер не найден")
+    server = await _get_or_404(server_id, session)
     settings = get_settings()
     ensure_panel_key(settings.data_dir)
     key_path, _pub = key_paths(settings.data_dir)
@@ -84,9 +82,7 @@ async def remove_protocol(
     клиентов (снимок конфига остается на ноде), поэтому требует пароль."""
     if protocol not in protoremove.PROTOCOLS:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Неизвестный протокол")
-    server = await session.get(Server, server_id)
-    if server is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Сервер не найден")
+    server = await _get_or_404(server_id, session)
     try:
         await stepup.verify(user, body.password, request)
     except HTTPException as exc:

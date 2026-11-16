@@ -15,6 +15,7 @@ from app.api import (
     auth,
     awg,
     awg3,
+    awg_settings,
     awg_legacy,
     backup,
     branding,
@@ -147,6 +148,7 @@ def create_app() -> FastAPI:
     app.include_router(awg.router, prefix="/api")
     app.include_router(awg_legacy.router, prefix="/api")
     app.include_router(awg3.router, prefix="/api")
+    app.include_router(awg_settings.router, prefix="/api")
     app.include_router(clients.router, prefix="/api")
     app.include_router(clients.metadata_router, prefix="/api")
     app.include_router(bulk_clients.router, prefix="/api")

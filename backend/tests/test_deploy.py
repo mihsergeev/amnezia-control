@@ -211,7 +211,8 @@ def test_client_nat_survives_docker_interface_renumbering() -> None:
                 part.strip() for part in script.replace(";", "\n").splitlines()
                 if "-A POSTROUTING" in part
             )
-            assert f"-s {subnet} ! -o awg0 -j MASQUERADE" in add
+            assert '-s "$VPN_SUBNET" ! -o awg0 -j MASQUERADE' in add
+            assert f'VPN_SUBNET={subnet}' in script
             assert "-o eth0" not in add
             assert f"-D POSTROUTING -s {subnet} -o eth0" in script
 

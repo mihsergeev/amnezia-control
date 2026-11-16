@@ -507,6 +507,11 @@ async def _create_cascade(body: CascadeCreate, request: Request, user: CurrentUs
     entry, exit_ = await _pair(body, session)
     try:
         async with _locked_pair(entry, exit_) as (ec, xc):
+            # Settings edits use cascade -> AWG order too. Resolve an earlier
+            # disconnected edit before committing a new cascade on either node.
+            from app.api.awg_settings import recover
+            await recover(entry, session)
+            await recover(exit_, session)
             # проверка в _pair шла до блокировки: двойной клик проходил ее дважды
             # и создавал два каскада. Перепроверяем и пишем строку под блокировкой
             await _ensure_free(session, entry, exit_)

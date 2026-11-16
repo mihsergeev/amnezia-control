@@ -152,9 +152,10 @@ def _exec(container: str, script: str) -> str:
 async def sync_container(conn, container: str, enabled: bool) -> tuple[bool | None, dict[str, int]]:
     """Приводит правила контейнера к настройке. Включено - (стоят?, попадания)."""
     if not enabled:
-        result = await conn.run(_exec(container, disable_script()), check=False)
+        result = await conn.run(_exec(container, "rm -f /opt/amnezia/awg/.acontrol-torrent-block\n" + disable_script()), check=False)
         return f"{CHAIN} off" in (result.stdout or ""), {}
-    result = await conn.run(_exec(container, enable_script()), check=False)
+    flag = "if [ -d /opt/amnezia/awg ]; then touch /opt/amnezia/awg/.acontrol-torrent-block || exit 1; fi\n"
+    result = await conn.run(_exec(container, flag + enable_script()), check=False)
     return parse_output(result.stdout or "")
 
 
@@ -169,7 +170,22 @@ def status(server_id: int) -> dict | None:
     return _status.get(server_id)
 
 
-async def sample(conn, server: Server, nets: list[dict]) -> list[dict]:
+async def sample(conn, server: Server, nets: list[dict], session_factory=None) -> list[dict]:
+    # A collector snapshot may predate a settings swap or policy PATCH. Refresh
+    # only after acquiring the same lock, and never mutate unresolved settings.
+    async with nodelock.hold("awg", server.id):
+        if session_factory is not None:
+            async with session_factory() as session:
+                fresh = await session.get(Server, server.id)
+                if fresh is None:
+                    return []
+                from app.api.awg_settings import recover
+                await recover(fresh, session)
+                return await _sample(conn, fresh, nets)
+        return await _sample(conn, server, nets)
+
+
+async def _sample(conn, server: Server, nets: list[dict]) -> list[dict]:
     """Шаг коллектора. nets - контейнеры с клиентами:
     [{"container", "protocol", "ips": {адрес: (client_id, имя)}}].
     Возвращает попадания по клиентам [{protocol, client_id, name, hits}]."""
@@ -252,7 +268,7 @@ async def node_nets(conn, host: str) -> list[dict]:
     return nets
 
 
-async def apply_now(server: Server, settings: Settings) -> None:
+async def apply_now(server: Server, settings: Settings, session_factory=None) -> None:
     """Сразу применяет настройку на ноде после ее смены (не ждать цикл
     коллектора). Best-effort: нода недоступна - применит коллектор."""
     ensure_panel_key(settings.data_dir)
@@ -264,7 +280,7 @@ async def apply_now(server: Server, settings: Settings) -> None:
                 server.host, server.ssh_port, server.ssh_user, key_path, timeout
             ) as conn:
                 _cleared.discard(server.id)
-                await sample(conn, server, await node_nets(conn, server.host))
+                await sample(conn, server, await node_nets(conn, server.host), session_factory)
     except Exception:  # noqa: BLE001
         log.warning("блокировка торрентов на %s не применилась сразу", server.name,
                     exc_info=True)
@@ -273,8 +289,8 @@ async def apply_now(server: Server, settings: Settings) -> None:
 _tasks: set[asyncio.Task] = set()
 
 
-def spawn_apply(server: Server, settings: Settings) -> None:
-    task = asyncio.create_task(apply_now(server, settings))
+def spawn_apply(server: Server, settings: Settings, session_factory=None) -> None:
+    task = asyncio.create_task(apply_now(server, settings, session_factory))
     _tasks.add(task)
     task.add_done_callback(_tasks.discard)
 
@@ -378,6 +394,9 @@ async def record(session_factory, settings: Settings, samples: list[dict],
 async def _autopause(session, settings: Settings, server: Server, h: dict) -> str:
     """"ok" - клиент на паузе, иначе текст ошибки."""
     try:
+        if h["protocol"].startswith("awg"):
+            from app.api.awg_settings import recover
+            await recover(server, session)
         data = await _pause(server, settings, h["protocol"], h["client_id"])
     except Exception as exc:  # noqa: BLE001
         log.warning("автопауза %s на %s не удалась", h["client_id"], server.name,

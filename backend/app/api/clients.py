@@ -338,6 +338,9 @@ async def revoke_bulk(
         async with sem, nodelock.hold(protocol, sid):
             try:
                 async with AsyncSession(bind=session.bind, expire_on_commit=False) as journal_session:
+                    if protocol.startswith("awg"):
+                        from app.api.awg_settings import recover
+                        await recover(server, journal_session)
                     await bulk_issue_state.request_cancel(journal_session, sid, protocol, ids)
                 errors = await expiry.revoke_many_on_node(
                     server, protocol, ids, key_path, settings.ssh_connect_timeout,

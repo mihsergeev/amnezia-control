@@ -18,6 +18,7 @@ const LABELS: Record<string, string> = {
   awg_revoke: 'Отозван AmneziaWG',
   awg_reissue: 'Перевыпущен AmneziaWG',
   awg_deploy: 'Развёрнут AmneziaWG',
+  awg_settings_update: 'Изменены настройки AmneziaWG',
   awg_update: 'Обновлён AmneziaWG',
   awg_adopt: 'AmneziaWG взят под управление',
   awg_pause: 'AmneziaWG на паузе',
