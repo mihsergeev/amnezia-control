@@ -9,6 +9,7 @@ from pydantic import AfterValidator, BaseModel, ConfigDict, Field, computed_fiel
 
 
 from app.cascade_routes import Route, RouteUpdate
+from app.cascade_endpoints import endpoint as normalize_cascade_endpoint
 from app.client_endpoint import normalize as normalize_client_endpoint
 from app.geo import country_override as validate_country_override, normalize_country_code
 from app.metadata_schemas import ClientLabels
@@ -807,6 +808,17 @@ class ShareLinkOut(BaseModel):
 class CascadePair(BaseModel):
     entry_id: int
     exit_id: int
+    address_family: Literal["ipv4", "ipv6"] = "ipv4"
+    entry_endpoint: Annotated[str, Field(max_length=45), AfterValidator(normalize_cascade_endpoint)] = ""
+    exit_endpoint: Annotated[str, Field(max_length=45), AfterValidator(normalize_cascade_endpoint)] = ""
+
+    @model_validator(mode="after")
+    def endpoint_family(self):
+        from app.cascade_endpoints import family
+        for value in (self.entry_endpoint, self.exit_endpoint):
+            if value and (self.address_family != "ipv6" or family(value) != 6):
+                raise ValueError("Explicit interserver endpoints require IPv6 mode and IPv6 addresses")
+        return self
 
 
 class CascadeInstall(BaseModel):
@@ -846,6 +858,7 @@ class ProbeSide(BaseModel):
 
 
 class CascadeProbeOut(BaseModel):
+    address_family: Literal["ipv4", "ipv6"] = "ipv4"
     entry_ip: str
     exit_ip: str
     exit_country: str = ""
@@ -890,6 +903,7 @@ class CascadeTransportProgressOut(BaseModel):
 
 
 class CascadeTransportProbeOut(BaseModel):
+    address_family: Literal["ipv4", "ipv6"] = "ipv4"
     transport: Literal["awg", "vless", "gre"]
     measurement: Literal["awg", "vless", "gre"]
     run_id: str
@@ -927,6 +941,7 @@ class CascadeOut(BaseModel):
     log: str = ""
     progress: dict[Literal["entry", "exit"], CascadeSideProgress] = Field(default_factory=dict)
     entry_ip: str = ""
+    address_family: Literal["ipv4", "ipv6"] = "ipv4"
     entry_country: str = ""
     entry_country_override: str = ""
     desired_entry_country: str = ""

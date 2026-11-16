@@ -168,30 +168,40 @@ def test_exit_receiver_deadline_starts_after_delayed_entry_preparation(tmp_path,
     (True, False, False, False, False), (False, True, True, False, False),
     (False, False, False, True, False), (False, False, False, False, True),
 ])
+@pytest.mark.parametrize("version", [4, 6])
 def test_worker_partial_gre_setup_cleans_exact_owned_interface_and_rules(
-    tmp_path, monkeypatch, occupied, alias_failure, delete_failure, atomic_failure, create_interrupt,
+    tmp_path, monkeypatch, occupied, alias_failure, delete_failure, atomic_failure, create_interrupt, version,
 ):
     worker = worker_namespace()
     config = {"tag": "a" * 32, "interface": "acp1234567890", "container": "probe-test",
               "transport": "gre", "role": "exit", "peer_ip": "203.0.113.20", "peer_source": "203.0.113.20",
               "inner": "198.51.100.1", "peer_inner": "198.51.100.2",
               "network": "198.51.100.0/30", "lease": 100, "cleanup_rules": [], "gre_key": 123456}
+    local = "203.0.113.10"
+    kind = "gre"
+    if version == 6:
+        local, kind = "2001:db8::10", "ip6gre"
+        config.update(address_family=6, peer_ip="2001:db8::20", peer_source="2001:db8::20")
     calls, events, state = [], [], {"link": occupied, "rules": [], "alias": ""}
     def command(args, required=True):
         calls.append(args)
         data, code = b"", 0
         if args[:4] == ["ip", "link", "show", "dev"]: code = 0 if occupied else 1
-        elif args[:4] == ["ip", "-j", "-4", "route"]:
-            data = json.dumps([{"prefsrc": "203.0.113.10"}] if "get" in args else []).encode()
+        elif args[:4] == ["ip", "-j", "-" + str(version), "route"]:
+            data = json.dumps([{"prefsrc": local}] if "get" in args else []).encode()
+        elif args[:4] == ["ip", "-j", "-4", "route"]: data = b"[]"
         elif args[:4] == ["ip", "-j", "-4", "address"]: data = b"[]"
         elif args[:4] == ["ip", "-j", "-d", "link"]:
             if "dev" in args:
                 data = json.dumps([{"ifindex": 42, "ifalias": state["alias"], "linkinfo": {
-                    "info_kind": "gre", "info_data": {"local": "203.0.113.10", "remote": config["peer_ip"],
+                    "info_kind": kind, "info_data": {"local": local, "remote": config["peer_ip"],
                                                        "ikey": 123456, "okey": 123456}}}]).encode()
             else: data = b"[]"
         elif args[:3] == ["ip", "link", "add"]:
             assert "alias" not in args
+            assert args[args.index("type") + 1] == kind
+            if version == 6:
+                assert args[-4:] == ["hoplimit", "64", "encaplimit", "none"]
             state["link"] = True
             if create_interrupt: raise worker["WorkerStopped"]()
         elif args[:3] == ["ip", "link", "set"] and "alias" in args:
@@ -203,7 +213,8 @@ def test_worker_partial_gre_setup_cleans_exact_owned_interface_and_rules(
         elif args[:3] == ["ip", "link", "del"]:
             if delete_failure: code = 1
             else: state["link"] = False
-        elif args[0] == "iptables":
+        elif args[0] in ("iptables", "ip6tables"):
+            assert args[0] == ("ip6tables" if version == 6 else "iptables")
             operation, spec = args[3], args[4:]
             if operation == "-I": state["rules"].append(spec)
             elif operation == "-C": code = 0 if spec in state["rules"] else 1

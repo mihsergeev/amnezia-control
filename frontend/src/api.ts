@@ -1068,6 +1068,7 @@ export type CascadeProbe = {
 }
 
 export type CascadeTransportProbe = {
+  address_family?: 'ipv4' | 'ipv6'
   transport: CascadeTransport
   measurement: CascadeTransport
   run_id: string
@@ -1116,6 +1117,7 @@ export type CascadeRoute = { destination: string; via: 'entry' | 'exit' }
 export type CascadeHealth = { ok: boolean; reason?: string; since?: string; checked_at?: string }
 
 export type Cascade = {
+  address_family?: 'ipv4' | 'ipv6'
   routes?: CascadeRoute[]
   id: number
   entry_server_id: number
@@ -1232,11 +1234,12 @@ export function probeCascadeTransport(
   signal?: AbortSignal,
   prepareMissingImage = false,
   runId?: string,
+  addresses: CascadeAddressOptions = {},
 ): Promise<CascadeTransportProbe> {
   return api('/api/cascades/probe-transport', {
     method: 'POST', signal,
     body: JSON.stringify({
-      entry_id: entryId, exit_id: exitId, transport, ...(transport === 'awg' ? ports : {}),
+      entry_id: entryId, exit_id: exitId, transport, ...addresses, ...(transport === 'awg' ? ports : {}),
       ...(runId ? { run_id: runId } : {}),
       ...(prepareMissingImage && transport !== 'gre' ? { prepare_missing_image: true } : {}),
     }),
@@ -1248,7 +1251,9 @@ export function getCascadeProbeProgress(runId: string, signal?: AbortSignal): Pr
   return api(`/api/cascades/probe-transport/${encodeURIComponent(runId)}/progress`, { signal: signal ? AbortSignal.any([signal, timeout]) : timeout })
 }
 
-export type CascadeCreateRequest = {
+export type CascadeAddressOptions = { address_family?: 'ipv4' | 'ipv6'; entry_endpoint?: string; exit_endpoint?: string }
+
+export type CascadeCreateRequest = CascadeAddressOptions & {
   entry_id: number
   exit_id: number
   transport: CascadeTransport

@@ -104,6 +104,20 @@ global and use the configured channels.
 
 ---
 
+## IPv6 between cascade nodes
+
+The cascade wizard defaults to IPv4. Select **IPv6** at the link step to use IPv6
+only between the entry and exit. SSH management addresses and existing IPv4 VPN
+client profiles stay unchanged. AWG, VLESS Reality and GRE support this choice;
+GRE uses an IPv6 outer tunnel with an IPv4 inner network.
+
+Leave both IPv6 fields empty to discover a single stable global IPv6 address on
+each server, or enter the addresses explicitly when a server has several prefixes.
+Both addresses must be reachable from the opposite node and match the outgoing
+route's source address. Missing or ambiguous addresses, unavailable IPv6 routes,
+and failed probes are reported without silently retrying over IPv4. Existing
+cascades keep their saved address family and endpoints during reinstallations.
+
 ## Server country and cascade routing
 
 Leave **Server country** empty for automatic detection. The panel first looks up

@@ -8,7 +8,7 @@ import shlex
 import uuid
 from collections.abc import Callable
 
-from app import cascade, cascade_awg, deploy
+from app import cascade, cascade_awg, cascade_endpoints, deploy
 
 PAYLOAD_BYTES = 20 * 1024 * 1024
 LEASE_SECONDS = 100
@@ -46,6 +46,7 @@ REASONS = {
     "missing docker": "На сервере нет Docker",
     "missing ip": "На сервере нет утилиты ip",
     "missing iptables": "На сервере нет утилиты iptables",
+    "missing ip6tables": "На сервере нет утилиты ip6tables",
     "missing ss": "На сервере нет утилиты ss",
 }
 
@@ -158,6 +159,8 @@ def send(host,port,token,total,interface=None,own=None):
 def main():
     os.umask(0o077)
     cfg=json.loads(sys.stdin.readline())
+    version=cfg.get('address_family',4)
+    gre_kind='ip6gre' if version==6 else 'gre'
     tag=cfg['tag']; iface=cfg['interface']; name=cfg['container']
     label='org.amnezia.control.probe'
     directory=Path('/run')/('acontrol-probe-'+tag)
@@ -173,7 +176,9 @@ def main():
     def rule(parts,target='ACCEPT'):
         spec=['INPUT',*parts,'-m','comment','--comment',tag,'-j',target]
         rules.append(spec)
-        command(['iptables','-w','3','-I',*spec])
+        command([firewall(spec),'-w','3','-I',*spec])
+    def firewall(spec):
+        return 'ip6tables' if version==6 and cfg['peer_source'] in spec else 'iptables'
     def launch_container(args,required=True):
         nonlocal container_attempted,container_launch_uncertain
         container_attempted=True
@@ -213,7 +218,7 @@ def main():
                         record=json.loads(owner_path.read_text())
                         info=link.get('linkinfo',{})
                         data=info.get('info_data',{})
-                        owned=(info.get('info_kind')=='gre' and data.get('local')==record['local']
+                        owned=(info.get('info_kind')==gre_kind and data.get('local')==record['local']
                             and data.get('remote')==cfg['peer_ip']
                             and gre_key(data.get('ikey'))==cfg['gre_key']
                             and gre_key(data.get('okey'))==cfg['gre_key']
@@ -228,7 +233,7 @@ def main():
             return item.returncode==1 and item.stderr.strip().endswith(
                 b'Bad rule (does a matching rule exist in that chain?).')
         for spec in reversed(rules):
-            good=remove(['iptables','-w','3','-C',*spec],['iptables','-w','3','-D',*spec],
+            good=remove([firewall(spec),'-w','3','-C',*spec],[firewall(spec),'-w','3','-D',*spec],
                 rule_missing,lambda item: True) and good
         # An interrupted Docker client may leave a pending daemon operation.
         # Keep the lease for a later recheck even if no container exists yet.
@@ -265,7 +270,7 @@ def main():
     listener=None
     try:
         transport=cfg['transport']; role=cfg['role']
-        for tool in ('ip','iptables')+(() if transport=='gre' else ('docker',))+(('ss',) if transport=='vless' else ()):
+        for tool in ('ip','iptables')+(('ip6tables',) if version==6 else ())+(() if transport=='gre' else ('docker',))+(('ss',) if transport=='vless' else ()):
             if not shutil.which(tool): raise Unavailable('missing '+tool)
         if command(['ip','link','show','dev',iface],False).returncode==0:
             raise Unavailable('temporary interface name is occupied')
@@ -293,17 +298,17 @@ def main():
                 if destination!='default' and network.overlaps(ipaddress.ip_network(destination,strict=False)):
                     raise Unavailable('temporary subnet overlaps an existing route')
         if transport=='gre':
-            local=json.loads(output(['ip','-j','-4','route','get',cfg['peer_ip']]))[0].get('prefsrc')
+            local=json.loads(output(['ip','-j','-'+str(version),'route','get',cfg['peer_ip']]))[0].get('prefsrc')
             if not local: raise Unavailable('no source route to peer')
-            for existing in json.loads(output(['ip','-j','-d','link','show','type','gre'])):
+            for existing in json.loads(output(['ip','-j','-d','link','show','type',gre_kind])):
                 data=existing.get('linkinfo',{}).get('info_data',{})
                 if data.get('remote')==cfg['peer_ip'] and data.get('local')==local and gre_key(data.get('ikey',0))==0:
                     raise Unavailable('an existing unkeyed GRE tunnel already uses this peer')
             record={'local':local,'remote':cfg['peer_ip'],'key':cfg['gre_key']}
             save_owner(record)
             interface_created=True
-            command(['ip','link','add',iface,'type','gre','local',local,'remote',cfg['peer_ip'],
-                'key',str(cfg['gre_key']),'ttl','64'])
+            command(['ip','link','add',iface,'type',gre_kind,'local',local,'remote',cfg['peer_ip'],
+                'key',str(cfg['gre_key'])]+(['hoplimit','64','encaplimit','none'] if version==6 else ['ttl','64']))
             record['ifindex']=json.loads(output(['ip','-j','link','show','dev',iface]))[0]['ifindex']
             save_owner(record)
             command(['ip','link','set','dev',iface,'alias',tag])
@@ -324,7 +329,7 @@ def main():
             rule(['-p','udp','!','-s',cfg['peer_source'],'--dport',str(cfg['port'])],'DROP')
         if transport!='vless':
             command(['ip','address','add',own+'/32','dev',iface])
-            command(['ip','link','set',iface,'mtu',str(1280 if transport=='awg' else 1472),'up'])
+            command(['ip','link','set',iface,'mtu',str(1280 if transport=='awg' else 1452 if version==6 else 1472),'up'])
             command(['ip','route','add',peer+'/32','dev',iface,'src',own])
             command(['sysctl','-qw','net.ipv4.conf.'+iface+'.rp_filter=2'])
             rule(['-i',iface,'-s',peer+'/32','-d',own+'/32','-p','tcp'])
@@ -612,6 +617,8 @@ def verdict(sent: dict, received: dict) -> dict:
 def xray_configs(params: dict, peer_ip: str, exit_port: int, entry_port: int) -> tuple[dict, dict]:
     params = params | {"port": exit_port}
     exit_config = json.loads(cascade.exit_vless_config(params))
+    if cascade_endpoints.family(peer_ip) == 6:
+        exit_config["inbounds"][0]["listen"] = peer_ip
     exit_config["log"] = {"loglevel": "none", "access": "none"}
     exit_config["inbounds"][0].pop("sniffing", None)
     exit_config["outbounds"] = [{"tag": "block", "protocol": "blackhole"},
@@ -703,16 +710,19 @@ async def run(exit_conn, entry_conn, entry_ip: str, exit_ip: str, transport: str
         raise ValueError("Unknown transport")
     if prepare_missing_image and transport == "gre":
         raise ValueError("GRE does not use a Docker image")
-    entry_ip, exit_ip = str(ipaddress.IPv4Address(entry_ip)), str(ipaddress.IPv4Address(exit_ip))
+    entry_ip, exit_ip = cascade_endpoints.address(entry_ip), cascade_endpoints.address(exit_ip)
+    version = cascade_endpoints.family(entry_ip)
+    if version != cascade_endpoints.family(exit_ip):
+        raise ValueError("Entry and exit must use the same address family")
     if entry_ip == exit_ip:
         raise ValueError("Entry and exit must be different hosts")
-    source_ip = str(ipaddress.IPv4Address(entry_source_ip or entry_ip))
+    source_ip = cascade_endpoints.address(entry_source_ip or entry_ip, version)
     run_id = uuid.uuid4().hex
     subnet = ipaddress.ip_network(f"198.18.{secrets.randbelow(256)}.{secrets.randbelow(64) * 4}/30")
     entry_inner, exit_inner = str(subnet[1]), str(subnet[2])
     images = [cascade_awg.IMAGE, deploy.IMAGE_V3, AWG_PROBE_IMAGE] if transport == "awg" else [cascade.XRAY_IMAGE, "amnezia-xray"]
     xray_version = cascade.XRAY_IMAGE.rsplit(":", 1)[1]
-    base = {"tag": run_id, "transport": transport, "token": secrets.token_hex(24),
+    base = {"tag": run_id, "transport": transport, "address_family": version, "token": secrets.token_hex(24),
             "total": PAYLOAD_BYTES, "lease": LEASE_SECONDS, "images": images, "network": str(subnet),
             "gre_key": int(run_id[:8], 16) or 1, "xray_version": xray_version}
     configs = []

@@ -172,6 +172,9 @@ export function CascadeWizard({
   const [transport, setTransport] = useState<CascadeTransport>(replacement?.transport ?? DEFAULT_CASCADE_TRANSPORT)
   const [entryPort, setEntryPort] = useState('')
   const [exitPort, setExitPort] = useState('')
+  const [addressFamily, setAddressFamily] = useState<'ipv4' | 'ipv6'>((resume ?? replacement)?.address_family ?? 'ipv4')
+  const [entryEndpoint, setEntryEndpoint] = useState(replacement?.address_family === 'ipv6' ? replacement.entry_ip : '')
+  const [exitEndpoint, setExitEndpoint] = useState(replacement?.address_family === 'ipv6' ? replacement.exit_ip : '')
   const [cascade, setCascade] = useState<Cascade | null>(resume ?? null)
   const createRequests = useRef(new Map<string, CascadeCreateRequest>())
   const [extra, setExtra] = useState<Server[]>([])
@@ -358,7 +361,8 @@ export function CascadeWizard({
       await runTransportProbes(async (kind, signal) => {
         try {
           return await probeCascadeTransport(eId, xId, kind,
-            { entry_port: ports.entry_port ?? null, exit_port: ports.exit_port ?? null }, signal, kind === prepareTransport, runId)
+            { entry_port: ports.entry_port ?? null, exit_port: ports.exit_port ?? null }, signal, kind === prepareTransport, runId,
+            addressFamily === 'ipv6' ? { address_family: addressFamily, entry_endpoint: entryEndpoint.trim(), exit_endpoint: exitEndpoint.trim() } : {})
         } catch (err) {
           if (err instanceof ApiError && err.status === 401) {
             controller.abort()
@@ -398,6 +402,13 @@ export function CascadeWizard({
     } })
   }
 
+  function changeAddress(change: () => void) {
+    change()
+    setProbeRows(idleProbeRows())
+    setProbeProgress(null)
+    setError(null)
+  }
+
   async function next() {
     setError(null)
     if (step === 'entry' || step === 'exit') {
@@ -434,6 +445,7 @@ export function CascadeWizard({
       entry_id: entryId,
       exit_id: exitId,
       transport,
+      ...(addressFamily === 'ipv6' ? { address_family: addressFamily, entry_endpoint: entryEndpoint.trim(), exit_endpoint: exitEndpoint.trim() } : {}),
       ...(transport === 'awg' ? requestedPorts : {}),
       ...(entryCountry ? { entry_country: entryCountry } : {}),
       ...(replacement?.routes?.length ? { routes: replacement.routes } : {}),
@@ -588,7 +600,9 @@ export function CascadeWizard({
         const server = side === 'entry' ? entry : exit
         const country = side === 'entry' ? cascade ? cascadeEntryCountry(cascade, entry) : entryCountry || entry?.country : exit?.country
         const flag = countryFlag(country || '')
-        const ip = installing ? side === 'entry' ? cascade?.entry_ip : cascade?.exit_ip : server?.host
+        const interserver = installing && cascade?.address_family === 'ipv6'
+          ? side === 'entry' ? cascade.entry_ip : cascade.exit_ip : ''
+        const ip = interserver ? server?.host : installing ? side === 'entry' ? cascade?.entry_ip : cascade?.exit_ip : server?.host
         let progress = installing ? cascade?.progress?.[side] : currentProgress?.sides[side]
         // Legacy jobs have only a phase. An error without a phase belongs to neither side.
         if (installing && !progress && cascade) progress = {
@@ -606,6 +620,7 @@ export function CascadeWizard({
             <div><strong>{server?.name || ip || t(side === 'entry' ? 'Вход' : 'Выход')}</strong><span className="mono muted small">{ip || server?.host}</span></div>
           </div>
           <div className="cas-side-role small muted">{side === 'entry' ? t('Вход · подключение клиентов') : t('Выход · доступ в интернет')}</div>
+          {interserver && <div className="mono small muted">IPv6: {interserver}</div>}
           <SideProgress side={progress} now={clockNow} waiting={installing ? t('Ожидает своей очереди') : currentProgress ? t('Ход этого сервера не подтвержден') : t('Готов к проверке')} />
           {sideError && <p className="small err-text">{t(sideError)}</p>}
           {cleanupFailed && <p className="small err-text">{t('Очистка временных ресурсов не подтверждена')}</p>}
@@ -627,7 +642,7 @@ export function CascadeWizard({
             <span className="srv-route-arrow">→</span>
           </>
         )}
-        {hop(entry, cascade?.entry_ip || probe?.entry_ip || '', named(entry, 'вход'), false, cascade ? cascadeEntryCountry(cascade, entry) : entryCountry)}
+        {hop(entry, cascade?.address_family === 'ipv6' ? entry?.host || '' : cascade?.entry_ip || probe?.entry_ip || '', named(entry, 'вход'), false, cascade ? cascadeEntryCountry(cascade, entry) : entryCountry)}
         {step === 'link' ? (
           <div
             className={`cc-link cas-link ${
@@ -860,6 +875,17 @@ export function CascadeWizard({
             {head(t('Новый каскад'))}
             {steps}
             <p className="muted small">{t('Выберите канал и запустите проверку. Этапы показаны отдельно для каждого сервера.')}</p>
+            <label>{t('Адреса между узлами каскада')}<select value={addressFamily} disabled={busy || recoveryBusy || recoveryConfirm}
+              onChange={event => changeAddress(() => setAddressFamily(event.target.value as 'ipv4' | 'ipv6'))}>
+              <option value="ipv4">IPv4</option><option value="ipv6">IPv6</option>
+            </select></label>
+            <p className="muted small">{t('Это только межсерверный канал. Адрес SSH и подключение клиентов по IPv4 не меняются. При выборе IPv6 перехода на IPv4 нет.')}</p>
+            {addressFamily === 'ipv6' && <div className="cas-row2">
+              <label>{t('IPv6 входа')}<input className="mono" maxLength={45} value={entryEndpoint} disabled={busy || recoveryBusy || recoveryConfirm}
+                placeholder={t('Автоматически')} onChange={event => changeAddress(() => setEntryEndpoint(event.target.value))} /></label>
+              <label>{t('IPv6 выхода')}<input className="mono" maxLength={45} value={exitEndpoint} disabled={busy || recoveryBusy || recoveryConfirm}
+                placeholder={t('Автоматически')} onChange={event => changeAddress(() => setExitEndpoint(event.target.value))} /></label>
+            </div>}
             <div className="cas-opts cas-opts-compact">
               {PROBE_TRANSPORTS.map(k => <label key={k} className={`cas-transport-option${transport === k ? ' on' : ''}`}>
                 <input type="radio" name="cas-transport" checked={transport === k} disabled={busy || recoveryBusy || recoveryConfirm}
@@ -908,6 +934,7 @@ export function CascadeWizard({
             {head(t('Каскад собран'))}
             {steps}
             {route(true)}
+            {cascade.address_family === 'ipv6' && <p className="muted small">{t('Адреса между узлами каскада')}: <span className="mono">{cascade.entry_ip} → {cascade.exit_ip}</span></p>}
             <CascadeSecurity encrypted={cascade.encrypted} encryption={cascade.encryption} />
             <div className="cas-checks">
               {cascade.result.egress && (

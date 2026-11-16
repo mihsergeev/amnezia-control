@@ -18,7 +18,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select
 
 from app import (
-    audit, cascade, cascade_awg, cascade_exit, cascade_http, cascade_lock, cascade_observations,
+    audit, cascade, cascade_awg, cascade_endpoints, cascade_exit, cascade_http, cascade_lock, cascade_observations,
     cascade_probe, cascade_progress, cascade_recovery, cascadejob, deploy, geo, nodelock, server_ops,
 )
 from app.cascade_routes import (
@@ -169,6 +169,7 @@ def _out(c: Cascade, entry: Server | None = None) -> CascadeOut:
         log=prog.get("log", ""),
         progress=prog.get("sides", {}),
         entry_ip=params.get("entry_ip", ""),
+        address_family=params.get("address_family", "ipv4"),
         entry_country=params.get("entry_country", ""),
         entry_country_override=params.get("entry_country_override", params.get("entry_country", "")),
         desired_entry_country=_desired_country(params, entry),
@@ -270,6 +271,21 @@ async def _addresses(entry_conn, entry: Server, exit_: Server) -> tuple[str, str
     return entry_ip, exit_ip
 
 
+async def _pair_addresses(ec, xc, entry: Server, exit_: Server, body: CascadePair) -> tuple[str, str]:
+    if body.address_family == "ipv4":
+        return await _addresses(ec, entry, exit_)
+    exit_ip = body.exit_endpoint or await cascade_endpoints.discover_ipv6(xc)
+    entry_ip = body.entry_endpoint or await cascade_endpoints.discover_ipv6(ec)
+    if not exit_ip or not entry_ip:
+        raise conflict("cascade_ipv6_address_unknown", "Укажите адреса IPv6 для связи между узлами каскада")
+    if entry_ip == exit_ip:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Вход и выход указывают на один сервер")
+    source, reverse = await asyncio.gather(cascade._route_src(ec, exit_ip), cascade._route_src(xc, entry_ip))
+    if source != entry_ip or reverse != exit_ip:
+        raise conflict("cascade_ipv6_source_mismatch", "Выбранные IPv6 должны совпадать с адресами исходящего маршрута между узлами")
+    return entry_ip, exit_ip
+
+
 @router.get("", response_model=list[CascadeOut])
 async def list_cascades(_: CurrentUser, session: SessionDep) -> list[CascadeOut]:
     rows = (await session.execute(select(Cascade).order_by(Cascade.id))).scalars().all()
@@ -287,7 +303,7 @@ async def probe(body: CascadePair, _: CurrentUser, session: SessionDep) -> Casca
     try:
         async with _locked_pair(entry, exit_) as (ec, xc):
             await _ensure_free(session, entry, exit_)
-            entry_ip, exit_ip = await _addresses(ec, entry, exit_)
+            entry_ip, exit_ip = await _pair_addresses(ec, xc, entry, exit_, body)
             res = await cascade.probe(xc, ec, entry_ip, exit_ip)
     except Exception as exc:  # noqa: BLE001
         raise _ssh_error(exc) from exc
@@ -295,6 +311,7 @@ async def probe(body: CascadePair, _: CurrentUser, session: SessionDep) -> Casca
     res["checked_at"] = datetime.now(timezone.utc).isoformat()
     _last_probe[(entry.id, exit_.id)] = res
     return CascadeProbeOut(
+        address_family=body.address_family,
         entry_ip=entry_ip, exit_ip=exit_ip, exit_country=country, exit_org=org,
         tcp=res["tcp"], gre=res["gre"], recommend=res["recommend"],
         entry_nat=res.get("entry_nat", False), exit_nat=res.get("exit_nat", False),
@@ -325,8 +342,8 @@ async def probe_transport(
         async with nodelock.hold("cascade", first, wait=0.1), nodelock.hold("cascade", second, wait=0.1):
             async with _locked_pair(entry, exit_, report) as (ec, xc):
                 await _ensure_free(session, entry, exit_)
-                entry_source, exit_ip = await _addresses(ec, entry, exit_)
-                entry_ip = await _ipv4(entry.host) or entry_source
+                entry_source, exit_ip = await _pair_addresses(ec, xc, entry, exit_, body)
+                entry_ip = (await _ipv4(entry.host) or entry_source) if body.address_family == "ipv4" else entry_source
                 if cascade._is_public(entry_ip) and not cascade._is_public(entry_source):
                     entry_source = entry_ip
                 entry_addresses = await server_ops._host_addrs(entry.host)
@@ -383,7 +400,7 @@ async def probe_transport(
         country = found_country or country
     except Exception:  # noqa: BLE001 — enrichment cannot invalidate measurement
         pass
-    res |= {"entry_ip": entry_ip, "exit_ip": exit_ip, "exit_country": country,
+    res |= {"address_family": body.address_family, "entry_ip": entry_ip, "exit_ip": exit_ip, "exit_country": country,
             "exit_org": org, **nat}
     # Explicit transport/run markers distinguish these measurements from the
     # legacy plain-TCP prerequisite. No keys/configuration enter this cache.
@@ -500,7 +517,10 @@ async def create(
 
 def _create_request_data(body: CascadeCreate) -> dict:
     # Requests stored by earlier versions have no routes key.
-    return body.model_dump(mode="json", exclude={"routes"} if not body.routes else None)
+    excluded = {"routes"} if not body.routes else set()
+    if body.address_family == "ipv4":
+        excluded |= {"address_family", "entry_endpoint", "exit_endpoint"}
+    return body.model_dump(mode="json", exclude=excluded)
 
 
 async def _create_cascade(body: CascadeCreate, request: Request, user: CurrentUser, session: SessionDep) -> CascadeOut:
@@ -517,9 +537,11 @@ async def _create_cascade(body: CascadeCreate, request: Request, user: CurrentUs
             await _ensure_free(session, entry, exit_)
             params: dict = {"runtime_layout": 2, "runtime_owner": secrets.token_hex(16)}
             await _entry_creation_available(ec, body.transport, params, entry.id)
-            entry_ip, exit_ip = await _addresses(ec, entry, exit_)
+            entry_ip, exit_ip = await _pair_addresses(ec, xc, entry, exit_, body)
             siblings = await _siblings(session, exit_.id)
             params.update(entry_ip=entry_ip, exit_ip=exit_ip, inner_net=_inner_reservation(siblings))
+            if body.address_family == "ipv6":
+                params["address_family"] = "ipv6"
             params["entry_country_override"] = body.entry_country or ""
             if body.entry_country:
                 params["entry_country"] = body.entry_country.upper()
@@ -533,7 +555,8 @@ async def _create_cascade(body: CascadeCreate, request: Request, user: CurrentUs
             elif body.transport == "awg":
                 # The endpoint/firewall peer is the server's reachable address,
                 # not a cloud VM's private source address behind provider NAT.
-                params["entry_ip"] = await _ipv4(entry.host) or entry_ip
+                if body.address_family == "ipv4":
+                    params["entry_ip"] = await _ipv4(entry.host) or entry_ip
                 await _awg_preflight(ec)
                 params |= cascade_awg.new_params()
                 params["entry_port"] = await _awg_port(ec, body.entry_port)

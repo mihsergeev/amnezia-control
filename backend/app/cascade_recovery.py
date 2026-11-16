@@ -45,9 +45,9 @@ gre=read('/etc/default/acontrol-gre',4096)
 if gre is not None:
  if owner['transport']!='gre' or 'ROLE=entry' not in gre.splitlines():sys.exit(73)
  key=re.findall(r'^KEY=([0-9]{1,10})$',gre,re.M)
- peer=re.findall(r'^REMOTE=([0-9.]+)$',gre,re.M)
+ peer=re.findall(r'^REMOTE=([0-9a-fA-F:.]+)$',gre,re.M)
  if len(key)!=1 or not 0<int(key[0])<=4294967295 or len(peer)!=1:sys.exit(73)
- owner.update(gre_key=int(key[0]),exit_ip=str(ipaddress.IPv4Address(peer[0])))
+ owner.update(gre_key=int(key[0]),exit_ip=str(ipaddress.ip_address(peer[0])))
 print(json.dumps(owner,sort_keys=True,separators=(',',':')))
 '''
 

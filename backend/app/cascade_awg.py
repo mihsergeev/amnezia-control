@@ -5,11 +5,10 @@ routes and externally managed GRE-over-AWG links are never adopted or changed.
 """
 
 import base64
-import ipaddress
 import secrets
 import shlex
 
-from app import awg, deploy
+from app import awg, cascade_endpoints, deploy
 
 BASE = "/opt/acontrol/cascade-awg"
 SCRIPT = "/lib65/scripts/acontrol-cascade-awg.sh"
@@ -38,8 +37,8 @@ def new_params() -> dict:
 
 def config(role: str, params: dict) -> str:
     peer = "exit" if role == "entry" else "entry"
-    # Explicit IPv4 endpoints avoid DNS changes and route recursion.
-    endpoint = str(ipaddress.IPv4Address(params[f"{peer}_ip"]))
+    # Explicit endpoints avoid DNS changes and route recursion.
+    endpoint = cascade_endpoints.address(params[f"{peer}_ip"])
     own_port, peer_port = int(params[f"{role}_port"]), int(params[f"{peer}_port"])
     if not 1 <= own_port <= 65535 or not 1 <= peer_port <= 65535:
         raise ValueError("Invalid AWG port")
@@ -51,7 +50,7 @@ def config(role: str, params: dict) -> str:
               f"PublicKey = {params[f'{peer}_public']}",
               f"PresharedKey = {params['psk']}",
               "AllowedIPs = " + ("0.0.0.0/0" if role == "entry" else params["entry_inner"] + "/32"),
-              f"Endpoint = {endpoint}:{peer_port}", "PersistentKeepalive = 25", ""]
+              f"Endpoint = {cascade_endpoints.host_port(endpoint, peer_port)}", "PersistentKeepalive = 25", ""]
     return "\n".join(lines)
 
 
@@ -80,6 +79,7 @@ exec 9>@LOCK@
 flock -x -w 5 9 || die
 [ -f "$BASE/node.env" ] || die
 . "$BASE/node.env"
+case "$PEER" in *:*) PEER_IPTABLES=ip6tables;; *) PEER_IPTABLES=iptables;; esac
 [ "$SCOPED_EXIT" != yes ] || [ "$ROLE" = exit ] || die
 owner() {
   if [ "$SCOPED_EXIT" != yes ]; then
@@ -108,6 +108,8 @@ owner() {
 }
 rule() { table=$1; chain=$2; shift 2; iptables -w -t "$table" -C "$chain" "$@" 2>/dev/null || iptables -w -t "$table" -I "$chain" 1 "$@"; }
 unrule() { table=$1; chain=$2; shift 2; while iptables -w -t "$table" -C "$chain" "$@" 2>/dev/null; do iptables -w -t "$table" -D "$chain" "$@"; done; }
+peer_rule() { "$PEER_IPTABLES" -w -C INPUT "$@" 2>/dev/null || "$PEER_IPTABLES" -w -I INPUT 1 "$@"; }
+peer_unrule() { while "$PEER_IPTABLES" -w -C INPUT "$@" 2>/dev/null; do "$PEER_IPTABLES" -w -D INPUT "$@"; done; }
 remove_container() {
   RESULT=$(docker rm -f "$CONT" 2>&1) && return 0
   case "$RESULT" in *'No such container:'*|*'No such object:'*) return 0;; *) die;; esac
@@ -153,13 +155,16 @@ up() {
   ip link set "$IF" mtu 1280 up
   sysctl -qw "net.ipv4.conf.$IF.rp_filter=2"
   ip route replace "$PEER_INNER/32" dev "$IF" src "$INNER"
-  rule filter INPUT -p udp -s "$PEER" --dport "$PORT" -j ACCEPT
+  peer_rule -p udp -s "$PEER" --dport "$PORT" -j ACCEPT
   rule filter INPUT -i "$IF" -s "$PEER_INNER/32" -p icmp -j ACCEPT
   if [ "$ROLE" = entry ]; then
     ip route replace default dev "$IF" src "$INNER" table 242
     ip rule show | grep -q '1010:.*fwmark 0x200 lookup 242' || ip rule add pref 1010 fwmark 0x200 table 242
     # Outer UDP has its own mark and always follows the host main table.
     ip rule show | grep -q '1009:.*fwmark 0x400 lookup main' || ip rule add pref 1009 fwmark 0x400 table main
+    if [ "$PEER_IPTABLES" = ip6tables ]; then
+      ip -6 rule show | grep -q '1009:.*fwmark 0x400 lookup main' || ip -6 rule add pref 1009 fwmark 0x400 table main
+    fi
   else
     sysctl -qw net.ipv4.ip_forward=1
     rule filter FORWARD -i "$IF" -s "$PEER_INNER/32" -o "$EGRESS" -j ACCEPT
@@ -203,10 +208,11 @@ down() {
   remove_container
   ip link delete "$IF" 2>/dev/null || true
   ip route del "$PEER_INNER/32" dev "$IF" 2>/dev/null || true
-  unrule filter INPUT -p udp -s "$PEER" --dport "$PORT" -j ACCEPT
+  peer_unrule -p udp -s "$PEER" --dport "$PORT" -j ACCEPT
   unrule filter INPUT -i "$IF" -s "$PEER_INNER/32" -p icmp -j ACCEPT
   if [ "$ROLE" = entry ]; then
     ip rule del pref 1009 fwmark 0x400 table main 2>/dev/null || true
+    if [ "$PEER_IPTABLES" = ip6tables ]; then ip -6 rule del pref 1009 fwmark 0x400 table main 2>/dev/null || true; fi
     ip rule del pref 1010 fwmark 0x200 table 242 2>/dev/null || true
     ip rule del pref 1011 fwmark 0x200 unreachable 2>/dev/null || true
     ROUTES=$(ip -N -4 route show table all) || die
@@ -308,7 +314,7 @@ def install(role: str, peer_ip: str, cascade_id: int, params: dict,
     paths = resources(cascade_id if scoped_exit else None)
     BASE, SCRIPT, CONTAINER, INTERFACE, UNIT, TIMER = (paths[k] for k in
         ("base", "script", "container", "interface", "unit", "timer"))
-    peer_ip = str(ipaddress.IPv4Address(peer_ip))
+    peer_ip = cascade_endpoints.address(peer_ip)
     params = params | {"entry_inner": entry_inner, "exit_inner": exit_inner}
     peer_role = "exit" if role == "entry" else "entry"
     values = {

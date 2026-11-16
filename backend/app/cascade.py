@@ -116,21 +116,30 @@ _GRE_TUN_SH = r"""#!/bin/sh
 #   gre-tun.sh up|down|status
 set -u
 . @DEFAULTS@
+case "$REMOTE" in *:*) PEER_IPTABLES=ip6tables;; *) PEER_IPTABLES=iptables;; esac
 
 rule() { t=$1; shift; iptables -t "$t" -C "$@" 2>/dev/null || iptables -t "$t" -I "$@"; }
 unrule() { t=$1; shift; while iptables -t "$t" -D "$@" 2>/dev/null; do :; done; }
+peer_rule() { "$PEER_IPTABLES" -C INPUT "$@" 2>/dev/null || "$PEER_IPTABLES" -I INPUT "$@"; }
+peer_unrule() { while "$PEER_IPTABLES" -D INPUT "$@" 2>/dev/null; do :; done; }
 
 up() {
-  modprobe ip_gre 2>/dev/null || true
+  if [ "$PEER_IPTABLES" = ip6tables ]; then modprobe ip6_gre 2>/dev/null || true
+  else modprobe ip_gre 2>/dev/null || true; fi
   if ! ip link show "$IF" >/dev/null 2>&1; then
-    if [ -n "${KEY:-}" ]; then ip tunnel add "$IF" mode gre local "$LOCAL" remote "$REMOTE" key "$KEY" ttl 64 || exit 1
+    if [ "$PEER_IPTABLES" = ip6tables ]; then
+      if [ -n "${KEY:-}" ]; then ip link add "$IF" type ip6gre local "$LOCAL" remote "$REMOTE" key "$KEY" hoplimit 64 encaplimit none || exit 1
+      else ip link add "$IF" type ip6gre local "$LOCAL" remote "$REMOTE" hoplimit 64 encaplimit none || exit 1; fi
+    elif [ -n "${KEY:-}" ]; then ip tunnel add "$IF" mode gre local "$LOCAL" remote "$REMOTE" key "$KEY" ttl 64 || exit 1
     else ip tunnel add "$IF" mode gre local "$LOCAL" remote "$REMOTE" ttl 64 || exit 1; fi
   fi
   ip addr replace "$INNER" dev "$IF"
-  ip link set "$IF" mtu 1476 up
+  MTU=1476
+  if [ "$PEER_IPTABLES" = ip6tables ]; then MTU=1456; [ -z "${KEY:-}" ] || MTU=1452; fi
+  ip link set "$IF" mtu "$MTU" up
   # ответы из туннеля приходят с внешних адресов, строгий rp_filter их бы выкинул
   sysctl -qw "net.ipv4.conf.$IF.rp_filter=2"
-  rule filter INPUT -p gre -s "$REMOTE" -j ACCEPT
+  peer_rule -p gre -s "$REMOTE" -j ACCEPT
   rule mangle FORWARD -o "$IF" -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu
   rule mangle FORWARD -i "$IF" -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu
   if [ "$ROLE" = exit ]; then
@@ -175,7 +184,7 @@ down() {
     while ip rule del fwmark "$MARK" unreachable 2>/dev/null; do :; done
     ip route flush table "$TABLE" 2>/dev/null || true
   fi
-  unrule filter INPUT -p gre -s "$REMOTE" -j ACCEPT
+  peer_unrule -p gre -s "$REMOTE" -j ACCEPT
   unrule mangle FORWARD -o "$IF" -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu
   unrule mangle FORWARD -i "$IF" -p tcp --tcp-flags SYN,RST SYN -j TCPMSS --clamp-mss-to-pmtu
   ip link del "$IF" 2>/dev/null || true
@@ -539,7 +548,7 @@ _DOCKER = (
     "| sudo sh >/dev/null || fail 'docker install'; }"
 )
 
-_SRC_OF = "sed -n 's/.* src \\([0-9.]*\\).*/\\1/p'"
+_SRC_OF = "sed -n 's/.* src \\([^ ]*\\).*/\\1/p'"
 _DEV_OF = "sed -n 's/.* dev \\([^ ]*\\).*/\\1/p'"
 
 
@@ -561,7 +570,7 @@ def _gre_install(role: str, remote: str, inner: str, net: str, key: int | None =
     нода ходит к соседу (за NAT это внутренний адрес), EGRESS - внешний интерфейс."""
     defaults = _gre_defaults(role, remote, inner, net, key)
     return [
-        f'LOCAL=$(ip -4 route get {remote} | {_SRC_OF} | head -1)',
+        f'LOCAL=$(ip -{ipaddress.ip_address(remote).version} route get {remote} | {_SRC_OF} | head -1)',
         '[ -n "$LOCAL" ] || fail "no route to peer"',
         f"EGRESS=$(ip -4 route get 1.1.1.1 | {_DEV_OF} | head -1)",
         '[ -n "$EGRESS" ] || fail "no default route"',
@@ -634,7 +643,7 @@ def build_exit_script(transport: str, entry_ip: str, cascade_id: int, params: di
             "if command -v ufw >/dev/null 2>&1; then "
             f"sudo ufw allow from {entry_ip} to any port {port} proto tcp >/dev/null 2>&1 || true; fi",
             "if command -v firewall-cmd >/dev/null 2>&1; then sudo firewall-cmd --permanent "
-            f"--add-rich-rule='rule family=ipv4 source address={entry_ip} port port={port} "
+            f"--add-rich-rule='rule family=ipv{ipaddress.ip_address(entry_ip).version} source address={entry_ip} port port={port} "
             "protocol=tcp accept' >/dev/null 2>&1 && sudo firewall-cmd --reload >/dev/null 2>&1; fi",
         ]
     lines += ['echo "DEPLOY_DONE"']
@@ -647,7 +656,7 @@ def exit_vless_config(params: dict) -> str:
         # без журнала доступа: иначе на выходе копятся адреса сайтов клиентов
         "log": {"loglevel": "warning", "access": "none"},
         "inbounds": [{
-            "tag": "from-entry", "listen": "0.0.0.0", "port": int(params["port"]),
+            "tag": "from-entry", "listen": params.get("exit_ip", "::") if params.get("address_family") == "ipv6" else "0.0.0.0", "port": int(params["port"]),
             "protocol": "vless",
             "settings": {
                 "clients": [{"id": params["uuid"], "flow": "xtls-rprx-vision"}],
@@ -1263,7 +1272,7 @@ def ufw_cleanup(peer_ip: str, port: int | None) -> str:
 _RECV_PY = r"""
 import json, socket, sys, time
 bind, port, wait = sys.argv[1], int(sys.argv[2]), float(sys.argv[3])
-s = socket.socket()
+s = socket.socket(socket.AF_INET6 if ':' in bind else socket.AF_INET)
 s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
 s.bind((bind, port))
 s.listen(1)
@@ -1364,11 +1373,12 @@ async def _pair(
 async def probe_tcp(exit_conn, entry_conn, entry_ip: str, exit_ip: str) -> dict:
     port = random.randint(40000, 49999)
     allow = f"INPUT -p tcp -s {entry_ip} --dport {port} -j ACCEPT"
-    await exit_conn.run(f"sudo iptables -I {allow}", check=False)
+    firewall = "ip6tables" if ipaddress.ip_address(exit_ip).version == 6 else "iptables"
+    await exit_conn.run(f"sudo {firewall} -I {allow}", check=False)
     try:
-        return await _pair(exit_conn, entry_conn, "0.0.0.0", exit_ip, port)
+        return await _pair(exit_conn, entry_conn, "::" if firewall == "ip6tables" else "0.0.0.0", exit_ip, port)
     finally:
-        await exit_conn.run(f"sudo iptables -D {allow}", check=False)
+        await exit_conn.run(f"sudo {firewall} -D {allow}", check=False)
 
 
 async def probe_gre(exit_conn, entry_conn, entry_ip: str, exit_ip: str) -> dict:
@@ -1417,8 +1427,11 @@ def pick_source(route_src: str, exit_ip: str, nat_ip: str) -> str:
 
 
 async def entry_source_ip(conn: asyncssh.SSHClientConnection, exit_ip: str) -> str:
-    r = await conn.run(f"ip -4 route get {exit_ip} | {_SRC_OF} | head -1", check=False)
+    version = ipaddress.ip_address(exit_ip).version
+    r = await conn.run(f"ip -{version} route get {exit_ip} | {_SRC_OF} | head -1", check=False)
     src = _ip_or_empty(r.stdout if isinstance(r.stdout, str) else "")
+    if version == 6:
+        return src
     nat = "" if src and (_is_public(src) or not _is_public(exit_ip)) else await public_ip(conn)
     return pick_source(src, exit_ip, nat)
 
@@ -1445,7 +1458,7 @@ def _internal(ip: str) -> bool:
 
 
 async def _route_src(conn, peer: str) -> str:
-    r = await conn.run(f"ip -4 route get {peer} | {_SRC_OF} | head -1", check=False)
+    r = await conn.run(f"ip -{ipaddress.ip_address(peer).version} route get {peer} | {_SRC_OF} | head -1", check=False)
     return _ip_or_empty(r.stdout if isinstance(r.stdout, str) else "")
 
 

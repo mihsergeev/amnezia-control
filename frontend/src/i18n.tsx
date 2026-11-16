@@ -11,6 +11,13 @@ export type Lang = 'ru' | 'en'
 // Ключ = русская строка (дефолт). Значение = английский перевод.
 // Отсутствующий ключ → возвращается русский (мягкий фолбэк).
 const EN: Record<string, string> = {
+  'Адреса между узлами каскада': 'Addresses between cascade nodes',
+  'Это только межсерверный канал. Адрес SSH и подключение клиентов по IPv4 не меняются. При выборе IPv6 перехода на IPv4 нет.': 'This is only the interserver link. The SSH address and IPv4 client connections are preserved. IPv6 mode never falls back to IPv4.',
+  'IPv6 входа': 'Entry IPv6',
+  'IPv6 выхода': 'Exit IPv6',
+  'Укажите адреса IPv6 для связи между узлами каскада': 'Specify IPv6 addresses for the interserver link',
+  'Выбранные IPv6 должны совпадать с адресами исходящего маршрута между узлами': 'The selected IPv6 addresses must match the source addresses of the route between nodes',
+  'На сервере нет утилиты ip6tables': 'The server has no ip6tables utility',
   'Страна сервера': 'Server country',
   'Пусто — авто по адресу SSH или публичному выходу самого сервера. Изменение страны не применяет маршруты действующего каскада.': 'Leave empty to detect from the SSH address or the host public egress. Changing the country does not apply routes to an active cascade.',
   'Желаемая страна: {country}': 'Desired country: {country}',

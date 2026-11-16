@@ -14,6 +14,7 @@ All notable changes to Amnezia Control are documented here. The format is based 
 
 ## [0.84.49] - 2026-11-16
 
+- Add an explicit IPv6 choice for the interserver AWG, VLESS Reality and GRE channel, with optional endpoint selection, IPv6 link measurements and matching firewall cleanup. Preserve SSH management addresses, IPv4 VPN client profiles and existing IPv4 cascade behavior; do not fall back silently when IPv6 is unavailable.
 - Add an optional manual server country with automatic detection by the SSH address and the managed host's public egress as a fallback for private management addresses. Keep manual countries during periodic checks and preserve SSH targets.
 - Apply cascade country GeoIP/GeoSite rules in place after explicit confirmation, preserving transport resources, keys, client profiles, other parameters, and custom gateway settings. Validate the candidate and restore the previous configuration if the gateway cannot restart.
 - Show the desired country separately from the rules observed in the running gateway, including pending and unknown states. Keep country-dependent health evidence from an older configuration out of new results.

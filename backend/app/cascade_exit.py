@@ -4,7 +4,7 @@ import ipaddress
 import json
 import shlex
 
-from app import cascade_awg
+from app import cascade_awg, cascade_endpoints
 
 
 def scoped(params: dict) -> bool:
@@ -63,10 +63,11 @@ for name in ('acgre','acawg'):
   if name=='acgre':
    x=json.loads(r.stdout)[0];d=x.get('linkinfo',{});key=d.get('info_data',{}).get('ikey',0)
    key=int(key) if str(key).isdigit() else int(ipaddress.IPv4Address(key))
-   if expected['transport']!='gre' or d.get('info_kind')!='gre' or key!=int(sys.argv[2]):sys.exit(73)
+   if expected['transport']!='gre' or d.get('info_kind')!=sys.argv[3] or key!=int(sys.argv[2]):sys.exit(73)
 print('CASCADE_AVAILABLE')
 '''
-    return cascade_awg.foreign_guard() + "sudo -n python3 -c " + shlex.quote(code) + " " + shlex.quote(json.dumps(expected)) + " " + str(int(params.get("gre_key", 0))) + " || exit 73\n"
+    kind = "ip6gre" if params.get("address_family") == "ipv6" or ":" in params.get("exit_ip", "") else "gre"
+    return cascade_awg.foreign_guard() + "sudo -n python3 -c " + shlex.quote(code) + " " + shlex.quote(json.dumps(expected)) + " " + str(int(params.get("gre_key", 0))) + " " + kind + " || exit 73\n"
 
 
 def network_preflight(cid: int, transport: str, params: dict, role: str) -> str:
@@ -123,6 +124,7 @@ RUNTIME = r'''#!/bin/bash
 set -eu
 BASE=@BASE@
 . "$BASE/exit.env"
+case "$PEER" in *:*) PEER_IPTABLES=ip6tables; GRE_KIND=ip6gre;; *) PEER_IPTABLES=iptables; GRE_KIND=gre;; esac
 exec 9>@LOCK@
 flock -x -w 10 9 || exit 73
 DOCKER_BIN=$(command -v docker || true)
@@ -131,12 +133,12 @@ remove_container() {
   RESULT=$(docker rm -f "$CONT" 2>&1) && return 0
   case "$RESULT" in *'No such container:'*|*'No such object:'*) return 0;; *) exit 73;; esac
 }
-rule() { t=$1; c=$2; shift 2; iptables -w -t "$t" -C "$c" "$@" -m comment --comment "$OWNER" 2>/dev/null || iptables -w -t "$t" -I "$c" 1 "$@" -m comment --comment "$OWNER"; }
-unrule() { t=$1; c=$2; shift 2; while iptables -w -t "$t" -C "$c" "$@" -m comment --comment "$OWNER" 2>/dev/null; do iptables -w -t "$t" -D "$c" "$@" -m comment --comment "$OWNER"; done; }
+rule() { t=$1; c=$2; shift 2; tool=iptables; [ "$c" != INPUT ] || tool=$PEER_IPTABLES; "$tool" -w -t "$t" -C "$c" "$@" -m comment --comment "$OWNER" 2>/dev/null || "$tool" -w -t "$t" -I "$c" 1 "$@" -m comment --comment "$OWNER"; }
+unrule() { t=$1; c=$2; shift 2; tool=iptables; [ "$c" != INPUT ] || tool=$PEER_IPTABLES; while "$tool" -w -t "$t" -C "$c" "$@" -m comment --comment "$OWNER" 2>/dev/null; do "$tool" -w -t "$t" -D "$c" "$@" -m comment --comment "$OWNER"; done; }
 owner() {
   if [ "$TRANSPORT" = gre ]; then
     if ip link show "$IF" >/dev/null 2>&1; then
-      ip -j -d link show "$IF" | python3 -c 'import ipaddress,json,sys;x=json.load(sys.stdin)[0];d=x.get("linkinfo",{});v=d.get("info_data",{});key=lambda n:int(n) if str(n).isdigit() else int(ipaddress.IPv4Address(n));assert d.get("info_kind")=="gre" and v.get("local")==sys.argv[2] and v.get("remote")==sys.argv[3] and key(v.get("ikey",0))==int(sys.argv[4]) and key(v.get("okey",0))==int(sys.argv[4]) and x.get("ifalias",sys.argv[1])==sys.argv[1]' "$OWNER" "$LOCAL" "$PEER" "$KEY" || exit 73
+      ip -j -d link show "$IF" | python3 -c 'import ipaddress,json,sys;x=json.load(sys.stdin)[0];d=x.get("linkinfo",{});v=d.get("info_data",{});key=lambda n:int(n) if str(n).isdigit() else int(ipaddress.IPv4Address(n));assert d.get("info_kind")==sys.argv[5] and v.get("local")==sys.argv[2] and v.get("remote")==sys.argv[3] and key(v.get("ikey",0))==int(sys.argv[4]) and key(v.get("okey",0))==int(sys.argv[4]) and x.get("ifalias",sys.argv[1])==sys.argv[1]' "$OWNER" "$LOCAL" "$PEER" "$KEY" "$GRE_KIND" || exit 73
     fi
   else
     NAMES=$(docker container ls -a --format '{{.Names}}') || exit 73
@@ -162,10 +164,14 @@ rules() {
 up() {
   owner
   if [ "$TRANSPORT" = gre ]; then
-    ip link show "$IF" >/dev/null 2>&1 || ip link add "$IF" type gre local "$LOCAL" remote "$PEER" key "$KEY" ttl 64
+    if ! ip link show "$IF" >/dev/null 2>&1; then
+      if [ "$GRE_KIND" = ip6gre ]; then ip link add "$IF" type ip6gre local "$LOCAL" remote "$PEER" key "$KEY" hoplimit 64 encaplimit none
+      else ip link add "$IF" type gre local "$LOCAL" remote "$PEER" key "$KEY" ttl 64; fi
+    fi
     ip link set dev "$IF" alias "$OWNER"
     ip addr replace "$INNER/32" dev "$IF"
-    ip link set "$IF" mtu 1476 up
+    MTU=1476; [ "$GRE_KIND" != ip6gre ] || MTU=1452
+    ip link set "$IF" mtu "$MTU" up
     ip route replace "$PEER_INNER/32" dev "$IF" src "$INNER"
     sysctl -qw "net.ipv4.conf.$IF.rp_filter=2" net.ipv4.ip_forward=1
   else
@@ -204,14 +210,14 @@ def install(cid: int, transport: str, peer: str, params: dict) -> list[str]:
         return lines
     values = {"CID": str(cid), "OWNER": owner["owner"], "TRANSPORT": transport,
               "IF": p["interface_gre"], "CONT": p["container_xray"],
-              "PEER": str(ipaddress.IPv4Address(peer)), "INNER": exit_.split('/')[0],
+              "PEER": cascade_endpoints.address(peer), "INNER": exit_.split('/')[0],
               "PEER_INNER": entry.split('/')[0], "KEY": str(int(params.get("gre_key", 0))),
               "PORT": str(int(params.get("port", 0)))}
     runtime = RUNTIME.replace("@BASE@", p["base"]).replace("@LOCK@", p["lock"]).replace("@XRAY@", cascade.XRAY_IMAGE)
     script = p["base"] + "/exit.sh"
     lines += ["EGRESS=$(ip -4 route show default | awk '/^default/ {print $5; exit}')",
               '[ -n "$EGRESS" ] || fail "exit egress"',
-              "LOCAL=$(ip -4 route get " + values["PEER"] + " | " + cascade._SRC_OF + " | head -1)",
+              f"LOCAL=$(ip -{cascade_endpoints.family(values['PEER'])} route get " + values["PEER"] + " | " + cascade._SRC_OF + " | head -1)",
               '[ -n "$LOCAL" ] || fail "exit source address"',
               cascade._put(script, runtime, "700"),
               cascade._put(p["base"] + "/exit.env.next", ''.join(f"{k}={shlex.quote(v)}\n" for k,v in values.items()), "600"),
