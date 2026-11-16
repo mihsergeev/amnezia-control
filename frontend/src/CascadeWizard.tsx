@@ -174,7 +174,7 @@ export function CascadeWizard({
   const [exitPort, setExitPort] = useState('')
   const [addressFamily, setAddressFamily] = useState<'ipv4' | 'ipv6'>((resume ?? replacement)?.address_family ?? 'ipv4')
   const [entryEndpoint, setEntryEndpoint] = useState(replacement?.address_family === 'ipv6' ? replacement.entry_ip : '')
-  const [exitEndpoint, setExitEndpoint] = useState(replacement?.address_family === 'ipv6' ? replacement.exit_ip : '')
+  const [exitEndpoint, setExitEndpoint] = useState('')
   const [cascade, setCascade] = useState<Cascade | null>(resume ?? null)
   const createRequests = useRef(new Map<string, CascadeCreateRequest>())
   const [extra, setExtra] = useState<Server[]>([])
@@ -418,7 +418,7 @@ export function CascadeWizard({
         if (!added) return
         setExtra((current) => [...current.filter((server) => server.id !== added.id), added])
         if (step === 'entry') pickEntry(added.id)
-        else setExitId(added.id)
+        else pickExit(added.id)
         picked = added
       }
       if (!picked) return
@@ -532,8 +532,16 @@ export function CascadeWizard({
   }
 
   function pickEntry(id: number) {
-    if (id !== entryId) setEntryCountry('')
+    if (id !== entryId) {
+      setEntryCountry('')
+      setEntryEndpoint('')
+    }
     setEntryId(id)
+  }
+
+  function pickExit(id: number) {
+    if (id !== exitId) setExitEndpoint('')
+    setExitId(id)
   }
 
   function countryInput() {
@@ -671,7 +679,7 @@ export function CascadeWizard({
   function picker(kind: 'entry' | 'exit') {
     const list = candidates(kind === 'exit' ? entryId : exitId, kind)
     const value = kind === 'entry' ? entryId : exitId
-    const set = kind === 'entry' ? pickEntry : setExitId
+    const set = kind === 'entry' ? pickEntry : pickExit
     return (
       <>
         <div className="tabs">

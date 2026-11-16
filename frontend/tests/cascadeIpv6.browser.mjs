@@ -59,6 +59,11 @@ try {
       await mkdir(process.env.CASCADE_IPV6_SCREENSHOTS, { recursive: true })
       await page.screenshot({ path: `${process.env.CASCADE_IPV6_SCREENSHOTS}/${lang}-${width}.png` })
     }
+    await page.getByRole('button', { name: lang === 'ru' ? 'Назад' : 'Back', exact: true }).click()
+    await page.getByRole('radio').last().check()
+    await page.getByRole('button', { name: lang === 'ru' ? 'Дальше' : 'Next', exact: true }).click()
+    assert.equal(await page.getByRole('textbox', { name: lang === 'ru' ? 'IPv6 выхода' : 'Exit IPv6' }).inputValue(), '')
+    assert.equal(await page.getByRole('textbox', { name: lang === 'ru' ? 'IPv6 входа' : 'Entry IPv6' }).inputValue(), '2001:db8::10')
     await page.close()
   }
   assert.deepEqual(errors, [])
