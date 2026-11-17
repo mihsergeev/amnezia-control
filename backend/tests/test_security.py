@@ -31,7 +31,7 @@ async def test_restore_blocks_absolute_path_write(
         {
             "db.json": b"{}",
             # rel="/…/ESCAPED.txt" — абсолютный, os.path.join отбрасывает base
-            "data/" + str(escaped): b"PWNED",
+            "data/" + escaped.as_posix(): b"PWNED",
             "data/marker.txt": b"ok",  # легитимный файл — должен восстановиться
         }
     )
