@@ -27,12 +27,12 @@ from fastapi import APIRouter, HTTPException, Request, status
 from fastapi.responses import Response
 from sqlalchemy import DateTime, func, insert, select
 
-from app import alerts, audit, client_endpoint, geo, native_snapshots, sshops, stepup
+from app import alerts, audit, client_endpoint, geo, native_snapshots, ssh_archives, sshops, stepup
 from app.clientip import client_ip
 from app.config import get_settings
 from app.db import Base
 from app.deps import CurrentUser, SessionDep
-from app.models import BulkClientIssue, Server
+from app.models import BulkClientIssue, Server, SshAccessChange
 from app.schemas import ServerImportResult
 
 router = APIRouter(tags=["transfer"])
@@ -49,7 +49,7 @@ _RUNTIME_TABLES = {"server_status", "node_metrics", "torrent_hits"}
 # Issue journals belong to the panel and user that prepared the operation.
 # A pending journal can write credentials to the node when replayed; only the
 # separately stored profiles and other client metadata belong in a transfer.
-_PANEL_LOCAL_TABLES = {BulkClientIssue.__tablename__}
+_PANEL_LOCAL_TABLES = {BulkClientIssue.__tablename__, SshAccessChange.__tablename__}
 
 # История трафика на активной ноде — сотни тысяч строк (у боевого сервера это
 # ~0.8 млн). Тащим только по явному запросу, иначе файл раздувается в сотни
@@ -59,7 +59,8 @@ _HISTORY_TABLES = {"traffic_samples", "client_traffic_samples"}
 # поля сервера, которые имеет смысл переносить: адрес, доступ и то, как карточка
 # выглядит. id/position/результаты последней проверки — местные, их не берём
 _SERVER_FIELDS = ("name", "host", "client_endpoint", "ssh_port", "ssh_user", "note", "group_name",
-                  "country", "country_override", "torrent_block", "torrent_autopause", "alerts_enabled")
+                  "country", "country_override", "torrent_block", "torrent_autopause", "alerts_enabled",
+                  *ssh_archives.POLICY_FIELDS)
 
 _MAX_IMPORT_BYTES = 200 * 1024 * 1024
 
@@ -131,6 +132,19 @@ async def export_server(
     server = await session.get(Server, server_id)
     if server is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Сервер не найден")
+    if await session.scalar(select(SshAccessChange.id).where(
+            SshAccessChange.server_id == server_id,
+            SshAccessChange.phase.not_in(("preview", "done", "rolledback"))).limit(1)):
+        raise HTTPException(409, "Сначала завершите восстановление настройки SSH этого сервера")
+
+    jump_descriptor = None
+    if server.ssh_jump_server_id is not None:
+        jump = await session.get(Server, server.ssh_jump_server_id)
+        if jump is None or jump.ssh_jump_server_id is not None or jump.id == server.id:
+            raise HTTPException(409, "Исправьте сохраненный маршрут SSH перед переносом сервера")
+        # Inventory IDs and forwarding keys are panel-local. A receiving panel
+        # may bind only an already existing direct node with this exact address.
+        jump_descriptor = {field: getattr(jump, field) for field in ("name", "host", "ssh_port")}
 
     tables: dict[str, list[dict]] = {}
     for model in _selected_models(history):
@@ -154,7 +168,7 @@ async def export_server(
         "panel_version": get_settings().version,
         "exported_at": datetime.now(timezone.utc).isoformat(),
         "with_history": history,
-        "server": {f: getattr(server, f) for f in _SERVER_FIELDS},
+        "server": {**{f: getattr(server, f) for f in _SERVER_FIELDS}, "ssh_jump": jump_descriptor},
         "tables": tables,
         "native_snapshots": await native_snapshots.export_server(session, server_id),
     }
@@ -215,6 +229,26 @@ async def import_server_file(
             f"(панель понимает {FORMAT_VERSION})",
         )
     spec = payload.get("server") or {}
+    if not isinstance(spec, dict):
+        raise HTTPException(400, "В файле неверное описание сервера")
+    if spec.get("ssh_jump_server_id") is not None:
+        raise HTTPException(400, "Номер промежуточной ноды относится к другой панели; используйте адрес ноды в файле переноса")
+    try:
+        access_policy = ssh_archives.policy(spec)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from None
+    jump_id = None
+    descriptor = spec.get("ssh_jump")
+    if descriptor is not None:
+        if (not isinstance(descriptor, dict) or not isinstance(descriptor.get("host"), str)
+                or not 1 <= len(descriptor["host"]) <= 255
+                or type(descriptor.get("ssh_port")) is not int or not 1 <= descriptor["ssh_port"] <= 65535):
+            raise HTTPException(400, "В файле неверный адрес промежуточной ноды SSH")
+        jumps = list((await session.scalars(select(Server).where(
+            Server.host == descriptor["host"], Server.ssh_port == descriptor["ssh_port"]))).all())
+        if len(jumps) != 1 or jumps[0].ssh_jump_server_id is not None:
+            raise HTTPException(409, "Сначала добавьте промежуточную ноду из файла как прямой сервер и повторите импорт")
+        jump_id = jumps[0].id
     host, name = spec.get("host"), spec.get("name")
     if not host or not name:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "в файле нет адреса сервера")
@@ -233,7 +267,9 @@ async def import_server_file(
         override = geo.country_override(spec.get("country_override") or "")
     except ValueError as exc:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from None
-    ssh_port = int(spec.get("ssh_port") or 22)
+    ssh_port = spec.get("ssh_port", 22)
+    if type(ssh_port) is not int or not 1 <= ssh_port <= 65535:
+        raise HTTPException(400, "В файле неверный SSH-порт сервера")
     # тот же адрес и порт = тот же сервер. Молча заводить дубль нельзя: две
     # карточки начали бы независимо править один и тот же конфиг на ноде
     dup = await session.scalar(
@@ -253,6 +289,8 @@ async def import_server_file(
         client_endpoint=endpoint,
         ssh_port=ssh_port,
         ssh_user=ssh_user,
+        ssh_jump_server_id=jump_id,
+        **access_policy,
         note=spec.get("note") or "",
         group_name=(spec.get("group_name") or "")[:64],
         country=override or geo.normalize_country_code(spec.get("country")),
@@ -335,4 +373,5 @@ async def import_server_file(
         host=server.host,
         imported=imported,
         skipped_tables=skipped,
+        warnings=(["Маршрут SSH сопоставлен по адресу промежуточной ноды. Подготовьте доступ ключом этой панели перед проверкой сервера."] if jump_id is not None else []),
     )

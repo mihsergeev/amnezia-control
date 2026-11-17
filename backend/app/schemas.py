@@ -294,6 +294,7 @@ class ServerImportResult(BaseModel):
     imported: dict[str, int] = {}
     # таблицы из более новой панели, которых тут нет: называем вслух
     skipped_tables: list[str] = []
+    warnings: list[str] = Field(default_factory=list)
 
 
 class ImportLinkRequest(BaseModel):

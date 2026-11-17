@@ -13,7 +13,7 @@ from fastapi import APIRouter, HTTPException, Request, status
 from fastapi.responses import Response
 from sqlalchemy import DateTime, Integer, delete, insert, select, text, update
 
-from app import alerts, audit, bulk_issue_state, sshops, stepup
+from app import alerts, audit, bulk_issue_state, ssh_archives, sshops, stepup
 from app.clientip import client_ip
 from app.config import get_settings
 from app.deps import CurrentUser, SessionDep
@@ -36,6 +36,7 @@ from app.models import (
     PausedClient,
     Server,
     ServerStatus,
+    SshAccessChange,
     TorrentHit,
     TrafficSample,
     User,
@@ -77,7 +78,9 @@ _MODELS = [
 ]
 
 # таблицы, которые в бэкап сознательно не берем: {имя: причина}
-_NOT_BACKED_UP: dict[str, str] = {}
+_NOT_BACKED_UP: dict[str, str] = {
+    SshAccessChange.__tablename__: "Panel-local SSH preparation plans cannot be replayed after restore",
+}
 
 # история трафика — объёмная и некритичная; в «лёгком» бэкапе её пропускаем
 _TRAFFIC_MODELS = (TrafficSample, ClientTrafficSample)
@@ -244,6 +247,7 @@ def verify_archive(archive: bytes) -> list[str]:
 async def _build_archive(
     session, data_dir: str, version: str, include_traffic: bool = False
 ) -> bytes:
+    await _require_no_ssh_change(session)
     dump: dict[str, list] = {}
     sqlite_paths = _sqlite_runtime_paths(session)
     for model in _MODELS:
@@ -359,6 +363,12 @@ def _coerce_row(model, row: dict) -> dict:
                     raise ValueError(f"{model.__tablename__}.{col.name}: неверная дата") from exc
         out[col.name] = val
     return out
+
+
+async def _require_no_ssh_change(session) -> None:
+    if await session.scalar(select(SshAccessChange.id).where(
+            SshAccessChange.phase.not_in(("preview", "done", "rolledback"))).limit(1)):
+        raise HTTPException(409, "Завершите восстановление незавершенной настройки SSH перед резервным копированием или восстановлением панели")
 
 
 def _validate_awg_journal(prepared: dict[str, list[dict]]) -> None:
@@ -550,12 +560,15 @@ async def restore_backup(
                 raise ValueError("users: нет учетной записи для входа")
             prepared[model.__tablename__] = [_coerce_row(model, row) for row in rows]
         _validate_awg_journal(prepared)
+        if Server.__tablename__ in prepared:
+            ssh_archives.validate_servers(prepared[Server.__tablename__])
     except ValueError as exc:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
 
     settings = get_settings()
     try:
         files = _restore_files(tar, settings.data_dir, _sqlite_runtime_paths(session))
+        ssh_archives.validate_keys(tar, files, settings.data_dir, prepared.get(Server.__tablename__, []))
     except ValueError as exc:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
     except (tarfile.TarError, OSError, EOFError, RuntimeError) as exc:
@@ -573,6 +586,11 @@ async def restore_backup(
                 f"в архиве недопустимое имя SSH-пользователя: {row.get('ssh_user')!r}",
             )
     present = [m for m in _MODELS if m.__tablename__ in dump]
+    await _require_no_ssh_change(session)
+    # Archived server IDs must never inherit a live preview or old compensation
+    # plan. SSH nodes themselves are not changed by a panel backup restore.
+    if Server in present:
+        await session.execute(delete(SshAccessChange))
     # Older archives predate display labels. Server/client IDs restored from
     # them must not inherit labels belonging to the current database.
     if Server in present and ClientMetadata not in present:
@@ -661,17 +679,7 @@ async def restore_backup(
 
     # восстановление data/ (ssh-ключ и пр.), без postgres
     for dest, member in files.items():
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        src = tar.extractfile(member)
-        if src is None:
-            continue
-        with src, dest.open("wb") as fh:
-            fh.write(src.read())
-        if member.name.endswith("id_ed25519"):
-            try:
-                os.chmod(dest, 0o600)
-            except OSError:
-                pass
+        ssh_archives.restore_file(dest, member, tar, settings.data_dir)
 
     await audit.record(
         session, user.username, "restore", "", f"строк: {sum(restored.values())}"

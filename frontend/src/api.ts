@@ -236,6 +236,7 @@ export type ServerImportResult = {
   host: string
   imported: Record<string, number>
   skipped_tables: string[]
+  warnings?: string[]
 }
 
 // В файле приватные ключи клиентов: пароль заголовком, как у восстановления.
