@@ -10,7 +10,7 @@ const fixtureId = root + '/src/__ssh_access_workflow.tsx'
 const fixture = `import {createRoot} from 'react-dom/client';
 import {I18nProvider} from '/src/i18n';import {ServersPage} from '/src/ServersPage';
 import '/src/index.css';import '/src/App.css';
-createRoot(document.getElementById('root')!).render(<I18nProvider><ServersPage onUnauthorized={()=>{throw Error('Unexpected logout')}}/></I18nProvider>);`
+createRoot(document.getElementById('root')!).render(<I18nProvider><ServersPage onUnauthorized={()=>{document.body.dataset.unauthorized = 'true'}}/></I18nProvider>);`
 const vite = await createServer({ root, server: { host: '127.0.0.1', port: 0 }, plugins: [{
   name: 'ssh-access-workflow',
   enforce: 'pre',
@@ -27,17 +27,24 @@ const vite = await createServer({ root, server: { host: '127.0.0.1', port: 0 }, 
 await vite.listen()
 const executablePath = process.env.CHROME_PATH || ['C:/Program Files/Google/Chrome/Application/chrome.exe', '/usr/bin/chromium', '/usr/bin/google-chrome'].find(existsSync)
 const browser = await chromium.launch({ headless: true, ...(executablePath ? { executablePath } : {}) })
+const workflowUrl = vite.resolvedUrls.local[0] + '__ssh_access_workflow.html'
+const node = id => ({
+  id, name: `Node ${id}`, host: `192.0.2.${id}`, ssh_port: 22, ssh_user: 'acontrol',
+  client_endpoint: '', note: '', group_name: '', position: id, country: '', country_override: '',
+  torrent_block: false, torrent_autopause: false, alerts_enabled: false, last_check_ok: true,
+  last_check_info: JSON.stringify({ hostname: `node-${id}`, amnezia_containers: [] }),
+  ssh_jump_server_id: null, ssh_source_mode: 'panel', ssh_source_ips: [], ssh_firewall_mode: 'add', ssh_access_pending: false,
+})
+
+async function openMenu(page, name) {
+  await page.locator('.srv-item').filter({ hasText: name }).click()
+  await page.locator('.srv-detail').getByRole('button', { name: 'Ещё' }).click()
+}
+
 async function workflow(scenario) {
   const page = await browser.newPage({ viewport: { width: 1100, height: 1000 } })
   const pageErrors = []
   page.on('pageerror', error => pageErrors.push(error.message))
-  const node = id => ({
-    id, name: `Node ${id}`, host: `192.0.2.${id}`, ssh_port: 22, ssh_user: 'acontrol',
-    client_endpoint: '', note: '', group_name: '', position: id, country: '', country_override: '',
-    torrent_block: false, torrent_autopause: false, alerts_enabled: false, last_check_ok: true,
-    last_check_info: JSON.stringify({ hostname: `node-${id}`, amnezia_containers: [] }),
-    ssh_jump_server_id: null, ssh_source_mode: 'panel', ssh_source_ips: [], ssh_firewall_mode: 'add', ssh_access_pending: false,
-  })
   const nodes = [node(1), node(2)]
   const calls = []
   let metadataFailures = 2
@@ -98,11 +105,10 @@ async function workflow(scenario) {
       }
       return respond([])
     })
-    await page.goto(vite.resolvedUrls.local[0] + '__ssh_access_workflow.html')
+    await page.goto(workflowUrl)
     const form = page.locator('form.modal')
     async function edit(name) {
-      await page.locator('.srv-item').filter({ hasText: name }).click()
-      await page.locator('.srv-detail').getByRole('button', { name: 'Ещё' }).click()
+      await openMenu(page, name)
       await page.getByRole('button', { name: 'Изменить', exact: true }).click()
     }
     const name = form.getByLabel('Имя', { exact: true })
@@ -210,13 +216,161 @@ async function workflow(scenario) {
     await page.keyboard.press('Escape')
     await form.waitFor({ state: 'hidden' })
     assert.deepEqual(pageErrors, [])
+    assert.equal(await page.locator('body').getAttribute('data-unauthorized'), null)
     console.log(`PASS SSH apply + repeated metadata failure retries metadata only: ${scenario.mode} ${scenario.input.join(', ')}`)
     if (scenario.delayed) console.log('PASS delayed preview, apply and PATCH preserve the active draft and the next editor')
   } finally {
     await page.close()
   }
 }
+
+async function editorWorkflow(run) {
+  const page = await browser.newPage({ viewport: { width: 1100, height: 1000 } })
+  page.setDefaultTimeout(4000)
+  const nodes = [node(1), { ...node(2), ssh_access_pending: true }]
+  const calls = []
+  const routes = new Map()
+  const errors = []
+  page.on('pageerror', error => errors.push(error.message))
+  try {
+    await page.addInitScript(() => localStorage.setItem('acontrol_lang', 'ru'))
+    await page.route('**/api/**', async route => {
+      const request = route.request()
+      const path = new URL(request.url()).pathname
+      const key = `${request.method()} ${path}`
+      const body = request.postDataJSON()
+      calls.push({ key, body })
+      const respond = (value, status = 200) => route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(value) })
+      const handler = routes.get(key)
+      if (handler) return handler(body, respond)
+      if (key === 'GET /api/servers') return respond(nodes)
+      if (key === 'GET /api/config') return respond({ default_ssh_user: 'test-user', panel_ip: '203.0.113.7', protocols: [] })
+      if (key === 'GET /api/stats/overview') return respond({ per_server: [] })
+      if (key === 'GET /api/stats/nodes' || key === 'GET /api/cascades') return respond([])
+      throw new Error(`Unexpected request: ${key}`)
+    })
+    await page.goto(workflowUrl)
+    await page.locator('.srv-item').filter({ hasText: 'Node 1' }).waitFor()
+    const form = page.locator('form.modal')
+    const save = form.getByRole('button', { name: 'Сохранить', exact: true })
+    const name = form.getByLabel('Имя', { exact: true })
+    const recover = { name: 'Восстановить настройку SSH', exact: true }
+    async function edit(server) {
+      await openMenu(page, server)
+      await page.getByRole('button', { name: 'Изменить', exact: true }).click()
+    }
+    await run({ page, form, save, name, edit, recover, nodes, calls, routes })
+    assert.deepEqual(errors, [])
+  } finally {
+    await page.close()
+  }
+}
+
+async function recoveryMenuKeepsDraft({ page, form, save, name, edit, recover, nodes, calls, routes }) {
+  routes.set('POST /api/servers/1/ssh-access/preview', (body, respond) => respond({ token: 'fixture', sources: body.ssh_source_ips, unrestricted: false, firewall: 'add', actions: [], jump_user: null }))
+  routes.set('POST /api/servers/2/ssh-access/recover', (_body, respond) => respond({ detail: 'Synthetic recovery failure' }, 409))
+  await edit('Node 1')
+  await name.fill('Unsaved node')
+  await form.locator('.ssh-access-options summary').click()
+  await form.getByLabel('Разрешенные источники ключа панели').selectOption('custom')
+  await form.getByLabel('IP или CIDR через запятую').fill('198.51.100.9')
+  await save.click()
+  const preview = form.getByText('Предпросмотр изменения SSH', { exact: true })
+  await preview.waitFor()
+  await page.locator('.srv-item').filter({ hasText: 'Node 2' }).press('Enter')
+  await page.locator('.srv-detail').getByRole('button', { name: 'Ещё' }).press('Enter')
+  const menuRecovery = page.locator('.srv-detail').getByRole('button', recover)
+  assert.equal(await menuRecovery.isDisabled(), true, 'Background recovery must be disabled while the editor is open')
+  await page.keyboard.press('Tab')
+  await page.keyboard.press('Escape')
+  assert.equal(await form.isVisible(), true, 'Escape closes the background menu before the editor')
+  assert.equal(await name.inputValue(), 'Unsaved node')
+  assert.equal(await preview.isVisible(), true)
+  assert.equal(await form.getByRole('alert').count(), 0)
+  assert.equal(calls.filter(call => call.key === 'POST /api/servers/2/ssh-access/recover').length, 0, 'The background recovery action must not affect the active editor')
+
+  await form.getByRole('button', { name: 'Отмена', exact: true }).click()
+  await openMenu(page, 'Node 2')
+  await menuRecovery.click()
+  await page.locator('.form-error').filter({ hasText: 'Synthetic recovery failure' }).waitFor()
+  await edit('Node 2')
+  await name.fill('Recovered node')
+  const editorRecovery = form.getByRole('button', recover)
+  assert.equal(await save.isDisabled(), true)
+  await editorRecovery.click()
+  await form.getByRole('alert').filter({ hasText: 'Synthetic recovery failure' }).waitFor()
+  assert.equal(await save.isDisabled(), true)
+  assert.equal(await editorRecovery.isEnabled(), true)
+
+  routes.set('POST /api/servers/2/ssh-access/recover', (_body, respond) => {
+    nodes[1].ssh_access_pending = false
+    return respond(nodes[1])
+  })
+  routes.set('PATCH /api/servers/2', (body, respond) => {
+    Object.assign(nodes[1], body)
+    return respond(nodes[1])
+  })
+  await editorRecovery.click()
+  await editorRecovery.waitFor({ state: 'hidden' })
+  assert.equal(await name.inputValue(), 'Recovered node')
+  assert.equal(await form.getByRole('alert').count(), 0)
+  await save.click()
+  await form.waitFor({ state: 'hidden' })
+  assert.equal(calls.filter(call => call.key === 'POST /api/servers/2/ssh-access/recover').length, 3)
+  assert.equal(calls.filter(call => call.key === 'PATCH /api/servers/2').length, 1)
+  assert.equal(await page.locator('body').getAttribute('data-unauthorized'), null)
+}
+
+async function recoveryRestoresPolicy({ page, form, save, name, edit, recover, nodes, calls, routes }) {
+  for (const refreshFails of [false, true]) {
+    Object.assign(nodes[1], {
+      ssh_access_pending: true,
+      ssh_source_mode: 'custom',
+      ssh_source_ips: ['198.51.100.9'],
+    })
+    routes.delete('GET /api/servers')
+    await page.reload()
+    await edit('Node 2')
+    await name.fill('Recovered metadata')
+    await form.locator('.ssh-access-options summary').click()
+    const mode = form.getByLabel('Разрешенные источники ключа панели')
+    assert.equal(await mode.inputValue(), 'custom')
+
+    routes.set('POST /api/servers/2/ssh-access/recover', (_body, respond) => {
+      Object.assign(nodes[1], { ssh_access_pending: false, ssh_source_mode: 'panel', ssh_source_ips: [] })
+      if (refreshFails) routes.set('GET /api/servers', (_body, respond) => respond({ detail: 'Synthetic recovery refresh failure' }, 503))
+      // require_idle confirms completion even if the response still reflects the
+      // pending flag on the record initially loaded by the recovery endpoint.
+      return respond({ ...nodes[1], ssh_access_pending: true })
+    })
+    routes.set('PATCH /api/servers/2', (body, respond) => {
+      assert.equal(body.ssh_source_mode, 'panel')
+      assert.deepEqual(body.ssh_source_ips, [])
+      Object.assign(nodes[1], body)
+      return respond(nodes[1])
+    })
+    const recovery = form.getByRole('button', recover)
+    await recovery.click()
+    await recovery.waitFor({ state: 'hidden' })
+    assert.equal(await mode.inputValue(), 'panel', 'The recovered policy must replace the pre-recovery policy in the editor')
+    assert.equal(await name.inputValue(), 'Recovered metadata')
+    await save.click()
+    await form.waitFor({ state: 'hidden' })
+    assert.equal(nodes[1].name, 'Recovered metadata')
+    nodes[1].name = 'Node 2'
+  }
+  assert.equal(calls.filter(call => call.key === 'PATCH /api/servers/2').length, 2)
+  assert.equal(calls.filter(call => call.key.endsWith('/ssh-access/preview')).length, 0)
+}
+
 try {
+  const scenarios = [recoveryMenuKeepsDraft, recoveryRestoresPolicy]
+  const checks = await Promise.allSettled(scenarios.map(async check => {
+    await editorWorkflow(check)
+    console.log(`PASS ${check.name}`)
+  }))
+  const failures = checks.flatMap((result, index) => result.status === 'rejected' ? [`${scenarios[index].name}: ${result.reason}`] : [])
+  assert.deepEqual(failures, [])
   for (const scenario of [
     { mode: 'any', input: [], canonical: [] },
     { mode: 'custom', input: ['203.0.113.7/32', '2001:0db8::7/128', '203.0.113.7/32'], canonical: ['203.0.113.7', '2001:db8::7'] },

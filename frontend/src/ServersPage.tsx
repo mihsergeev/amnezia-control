@@ -937,19 +937,23 @@ export function ServersPage({ onUnauthorized }: Props) {
     }
   }
 
-  async function recoverSshAccess(serverId: number) {
-    if (busy) return
+  async function recoverSshAccess(serverId: number, fromEditor = false) {
+    if (busy || (formOpen && !fromEditor)) return
     setBusy(true)
-    setFormError(null)
+    if (fromEditor) setFormError(null)
     try {
-      await api(`/api/servers/${serverId}/ssh-access/recover`, { method: 'POST' })
-      setSshPreview(null)
+      const recovered = await api<Server>(`/api/servers/${serverId}/ssh-access/recover`, { method: 'POST' })
+      if (fromEditor) {
+        setSshPreview(null)
+        setForm(previous => ({ ...previous, ...accessPolicy(recovered) }))
+      }
+      // A successful recovery confirms the transaction is no longer pending.
       setServers(previous => previous.map(server => server.id === serverId
-        ? { ...server, ssh_access_pending: false } : server))
+        ? { ...recovered, ssh_access_pending: false } : server))
       await load()
     } catch (err) {
       await load()
-      if (formOpen) setFormError(err instanceof Error ? err.message : t('Неизвестная ошибка'))
+      if (fromEditor) setFormError(err instanceof Error ? err.message : t('Неизвестная ошибка'))
       else handleError(err)
     } finally {
       setBusy(false)
@@ -1206,7 +1210,11 @@ export function ServersPage({ onUnauthorized }: Props) {
     }
     items.push({ label: t('Выгрузить в файл'), onClick: () => setExportFor(s) })
     items.push({ label: t('Изменить'), onClick: () => openEdit(s) })
-    if (s.ssh_access_pending) items.push({ label: t('Восстановить настройку SSH'), onClick: () => { void recoverSshAccess(s.id) } })
+    if (s.ssh_access_pending) items.push({
+      label: t('Восстановить настройку SSH'),
+      disabled: busy || formOpen,
+      onClick: () => { void recoverSshAccess(s.id) },
+    })
     // опасное - в конце меню за чертой, подальше от выдачи конфигов в окне клиентов
     items.push({ divider: true })
     if (online) {
@@ -1596,7 +1604,7 @@ export function ServersPage({ onUnauthorized }: Props) {
               </div>
               <SshAccessEditor value={form} servers={servers} serverId={editingId} onChange={update => { setForm({ ...form, ...update }); setSshPreview(null) }} />
               {editingId !== null && servers.find(server => server.id === editingId)?.ssh_access_pending && (
-                <button type="button" className="ghost" disabled={busy} onClick={() => { void recoverSshAccess(editingId) }}>
+                <button type="button" className="ghost" disabled={busy} onClick={() => { void recoverSshAccess(editingId, true) }}>
                   {t('Восстановить настройку SSH')}
                 </button>
               )}
