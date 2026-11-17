@@ -137,9 +137,11 @@ function App() {
 
   async function restore(file: File, password: string) {
     let total: number
+    let sshRequiresPrepare: number[] = []
     try {
       const r = await restoreBackup(file, password)
       total = Object.values(r.restored).reduce((a, b) => a + b, 0)
+      sshRequiresPrepare = r.ssh_requires_check ?? []
     } catch (err) {
       if (err instanceof ApiError && err.status === 401) {
         logout()
@@ -152,7 +154,8 @@ function App() {
       )
     }
     setStepUp(null)
-    window.alert(t('Восстановлено записей: {n}. Страница перезагрузится.', { n: total }))
+    const sshNotice = sshRequiresPrepare.length ? '\n' + t('Для серверов {ids} проверьте SSH-доступ и при необходимости подготовьте маршрут. Клиенты и конфиги восстановлены.', { ids: sshRequiresPrepare.join(', ') }) : ''
+    window.alert(t('Восстановлено записей: {n}. Страница перезагрузится.', { n: total }) + sshNotice)
     window.location.reload()
   }
 

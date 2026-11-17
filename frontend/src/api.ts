@@ -202,7 +202,7 @@ export async function downloadBackup(password: string): Promise<void> {
 export async function restoreBackup(
   file: File | Blob,
   password: string,
-): Promise<{ restored: Record<string, number> }> {
+): Promise<{ restored: Record<string, number>; ssh_requires_check?: number[] }> {
   const token = getToken()
   const res = await stepUpFetch('/api/backup/restore', {
     method: 'POST',
@@ -230,7 +230,6 @@ export async function downloadSavedBackup(filename: string, password: string): P
 // Перенос одного сервера между панелями (в отличие от бэкапа, который
 // переносит панель целиком и затирает принимающую).
 export type ServerImportResult = {
-  warnings?: string[]
   server_id: number
   name: string
   host: string

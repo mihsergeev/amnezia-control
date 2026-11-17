@@ -9,7 +9,7 @@ import pytest
 from sqlalchemy import select
 
 from app import config, ssh_archives
-from app.models import Server, SshAccessChange
+from app.models import AwgConfig, Server, SshAccessChange
 from app.sshkeys import ensure_jump_key, ensure_panel_key, key_paths
 
 
@@ -146,6 +146,8 @@ async def test_restore_rejects_unsafe_ssh_archive_before_replacement(client, aut
                     first["ssh_source_mode"] = "invalid"
                 else:
                     first["ssh_jump_server_id"] = {"self": 1, "dangling": 99, "bool": True, "missing_key": 2}[invalid]
+                    if invalid == "missing_key":
+                        first["last_check_ok"] = True
                 data = json.dumps(dump).encode()
             member.size = len(data)
             changed.addfile(member, io.BytesIO(data))
@@ -179,3 +181,46 @@ def test_key_archive_aliases_are_rejected_before_writing(tmp_path, name):
     with pytest.raises(ValueError):
         ssh_archives.validate_path(tmp_path.resolve(), name)
     assert target.read_bytes() == b"original"
+
+
+@pytest.mark.parametrize("corrupt", [False, True])
+async def test_pending_route_restore_keeps_profiles_without_inheriting_local_identity(client, auth_headers, session_factory, corrupt):
+    settings = config.get_settings()
+    ensure_panel_key(settings.data_dir)
+    master, _ = key_paths(settings.data_dir)
+    async with session_factory() as session:
+        session.add_all([Server(id=1, name="relay", host="203.0.113.51", ssh_user="acontrol"),
+                         Server(id=2, name="pending", host="203.0.113.52", ssh_user="acontrol", ssh_jump_server_id=1)])
+        session.add(AwgConfig(server_id=2, public_key="pending-fixture", name="saved-client", config="synthetic stored profile"))
+        await session.commit()
+    exported = await client.post("/api/backup/download", headers=auth_headers, json={"password": "testpass"})
+    assert exported.status_code == 200
+    content = exported.content
+    if corrupt:
+        changed = io.BytesIO()
+        with tarfile.open(fileobj=io.BytesIO(content)) as archive, tarfile.open(fileobj=changed, mode="w:gz") as out:
+            for member in archive:
+                if member.isfile():
+                    out.addfile(member, archive.extractfile(member))
+            member = tarfile.TarInfo("data/ssh/jump_2"); member.size = 6
+            out.addfile(member, io.BytesIO(b"broken"))
+        content = changed.getvalue()
+    # A receiving panel can already have an unrelated, otherwise valid identity
+    # with the same inventory ID. It must never become part of this archive.
+    ensure_jump_key(master, 2)
+    old_key = (master.parent / "jump_2").read_bytes()
+    (master.parent / "known_hosts").write_text("old local pins")
+    result = await client.post("/api/backup/restore", headers=auth_headers | {"X-Confirm-Password": "testpass"}, content=content)
+    if corrupt:
+        assert result.status_code == 400, result.text
+        assert (master.parent / "jump_2").read_bytes() == old_key
+        return
+    assert result.status_code == 200, result.text
+    assert result.json()["ssh_requires_check"] == [2]
+    assert not (master.parent / "jump_2").exists()
+    assert not (master.parent / "known_hosts").exists()
+    async with session_factory() as session:
+        node = await session.get(Server, 2)
+        assert node.ssh_jump_server_id == 1 and node.last_check_ok is None
+        assert json.loads(node.last_check_info)["ssh_route_pending"] is True
+        assert (await session.scalar(select(AwgConfig.config).where(AwgConfig.server_id == 2))) == "synthetic stored profile"

@@ -27,13 +27,14 @@ from fastapi import APIRouter, HTTPException, Request, status
 from fastapi.responses import Response
 from sqlalchemy import DateTime, func, insert, select
 
-from app import alerts, audit, client_endpoint, geo, native_snapshots, ssh_archives, sshops, stepup
+from app import alerts, audit, bulk_issue_state, client_endpoint, geo, native_snapshots, ssh_access, ssh_archives, sshops, stepup
 from app.clientip import client_ip
 from app.config import get_settings
 from app.db import Base
 from app.deps import CurrentUser, SessionDep
 from app.models import BulkClientIssue, Server, SshAccessChange
 from app.schemas import ServerImportResult
+from app.sshkeys import jump_key_path, key_paths
 
 router = APIRouter(tags=["transfer"])
 
@@ -194,6 +195,8 @@ async def export_server(
 
 
 @router.post("/servers/import-file", response_model=ServerImportResult)
+@bulk_issue_state.guard()
+@ssh_access.serialized
 async def import_server_file(
     request: Request, user: CurrentUser, session: SessionDep
 ) -> ServerImportResult:
@@ -249,6 +252,7 @@ async def import_server_file(
         if len(jumps) != 1 or jumps[0].ssh_jump_server_id is not None:
             raise HTTPException(409, "Сначала добавьте промежуточную ноду из файла как прямой сервер и повторите импорт")
         jump_id = jumps[0].id
+        await ssh_access.require_idle(session, jump_id)
     host, name = spec.get("host"), spec.get("name")
     if not host or not name:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "в файле нет адреса сервера")
@@ -303,6 +307,7 @@ async def import_server_file(
     )
     session.add(server)
     await session.flush()
+    jump_key_path(key_paths(get_settings().data_dir)[0], server.id).unlink(missing_ok=True)
 
     by_table = {m.__tablename__: m for m in server_scoped_models()}
     imported: dict[str, int] = {}

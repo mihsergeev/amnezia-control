@@ -1204,6 +1204,8 @@ const EN: Record<string, string> = {
     'Restore the panel from “{name}”?\n\nALL current servers, configs, notes and the panel SSH key will be REPLACED with the archive data. This cannot be undone.',
   'Восстановлено записей: {n}. Страница перезагрузится.':
     'Restored {n} records. The page will reload.',
+  'Для серверов {ids} проверьте SSH-доступ и при необходимости подготовьте маршрут. Клиенты и конфиги восстановлены.':
+    'Check SSH access for servers {ids} and prepare the route if needed. Clients and configurations have been restored.',
   'Ошибка восстановления: {msg}': 'Restore error: {msg}',
 
   // --- журнал ---

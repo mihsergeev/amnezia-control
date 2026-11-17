@@ -55,16 +55,22 @@ def validate_servers(rows: list[dict]) -> None:
             raise ValueError("Маршрут SSH в архиве должен содержать одну существующую прямую промежуточную ноду")
 
 
-def validate_keys(tar, files: dict, data_dir: str, rows: list[dict]) -> None:
+def validate_keys(tar, files: dict, data_dir: str, rows: list[dict]) -> list[int]:
     required = {"jump_" + str(row["id"]) for row in rows if row.get("ssh_jump_server_id") is not None}
     if not required:
-        return
+        return []
+    routes = {row["id"]: row for row in rows if row.get("ssh_jump_server_id") is not None}
+    pending = set()
+    unprepared = {sid for sid, row in routes.items() if row.get("last_check_ok") is not True}
     required.add("id_ed25519")
     root = Path(data_dir).resolve()
     parsed = {}
     for name in required:
         target = (root / "ssh" / name).resolve()
         member = files.get(target)
+        if member is None and name.startswith("jump_") and int(name[5:]) in unprepared:
+            pending.add(int(name[5:]))
+            continue
         if member is None or member.name != "data/ssh/" + name or member.size > 32768:
             raise ValueError("В архиве нет ключей для сохраненного маршрута SSH")
         try:
@@ -77,15 +83,20 @@ def validate_keys(tar, files: dict, data_dir: str, rows: list[dict]) -> None:
             raise ValueError("В архиве поврежден ключ маршрута SSH") from exc
     try:
         pub = files[(root / "ssh/id_ed25519.pub").resolve()]
-        known = files[(root / "ssh/known_hosts").resolve()]
-        if pub.name != "data/ssh/id_ed25519.pub" or pub.size > 32768 or known.name != "data/ssh/known_hosts" or known.size > 1024 * 1024:
+        if pub.name != "data/ssh/id_ed25519.pub" or pub.size > 32768:
             raise ValueError()
         with tar.extractfile(pub) as stream:
             public = asyncssh.import_public_key(stream.read()).export_public_key().strip()
         if public != parsed["id_ed25519"].export_public_key().strip():
             raise ValueError()
-        with tar.extractfile(known) as stream:
-            lines = stream.read().decode("utf-8").splitlines()
+        known = files.get((root / "ssh/known_hosts").resolve())
+        if known is None:
+            lines = []
+        else:
+            if known.name != "data/ssh/known_hosts" or known.size > 1024 * 1024:
+                raise ValueError()
+            with tar.extractfile(known) as stream:
+                lines = stream.read().decode("utf-8").splitlines()
         trusted = set()
         for line in lines:
             words = line.split()
@@ -103,9 +114,30 @@ def validate_keys(tar, files: dict, data_dir: str, rows: list[dict]) -> None:
                 host, port = node["host"], node.get("ssh_port", 22)
                 token = host if port == 22 else f"[{host}]:{port}"
                 if token not in trusted:
-                    raise ValueError()
+                    if row["id"] not in unprepared:
+                        raise ValueError()
+                    pending.add(row["id"])
     except (KeyError, ValueError, TypeError, asyncssh.KeyImportError) as exc:
         raise ValueError("В архиве нет согласованной пары ключей и доверенных host-ключей для маршрута SSH") from exc
+    return sorted(pending)
+
+
+def missing_key_files(files: dict, data_dir: str) -> list[Path]:
+    """Old panel-local identities must not attach to IDs from another archive."""
+    root = Path(data_dir).resolve()
+    ssh = root / "ssh"
+    if not ssh.is_dir():
+        return []
+    stale = []
+    for path in ssh.iterdir():
+        if not (PRIVATE_JUMP.fullmatch(path.name) or path.name == "known_hosts"):
+            continue
+        validate_path(root, "data/ssh/" + path.name)
+        if not path.is_file():
+            raise ValueError("В каталоге SSH некорректный тип файла ключа или доверенных отпечатков")
+        if path not in files:
+            stale.append(path)
+    return stale
 
 
 def restore_file(dest: Path, member, tar, data_dir: str) -> None:

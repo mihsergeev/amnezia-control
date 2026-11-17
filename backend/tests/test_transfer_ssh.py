@@ -4,7 +4,7 @@ import json
 import pytest
 from sqlalchemy import delete, select
 
-from app.models import Server
+from app.models import Server, SshAccessChange
 
 
 async def test_transfer_binds_hop_by_address_never_foreign_id(client, auth_headers, session_factory):
@@ -52,3 +52,16 @@ async def test_bad_transfer_does_not_create_or_rebind_nodes(client, auth_headers
     assert result.status_code == status, result.text
     async with session_factory() as session:
         assert await session.scalar(select(Server.id)) is None
+
+
+async def test_import_cannot_bind_a_jump_with_unresolved_change(client, auth_headers, session_factory):
+    async with session_factory() as session:
+        session.add(Server(id=1, name="relay", host="203.0.113.41", ssh_user="acontrol"))
+        session.add(SshAccessChange(id="c" * 32, server_id=1, phase="applying", payload={}))
+        await session.commit()
+    payload = {"format": "acontrol-server-export", "format_version": 1,
+               "server": {"host": "203.0.113.42", "name": "target", "ssh_jump": {"host": "203.0.113.41", "ssh_port": 22}}, "tables": {}}
+    result = await client.post("/api/servers/import-file", headers=auth_headers, content=json.dumps(payload).encode())
+    assert result.status_code == 409, result.text
+    async with session_factory() as session:
+        assert list(await session.scalars(select(Server.id))) == [1]

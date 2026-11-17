@@ -576,7 +576,12 @@ async def restore_backup(
     settings = get_settings()
     try:
         files = _restore_files(tar, settings.data_dir, _sqlite_runtime_paths(session))
-        ssh_archives.validate_keys(tar, files, settings.data_dir, prepared.get(Server.__tablename__, []))
+        ssh_requires_prepare = ssh_archives.validate_keys(tar, files, settings.data_dir, prepared.get(Server.__tablename__, []))
+        stale_ssh_keys = ssh_archives.missing_key_files(files, settings.data_dir) if Server.__tablename__ in prepared else []
+        for row in prepared.get(Server.__tablename__, []):
+            if row.get("id") in ssh_requires_prepare:
+                row["last_check_ok"] = None
+                row["last_check_info"] = json.dumps({"ssh_route_pending": True})
     except ValueError as exc:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
     except (tarfile.TarError, OSError, EOFError, RuntimeError) as exc:
@@ -688,6 +693,8 @@ async def restore_backup(
     # восстановление data/ (ssh-ключ и пр.), без postgres
     for dest, member in files.items():
         ssh_archives.restore_file(dest, member, tar, settings.data_dir)
+    for stale in stale_ssh_keys:
+        stale.unlink(missing_ok=True)
 
     await audit.record(
         session, user.username, "restore", "", f"строк: {sum(restored.values())}"
@@ -698,6 +705,8 @@ async def restore_backup(
                     alerts.t("{user} с {ip}", user=user.username, ip=client_ip(request))),
     )
     out: dict = {"restored": restored}
+    if ssh_requires_prepare:
+        out["ssh_requires_check"] = ssh_requires_prepare
     # все старые токены отозваны версией; тому, кто восстанавливал (он только
     # что ввел пароль), выдаем новый, чтобы не выкидывать его на вход
     ver = await session.scalar(
