@@ -12,6 +12,17 @@ POLICY_FIELDS = ("ssh_source_mode", "ssh_source_ips", "ssh_firewall_mode")
 PRIVATE_JUMP = re.compile(r"jump_[1-9][0-9]*\Z")
 
 
+def validate_path(root: Path, member_name: str) -> None:
+    if not re.fullmatch(r"data/ssh/(?:id_ed25519(?:\.pub)?|known_hosts|jump_[1-9][0-9]*)", member_name):
+        return
+    target = root / member_name.removeprefix("data/")
+    for path in (target, *target.parents):
+        if path == root:
+            break
+        if path.is_symlink():
+            raise ValueError("Файлы доступа SSH нельзя восстанавливать через символическую ссылку")
+
+
 def policy(row: dict) -> dict:
     candidate = {field: row[field] for field in POLICY_FIELDS if field in row}
     try:
@@ -44,6 +55,7 @@ def validate_keys(tar, files: dict, data_dir: str, rows: list[dict]) -> None:
         return
     required.add("id_ed25519")
     root = Path(data_dir).resolve()
+    parsed = {}
     for name in required:
         target = (root / "ssh" / name).resolve()
         member = files.get(target)
@@ -54,18 +66,52 @@ def validate_keys(tar, files: dict, data_dir: str, rows: list[dict]) -> None:
             if stream is None:
                 raise ValueError()
             with stream:
-                asyncssh.import_private_key(stream.read())
+                parsed[name] = asyncssh.import_private_key(stream.read())
         except (ValueError, asyncssh.KeyImportError) as exc:
             raise ValueError("В архиве поврежден ключ маршрута SSH") from exc
+    try:
+        pub = files[(root / "ssh/id_ed25519.pub").resolve()]
+        known = files[(root / "ssh/known_hosts").resolve()]
+        if pub.name != "data/ssh/id_ed25519.pub" or pub.size > 32768 or known.name != "data/ssh/known_hosts" or known.size > 1024 * 1024:
+            raise ValueError()
+        with tar.extractfile(pub) as stream:
+            public = asyncssh.import_public_key(stream.read()).export_public_key().strip()
+        if public != parsed["id_ed25519"].export_public_key().strip():
+            raise ValueError()
+        with tar.extractfile(known) as stream:
+            lines = stream.read().decode("utf-8").splitlines()
+        trusted = set()
+        for line in lines:
+            words = line.split()
+            if not words or words[0].startswith("#"):
+                continue
+            if len(words) < 3:
+                raise ValueError()
+            asyncssh.import_public_key(" ".join(words[1:3]))
+            trusted.update(words[0].split(","))
+        by_id = {row["id"]: row for row in rows}
+        for row in rows:
+            if row.get("ssh_jump_server_id") is None:
+                continue
+            for node in (row, by_id[row["ssh_jump_server_id"]]):
+                host, port = node["host"], node.get("ssh_port", 22)
+                token = host if port == 22 else f"[{host}]:{port}"
+                if token not in trusted:
+                    raise ValueError()
+    except (KeyError, ValueError, TypeError, asyncssh.KeyImportError) as exc:
+        raise ValueError("В архиве нет согласованной пары ключей и доверенных host-ключей для маршрута SSH") from exc
 
 
 def restore_file(dest: Path, member, tar, data_dir: str) -> None:
     """Private keys never appear as 0644 or as partially written key files."""
+    member_name = member.name.removeprefix("data/ssh/")
+    private = member.name.startswith("data/ssh/") and (member_name == "id_ed25519" or PRIVATE_JUMP.fullmatch(member_name))
+    validate_path(Path(data_dir).resolve(), member.name)
+    if private and dest != Path(data_dir).resolve() / "ssh" / member_name:
+        raise ValueError("Неверный путь восстановления приватного ключа SSH")
     src = tar.extractfile(member)
     if src is None:
         return
-    ssh_root = (Path(data_dir).resolve() / "ssh").resolve()
-    private = dest.parent == ssh_root and (dest.name == "id_ed25519" or PRIVATE_JUMP.fullmatch(dest.name))
     dest.parent.mkdir(parents=True, exist_ok=True)
     if not private:
         with src, dest.open("wb") as stream:

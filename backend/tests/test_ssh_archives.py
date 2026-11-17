@@ -87,6 +87,8 @@ async def test_backup_preserves_one_hop_policy_keys_and_retires_preview(client, 
         tid = target.id
         await session.commit()
     ensure_jump_key(master, tid)
+    host_key = asyncssh.generate_private_key("ssh-ed25519").export_public_key().decode().strip()
+    (master.parent / "known_hosts").write_text(f"203.0.113.21 {host_key}\n203.0.113.22 {host_key}\n")
     original = (master.parent / f"jump_{tid}").read_bytes()
     response = await client.post("/api/backup/download", headers=auth_headers, json={"password": "testpass"})
     assert response.status_code == 200, response.text
@@ -153,3 +155,17 @@ async def test_restore_rejects_unsafe_ssh_archive_before_replacement(client, aut
         first = await session.get(Server, 1)
         assert first.name == "first" and first.ssh_jump_server_id is None and first.ssh_source_mode == "panel"
     assert master.read_bytes() == key_before
+
+
+def test_restore_refuses_managed_key_symlink_even_inside_data(tmp_path):
+    ssh = tmp_path / "ssh"
+    ssh.mkdir()
+    public_copy = tmp_path / "public-copy"
+    public_copy.write_text("unchanged")
+    try:
+        (ssh / "jump_2").symlink_to(public_copy)
+    except OSError:
+        pytest.skip("This host cannot create symlinks; run the regression on the Linux lab")
+    with pytest.raises(ValueError, match="символическую"):
+        ssh_archives.validate_path(tmp_path.resolve(), "data/ssh/jump_2")
+    assert public_copy.read_text() == "unchanged"

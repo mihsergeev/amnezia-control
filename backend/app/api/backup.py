@@ -183,6 +183,7 @@ def _restore_files(tar: tarfile.TarFile, data_dir: str, sqlite_paths: set[str]) 
     for member in tar.getmembers():
         if not (member.isfile() or member.isdir()) or not member.name.startswith("data/"):
             continue
+        ssh_archives.validate_path(root, member.name)
         rel = member.name[len("data/"):]
         if not rel or ".." in rel or os.path.isabs(rel) or _skip_data_dir(rel.split("/", 1)[0]):
             continue
@@ -546,6 +547,13 @@ async def restore_backup(
 
     if not isinstance(dump, dict):
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "db.json должен содержать объект таблиц")
+    # SSH compensation belongs to the panel which prepared it. An archive from
+    # another revision must not silently discard an unresolved node operation.
+    ssh_journal = dump.get(SshAccessChange.__tablename__, [])
+    if not isinstance(ssh_journal, list) or any(not isinstance(row, dict) for row in ssh_journal):
+        raise HTTPException(400, "В архиве неверный журнал настройки SSH")
+    if any(row.get("phase") not in ("preview", "done", "rolledback") for row in ssh_journal):
+        raise HTTPException(409, "В архиве есть незавершенная настройка SSH; сначала восстановите ее на исходной панели")
     # Проверяем структуру и даты до DELETE: поврежденный expires_at нельзя
     # превращать в NULL, иначе ограниченный клиент становится бессрочным.
     prepared: dict[str, list[dict]] = {}
