@@ -3,6 +3,8 @@ import shlex
 import shutil
 import subprocess
 
+import pytest
+
 from app import ssh_firewall
 
 
@@ -36,6 +38,8 @@ firewall-cmd() {
   esac
 }
 '''
+    if os.name == 'nt':
+        fixture += '\nflock() { :; }\n'
     bash = "C:/Program Files/Git/usr/bin/bash.exe" if os.name == "nt" else shutil.which("bash")
     return subprocess.run([bash, '-s'], input=fixture + extra + body,
                           text=True, capture_output=True, cwd='C:/' if os.name == 'nt' else '/',
@@ -86,11 +90,27 @@ def test_concurrent_manual_change_blocks_ambiguous_firewalld_cleanup(tmp_path):
     assert 'требуется проверка собственного правила' in result.stderr
 
 
-def test_explicit_recovery_can_undo_a_lost_commit_reply(tmp_path):
+def test_committed_firewall_rejects_rollback_and_commit_is_idempotent(tmp_path):
     init(tmp_path)
     assert execute(tmp_path, 'stage').returncode == 0
     assert execute(tmp_path, 'commit').returncode == 0
+    original = (tmp_path / 'ufw').read_text()
     result = execute(tmp_path, 'rollback')
-    assert result.returncode == 0, result.stderr
-    assert not (tmp_path / 'ufw').read_text()
-    assert not (tmp_path / 'firewalld-runtime').read_text()
+    assert result.returncode != 0
+    assert (tmp_path / 'ufw').read_text() == original
+    assert execute(tmp_path, 'commit').returncode == 0
+    assert 'ACONTROL_FIREWALL_STATE_COMMITTED' in execute(tmp_path, 'status').stdout
+
+
+@pytest.mark.skipif(os.name == 'nt', reason='Kernel flock process-death proof requires Linux; also exercised on a test VM')
+def test_firewall_lock_is_released_after_sigkill(tmp_path):
+    init(tmp_path)
+    assert execute(tmp_path, 'stage').returncode == 0
+    lock = tmp_path / 'rootdata/acontrol-ssh-firewall' / ('a' * 32) / 'lock'
+    process = subprocess.Popen(['bash', '-c', 'exec 9>"$1"; flock 9; echo READY; exec sleep 60', 'bash', str(lock)], stdout=subprocess.PIPE, text=True)
+    try:
+        assert process.stdout.readline().strip() == 'READY'
+        process.kill(); process.wait(timeout=5)
+        assert execute(tmp_path, 'rollback').returncode == 0
+    finally:
+        if process.poll() is None: process.kill(); process.wait(timeout=5)

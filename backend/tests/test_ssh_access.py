@@ -42,8 +42,24 @@ def shell(script, home):
     env = {**os.environ, "HOME": home.as_posix(), "PATH": str(Path(bash).parent) + os.pathsep + os.environ["PATH"]}
     # Do not start real watchdog processes in unit tests. Replay their exact
     # generated body deterministically through operation=watchdog instead.
-    return subprocess.run([bash, "-s"], input="nohup() { :; };\n" + script,
+    # Git Bash has no kernel flock; VM tests cover process-death locking.
+    fixture = "nohup() { :; };\n" + ("flock() { :; };\n" if os.name == 'nt' else '')
+    return subprocess.run([bash, "-s"], input=fixture + script,
                           text=True, capture_output=True, env=env, cwd="C:/" if os.name == "nt" else "/")
+
+
+@pytest.mark.skipif(os.name == 'nt', reason='Kernel flock process-death proof requires Linux; also exercised on a test VM')
+def test_key_lock_is_released_after_sigkill(tmp_path):
+    directory = tmp_path / '.ssh'; directory.mkdir()
+    process = subprocess.Popen(['bash', '-c', 'exec 9>"$HOME/.ssh/.acontrol-key.lock"; flock 9; echo READY; exec sleep 60'],
+                               env={**os.environ, 'HOME': str(tmp_path)}, stdout=subprocess.PIPE, text=True)
+    try:
+        assert process.stdout.readline().strip() == 'READY'
+        process.kill(); process.wait(timeout=5)
+        result = shell(ssh_access.write_key('ssh-ed25519 AAA panel', 'restrict'), tmp_path)
+        assert result.returncode == 0, result.stderr
+    finally:
+        if process.poll() is None: process.kill(); process.wait(timeout=5)
 
 
 def test_atomic_key_updates_preserve_admin_lines_and_stale_watchdogs(tmp_path):
@@ -63,7 +79,8 @@ def test_atomic_key_updates_preserve_admin_lines_and_stale_watchdogs(tmp_path):
     final = ak.read_text()
     assert '192.0.2.11' in final and '192.0.2.20' not in final
     assert '# admin comment\nssh-ed25519 BBB administrator\n' in final
-    shell(ssh_access.write_key(public, 'restrict', transaction=first, operation="watchdog"), tmp_path)
+    assert shell(ssh_access.write_key(public, 'restrict', transaction=first, operation="watchdog"), tmp_path).returncode != 0
+    assert shell(ssh_access.write_key(public, 'restrict', transaction=first, operation="rollback"), tmp_path).returncode != 0
     assert ak.read_text() == final
     # Even an interrupted old operation cannot overwrite a newer generation.
     (directory / f".acontrol-{first}.rolledback").unlink()
@@ -329,6 +346,54 @@ async def test_successful_route_is_preserved_when_old_role_retirement_fails(clie
         change = await session.get(SshAccessChange, plan['token'])
         assert change.phase == 'done'
         assert change.payload['retired_jump'] == ('warning' if warning else 'revoked')
+
+
+@pytest.mark.parametrize('remote_after_loss', ['committed', 'firewall-watchdog', 'key-watchdog'])
+async def test_lost_firewall_commit_reply_reconciles_without_blind_rollback(client, auth_headers, monkeypatch, remote_after_loss):
+    node = (await client.post('/api/servers', json={'name': 'target', 'host': '192.0.2.2'}, headers=auth_headers)).json()
+    state = {'key': 'STAGED', 'firewall': 'STAGED', 'lost': False}
+    operations = []
+    class Conn:
+        async def run(self, command, **kwargs):
+            if 'ACONTROL_KEY_STATE_' in command: marker = 'ACONTROL_KEY_STATE_' + state['key']
+            elif 'ACONTROL_FIREWALL_STATE_' in command: marker = 'ACONTROL_FIREWALL_STATE_' + state['firewall']
+            elif 'ACONTROL_KEY_READY' in command: marker = 'ACONTROL_KEY_READY'
+            elif 'ACONTROL_FIREWALL_READY' in command: marker = 'ACONTROL_FIREWALL_READY'
+            elif 'ACONTROL_KEY_COMMITTED' in command:
+                assert state['key'] != 'ROLLEDBACK'
+                state['key'] = 'COMMITTED'; marker = 'ACONTROL_KEY_COMMITTED'
+            elif 'ACONTROL_FIREWALL_COMMITTED' in command:
+                assert state['firewall'] != 'ROLLEDBACK'
+                state['firewall'] = 'COMMITTED'
+                if not state['lost']:
+                    state['lost'] = True
+                    raise OSError('commit applied remotely; reply lost')
+                marker = 'ACONTROL_FIREWALL_COMMITTED'
+            elif 'ACONTROL_KEY_ROLLEDBACK' in command:
+                state['key'] = 'ROLLEDBACK'; marker = 'ACONTROL_KEY_ROLLEDBACK'
+            elif 'ACONTROL_FIREWALL_ROLLEDBACK' in command:
+                assert state['firewall'] != 'COMMITTED'
+                state['firewall'] = 'ROLLEDBACK'; marker = 'ACONTROL_FIREWALL_ROLLEDBACK'
+            else: raise AssertionError(command)
+            operations.append(marker)
+            return SimpleNamespace(exit_status=0, stdout=marker, stderr='')
+    @asynccontextmanager
+    async def connection(*args, **kwargs): yield Conn()
+    async def verify(*args): return '192.0.2.7'
+    monkeypatch.setattr(ssh_access, 'connection', connection)
+    monkeypatch.setattr(ssh_access, 'verify', verify)
+    plan = (await client.post(f'/api/servers/{node["id"]}/ssh-access/preview', json={'ssh_source_mode': 'custom', 'ssh_source_ips': ['192.0.2.7'], 'ssh_firewall_mode': 'add'}, headers=auth_headers)).json()
+    result = await client.post(f'/api/servers/{node["id"]}/ssh-access/apply', json={'token': plan['token']}, headers=auth_headers)
+    assert result.status_code == 409 and 'журнал' in result.text
+    assert not any('ROLLEDBACK' in item for item in operations)
+    if remote_after_loss == 'firewall-watchdog': state['firewall'] = 'ROLLEDBACK'
+    if remote_after_loss == 'key-watchdog': state.update(key='ROLLEDBACK', firewall='STAGED')
+    result = await client.post(f'/api/servers/{node["id"]}/ssh-access/recover', headers=auth_headers)
+    assert result.status_code == 200, result.text
+    async with client.session_factory() as session:
+        change = await session.get(SshAccessChange, plan['token'])
+        assert change.phase == ('done' if remote_after_loss == 'committed' else 'rolledback')
+    assert result.json()['ssh_source_mode'] == ('custom' if remote_after_loss == 'committed' else 'panel')
 
 
 async def test_bootstrap_success_marker_without_key_login_is_failure(client, auth_headers, monkeypatch):

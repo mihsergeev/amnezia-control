@@ -21,6 +21,10 @@ ACCESS_FIELDS = ("ssh_jump_server_id", "ssh_source_mode", "ssh_source_ips", "ssh
 ACTIVE = ("applying", "finalizing")
 
 
+class _RemoteRolledBack(Exception):
+    pass
+
+
 def serialized(handler):
     @wraps(handler)
     async def wrapped(*args, **kwargs):
@@ -99,19 +103,21 @@ def write_key(public_key, key_options, *, transaction=None, operation="set"):
     awk = f"awk -v want={sshops._sh_quote(public_key.split()[0] + ':' + blob)} "
     strip = awk + '-v selected=0 ' + sshops._sh_quote(selector)
     own = awk + '-v selected=1 ' + sshops._sh_quote(selector)
-    rollback = f'''mkdir "$LOCK" 2>/dev/null || exit 1
-trap 'rmdir "$LOCK" 2>/dev/null || true' EXIT
-trap 'exit 1' HUP INT TERM
+    lock = '''exec 9>"$LOCK"
+flock -w 5 9 || { echo 'Другая операция меняет SSH-ключ'; exit 1; }
+'''
+    rollback = lock + f'''
 [ -f "$BACKUP" ] || exit 1
+[ "$(cat "$DIR/.acontrol-current" 2>/dev/null)" = '{token}' ] || exit 1
 [ ! -e "$STATE.rolledback" ] || {{ echo ACONTROL_KEY_ROLLEDBACK; exit 0; }}
 [ ! -e "$STATE.commit" ] || exit 0
-[ "$(cat "$DIR/.acontrol-current" 2>/dev/null)" = '{token}' ] || exit 1
 T=$(mktemp "$DIR/.acontrol-key.XXXXXX") || exit 1
 {{ {strip} "$AK"; {own} "$BACKUP"; }} > "$T" && chmod 600 "$T" && mv -f "$T" "$AK" || exit 1
 touch "$STATE.rolledback"
 '''
     header = f'''set -eu
 umask 077
+command -v flock >/dev/null 2>&1 || {{ echo 'Требуется flock для безопасного изменения SSH'; exit 1; }}
 DIR="$HOME/.ssh"
 [ ! -L "$DIR" ] || {{ echo 'Символические ссылки SSH не поддерживаются'; exit 1; }}
 if [ -e "$DIR" ]; then [ -d "$DIR" ] && [ "$(stat -c %u "$DIR")" = "$(id -u)" ] || exit 1; fi
@@ -125,15 +131,20 @@ LINE={sshops._sh_quote(line)}
 STATE="$DIR/.acontrol-{token}"
 BACKUP="$STATE.backup"
 [ ! -L "$BACKUP" ] && [ ! -L "$DIR/.acontrol-current" ] || exit 1
-LOCK="$DIR/.acontrol-key-lock"
+LOCK="$DIR/.acontrol-key.lock"
+[ ! -L "$LOCK" ] || exit 1
+if [ -e "$LOCK" ]; then [ -f "$LOCK" ] && [ "$(stat -c %u "$LOCK")" = "$(id -u)" ] && [ "$(stat -c %h "$LOCK")" = 1 ] || exit 1; fi
 '''
     if operation == "rollback":
         return header + rollback.replace('[ ! -e "$STATE.commit" ] || exit 0\n', '') + 'echo ACONTROL_KEY_ROLLEDBACK\n'
     if operation == "watchdog":
         return header + rollback
-    lock = '''mkdir "$LOCK" 2>/dev/null || { echo 'Другая операция меняет SSH-ключ'; exit 1; }
-trap 'rmdir "$LOCK" 2>/dev/null || true' EXIT
-trap 'exit 1' HUP INT TERM
+    if operation == "status":
+        return header + lock + f'''[ "$(cat "$DIR/.acontrol-current" 2>/dev/null)" = '{token}' ] || exit 1
+if [ -e "$STATE.rolledback" ]; then echo ACONTROL_KEY_STATE_ROLLEDBACK
+elif [ -e "$STATE.commit" ]; then echo ACONTROL_KEY_STATE_COMMITTED
+elif [ -f "$BACKUP" ]; then echo ACONTROL_KEY_STATE_STAGED
+else exit 1; fi
 '''
     if operation == "commit":
         return header + lock + f'''[ -f "$BACKUP" ] && [ ! -e "$STATE.rolledback" ] || exit 1
@@ -166,7 +177,7 @@ done
 ''' + rollback
         script += f'''[ ! -e "$BACKUP" ] && [ ! -e "$STATE.rolledback" ] || exit 1
 cp -p "$AK" "$BACKUP" && chmod 600 "$BACKUP"
-nohup sh -c {sshops._sh_quote(guard)} </dev/null >/dev/null 2>&1 &
+nohup sh -c {sshops._sh_quote(guard)} 9>&- </dev/null >/dev/null 2>&1 &
 '''
     script += '''T=$(mktemp "$DIR/.acontrol-key.XXXXXX")
 '''
@@ -459,18 +470,20 @@ async def apply(session, server, token, settings):
                     # Keep the durable finalizing phase until the best-effort
                     # retirement is recorded; restart recovery can finish it.
                 except BaseException:
-                    await _run(old_conn, write_key(public, keyopts, transaction=token, operation="rollback"), "ACONTROL_KEY_ROLLEDBACK")
-                    if proposed.ssh_firewall_mode == "add":
-                        await _run(old_conn, ssh_firewall.script(token, [], proposed.ssh_port, "rollback"), "ACONTROL_FIREWALL_ROLLEDBACK")
-                    rollback_confirmed = True
+                    if change.phase != "finalizing":
+                        await _run(old_conn, write_key(public, keyopts, transaction=token, operation="rollback"), "ACONTROL_KEY_ROLLEDBACK")
+                        if proposed.ssh_firewall_mode == "add":
+                            await _run(old_conn, ssh_firewall.script(token, [], proposed.ssh_port, "rollback"), "ACONTROL_FIREWALL_ROLLEDBACK")
+                        rollback_confirmed = True
                     raise
         except BaseException as exc:
             await session.rollback()
             # refresh expired ORM state before reading the durable payload
             await session.refresh(change)
             await session.refresh(server)
-            for field in ACCESS_FIELDS:
-                setattr(server, field, change.payload["old"][field])
+            if change.phase != "finalizing":
+                for field in ACCESS_FIELDS:
+                    setattr(server, field, change.payload["old"][field])
             if rollback_confirmed or not mutation_started:
                 change.phase = "rolledback"
             await session.commit()
@@ -510,6 +523,16 @@ async def recover(session, settings, server_id=None):
                 async with connection(target, settings) as conn:
                     if change.phase == "finalizing":
                         try:
+                            key_state = (await _run(conn, write_key(public, keyopts, transaction=change.id, operation="status"), "ACONTROL_KEY_STATE_")).stdout.strip()
+                            firewall_state = ""
+                            if proposed.ssh_firewall_mode == "add":
+                                firewall_state = (await _run(conn, ssh_firewall.script(change.id, [], proposed.ssh_port, "status"), "ACONTROL_FIREWALL_STATE_")).stdout.strip()
+                            if "ROLLEDBACK" in key_state or "ROLLEDBACK" in firewall_state:
+                                if "COMMITTED" in firewall_state:
+                                    continue  # Conflicting proof: preserve the journal.
+                                # A watchdog already reverted part of this exact
+                                # generation; complete rollback while it is current.
+                                raise _RemoteRolledBack
                             await verify(proposed, settings)
                             await _run(conn, write_key(public, keyopts, transaction=change.id, operation="commit"), "ACONTROL_KEY_COMMITTED")
                             if proposed.ssh_firewall_mode == "add":
@@ -519,8 +542,10 @@ async def recover(session, settings, server_id=None):
                             change.phase = "done"
                             restored = True
                             break
-                        except Exception:
+                        except _RemoteRolledBack:
                             pass
+                        except Exception:
+                            continue  # Lost replies are reconciled, never guessed.
                     await _run(conn, write_key(public, keyopts, transaction=change.id, operation="rollback"), "ACONTROL_KEY_ROLLEDBACK")
                     if proposed.ssh_firewall_mode == "add":
                         await _run(conn, ssh_firewall.script(change.id, [], proposed.ssh_port, "rollback"), "ACONTROL_FIREWALL_ROLLEDBACK")

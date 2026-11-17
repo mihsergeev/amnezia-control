@@ -6,12 +6,13 @@ from app import sshops
 
 
 def script(token: str, addresses: list[str], port: int, operation: str = "stage", *, sudo="sudo -n") -> str:
-    if not re.fullmatch(r"[a-f0-9]{32}", token) or operation not in {"stage", "commit", "rollback"}:
+    if not re.fullmatch(r"[a-f0-9]{32}", token) or operation not in {"stage", "commit", "rollback", "status"}:
         raise ValueError("Некорректная операция firewall")
     port = int(port)
     networks = [ipaddress.ip_network(item, strict=False) for item in addresses]
     header = f'''set -eu
 umask 077
+command -v flock >/dev/null 2>&1 || exit 1
 BASE=/lib65/acontrol-ssh-firewall
 for path in /lib65 "$BASE"; do
   [ ! -L "$path" ] || exit 1
@@ -22,9 +23,9 @@ STATE="$BASE/{token}"
 [ ! -L "$STATE" ] || exit 1
 '''
     lock = '''[ -d "$STATE" ] || { echo ACONTROL_FIREWALL_ROLLEDBACK; exit 0; }
-mkdir "$STATE/lock" 2>/dev/null || { echo 'Firewall operation busy' >&2; exit 1; }
-trap 'rmdir "$STATE/lock" 2>/dev/null || true' EXIT
-trap 'exit 1' HUP INT TERM
+[ ! -L "$STATE/lock" ] || exit 1
+exec 9>"$STATE/lock"
+flock -w 5 9 || { echo 'Firewall operation busy' >&2; exit 1; }
 '''
     rollback = '''[ -d "$STATE" ] || { echo ACONTROL_FIREWALL_ROLLEDBACK; exit 0; }
 [ ! -e "$STATE/committed" ] || exit 1
@@ -61,8 +62,13 @@ done
 touch "$STATE/rolledback"
 echo ACONTROL_FIREWALL_ROLLEDBACK
 '''
-    if operation == "rollback":
-        body = header + lock + rollback.replace('[ ! -e "$STATE/committed" ] || exit 1\n', '')
+    if operation == "status":
+        body = header + lock + '''if [ -e "$STATE/rolledback" ]; then echo ACONTROL_FIREWALL_STATE_ROLLEDBACK
+elif [ -e "$STATE/committed" ]; then echo ACONTROL_FIREWALL_STATE_COMMITTED
+else echo ACONTROL_FIREWALL_STATE_STAGED; fi
+'''
+    elif operation == "rollback":
+        body = header + lock + rollback
     elif operation == "commit":
         body = header + lock + '''[ -d "$STATE" ] && [ ! -e "$STATE/rolledback" ] || exit 1
 touch "$STATE/committed"
@@ -104,7 +110,7 @@ while [ "$i" -lt 180 ]; do
   sleep 1; i=$((i + 1))
 done
 ''' + lock + '[ ! -e "$STATE/committed" ] || exit 0\n' + rollback
-        body += f'''nohup sh -c {sshops._sh_quote(guard)} </dev/null >/dev/null 2>&1 &
+        body += f'''nohup sh -c {sshops._sh_quote(guard)} 9>&- </dev/null >/dev/null 2>&1 &
 echo ACONTROL_FIREWALL_READY
 '''
     return f'''if [ "$(id -u)" = 0 ]; then SUDO=""; else SUDO={sshops._sh_quote(sudo)}; fi
