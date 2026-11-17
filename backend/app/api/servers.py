@@ -475,4 +475,5 @@ async def recover_ssh_access(server_id: int, _: CurrentUser, session: SessionDep
     await ssh_access.recover(session, get_settings(), server.id)
     await ssh_access.require_idle(session, server.id)
     await session.refresh(server)
+    server.ssh_access_pending = False
     return server

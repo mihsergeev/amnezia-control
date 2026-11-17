@@ -1,6 +1,7 @@
 import asyncio
 
 import httpx
+import pytest
 
 NEW_SERVER = {
     "name": "kz-admin",
@@ -116,6 +117,52 @@ async def test_reorder_sets_position_and_group(
 async def test_get_missing_returns_404(client: httpx.AsyncClient, auth_headers) -> None:
     response = await client.get("/api/servers/9999", headers=auth_headers)
     assert response.status_code == 404
+
+
+@pytest.mark.parametrize("phase", ["done", "rolledback", "finalizing"])
+async def test_recover_returns_current_ssh_state(client, auth_headers, monkeypatch, phase):
+    from app import ssh_access
+    from app.models import Server, SshAccessChange
+
+    old = {"ssh_source_mode": "panel", "ssh_source_ips": []}
+    proposed = {"ssh_source_mode": "custom", "ssh_source_ips": ["192.0.2.12"]}
+    journal_id = "a" * 32
+    async with client.session_factory() as session:
+        server = Server(id=1, name="example", host="192.0.2.10", **proposed)
+        change = SshAccessChange(id=journal_id, server_id=server.id, phase="finalizing",
+                                 payload={"old": old, "proposed": proposed})
+        session.add_all((server, change))
+        await session.commit()
+
+    async def recover(session, settings, server_id):
+        assert server_id == 1
+        if phase == "finalizing":
+            return
+        change = await session.get(SshAccessChange, journal_id)
+        server = await session.get(Server, server_id)
+        for field, value in change.payload["old" if phase == "rolledback" else "proposed"].items():
+            setattr(server, field, value)
+        change.phase = phase
+        await session.commit()
+
+    monkeypatch.setattr(ssh_access, "recover", recover)
+    url = "/api/servers/1"
+    before = await client.get(url, headers=auth_headers)
+    assert before.json()["ssh_access_pending"] is True
+
+    response = await client.post(url + "/ssh-access/recover", headers=auth_headers)
+    current = await client.get(url, headers=auth_headers)
+    assert current.status_code == 200
+    assert current.json()["ssh_access_pending"] is (phase == "finalizing")
+    expected_policy = old if phase == "rolledback" else proposed
+    assert {field: current.json()[field] for field in expected_policy} == expected_policy
+    async with client.session_factory() as session:
+        assert (await session.get(SshAccessChange, journal_id)).phase == phase
+    if phase == "finalizing":
+        assert response.status_code == 409
+    else:
+        assert response.status_code == 200
+        assert response.json() == current.json()
 
 
 async def test_create_validates_port(client: httpx.AsyncClient, auth_headers) -> None:
