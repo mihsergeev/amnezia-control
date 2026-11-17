@@ -4,6 +4,10 @@ All notable changes to Amnezia Control are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.84.55] - 2026-11-18
+
+- Style the SSH settings card and controls consistently in light and dark themes. Clarify advanced settings and firewall choices, and prevent SSH port and user fields from overflowing narrow dialogs. Applies to adding and editing servers and to the cascade wizard.
+
 ## [0.84.54] - 2026-11-18
 
 - Keep the server editor open with unsaved metadata when SSH preparation succeeds but saving the remaining fields fails. Apply the canonical SSH settings returned by the panel, including normalized source lists, and retry only the metadata. Update the server card from the save response even if refreshing the list fails.
