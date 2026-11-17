@@ -16,7 +16,7 @@ import pytest
 from sqlalchemy import select
 
 from app.api.transfer import _selected_models, server_scoped_models
-from app.models import AwgConfig, AwgNote, AwgSettingsChange, BulkClientIssue, ClientLimit, PausedClient, User
+from app.models import AwgConfig, AwgNote, AwgSettingsChange, BulkClientIssue, ClientLimit, PausedClient, Server, User
 
 SERVER = {
     "name": "vpn-f",
@@ -330,6 +330,42 @@ async def test_import_rejects_broken_expiry_instead_of_permanent_client(client, 
                           content=json.dumps(payload))
     assert r.status_code == 400
     assert (await client.get("/api/servers", headers=auth_headers)).json() == []
+
+
+@pytest.mark.parametrize("field", ["torrent_block", "torrent_autopause"])
+async def test_import_rejects_string_torrent_flags_before_writing(client, auth_headers, session_factory, field):
+    sid = await _make_server(client, auth_headers)
+    await _seed(session_factory, sid)
+    payload = {
+        "format": "acontrol-server-export", "format_version": 1,
+        "server": {**SERVER, "host": "192.0.2.8", field: "false"}, "tables": {},
+    }
+    response = await client.post("/api/servers/import-file", headers=auth_headers, json=payload)
+    async with session_factory() as session:
+        imported = await session.scalar(select(Server).where(Server.host == "192.0.2.8"))
+        assert response.status_code == 400, (response.status_code, field, getattr(imported, field, None))
+        assert imported is None
+        source = await session.get(Server, sid)
+        assert source.torrent_block is False and source.torrent_autopause is False
+        assert await session.scalar(select(AwgConfig.server_id)) == sid
+
+
+@pytest.mark.parametrize("fields,expected", [
+    ({}, (False, False)),
+    ({"torrent_block": False, "torrent_autopause": True}, (False, True)),
+    ({"torrent_block": True, "torrent_autopause": False}, (True, False)),
+])
+async def test_import_preserves_boolean_torrent_flags_and_legacy_defaults(client, auth_headers, session_factory, fields, expected):
+    payload = {
+        "format": "acontrol-server-export", "format_version": 1,
+        "server": {**SERVER, **fields, "alerts_enabled": True}, "tables": {},
+    }
+    response = await client.post("/api/servers/import-file", headers=auth_headers, json=payload)
+    assert response.status_code == 200, response.text
+    async with session_factory() as session:
+        imported = await session.get(Server, response.json()["server_id"])
+        assert (imported.torrent_block, imported.torrent_autopause) == expected
+        assert imported.alerts_enabled is False
 
 
 async def test_import_names_tables_it_could_not_take(

@@ -246,6 +246,10 @@ async def import_server_file(
     spec = payload.get("server") or {}
     if not isinstance(spec, dict):
         raise HTTPException(400, "В файле неверное описание сервера")
+    torrent_block = spec.get("torrent_block", False)
+    torrent_autopause = spec.get("torrent_autopause", False)
+    if not isinstance(torrent_block, bool) or not isinstance(torrent_autopause, bool):
+        raise HTTPException(400, "В файле torrent_block и torrent_autopause должны быть логическими значениями")
     tables = payload.get("tables", {})
     if not isinstance(tables, dict):
         raise HTTPException(400, "В файле неверное описание таблиц")
@@ -324,8 +328,8 @@ async def import_server_file(
         group_name=(spec.get("group_name") or "")[:64],
         country=override or geo.normalize_country_code(spec.get("country")),
         country_override=override,
-        torrent_block=bool(spec.get("torrent_block")),
-        torrent_autopause=bool(spec.get("torrent_autopause")),
+        torrent_block=torrent_block,
+        torrent_autopause=torrent_autopause,
         # Уведомления новой панели включаются только в настройках сервера.
         alerts_enabled=False,
         position=(max_pos or 0) + 1,
