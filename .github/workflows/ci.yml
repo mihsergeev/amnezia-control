@@ -24,7 +24,6 @@ jobs:
       - name: Tests
         run: pytest -q
       - name: Dependency audit (pip-audit)
-        continue-on-error: true # информативно, не блокирует
         run: |
           pip install pip-audit
           pip-audit
@@ -48,8 +47,7 @@ jobs:
       - name: Frontend tests
         run: npm test
       - name: Dependency audit (npm audit)
-        continue-on-error: true # информативно, не блокирует
-        run: npm audit --audit-level=high
+        run: npm run audit:ci
       - name: Build
         run: npm run build
 

@@ -4,11 +4,14 @@ All notable changes to Amnezia Control are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
-## [0.84.54] - 2026-11-17
+## [0.84.54] - 2026-11-18
 
-- Keep unsaved server metadata and the dialog open with a clear error when SSH preparation succeeds but saving the remaining fields fails. Synchronize the form with canonical SSH settings returned by the server, including normalized source lists, and retry only the unsaved metadata without repeating SSH preparation.
-- Arm SSH firewall rollback before adding rules and journal both possible firewalld add outcomes before mutation. Recover interrupted preparation and lost replies without leaving uncommitted SSH permissions or changing unrelated rules.
-- Validate archived SSH host names and ports before restoring backups or importing servers. Reject malformed endpoints before database changes and preserve the existing inventory and access state.
+- Keep the server editor open with unsaved metadata when SSH preparation succeeds but saving the remaining fields fails. Apply the canonical SSH settings returned by the panel, including normalized source lists, and retry only the metadata. Update the server card from the save response even if refreshing the list fails.
+- Keep SSH previews, application and recovery tied to the server being edited. Prevent stale responses and duplicate submissions. Apply the resolved SSH policy without losing draft metadata, clear the pending flag after completed recovery, and handle expired sessions during setup and recovery.
+- Arm SSH firewall rollback before adding rules and journal both possible firewalld outcomes before mutation. Resume incomplete rollback after interruption or a lost response, preserve unrelated rules, and block confirmation once rollback begins.
+- Validate SSH host names and ports before restoring backups or importing servers, while accepting supported local names with underscores. Validate server transfer data before removing stale keys and reject non-boolean torrent-blocking flags. Keep AmneziaWG recovery journals on the original panel and block a server transfer while recovery is pending.
+- Stage full-restore files before committing database changes. Restore the previous files and permissions after a confirmed failure, roll back PostgreSQL sequence changes, and retain copies for manual reconciliation if the commit outcome is uncertain.
+- Make dependency audits blocking in CI. Temporarily accept [GHSA-fc5q-39xc-vjpf (CVE-2026-112366)](https://github.com/advisories/GHSA-fc5q-39xc-vjpf) only for the locked frontend build dependency chain. The audit output and warning remain visible, and production dependencies must pass a separate audit with zero findings. Remove the exception when a patched build dependency is available.
 
 ## [0.84.53] - 2026-11-17
 

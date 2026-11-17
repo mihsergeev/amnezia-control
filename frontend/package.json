@@ -8,6 +8,7 @@
     "build": "tsc -b && vite build",
     "lint": "oxlint",
     "test": "node --test tests/*.test.ts",
+    "audit:ci": "node scripts/audit-dependencies.mjs",
     "check-i18n": "node scripts/check-i18n.mjs",
     "preview": "vite preview",
     "prebuild": "node scripts/copy-swagger.mjs",
