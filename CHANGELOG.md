@@ -4,6 +4,12 @@ All notable changes to Amnezia Control are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.84.54] - 2026-11-17
+
+- Preserve pending server metadata when SSH preparation succeeds but saving the remaining fields fails. Keep the dialog open with a clear error and retry only the unsaved metadata without repeating SSH preparation.
+- Arm SSH firewall rollback before adding rules and journal both possible firewalld add outcomes before mutation. Recover interrupted preparation and lost replies without leaving uncommitted SSH permissions or changing unrelated rules.
+- Validate archived SSH host names and ports before restoring backups or importing servers. Reject malformed endpoints before database changes and preserve the existing inventory and access state.
+
 ## [0.84.53] - 2026-11-17
 
 - Add per-node SSH source policies with explicit IP/CIDR lists or unrestricted key sources, plus a choice to add source-specific SSH firewall permissions or preserve the firewall. Keep existing nodes on direct access and preserve other users' keys and firewall rules.
