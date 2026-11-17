@@ -161,12 +161,16 @@ def missing_key_files(files: dict, data_dir: str) -> list[Path]:
     return stale
 
 
+def is_private_key(archive_path: str) -> bool:
+    name = archive_path.removeprefix("data/ssh/")
+    return name != archive_path and (name == "id_ed25519" or PRIVATE_JUMP.fullmatch(name) is not None)
+
+
 def restore_file(dest: Path, member, tar, data_dir: str) -> None:
     """Private keys never appear as 0644 or as partially written key files."""
-    member_name = member.name.removeprefix("data/ssh/")
-    private = member.name.startswith("data/ssh/") and (member_name == "id_ed25519" or PRIVATE_JUMP.fullmatch(member_name))
+    private = is_private_key(member.name)
     validate_path(Path(data_dir).resolve(), member.name)
-    if private and dest != Path(data_dir).resolve() / "ssh" / member_name:
+    if private and dest != Path(data_dir).resolve() / member.name.removeprefix("data/"):
         raise ValueError("Неверный путь восстановления приватного ключа SSH")
     src = tar.extractfile(member)
     if src is None:

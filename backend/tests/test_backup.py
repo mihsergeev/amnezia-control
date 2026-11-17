@@ -3,6 +3,7 @@
 архив и корректно восстанавливаются."""
 
 import gzip
+import hashlib
 import io
 import json
 import tarfile
@@ -232,6 +233,186 @@ async def test_restore_rejects_archive_path_conflict_before_mutation(
     assert [server["name"] for server in servers.json()] == ["srv-bkp"]
     assert marker.read_bytes() == b"before"
     assert not (data / "folder").exists()
+
+
+@pytest.mark.parametrize("fault", [
+    "file_write", "file_install", "stale_move", "database_commit", "lost_reply", "rollback_io_failure",
+])
+async def test_restore_preserves_panel_state_if_replacement_fails(
+    client, auth_headers, tmp_path, monkeypatch, fault,
+):
+    import gc
+    import os
+    import sqlite3
+    import stat
+    from pathlib import Path
+
+    from sqlalchemy.exc import DBAPIError, IntegrityError
+    from sqlalchemy.ext.asyncio import AsyncSession
+
+    from app import backup_files, native_snapshots, ssh_archives
+    from app.api.backup import _build_archive
+    from app.models import AppSetting, NativeVpnConfig
+
+    data = tmp_path / "data"
+    ssh_dir = data / "ssh"
+    ssh_dir.mkdir(parents=True)
+    key = data / "ssh/id_ed25519"
+    stale_key = data / "ssh/jump_1"
+    settings_file = data / "new/settings.txt"
+    local_file = data / "flags.txt"
+    key.write_bytes(b"synthetic archive key")
+    async with client.session_factory() as session:
+        server = Server(id=1, name="archive", host="192.0.2.10")
+        awg = AwgConfig(server_id=1, public_key="public-test", name="awg-profile", config="awg archived")
+        native = NativeVpnConfig(server_id=1, protocol="wireguard", client_id="test-client",
+                                name="native-profile", config="native archived")
+        session.add_all((server, awg, native))
+        await session.commit()
+        await native_snapshots.save(session, server, "wireguard", "20260101-000000",
+                                    {"port": 51820, "transport": "udp"})
+
+    download = await client.post("/api/backup/download", headers=auth_headers, json={"password": "testpass"})
+    assert download.status_code == 200
+    archived = _read_db_json(download.content)
+    archive = _tar({
+        "db.json": json.dumps(archived).encode(),
+        "data/ssh/id_ed25519": key.read_bytes(),
+        "data/flags.txt": b"archived flag",
+        "data/new/settings.txt": b"archive-only file",
+    })
+    key.write_bytes(b"synthetic current key")
+    local_file.write_bytes(b"current flag")
+    stale_key.write_bytes(b"synthetic stale key")
+    ssh_dir.chmod(0o750)
+    local_file.chmod(0o640)
+    before_modes = {path: stat.S_IMODE(path.stat().st_mode) for path in (ssh_dir, local_file, key, stale_key)}
+    async with client.session_factory() as session:
+        server = await session.get(Server, 1)
+        server.name = "current"
+        server.host = "192.0.2.11"
+        (await session.scalar(select(AwgConfig))).config = "awg current"
+        (await session.scalar(select(NativeVpnConfig))).config = "native current"
+        await session.execute(delete(AppSetting))
+        await session.commit()
+        await native_snapshots.save(session, server, "wireguard", "20260102-000000",
+                                    {"port": 51821, "transport": "udp"})
+
+    def digest(content):
+        return hashlib.sha256(content).hexdigest()
+
+    async def panel_state():
+        async with client.session_factory() as session:
+            server = (await session.execute(select(Server.name, Server.host))).one()
+            awg = await session.scalar(select(AwgConfig.config))
+            native = await session.scalar(select(NativeVpnConfig.config))
+            snapshot = (await session.execute(select(AppSetting.key, AppSetting.value))).one()
+        return {
+            "server": tuple(server), "awg": digest(awg.encode()), "native": digest(native.encode()),
+            "snapshot": (snapshot.key, digest(snapshot.value.encode())),
+            "files": {path.relative_to(data).as_posix(): digest(path.read_bytes())
+                      for path in data.rglob("*")
+                      if path.is_file() and path.relative_to(data).parts[0] != "debug-logs"},
+        }
+
+    before = await panel_state()
+    restore_file = ssh_archives.restore_file
+    replace = os.replace
+    commit = AsyncSession.commit
+    injected = []
+
+    def fail_file_write(dest, member, tar, data_dir):
+        if member.name == "data/new/settings.txt":
+            injected.append(fault)
+            raise OSError("synthetic file write failure")
+        restore_file(dest, member, tar, data_dir)
+
+    def fail_replace(src, dest):
+        if fault == "rollback_io_failure" and Path(dest) == key and "original" in Path(src).parts:
+            injected.append("rollback")
+            raise OSError("synthetic rollback write failure")
+        if ((fault in ("file_install", "rollback_io_failure") and Path(dest) == settings_file)
+                or (fault == "stale_move" and Path(src) == stale_key)):
+            assert key.read_bytes() == b"synthetic archive key"
+            assert local_file.read_bytes() == b"archived flag"
+            injected.append(fault)
+            raise OSError("synthetic file replacement failure")
+        return replace(src, dest)
+
+    async def fail_database_commit(session):
+        assert settings_file.read_bytes() == b"archive-only file"
+        assert not stale_key.exists()
+        injected.append(fault)
+        if fault == "lost_reply":
+            await commit(session)
+            raise DBAPIError("COMMIT", None, ConnectionError("synthetic lost reply"), connection_invalidated=True)
+        raise IntegrityError("COMMIT", None, sqlite3.IntegrityError("synthetic deferred constraint failure"))
+
+    headers = {**auth_headers, "X-Confirm-Password": "testpass"}
+    with monkeypatch.context() as faults:
+        faults.setattr(client._transport, "raise_app_exceptions", False)
+        if fault == "file_write":
+            faults.setattr(ssh_archives, "restore_file", fail_file_write)
+        elif fault in ("file_install", "stale_move", "rollback_io_failure"):
+            faults.setattr(os, "replace", fail_replace)
+        else:
+            faults.setattr(AsyncSession, "commit", fail_database_commit)
+        response = await client.post("/api/backup/restore", content=archive, headers=headers)
+
+    assert response.status_code == 500
+    if fault == "rollback_io_failure":
+        assert injected == [fault, "rollback"]
+        work, = data.glob(backup_files.WORK_PREFIX + "*")
+        assert work.name in response.json()["detail"]
+        assert "Не удалось полностью вернуть файлы" in response.json()["detail"]
+        assert (work / "original/ssh/id_ed25519").read_bytes() == b"synthetic current key"
+        restored = await panel_state()
+        assert key.read_bytes() == b"synthetic archive key"
+        assert local_file.read_bytes() == b"current flag"
+        assert stale_key.read_bytes() == b"synthetic stale key"
+        assert {field: value for field, value in restored.items() if field != "files"} == {
+            field: value for field, value in before.items() if field != "files"
+        }
+        return
+    assert injected == [fault]
+    if fault == "lost_reply":
+        gc.collect()
+        work, = data.glob(backup_files.WORK_PREFIX + "*")
+        assert work.name in response.json()["detail"]
+        assert "Результат записи в БД неизвестен" in response.json()["detail"]
+        if os.name != "nt":
+            assert stat.S_IMODE(work.stat().st_mode) == 0o700
+        assert (work / "original/ssh/id_ed25519").read_bytes() == b"synthetic current key"
+        assert (work / "original/ssh/jump_1").read_bytes() == b"synthetic stale key"
+        assert (work / "original/flags.txt").read_bytes() == b"current flag"
+        assert json.loads((work / "changes.json").read_text())["new"] == ["new/settings.txt"]
+        async with client.session_factory() as session:
+            downloaded = await _build_archive(session, str(data), "0.0.0")
+        with tarfile.open(fileobj=io.BytesIO(downloaded), mode="r:gz") as tar:
+            assert not any(backup_files.WORK_PREFIX in name for name in tar.getnames())
+    else:
+        assert response.json()["detail"] == "Не удалось завершить восстановление панели"
+        assert await panel_state() == before
+        assert not (data / "new").exists()
+        assert {path: stat.S_IMODE(path.stat().st_mode) for path in before_modes} == before_modes
+        assert not list(data.glob(backup_files.WORK_PREFIX + "*"))
+        retried = await client.post("/api/backup/restore", content=archive, headers=headers)
+        assert retried.status_code == 200
+    after = await panel_state()
+    assert after["server"] == ("archive", "192.0.2.10")
+    assert after["awg"] == digest(b"awg archived")
+    assert after["native"] == digest(b"native archived")
+    snapshot = archived["app_settings"][0]
+    assert after["snapshot"] == (snapshot["key"], digest(snapshot["value"].encode()))
+    assert {name: value for name, value in after["files"].items() if not name.startswith(backup_files.WORK_PREFIX)} == {
+        "ssh/id_ed25519": digest(b"synthetic archive key"),
+        "flags.txt": digest(b"archived flag"),
+        "new/settings.txt": digest(b"archive-only file"),
+    }
+    assert stat.S_IMODE(local_file.stat().st_mode) == before_modes[local_file]
+    if os.name != "nt":
+        assert stat.S_IMODE(key.stat().st_mode) == 0o600
+        assert stat.S_IMODE(ssh_dir.stat().st_mode) == 0o700
 
 
 async def test_restore_retires_keys_absent_from_older_archive(client, auth_headers):
@@ -528,10 +709,25 @@ async def test_awg_writer_cannot_change_tables_mid_backup_snapshot(client, auth_
 
 async def test_postgres_restore_reseeds_integer_ids_but_not_journal_tokens():
     from app.api.backup import _MODELS, _reset_sequences
+    from sqlalchemy.dialects import postgresql
+
     queries = []
+
     class Session:
-        bind = SimpleNamespace(dialect=SimpleNamespace(name='postgresql'))
-        async def execute(self, query): queries.append(str(query))
+        bind = SimpleNamespace(dialect=postgresql.dialect())
+
+        async def execute(self, query, params=None):
+            queries.append((str(query), params))
+            sequence = ('":test schema".servers_id_seq', 42) if params == {"table": "servers"} else None
+            return SimpleNamespace(one_or_none=lambda: sequence)
+
+        async def connection(self):
+            return self
+
+        async def exec_driver_sql(self, query):
+            queries.append((query, None))
+
     await _reset_sequences(Session(), _MODELS)
-    assert any("'servers'" in query for query in queries)
-    assert all('awg_settings_changes' not in query for query in queries)
+    assert any(params == {"table": "servers"} for _, params in queries)
+    assert ('ALTER SEQUENCE ":test schema".servers_id_seq RESTART WITH 42', None) in queries
+    assert all('awg_settings_changes' not in query and 'setval' not in query for query, _ in queries)

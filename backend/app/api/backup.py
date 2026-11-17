@@ -2,8 +2,10 @@
 
 import io
 import json
+import logging
 import os
 import re
+import sqlite3
 import tarfile
 import uuid
 from datetime import date, datetime, timezone
@@ -12,8 +14,9 @@ from pathlib import Path
 from fastapi import APIRouter, HTTPException, Request, status
 from fastapi.responses import Response
 from sqlalchemy import DateTime, Integer, delete, insert, select, text, update
+from sqlalchemy.exc import DBAPIError, IntegrityError
 
-from app import alerts, audit, bulk_issue_state, ssh_archives, sshops, stepup
+from app import alerts, audit, backup_files, bulk_issue_state, ssh_archives, sshops, stepup
 from app.clientip import client_ip
 from app.config import get_settings
 from app.deps import CurrentUser, SessionDep
@@ -45,6 +48,7 @@ from app.schemas import StepUpRequest
 from app.security import create_access_token
 
 router = APIRouter(prefix="/backup", tags=["backup"])
+log = logging.getLogger(__name__)
 
 _MAX_RESTORE_BYTES = 100 * 1024 * 1024  # 100 МБ — бэкапы много меньше
 
@@ -121,6 +125,9 @@ _RESTORE = """# Восстановление Amnezia Control
    из `.env` при старте их не трогают; пароль из `.env` применится только с
    `ACONTROL_ADMIN_PASSWORD_RESET=1` (аварийный сброс, флаг потом убрать).
 
+В PostgreSQL роль панели должна владеть последовательностями ее таблиц или
+иметь права роли-владельца, чтобы пересчитать номера в транзакции восстановления.
+
 Откат на СТАРУЮ версию панели: старый образ не стартует на базе новой схемы
 (alembic "Can't locate revision"). Остановите панель, удалите data/postgres,
 поднимите старую версию на пустой базе и восстановите архив, лучше снятый
@@ -157,6 +164,7 @@ def _skip_data_dir(name: str) -> bool:
     панель перепишет его сама через минуту)."""
     return (
         name in ("backups", "caddy", "heartbeat", "heartbeat.tmp")
+        or name.startswith(backup_files.WORK_PREFIX)
         or name.startswith("postgres")
         or name.startswith("pgdata")
     )
@@ -430,17 +438,64 @@ def _validate_awg_journal(prepared: dict[str, list[dict]]) -> None:
 
 async def _reset_sequences(session, models) -> None:
     """Explicit integer IDs need reseeding; journal tokens have no sequence."""
-    if session.bind.dialect.name != "postgresql":
+    dialect = session.bind.dialect
+    if dialect.name != "postgresql":
         return
     for model in models:
         pk = list(model.__table__.primary_key.columns)
         if len(pk) == 1 and pk[0].name == "id" and isinstance(pk[0].type, Integer):
-            tbl = model.__tablename__
-            await session.execute(text(
-                f"SELECT setval(pg_get_serial_sequence('{tbl}', 'id'), "
-                f"COALESCE((SELECT MAX(id) FROM {tbl}), 1), "
-                f"(SELECT COUNT(*) FROM {tbl}) > 0)"
-            ))
+            table = dialect.identifier_preparer.quote(model.__tablename__)
+            sequence = (await session.execute(text(
+                f"SELECT format('%I.%I', ns.nspname, seq.relname), "
+                f"(SELECT COALESCE(MAX(id)::bigint + 1, 1) FROM {table}) "
+                "FROM pg_catalog.pg_class seq "
+                "JOIN pg_catalog.pg_namespace ns ON ns.oid = seq.relnamespace "
+                "WHERE seq.oid = CAST(pg_get_serial_sequence(:table, 'id') AS regclass)"
+            ), {"table": table})).one_or_none()
+            if sequence is not None:
+                name, next_id = sequence
+                # RESTART rolls back with the transaction. setval does not.
+                connection = await session.connection()
+                await connection.exec_driver_sql(f"ALTER SEQUENCE {name} RESTART WITH {int(next_id)}")
+
+
+def _commit_rejected(exc: BaseException) -> bool:
+    """Compensate only when the driver reports the transaction did not commit."""
+    if not isinstance(exc, DBAPIError) or exc.connection_invalidated:
+        return False
+    if isinstance(exc, IntegrityError) or getattr(exc.orig, "sqlstate", None) in ("40001", "40P01"):
+        return True
+    sqlite_code = getattr(exc.orig, "sqlite_errorcode", None)
+    return isinstance(sqlite_code, int) and (sqlite_code & 0xFF) in (sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED)
+
+
+async def _commit_restore(session, data_dir: str, files, stale, tar) -> None:
+    copies = None
+    try:
+        with backup_files.replace_files(data_dir, files, stale, tar) as copies:
+            try:
+                await session.commit()
+            except BaseException as exc:
+                if not _commit_rejected(exc):
+                    copies.retain = True
+                raise
+    except BaseException as exc:
+        try:
+            await session.rollback()
+        except Exception:
+            log.warning("Could not roll back database session after failed panel restore")
+        if not isinstance(exc, Exception):
+            raise
+        if isinstance(exc, backup_files.RestoreRollbackError):
+            raise HTTPException(500, f"Не удалось полностью вернуть файлы. Проверьте каталог {exc} перед повтором.") from exc
+        if copies is not None and copies.retain:
+            message = "Результат записи в БД неизвестен. Проверьте состояние панели перед повтором."
+            if copies.directory:
+                message += f" Исходные файлы сохранены в каталоге {copies.directory.name}."
+            raise HTTPException(500, message) from exc
+        if isinstance(exc, (OSError, tarfile.TarError, EOFError, DBAPIError)):
+            raise HTTPException(500, "Не удалось завершить восстановление панели") from exc
+        raise
 
 
 @router.get("/list")
@@ -688,13 +743,7 @@ async def restore_backup(
     await _reset_sequences(session, present)
     if retired_keys:
         await session.execute(insert(ApiKey), retired_keys)
-    await session.commit()
-
-    # восстановление data/ (ssh-ключ и пр.), без postgres
-    for dest, member in files.items():
-        ssh_archives.restore_file(dest, member, tar, settings.data_dir)
-    for stale in stale_ssh_keys:
-        stale.unlink(missing_ok=True)
+    await _commit_restore(session, settings.data_dir, files, stale_ssh_keys, tar)
 
     await audit.record(
         session, user.username, "restore", "", f"строк: {sum(restored.values())}"
