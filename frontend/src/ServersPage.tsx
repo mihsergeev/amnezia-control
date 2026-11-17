@@ -883,10 +883,11 @@ export function ServersPage({ onUnauthorized }: Props) {
           payload.manual_exit_name = manualExitNameChange(payload.manual_exit_name, oldName)
           if (payload.manual_exit_name === undefined) delete payload.manual_exit_name
         }
-        await api<Server>(`/api/servers/${editingId}`, {
+        const updated = await api<Server>(`/api/servers/${editingId}`, {
           method: 'PATCH',
           body: JSON.stringify(payload),
         })
+        setServers(previous => previous.map(server => server.id === updated.id ? updated : server))
         setFormOpen(false)
         await load()
         if (existing?.ssh_jump_server_id && (existing.host !== form.host || existing.ssh_port !== form.ssh_port)) setNotice(t('Адрес SSH сохранен. В скрипте настройки подготовьте промежуточную ноду и проверьте подключение.'))

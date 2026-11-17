@@ -346,6 +346,23 @@ async function recoveryMenuKeepsDraft({ page, form, save, name, edit, recover, n
   assert.equal(await page.locator('body').getAttribute('data-unauthorized'), null)
 }
 
+async function metadataWithFailedRefresh({ page, form, save, name, edit, nodes, calls, routes }) {
+  routes.set('PATCH /api/servers/1', (body, respond) => {
+    Object.assign(nodes[0], body)
+    routes.set('GET /api/servers', (_body, respond) => respond({ detail: 'Synthetic list refresh failure' }, 503))
+    return respond(nodes[0])
+  })
+  await edit('Node 1')
+  await name.fill('Saved node')
+  await save.click()
+  await form.waitFor({ state: 'hidden' })
+  await page.getByText('Synthetic list refresh failure', { exact: true }).waitFor()
+  await page.locator('.srv-item').filter({ hasText: 'Saved node' }).waitFor()
+  await page.locator('.srv-item').filter({ hasText: 'Node 2' }).waitFor()
+  assert.equal(calls.filter(call => call.key === 'PATCH /api/servers/1').length, 1)
+  assert.equal(calls.filter(call => call.key.includes('/ssh-access/')).length, 0)
+}
+
 async function recoveryRestoresPolicy({ page, form, save, name, edit, recover, nodes, calls, routes }) {
   for (const refreshFails of [false, true]) {
     Object.assign(nodes[1], {
@@ -389,7 +406,7 @@ async function recoveryRestoresPolicy({ page, form, save, name, edit, recover, n
 }
 
 try {
-  const scenarios = [bootstrapUnauthorized, recoveryUnauthorized, recoveryMenuKeepsDraft, recoveryRestoresPolicy]
+  const scenarios = [bootstrapUnauthorized, recoveryUnauthorized, recoveryMenuKeepsDraft, metadataWithFailedRefresh, recoveryRestoresPolicy]
   const checks = await Promise.allSettled(scenarios.map(async check => {
     await editorWorkflow(check)
     console.log(`PASS ${check.name}`)
