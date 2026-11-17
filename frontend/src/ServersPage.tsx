@@ -687,11 +687,11 @@ export function ServersPage({ onUnauthorized }: Props) {
       else if (scriptFor) setScriptFor(null)
       else if (deleteFor) setDeleteFor(null)
       else if (unbuild) setUnbuild(null)
-      else if (formOpen) setFormOpen(false)
+      else if (formOpen && !busy) setFormOpen(false)
     }
     document.addEventListener('keydown', onKey)
     return () => document.removeEventListener('keydown', onKey)
-  }, [faStepUp, fullAccess, scriptFor, deleteFor, unbuild, formOpen])
+  }, [faStepUp, fullAccess, scriptFor, deleteFor, unbuild, formOpen, busy])
 
   const handleError = useCallback(
     (err: unknown) => {
@@ -751,12 +751,14 @@ export function ServersPage({ onUnauthorized }: Props) {
   }
 
   function openCreate() {
+    if (busy) return
     resetForm(config?.default_ssh_user ?? FALLBACK_USER)
     setEditingId(null)
     setFormOpen(true)
   }
 
   function openEdit(server: Server) {
+    if (busy) return
     setSshPreview(null)
     setFormError(null)
     setForm({
@@ -831,6 +833,7 @@ export function ServersPage({ onUnauthorized }: Props) {
 
   async function submit(e: FormEvent) {
     e.preventDefault()
+    if (busy) return
     if (editingId !== null && servers.find(server => server.id === editingId)?.ssh_access_pending) {
       setSshPreview(null)
       setFormError(t('Восстановить настройку SSH'))
@@ -935,6 +938,7 @@ export function ServersPage({ onUnauthorized }: Props) {
   }
 
   async function recoverSshAccess(serverId: number) {
+    if (busy) return
     setBusy(true)
     setFormError(null)
     try {
@@ -1545,261 +1549,264 @@ export function ServersPage({ onUnauthorized }: Props) {
             className="card modal"
             onClick={(e) => e.stopPropagation()}
             onSubmit={submit}
+            aria-busy={busy}
           >
             <h3>{editingId === null ? t('Новый сервер') : t('Изменить сервер')}</h3>
-            <label>
-              {t('Имя')}
-              <input
-                value={form.name}
-                onChange={(e) => setForm({ ...form, name: e.target.value })}
-                placeholder="kz-almaty-1"
-                required
-              />
-            </label>
-            <label>
-              {t('Хост (IP или домен)')}
-              <input
-                value={form.host}
-                onChange={(e) => setForm({ ...form, host: e.target.value })}
-                placeholder="203.0.113.10"
-                required
-              />
-            </label>
-            <div className="form-row">
+            <fieldset disabled={busy} style={{ display: 'contents' }}>
               <label>
-                {t('SSH-порт')}
+                {t('Имя')}
                 <input
-                  type="number"
-                  min={1}
-                  max={65535}
-                  value={form.ssh_port}
-                  onChange={(e) =>
-                    setForm({ ...form, ssh_port: Number(e.target.value) })
-                  }
+                  value={form.name}
+                  onChange={(e) => setForm({ ...form, name: e.target.value })}
+                  placeholder="kz-almaty-1"
                   required
                 />
               </label>
               <label>
-                {t('SSH-пользователь')}
+                {t('Хост (IP или домен)')}
                 <input
-                  value={form.ssh_user}
-                  onChange={(e) => setForm({ ...form, ssh_user: e.target.value })}
+                  value={form.host}
+                  onChange={(e) => setForm({ ...form, host: e.target.value })}
+                  placeholder="203.0.113.10"
                   required
                 />
               </label>
-            </div>
-            <SshAccessEditor value={form} servers={servers} serverId={editingId} onChange={update => { setForm({ ...form, ...update }); setSshPreview(null) }} />
-            {editingId !== null && servers.find(server => server.id === editingId)?.ssh_access_pending && (
-              <button type="button" className="ghost" disabled={busy} onClick={() => { void recoverSshAccess(editingId) }}>
-                {t('Восстановить настройку SSH')}
-              </button>
-            )}
-            {sshPreview && <div className="bootstrap-block" role="status">
-              <b>{t('Предпросмотр изменения SSH')}</b>
-              <p>{t('Разрешенные источники')}: {sshPreview.unrestricted ? t('Без ограничения') : sshPreview.sources.join(', ')}</p>
-              <ul>{sshPreview.actions.map(action => <li key={action}>{t(action)}</li>)}</ul>
-              {sshPreview.jump_user && <p>{t('На промежуточной ноде будет настроен отдельный пользователь и его SSH drop-in, разрешающий только соединение к этой цели.')}</p>}
-              <p className="muted small">{t('При сбое панель восстанавливает прежний ключ и удаляет только свои новые правила firewall. Если подтверждение отката не получено, сохранится операция восстановления.')}</p>
-            </div>}
-            <label>
-              {t('Адрес VPN для клиентов (Client Endpoint)')}
-              <input
-                value={form.client_endpoint}
-                onChange={(e) => setForm({ ...form, client_endpoint: e.target.value })}
-                placeholder="vpn.example.com"
-                maxLength={255}
-                autoComplete="off"
-                spellCheck={false}
-                aria-describedby="server-client-endpoint-help"
-              />
-              <small className="muted" id="server-client-endpoint-help">
-                {t('Домен или IP без порта для AmneziaWG и WireGuard. Если поле пустое, новые профили используют хост SSH, а у сохраненных остается исходный адрес.')}
-              </small>
-            </label>
-            <label>
-              {t('Страна сервера')}
-              <input className="mono" value={form.country_override ?? ''} maxLength={2} pattern="[A-Za-z]{2}"
-                placeholder={t('Автоматически')} autoCapitalize="characters" spellCheck={false}
-                onChange={event => setForm({ ...form, country_override: event.target.value.toUpperCase() })} />
-              <small className="muted">{t('Пусто — авто по адресу SSH или публичному выходу самого сервера. Изменение страны не применяет маршруты действующего каскада.')}</small>
-            </label>
-            <label>
-              {t('Заметка')}
-              <input
-                value={form.note}
-                onChange={(e) => setForm({ ...form, note: e.target.value })}
-                placeholder={t('необязательно')}
-              />
-            </label>
-            <label>
-              {t('Группа (папка)')}
-              <input
-                list="acontrol-groups"
-                value={form.group_name}
-                onChange={(e) => setForm({ ...form, group_name: e.target.value })}
-                placeholder={t('необязательно — компания, локация…')}
-              />
-              <datalist id="acontrol-groups">
-                {existingGroups.map((g) => (
-                  <option key={g} value={g} />
-                ))}
-              </datalist>
-            </label>
-
-            {editingId !== null && form.manual_exit_name !== undefined && <>
-              <label>{t('Название выхода')}
-                <input value={form.manual_exit_name || ''} maxLength={128}
-                  onChange={e => setForm({ ...form, manual_exit_name: e.target.value })}
-                  placeholder={t('необязательно')} />
+              <div className="form-row">
+                <label>
+                  {t('SSH-порт')}
+                  <input
+                    type="number"
+                    min={1}
+                    max={65535}
+                    value={form.ssh_port}
+                    onChange={(e) =>
+                      setForm({ ...form, ssh_port: Number(e.target.value) })
+                    }
+                    required
+                  />
+                </label>
+                <label>
+                  {t('SSH-пользователь')}
+                  <input
+                    value={form.ssh_user}
+                    onChange={(e) => setForm({ ...form, ssh_user: e.target.value })}
+                    required
+                  />
+                </label>
+              </div>
+              <SshAccessEditor value={form} servers={servers} serverId={editingId} onChange={update => { setForm({ ...form, ...update }); setSshPreview(null) }} />
+              {editingId !== null && servers.find(server => server.id === editingId)?.ssh_access_pending && (
+                <button type="button" className="ghost" disabled={busy} onClick={() => { void recoverSshAccess(editingId) }}>
+                  {t('Восстановить настройку SSH')}
+                </button>
+              )}
+              {sshPreview && <div className="bootstrap-block" role="status">
+                <b>{t('Предпросмотр изменения SSH')}</b>
+                <p>{t('Разрешенные источники')}: {sshPreview.unrestricted ? t('Без ограничения') : sshPreview.sources.join(', ')}</p>
+                <ul>{sshPreview.actions.map(action => <li key={action}>{t(action)}</li>)}</ul>
+                {sshPreview.jump_user && <p>{t('На промежуточной ноде будет настроен отдельный пользователь и его SSH drop-in, разрешающий только соединение к этой цели.')}</p>}
+                <p className="muted small">{t('При сбое панель восстанавливает прежний ключ и удаляет только свои новые правила firewall. Если подтверждение отката не получено, сохранится операция восстановления.')}</p>
+              </div>}
+              <label>
+                {t('Адрес VPN для клиентов (Client Endpoint)')}
+                <input
+                  value={form.client_endpoint}
+                  onChange={(e) => setForm({ ...form, client_endpoint: e.target.value })}
+                  placeholder="vpn.example.com"
+                  maxLength={255}
+                  autoComplete="off"
+                  spellCheck={false}
+                  aria-describedby="server-client-endpoint-help"
+                />
+                <small className="muted" id="server-client-endpoint-help">
+                  {t('Домен или IP без порта для AmneziaWG и WireGuard. Если поле пустое, новые профили используют хост SSH, а у сохраненных остается исходный адрес.')}
+                </small>
               </label>
-              <p className="muted small">{t('В списке используется имя известного сервера, иначе это название или адрес выхода.')}</p>
-            </>}
+              <label>
+                {t('Страна сервера')}
+                <input className="mono" value={form.country_override ?? ''} maxLength={2} pattern="[A-Za-z]{2}"
+                  placeholder={t('Автоматически')} autoCapitalize="characters" spellCheck={false}
+                  onChange={event => setForm({ ...form, country_override: event.target.value.toUpperCase() })} />
+                <small className="muted">{t('Пусто — авто по адресу SSH или публичному выходу самого сервера. Изменение страны не применяет маршруты действующего каскада.')}</small>
+              </label>
+              <label>
+                {t('Заметка')}
+                <input
+                  value={form.note}
+                  onChange={(e) => setForm({ ...form, note: e.target.value })}
+                  placeholder={t('необязательно')}
+                />
+              </label>
+              <label>
+                {t('Группа (папка)')}
+                <input
+                  list="acontrol-groups"
+                  value={form.group_name}
+                  onChange={(e) => setForm({ ...form, group_name: e.target.value })}
+                  placeholder={t('необязательно — компания, локация…')}
+                />
+                <datalist id="acontrol-groups">
+                  {existingGroups.map((g) => (
+                    <option key={g} value={g} />
+                  ))}
+                </datalist>
+              </label>
 
-            {editingId !== null && (
-              <div className="torrent-opts">
-                <label className="checkbox">
-                  <input
-                    type="checkbox"
-                    checked={!!form.alerts_enabled}
-                    onChange={(e) =>
-                      setForm({ ...form, alerts_enabled: e.target.checked })
-                    }
-                  />
-                  {t('Присылать алерты этого сервера')}
+              {editingId !== null && form.manual_exit_name !== undefined && <>
+                <label>{t('Название выхода')}
+                  <input value={form.manual_exit_name || ''} maxLength={128}
+                    onChange={e => setForm({ ...form, manual_exit_name: e.target.value })}
+                    placeholder={t('необязательно')} />
                 </label>
-                <p className="muted small">
-                  {t(
-                    'По умолчанию выключено. Включает алерты о доступности, каскаде, клиентах, диске и торрентах этого сервера.',
-                  )}
-                </p>
-                <label className="checkbox">
-                  <input
-                    type="checkbox"
-                    checked={!!form.torrent_block}
-                    onChange={(e) =>
-                      setForm({
-                        ...form,
-                        torrent_block: e.target.checked,
-                        torrent_autopause: e.target.checked ? form.torrent_autopause : false,
-                      })
-                    }
-                  />
-                  {t('Блокировать торренты')}
-                </label>
-                {form.torrent_block && (
-                  <label className="checkbox torrent-sub">
+                <p className="muted small">{t('В списке используется имя известного сервера, иначе это название или адрес выхода.')}</p>
+              </>}
+
+              {editingId !== null && (
+                <div className="torrent-opts">
+                  <label className="checkbox">
                     <input
                       type="checkbox"
-                      checked={!!form.torrent_autopause}
-                      onChange={(e) => setForm({ ...form, torrent_autopause: e.target.checked })}
+                      checked={!!form.alerts_enabled}
+                      onChange={(e) =>
+                        setForm({ ...form, alerts_enabled: e.target.checked })
+                      }
                     />
-                    {t('Ставить на паузу того, кто качает')}
+                    {t('Присылать алерты этого сервера')}
                   </label>
-                )}
-                <p className="muted small">
-                  {t(
-                    'AmneziaWG и OpenVPN: торрент-трафик режется на сервере, у клиента в списке видна отметка. При включенных алертах приходит уведомление. Шифрованные торренты могут пройти, XRay не охвачен.',
-                  )}
-                </p>
-              </div>
-            )}
-
-            {editingId === null && (
-              <div className="bootstrap-block">
-                <div className="setup-choice">
-                  <label
-                    className={`setup-option${useBootstrap ? ' setup-option-active' : ''}`}
-                  >
-                    <input
-                      type="radio"
-                      name="setup-method"
-                      checked={useBootstrap}
-                      onChange={() => setUseBootstrap(true)}
-                    />
-                    <div>
-                      <span className="setup-option-title">
-                        {t('Автоматически по SSH-паролю')}
-                      </span>
-                      <span className="setup-option-desc">
-                        {t('Панель сама зайдёт по паролю и всё настроит')}
-                      </span>
-                    </div>
-                  </label>
-                  <label
-                    className={`setup-option${!useBootstrap ? ' setup-option-active' : ''}`}
-                  >
-                    <input
-                      type="radio"
-                      name="setup-method"
-                      checked={!useBootstrap}
-                      onChange={() => setUseBootstrap(false)}
-                    />
-                    <div>
-                      <span className="setup-option-title">
-                        {t('Скриптом — запущу на сервере сам')}
-                      </span>
-                      <span className="setup-option-desc">
-                        {t('Панель даст скрипт: создаст юзера, ключ, откроет фаервол')}
-                      </span>
-                    </div>
-                  </label>
-                </div>
-                {useBootstrap ? (
-                  <>
-                    <p className="muted small">
-                      {t(
-                        'Панель один раз зайдет по паролю, установит свой ключ с выбранными ограничениями и проверит вход по нему. Пароль не сохраняется.',
-                      )}
-                    </p>
-                    <p className="muted small">
-                      {t(
-                        '⚠️ Если на сервере включён фаервол и он блокирует SSH с IP панели — подключиться не получится (будет таймаут). В этом случае снимите галку и запустите ручной скрипт прямо на сервере — он откроет доступ панели.',
-                      )}
-                    </p>
-                    <label>
-                      {t('SSH-пароль пользователя {user}', { user: form.ssh_user })}
-                      <input
-                        type="password"
-                        value={password}
-                        onChange={(e) => setPassword(e.target.value)}
-                        autoComplete="new-password"
-                        required
-                      />
-                    </label>
-                    {showAdvanced ? (
-                      <label>
-                        {t('Пароль для sudo (если отличается)')}
-                        <input
-                          type="password"
-                          value={sudoPassword}
-                          onChange={(e) => setSudoPassword(e.target.value)}
-                          autoComplete="new-password"
-                        />
-                      </label>
-                    ) : (
-                      <button
-                        type="button"
-                        className="linklike"
-                        onClick={() => setShowAdvanced(true)}
-                      >
-                        {t('Отдельный пароль для sudo?')}
-                      </button>
-                    )}
-                  </>
-                ) : (
                   <p className="muted small">
                     {t(
-                      'После «Сохранить» панель покажет скрипт. Выполните его под root: он создаст пользователя «{user}», обновит только ключ панели и применит выбранный режим firewall. Затем нажмите «Проверить».',
-                      { user: form.ssh_user },
+                      'По умолчанию выключено. Включает алерты о доступности, каскаде, клиентах, диске и торрентах этого сервера.',
                     )}
                   </p>
-                )}
-              </div>
-            )}
+                  <label className="checkbox">
+                    <input
+                      type="checkbox"
+                      checked={!!form.torrent_block}
+                      onChange={(e) =>
+                        setForm({
+                          ...form,
+                          torrent_block: e.target.checked,
+                          torrent_autopause: e.target.checked ? form.torrent_autopause : false,
+                        })
+                      }
+                    />
+                    {t('Блокировать торренты')}
+                  </label>
+                  {form.torrent_block && (
+                    <label className="checkbox torrent-sub">
+                      <input
+                        type="checkbox"
+                        checked={!!form.torrent_autopause}
+                        onChange={(e) => setForm({ ...form, torrent_autopause: e.target.checked })}
+                      />
+                      {t('Ставить на паузу того, кто качает')}
+                    </label>
+                  )}
+                  <p className="muted small">
+                    {t(
+                      'AmneziaWG и OpenVPN: торрент-трафик режется на сервере, у клиента в списке видна отметка. При включенных алертах приходит уведомление. Шифрованные торренты могут пройти, XRay не охвачен.',
+                    )}
+                  </p>
+                </div>
+              )}
+
+              {editingId === null && (
+                <div className="bootstrap-block">
+                  <div className="setup-choice">
+                    <label
+                      className={`setup-option${useBootstrap ? ' setup-option-active' : ''}`}
+                    >
+                      <input
+                        type="radio"
+                        name="setup-method"
+                        checked={useBootstrap}
+                        onChange={() => setUseBootstrap(true)}
+                      />
+                      <div>
+                        <span className="setup-option-title">
+                          {t('Автоматически по SSH-паролю')}
+                        </span>
+                        <span className="setup-option-desc">
+                          {t('Панель сама зайдёт по паролю и всё настроит')}
+                        </span>
+                      </div>
+                    </label>
+                    <label
+                      className={`setup-option${!useBootstrap ? ' setup-option-active' : ''}`}
+                    >
+                      <input
+                        type="radio"
+                        name="setup-method"
+                        checked={!useBootstrap}
+                        onChange={() => setUseBootstrap(false)}
+                      />
+                      <div>
+                        <span className="setup-option-title">
+                          {t('Скриптом — запущу на сервере сам')}
+                        </span>
+                        <span className="setup-option-desc">
+                          {t('Панель даст скрипт: создаст юзера, ключ, откроет фаервол')}
+                        </span>
+                      </div>
+                    </label>
+                  </div>
+                  {useBootstrap ? (
+                    <>
+                      <p className="muted small">
+                        {t(
+                          'Панель один раз зайдет по паролю, установит свой ключ с выбранными ограничениями и проверит вход по нему. Пароль не сохраняется.',
+                        )}
+                      </p>
+                      <p className="muted small">
+                        {t(
+                          '⚠️ Если на сервере включён фаервол и он блокирует SSH с IP панели — подключиться не получится (будет таймаут). В этом случае снимите галку и запустите ручной скрипт прямо на сервере — он откроет доступ панели.',
+                        )}
+                      </p>
+                      <label>
+                        {t('SSH-пароль пользователя {user}', { user: form.ssh_user })}
+                        <input
+                          type="password"
+                          value={password}
+                          onChange={(e) => setPassword(e.target.value)}
+                          autoComplete="new-password"
+                          required
+                        />
+                      </label>
+                      {showAdvanced ? (
+                        <label>
+                          {t('Пароль для sudo (если отличается)')}
+                          <input
+                            type="password"
+                            value={sudoPassword}
+                            onChange={(e) => setSudoPassword(e.target.value)}
+                            autoComplete="new-password"
+                          />
+                        </label>
+                      ) : (
+                        <button
+                          type="button"
+                          className="linklike"
+                          onClick={() => setShowAdvanced(true)}
+                        >
+                          {t('Отдельный пароль для sudo?')}
+                        </button>
+                      )}
+                    </>
+                  ) : (
+                    <p className="muted small">
+                      {t(
+                        'После «Сохранить» панель покажет скрипт. Выполните его под root: он создаст пользователя «{user}», обновит только ключ панели и применит выбранный режим firewall. Затем нажмите «Проверить».',
+                        { user: form.ssh_user },
+                      )}
+                    </p>
+                  )}
+                </div>
+              )}
+            </fieldset>
 
             {formError && <p className="error" role="alert">{t(formError)}</p>}
             <div className="modal-actions">
-              <button type="button" className="ghost" onClick={() => setFormOpen(false)}>
+              <button type="button" className="ghost" disabled={busy} onClick={() => setFormOpen(false)}>
                 {t('Отмена')}
               </button>
               <button type="submit" disabled={busy || (editingId !== null && !!servers.find(server => server.id === editingId)?.ssh_access_pending)}>
