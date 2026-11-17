@@ -1582,7 +1582,7 @@ export function ServersPage({ onUnauthorized }: Props) {
                   required
                 />
               </label>
-              <div className="form-row">
+              <div className="server-ssh-endpoint">
                 <label>
                   {t('SSH-порт')}
                   <input
