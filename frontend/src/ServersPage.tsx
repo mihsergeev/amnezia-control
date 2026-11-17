@@ -871,6 +871,7 @@ export function ServersPage({ onUnauthorized }: Props) {
           // SSH is already committed even if saving the remaining form fails.
           // Keep retries metadata-only instead of preparing the same SSH again.
           setServers(previous => previous.map(server => server.id === applied.id ? applied : server))
+          setForm(previous => ({ ...previous, ...accessPolicy(applied) }))
           setSshPreview(null)
         }
         if (payload.manual_exit_name !== undefined) {
