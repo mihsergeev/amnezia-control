@@ -1734,6 +1734,19 @@ tr:hover .note-edit {
   animation: backdrop-in 0.16s ease;
 }
 
+.ssh-access-options {
+  min-width: 0;
+  max-width: 100%;
+  box-sizing: border-box;
+}
+
+.ssh-access-options select {
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  box-sizing: border-box;
+}
+
 .modal-backdrop > .card,
 .modal-backdrop > .modal,
 .modal-backdrop > form.modal {

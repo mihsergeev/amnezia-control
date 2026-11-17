@@ -831,6 +831,11 @@ export function ServersPage({ onUnauthorized }: Props) {
 
   async function submit(e: FormEvent) {
     e.preventDefault()
+    if (editingId !== null && servers.find(server => server.id === editingId)?.ssh_access_pending) {
+      setSshPreview(null)
+      setFormError(t('Восстановить настройку SSH'))
+      return
+    }
     setBusy(true)
     setFormError(null)
     setNotice(null)
@@ -847,9 +852,20 @@ export function ServersPage({ onUnauthorized }: Props) {
             }))
             return
           }
-          const applied = await api<Server>(`/api/servers/${editingId}/ssh-access/apply`, {
-            method: 'POST', body: JSON.stringify({ token: sshPreview.token }),
-          })
+          let applied: Server
+          try {
+            applied = await api<Server>(`/api/servers/${editingId}/ssh-access/apply`, {
+              method: 'POST', body: JSON.stringify({ token: sshPreview.token }),
+            })
+          } catch (err) {
+            // A failed reply can leave either a terminal preview or an active
+            // remote transaction. Never resend its token or guess it is idle.
+            setSshPreview(null)
+            setServers(previous => previous.map(server => server.id === editingId
+              ? { ...server, ssh_access_pending: true } : server))
+            await load()
+            throw err
+          }
           const accessWarning = parseCheckInfo(applied)?.ssh_access_warning
           if (accessWarning) setNotice(String(accessWarning))
           setSshPreview(null)
@@ -911,6 +927,24 @@ export function ServersPage({ onUnauthorized }: Props) {
     } finally {
       setBusy(false)
       setBusyLabel('Сохранить')
+    }
+  }
+
+  async function recoverSshAccess(serverId: number) {
+    setBusy(true)
+    setFormError(null)
+    try {
+      await api(`/api/servers/${serverId}/ssh-access/recover`, { method: 'POST' })
+      setSshPreview(null)
+      setServers(previous => previous.map(server => server.id === serverId
+        ? { ...server, ssh_access_pending: false } : server))
+      await load()
+    } catch (err) {
+      await load()
+      if (formOpen) setFormError(err instanceof Error ? err.message : t('Неизвестная ошибка'))
+      else handleError(err)
+    } finally {
+      setBusy(false)
     }
   }
 
@@ -1164,10 +1198,7 @@ export function ServersPage({ onUnauthorized }: Props) {
     }
     items.push({ label: t('Выгрузить в файл'), onClick: () => setExportFor(s) })
     items.push({ label: t('Изменить'), onClick: () => openEdit(s) })
-    if (s.ssh_access_pending) items.push({ label: t('Восстановить настройку SSH'), onClick: async () => {
-      try { await api(`/api/servers/${s.id}/ssh-access/recover`, { method: 'POST' }); await load() }
-      catch (err) { handleError(err); await load() }
-    } })
+    if (s.ssh_access_pending) items.push({ label: t('Восстановить настройку SSH'), onClick: () => { void recoverSshAccess(s.id) } })
     // опасное - в конце меню за чертой, подальше от выдачи конфигов в окне клиентов
     items.push({ divider: true })
     if (online) {
@@ -1554,6 +1585,11 @@ export function ServersPage({ onUnauthorized }: Props) {
               </label>
             </div>
             <SshAccessEditor value={form} servers={servers} serverId={editingId} onChange={update => { setForm({ ...form, ...update }); setSshPreview(null) }} />
+            {editingId !== null && servers.find(server => server.id === editingId)?.ssh_access_pending && (
+              <button type="button" className="ghost" disabled={busy} onClick={() => { void recoverSshAccess(editingId) }}>
+                {t('Восстановить настройку SSH')}
+              </button>
+            )}
             {sshPreview && <div className="bootstrap-block" role="status">
               <b>{t('Предпросмотр изменения SSH')}</b>
               <p>{t('Разрешенные источники')}: {sshPreview.unrestricted ? t('Без ограничения') : sshPreview.sources.join(', ')}</p>
@@ -1762,7 +1798,7 @@ export function ServersPage({ onUnauthorized }: Props) {
               <button type="button" className="ghost" onClick={() => setFormOpen(false)}>
                 {t('Отмена')}
               </button>
-              <button type="submit" disabled={busy}>
+              <button type="submit" disabled={busy || (editingId !== null && !!servers.find(server => server.id === editingId)?.ssh_access_pending)}>
                 {busy ? t(busyLabel) : sshPreview ? t('Применить SSH и сохранить') : t('Сохранить')}
               </button>
             </div>
