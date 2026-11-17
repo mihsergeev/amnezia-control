@@ -1,10 +1,13 @@
 """Inventory IDs and forwarding keys must stay local to their own panel."""
+import hashlib
 import json
 
 import pytest
 from sqlalchemy import delete, select
 
-from app.models import Server, SshAccessChange
+from app.config import get_settings
+from app.models import AwgConfig, Server, SshAccessChange
+from app.sshkeys import ensure_jump_key, jump_key_path, key_paths
 
 
 @pytest.mark.parametrize("relay_host", ["203.0.113.41", "relay_node.example.test"])
@@ -66,3 +69,39 @@ async def test_import_cannot_bind_a_jump_with_unresolved_change(client, auth_hea
     assert result.status_code == 409, result.text
     async with session_factory() as session:
         assert list(await session.scalars(select(Server.id))) == [1]
+
+
+@pytest.mark.parametrize("fields", [
+    {"tables": [1]},
+    {"tables": {"awg_configs": {}}},
+    {"tables": {"awg_configs": [None]}},
+    {"native_snapshots": None},
+], ids=["tables", "rows", "row", "snapshots"])
+async def test_rejected_import_preserves_local_keys_until_successful_retry(client, auth_headers, session_factory, fields):
+    async with session_factory() as session:
+        session.add(Server(id=1, name="original", host="192.0.2.10"))
+        session.add(AwgConfig(server_id=1, public_key="fixture-client", name="fixture", config="stored profile"))
+        await session.commit()
+    panel_key, _ = key_paths(get_settings().data_dir)
+    ensure_jump_key(panel_key, 1)
+    ensure_jump_key(panel_key, 2)
+    current = jump_key_path(panel_key, 1)
+    stale = jump_key_path(panel_key, 2)
+    current_hash = hashlib.sha256(current.read_bytes()).digest()
+    stale_hash = hashlib.sha256(stale.read_bytes()).digest()
+    valid = {"format": "acontrol-server-export", "format_version": 1,
+             "server": {"name": "transfer fixture", "host": "192.0.2.11"}, "tables": {}}
+
+    response = await client.post("/api/servers/import-file", headers=auth_headers, json=valid | fields)
+    assert response.status_code == 400, response.text
+    async with session_factory() as session:
+        assert list(await session.scalars(select(Server.id))) == [1]
+        assert await session.scalar(select(AwgConfig.config).where(AwgConfig.server_id == 1)) == "stored profile"
+    assert hashlib.sha256(current.read_bytes()).digest() == current_hash
+    assert hashlib.sha256(stale.read_bytes()).digest() == stale_hash
+
+    retry = await client.post("/api/servers/import-file", headers=auth_headers, json=valid)
+    assert retry.status_code == 200, retry.text
+    assert retry.json()["server_id"] == 2
+    assert not stale.exists()
+    assert hashlib.sha256(current.read_bytes()).digest() == current_hash

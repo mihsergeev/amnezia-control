@@ -234,6 +234,9 @@ async def import_server_file(
     spec = payload.get("server") or {}
     if not isinstance(spec, dict):
         raise HTTPException(400, "В файле неверное описание сервера")
+    tables = payload.get("tables", {})
+    if not isinstance(tables, dict):
+        raise HTTPException(400, "В файле неверное описание таблиц")
     if spec.get("ssh_jump_server_id") is not None:
         raise HTTPException(400, "Номер промежуточной ноды относится к другой панели; используйте адрес ноды в файле переноса")
     try:
@@ -312,13 +315,12 @@ async def import_server_file(
     )
     session.add(server)
     await session.flush()
-    jump_key_path(key_paths(get_settings().data_dir)[0], server.id).unlink(missing_ok=True)
 
     by_table = {m.__tablename__: m for m in server_scoped_models()}
     imported: dict[str, int] = {}
     skipped: list[str] = []
     now = datetime.now(timezone.utc)
-    for table, rows in (payload.get("tables") or {}).items():
+    for table, rows in tables.items():
         model = by_table.get(table)
         if table in _PANEL_LOCAL_TABLES:
             # Older exports carried these journals. Never rebind them to a
@@ -329,10 +331,10 @@ async def import_server_file(
         if table in _RUNTIME_TABLES:
             # статус и метрики панель наберет сама, из файла их не берем
             continue
-        if model is None or not rows:
+        if model is None:
             # таблица из более новой панели — пропускаем, но говорим об этом
             # вслух: тихо потерянные данные хуже, чем явно названные
-            if model is None and rows:
+            if rows:
                 skipped.append(table)
             continue
         values = []
@@ -372,6 +374,8 @@ async def import_server_file(
     except ValueError as exc:
         await session.rollback()
         raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from None
+    # Validation is complete. Remove any stale identity before the new ID becomes visible.
+    jump_key_path(key_paths(get_settings().data_dir)[0], server.id).unlink(missing_ok=True)
     await session.commit()
     await session.refresh(server)
     await audit.record(
