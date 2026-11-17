@@ -44,9 +44,10 @@ for mode in runtime permanent; do
     raw=$(firewall-cmd $OPT --list-rich-rules) || { FAILED=1; continue; }
     current=$(printf '%s\\n' "$raw" | LC_ALL=C sort)
     expected=$(cat "$STATE/firewalld-$mode-after" 2>/dev/null) || { FAILED=1; continue; }
+    before=$(cat "$STATE/firewalld-$mode-before" 2>/dev/null) || before="$expected"
     while IFS= read -r rule; do
       if firewall-cmd $OPT --query-rich-rule="$rule" >/dev/null 2>&1; then
-        if [ "$current" != "$expected" ]; then
+        if [ "$current" != "$expected" ] && [ "$current" != "$before" ]; then
           echo "Firewall изменен после подготовки, требуется проверка собственного правила: $rule" >&2
           FAILED=1
         else
@@ -78,6 +79,16 @@ echo ACONTROL_FIREWALL_COMMITTED
         body = header + '''[ ! -e "$STATE" ] || exit 1
 mkdir -m 700 "$STATE"
 ''' + lock
+        guard = header + '''i=0
+while [ "$i" -lt 180 ]; do
+  [ ! -e "$STATE/committed" ] && [ ! -e "$STATE/rolledback" ] || exit 0
+  sleep 1; i=$((i + 1))
+done
+''' + lock + '[ ! -e "$STATE/committed" ] || exit 0\n' + rollback
+        # Arm recovery before the first rule mutation: the remote shell can
+        # die after adding a rule but before returning to the panel.
+        body += f'''nohup sh -c {sshops._sh_quote(guard)} 9>&- </dev/null >/dev/null 2>&1 &
+'''
         for network in networks:
             address = str(network.network_address) if network.prefixlen == network.max_prefixlen else str(network)
             canonical = f"allow from {address} to any port {port} proto tcp"
@@ -96,23 +107,22 @@ if command -v firewall-cmd >/dev/null 2>&1 && firewall-cmd --state >/dev/null 2>
     RULE={sshops._sh_quote(rich)}
     if firewall-cmd $OPT --query-rich-rule="$RULE" >/dev/null 2>&1; then :; else
       status=$?; [ "$status" = 1 ] || exit 1
+      # Journal both possible outcomes before changing firewalld. A process
+      # death can happen inside --add-rich-rule, before any reply or snapshot.
+      RAW=$(firewall-cmd $OPT --list-rich-rules)
+      T=$(mktemp "$STATE/.firewalld.XXXXXX")
+      printf '%s\\n' "$RAW" | LC_ALL=C sort > "$T"
+      mv -f "$T" "$STATE/firewalld-$mode-before"
+      T=$(mktemp "$STATE/.firewalld.XXXXXX")
+      printf '%s\\n%s\\n' "$RAW" "$RULE" | sed '/^$/d' | LC_ALL=C sort > "$T"
+      mv -f "$T" "$STATE/firewalld-$mode-after"
       printf '%s\\n' "$RULE" >> "$STATE/firewalld-$mode-intents"
       firewall-cmd $OPT --add-rich-rule="$RULE" >/dev/null
     fi
-    RAW=$(firewall-cmd $OPT --list-rich-rules)
-    printf '%s\\n' "$RAW" | LC_ALL=C sort > "$STATE/firewalld-$mode-after"
   done
 fi
 '''
-        guard = header + '''i=0
-while [ "$i" -lt 180 ]; do
-  [ ! -e "$STATE/committed" ] && [ ! -e "$STATE/rolledback" ] || exit 0
-  sleep 1; i=$((i + 1))
-done
-''' + lock + '[ ! -e "$STATE/committed" ] || exit 0\n' + rollback
-        body += f'''nohup sh -c {sshops._sh_quote(guard)} 9>&- </dev/null >/dev/null 2>&1 &
-echo ACONTROL_FIREWALL_READY
-'''
+        body += 'echo ACONTROL_FIREWALL_READY\n'
     return f'''if [ "$(id -u)" = 0 ]; then SUDO=""; else SUDO={sshops._sh_quote(sudo)}; fi
 $SUDO sh -c {sshops._sh_quote(body)}
 '''

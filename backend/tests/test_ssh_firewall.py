@@ -2,6 +2,7 @@ import os
 import shlex
 import shutil
 import subprocess
+import time
 
 import pytest
 
@@ -102,6 +103,32 @@ def test_committed_firewall_rejects_rollback_and_commit_is_idempotent(tmp_path):
     assert 'ACONTROL_FIREWALL_STATE_COMMITTED' in execute(tmp_path, 'status').stdout
 
 
+@pytest.mark.parametrize('outcome', ['not-applied', 'applied-with-lost-reply'])
+def test_firewalld_stage_failure_has_journal_for_both_remote_outcomes(tmp_path, outcome):
+    init(tmp_path)
+    extra = '''eval "$(declare -f firewall-cmd | sed '1s/firewall-cmd/original_firewalld/')"
+firewall-cmd() {
+  if [ "$1" = --permanent ]; then
+    case "$2" in
+      --add-rich-rule=*)
+'''
+    if outcome == 'applied-with-lost-reply':
+        extra += '        original_firewalld "$@"\n'
+    extra += '''        return 2 ;;
+    esac
+  fi
+  original_firewalld "$@"
+}
+'''
+    assert execute(tmp_path, 'stage', extra=extra).returncode != 0
+    assert (tmp_path / 'firewalld-runtime').read_text()
+    result = execute(tmp_path, 'rollback')
+    assert result.returncode == 0, result.stderr
+    assert not (tmp_path / 'firewalld-runtime').read_text()
+    assert not (tmp_path / 'firewalld-permanent').read_text()
+    assert (tmp_path / 'rootdata/acontrol-ssh-firewall' / ('a' * 32) / 'rolledback').exists()
+
+
 @pytest.mark.skipif(os.name == 'nt', reason='Kernel flock process-death proof requires Linux; also exercised on a test VM')
 def test_firewall_lock_is_released_after_sigkill(tmp_path):
     init(tmp_path)
@@ -114,3 +141,35 @@ def test_firewall_lock_is_released_after_sigkill(tmp_path):
         assert execute(tmp_path, 'rollback').returncode == 0
     finally:
         if process.poll() is None: process.kill(); process.wait(timeout=5)
+
+
+@pytest.mark.skipif(os.name == 'nt', reason='Detached watchdog and SIGKILL require Linux; real UFW proof also runs on an isolated test VM')
+def test_watchdog_recovers_sigkill_during_first_rule_mutation(tmp_path):
+    """The shell can die inside ufw, before stage returns or starts firewalld."""
+    commands = tmp_path / 'bin'; commands.mkdir()
+    rulefile = tmp_path / 'rules'; rulefile.write_text('')
+    (commands / 'stat').write_text('#!/bin/sh\necho 0\n')
+    (commands / 'firewall-cmd').write_text('#!/bin/sh\nexit 1\n')
+    (commands / 'ufw').write_text('''#!/bin/sh
+if [ "$1" = show ]; then cat "$TEST_RULES"; exit 0; fi
+if [ "$1" = --force ]; then : > "$TEST_RULES"; exit 0; fi
+printf "ufw allow from 192.0.2.1 to any port 2222 proto tcp comment 'acontrol-ssh-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'\\n" > "$TEST_RULES"
+touch "$TEST_MUTATED"
+kill -KILL "$PPID"
+''')
+    for path in commands.iterdir(): path.chmod(0o700)
+    generated = ssh_firewall.script('a' * 32, ['192.0.2.1'], 2222)
+    body = shlex.split(generated.split('$SUDO sh -c ', 1)[1])[0]
+    body = body.replace('/lib65', (tmp_path / 'rootdata').as_posix()).replace('"$i" -lt 180', '"$i" -lt 1')
+    mutation = tmp_path / 'mutation-observed'
+    env = {**os.environ, 'PATH': str(commands) + os.pathsep + os.environ['PATH'],
+           'TEST_RULES': str(rulefile), 'TEST_MUTATED': str(mutation)}
+    completed = subprocess.run(['sh', '-c', body], text=True, capture_output=True, env=env, timeout=5)
+    assert completed.returncode < 0
+    assert mutation.exists()  # The allow was applied before process death.
+    deadline = time.monotonic() + 8
+    state = tmp_path / 'rootdata/acontrol-ssh-firewall' / ('a' * 32)
+    while time.monotonic() < deadline and not (state / 'rolledback').exists():
+        time.sleep(.05)
+    assert (state / 'rolledback').exists(), 'mid-stage process death must still have an armed watchdog'
+    assert not rulefile.read_text()
