@@ -4,6 +4,13 @@ All notable changes to Amnezia Control are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.84.53] - 2026-11-17
+
+- Add per-node SSH source policies with explicit IP/CIDR lists or unrestricted key sources, plus a choice to add source-specific SSH firewall permissions or preserve the firewall. Keep existing nodes on direct access and preserve other users' keys and firewall rules.
+- Add explicit one-hop SSH management through an existing node across checks, metrics, deployment and website diagnostics. Use separate per-target forwarding identities, exact destination restrictions and host-key checks on both nodes while keeping private keys in the panel and preserving VPN client profiles.
+- Add SSH change previews, independent connection verification, durable recovery and rollback of owned key and firewall changes. Protect newer operations from stale callbacks, recover kernel locks after process failure, and warn when retiring an old forwarding key cannot be confirmed. Preserve server identity and client metadata during endpoint repair, and report failed key login after bootstrap as a failure.
+- Preserve SSH policies, keys and trust data in backups and use portable jump addresses in single-server transfers. Reject invalid routes and unresolved preparation plans, keep incomplete routes available for subsequent checking, and prevent restored inventory IDs from inheriting unrelated local forwarding identities. Document the setup and recovery workflow.
+
 ## [0.84.52] - 2026-11-16
 
 - Verify current AmneziaWG configuration, live port and interface address before resolving restored recovery journals. Reject incomplete original-state fingerprints before restoring a backup, and block stale profile exports when the node no longer matches the saved operation.

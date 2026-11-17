@@ -275,12 +275,18 @@ The bundled Caddy (`compose.tls.yml`) publishes its ports from the panel's own n
 
 Add the server in the panel (name, host, SSH port, SSH user) and pick a setup method:
 
-1. **With a script** (recommended for a fresh node) — save, then run the shown script as **root** on the node (SSH in and paste it). It **creates the SSH user**, installs the panel's key and opens the firewall for the panel IP. Nothing to prepare by hand. Then click **Check** on the card. Also works when a firewall blocks inbound SSH from the panel, since the script opens access itself.
-2. **Auto-setup by SSH password** — the panel connects once with the given user's password, installs its key and opens the SSH port **for the panel IP only** (password not stored). The user must already exist with a password, and the node needs `PasswordAuthentication yes`.
+1. **With a script** (recommended for a fresh node) — save, then run the shown script as **root** on the node (SSH in and paste it). It **creates the SSH user**, installs the panel's key and, when selected, adds source-specific SSH firewall permissions. Then click **Check** on the card. The script can also prepare access when the current firewall blocks the panel.
+2. **Auto-setup by SSH password** — the panel connects once with the given user's password, installs its key and confirms a separate key-authenticated connection before reporting success. The password is not stored. The user must already exist with a password, and the node needs `PasswordAuthentication yes`.
 
 You can also **import** existing AmneziaVPN servers via their "full access" `vpn://` link, or add many at once from a `host:port user password` list.
 
-> Firewall: the panel only opens the **SSH port for its own IP** (via ufw / firewalld / `hosts.allow`). The **VPN port** is opened to the world by the deploy step (Docker publish + ufw / firewalld), because clients need it — nothing else is exposed.
+**SSH access settings** choose direct access or one existing, directly reachable node as a jump. The latter carries panel management connections: checks, metrics, protocol operations and website diagnostics. The panel creates a separate key and restricted forwarding account for each target; private keys stay in the panel, and existing VPN client profiles stay unchanged. Prepare a new jump route after running the target's setup script. Forwarding is limited to that target's SSH address and port; host keys are checked separately on both nodes. OpenSSH with an included `sshd_config.d` directory and a systemd reload operation is required for the scoped forwarding role.
+
+Advanced settings choose the management key's allowed IP/CIDR sources and whether to add SSH firewall permissions or leave the firewall untouched. Set `ACONTROL_PANEL_IP` for the default source policy, or select an explicit source list. Unrestricted key sources are a separate, explicit choice. Existing rules and other users' keys are preserved; the panel does not enable, disable or reset the firewall. These key restrictions do not close SSH access provided by other keys or existing broad firewall rules.
+
+Changes to existing SSH access require a preview and a separate connection check, with a recovery journal and rollback of the operation's own key and firewall changes. An unavailable old endpoint can be corrected without deleting its server or client metadata. Retired forwarding keys are revoked where the old jump is reachable; an unconfirmed revocation produces a warning. Empty, locked system accounts and their restrictive drop-ins may remain. See the [SSH access guide](docs/ssh-access.html).
+
+> The **VPN port** is opened for clients by the protocol deployment step (Docker publish + ufw / firewalld). SSH access policy is configured separately.
 
 ---
 
