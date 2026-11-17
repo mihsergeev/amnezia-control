@@ -12,10 +12,11 @@ from urllib.parse import unquote
 from uuid import uuid4
 
 import httpx
+import pytest
 from sqlalchemy import select
 
 from app.api.transfer import _selected_models, server_scoped_models
-from app.models import AwgConfig, AwgNote, BulkClientIssue, ClientLimit, PausedClient, User
+from app.models import AwgConfig, AwgNote, AwgSettingsChange, BulkClientIssue, ClientLimit, PausedClient, User
 
 SERVER = {
     "name": "vpn-f",
@@ -136,7 +137,8 @@ async def test_every_server_scoped_table_is_accounted_for() -> None:
     # страховка от тихой потери: новая таблица с server_id обязана попасть либо
     # в перенос, либо в осознанные исключения
     known = {"server_status", "node_metrics", "traffic_samples",
-                 "client_traffic_samples", "torrent_hits", "bulk_client_issues", "ssh_access_changes"}
+             "client_traffic_samples", "torrent_hits", "bulk_client_issues", "ssh_access_changes",
+             "awg_settings_changes"}
     exported = {m.__tablename__ for m in _selected_models(False)}
     for model in server_scoped_models():
         t = model.__tablename__
@@ -177,6 +179,61 @@ async def test_transfer_keeps_profiles_but_does_not_move_pending_issue(client, a
     assert before.status_code == after.status_code == 200
     assert before.json()["request_id"] == pending["request_id"]
     assert after.json() is None
+
+
+async def test_transfer_roundtrip_after_completed_awg_settings_change(client, auth_headers, session_factory):
+    sid = await _make_server(client, auth_headers)
+    await _seed(session_factory, sid)
+    async with session_factory() as session:
+        session.add(AwgSettingsChange(id="a" * 32, server_id=sid, protocol="awg", phase="done", payload={}))
+        await session.commit()
+
+    exported = await client.get(f"/api/servers/{sid}/export", headers=_pw(auth_headers))
+    assert exported.status_code == 200, exported.text
+    assert (await client.delete(f"/api/servers/{sid}", headers=auth_headers)).status_code == 200
+    imported = await client.post("/api/servers/import-file", headers=auth_headers, content=exported.content)
+    assert imported.status_code == 200, imported.text
+    assert "awg_settings_changes" not in exported.json()["tables"]
+    new_id = imported.json()["server_id"]
+    async with session_factory() as session:
+        profile = await session.scalar(select(AwgConfig).where(AwgConfig.server_id == new_id))
+        assert profile.config == "[Interface]\nPrivateKey = c2VjcmV0\n"
+        assert await session.scalar(select(AwgSettingsChange.id)) is None
+
+
+@pytest.mark.parametrize("phase,status", [
+    ("done", 200), ("rolledback", 200), ("prepared", 409), ("applied", 409), ("unknown", 409),
+])
+async def test_legacy_transfer_with_awg_settings_journal(client, auth_headers, session_factory, phase, status):
+    data = {
+        "format": "acontrol-server-export", "format_version": 1, "server": SERVER,
+        "tables": {
+            "awg_configs": [{"public_key": "fixture-client", "name": "fixture", "config": "inert profile"}],
+            "awg_settings_changes": [{"protocol": "awg", "phase": phase, "payload": {"opaque": "legacy fixture"}}],
+        },
+    }
+    imported = await client.post("/api/servers/import-file", headers=auth_headers, json=data)
+    assert imported.status_code == status, imported.text
+    async with session_factory() as session:
+        assert await session.scalar(select(AwgSettingsChange.id)) is None
+        profile = await session.scalar(select(AwgConfig))
+    if status == 200:
+        assert imported.json()["skipped_tables"] == ["awg_settings_changes"]
+        assert profile.config == "inert profile"
+    else:
+        assert profile is None
+        assert (await client.get("/api/servers", headers=auth_headers)).json() == []
+
+
+async def test_transfer_does_not_export_profiles_while_awg_settings_recovery_is_pending(client, auth_headers, session_factory):
+    sid = await _make_server(client, auth_headers)
+    await _seed(session_factory, sid)
+    async with session_factory() as session:
+        session.add(AwgSettingsChange(id="a" * 32, server_id=sid, protocol="awg", phase="applied", payload={}))
+        await session.commit()
+
+    exported = await client.get(f"/api/servers/{sid}/export", headers=_pw(auth_headers))
+    assert exported.status_code == 409
 
 
 async def test_import_restores_server_with_its_data(

@@ -27,12 +27,12 @@ from fastapi import APIRouter, HTTPException, Request, status
 from fastapi.responses import Response
 from sqlalchemy import DateTime, func, insert, select
 
-from app import alerts, audit, bulk_issue_state, client_endpoint, geo, native_snapshots, ssh_access, ssh_archives, sshops, stepup
+from app import alerts, audit, bulk_issue_state, client_endpoint, geo, native_snapshots, nodelock, ssh_access, ssh_archives, sshops, stepup
 from app.clientip import client_ip
 from app.config import get_settings
 from app.db import Base
 from app.deps import CurrentUser, SessionDep
-from app.models import BulkClientIssue, Server, SshAccessChange
+from app.models import AwgSettingsChange, BulkClientIssue, Server, SshAccessChange
 from app.schemas import ServerImportResult
 from app.sshkeys import jump_key_path, key_paths
 
@@ -47,10 +47,11 @@ FORMAT_VERSION = 1
 # путал бы: новая панель показывала бы чужое «онлайн» до первой проверки.
 _RUNTIME_TABLES = {"server_status", "node_metrics", "torrent_hits"}
 
-# Issue journals belong to the panel and user that prepared the operation.
-# A pending journal can write credentials to the node when replayed; only the
+# Recovery journals belong to the panel that prepared the operation. The
 # separately stored profiles and other client metadata belong in a transfer.
-_PANEL_LOCAL_TABLES = {BulkClientIssue.__tablename__, SshAccessChange.__tablename__}
+_PANEL_LOCAL_TABLES = {AwgSettingsChange.__tablename__, BulkClientIssue.__tablename__, SshAccessChange.__tablename__}
+_AWG_SETTINGS_TERMINAL = ("done", "rolledback")
+_AWG_SETTINGS_PENDING = "Сначала завершите восстановление настроек AmneziaWG на исходной панели"
 
 # История трафика на активной ноде — сотни тысяч строк (у боевого сервера это
 # ~0.8 млн). Тащим только по явному запросу, иначе файл раздувается в сотни
@@ -120,19 +121,16 @@ def _selected_models(history: bool) -> list:
     return [m for m in server_scoped_models() if m.__tablename__ not in skip]
 
 
-@router.get("/servers/{server_id}/export")
-async def export_server(
-    server_id: int, request: Request, user: CurrentUser, session: SessionDep,
-    history: bool = False,
-) -> Response:
-    """Выгрузка одного сервера со всей его панельной обвязкой в JSON-файл.
-
-    В файле приватные ключи всех клиентов сервера, поэтому нужен пароль (и код
-    2FA): заголовками X-Confirm-Password и X-Confirm-OTP, как у восстановления."""
-    await stepup.verify(user, request.headers.get("x-confirm-password", ""), request)
+@bulk_issue_state.guard()
+@nodelock.operation("awg")
+async def _export_payload(server_id: int, session, history: bool) -> tuple[Server, dict]:
     server = await session.get(Server, server_id)
     if server is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Сервер не найден")
+    if await session.scalar(select(AwgSettingsChange.id).where(
+            AwgSettingsChange.server_id == server_id,
+            AwgSettingsChange.phase.not_in(_AWG_SETTINGS_TERMINAL)).limit(1)):
+        raise HTTPException(409, _AWG_SETTINGS_PENDING)
     if await session.scalar(select(SshAccessChange.id).where(
             SshAccessChange.server_id == server_id,
             SshAccessChange.phase.not_in(("preview", "done", "rolledback"))).limit(1)):
@@ -173,6 +171,20 @@ async def export_server(
         "tables": tables,
         "native_snapshots": await native_snapshots.export_server(session, server_id),
     }
+    return server, payload
+
+
+@router.get("/servers/{server_id}/export")
+async def export_server(
+    server_id: int, request: Request, user: CurrentUser, session: SessionDep,
+    history: bool = False,
+) -> Response:
+    """Выгрузка одного сервера со всей его панельной обвязкой в JSON-файл.
+
+    В файле приватные ключи всех клиентов сервера, поэтому нужен пароль (и код
+    2FA): заголовками X-Confirm-Password и X-Confirm-OTP, как у восстановления."""
+    await stepup.verify(user, request.headers.get("x-confirm-password", ""), request)
+    server, payload = await _export_payload(server_id, session, history)
     body = json.dumps(payload, ensure_ascii=False, indent=2).encode()
 
     await audit.record(session, user.username, "server_export", server.name, server.host)
@@ -237,6 +249,11 @@ async def import_server_file(
     tables = payload.get("tables", {})
     if not isinstance(tables, dict):
         raise HTTPException(400, "В файле неверное описание таблиц")
+    awg_journal = tables.get(AwgSettingsChange.__tablename__, [])
+    if not isinstance(awg_journal, list) or any(not isinstance(row, dict) for row in awg_journal):
+        raise HTTPException(400, "В файле неверный журнал настройки AmneziaWG")
+    if any(row.get("phase") not in _AWG_SETTINGS_TERMINAL for row in awg_journal):
+        raise HTTPException(409, _AWG_SETTINGS_PENDING)
     if spec.get("ssh_jump_server_id") is not None:
         raise HTTPException(400, "Номер промежуточной ноды относится к другой панели; используйте адрес ноды в файле переноса")
     try:
@@ -323,8 +340,8 @@ async def import_server_file(
     for table, rows in tables.items():
         model = by_table.get(table)
         if table in _PANEL_LOCAL_TABLES:
-            # Older exports carried these journals. Never rebind them to a
-            # new server or to an unrelated account with the same numeric ID.
+            # Older exports carried these journals. Keep recovery records on
+            # the panel where the operation was prepared.
             if rows:
                 skipped.append(table)
             continue
