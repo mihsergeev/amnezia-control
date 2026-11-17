@@ -169,3 +169,13 @@ def test_restore_refuses_managed_key_symlink_even_inside_data(tmp_path):
     with pytest.raises(ValueError, match="символическую"):
         ssh_archives.validate_path(tmp_path.resolve(), "data/ssh/jump_2")
     assert public_copy.read_text() == "unchanged"
+
+
+@pytest.mark.parametrize("name", ["data/ssh/./id_ed25519", "data/./ssh/jump_2", "data/ssh//id_ed25519", "data/ssh\\jump_2"])
+def test_key_archive_aliases_are_rejected_before_writing(tmp_path, name):
+    target = tmp_path / "ssh" / "id_ed25519"
+    target.parent.mkdir()
+    target.write_bytes(b"original")
+    with pytest.raises(ValueError):
+        ssh_archives.validate_path(tmp_path.resolve(), name)
+    assert target.read_bytes() == b"original"

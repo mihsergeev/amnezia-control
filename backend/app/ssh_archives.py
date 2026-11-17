@@ -1,5 +1,6 @@
 """Validate archived SSH policy without making network or node changes."""
 import os
+import posixpath
 import re
 import tempfile
 from pathlib import Path
@@ -13,8 +14,13 @@ PRIVATE_JUMP = re.compile(r"jump_[1-9][0-9]*\Z")
 
 
 def validate_path(root: Path, member_name: str) -> None:
-    if not re.fullmatch(r"data/ssh/(?:id_ed25519(?:\.pub)?|known_hosts|jump_[1-9][0-9]*)", member_name):
+    if "\\" in member_name:
+        raise ValueError("В архиве неверный разделитель пути")
+    canonical = posixpath.normpath(member_name)
+    if not re.fullmatch(r"data/ssh/(?:id_ed25519(?:\.pub)?|known_hosts|jump_[1-9][0-9]*)", canonical):
         return
+    if canonical != member_name:
+        raise ValueError("В архиве неканонический путь файла доступа SSH")
     target = root / member_name.removeprefix("data/")
     for path in (target, *target.parents):
         if path == root:
