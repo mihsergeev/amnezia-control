@@ -266,6 +266,31 @@ async function editorWorkflow(run) {
   }
 }
 
+async function bootstrapUnauthorized({ page, form, save, name, nodes, calls, routes }) {
+  routes.set('POST /api/servers', (body, respond) => {
+    nodes.push({ ...node(3), ...body })
+    return respond(nodes[2], 201)
+  })
+  routes.set('POST /api/servers/3/bootstrap', (_body, respond) => respond({ detail: 'Synthetic bootstrap session expired' }, 401))
+  await page.getByRole('button', { name: '+ Добавить сервер', exact: true }).click()
+  await name.fill('New node')
+  await form.getByLabel('Хост (IP или домен)').fill('192.0.2.3')
+  await form.getByLabel(/^SSH-пароль пользователя/).fill('fixture-password')
+  await save.click()
+  await page.locator('body[data-unauthorized="true"]').waitFor()
+  assert.equal(calls.filter(call => call.key === 'GET /api/servers').length, 1)
+  assert.equal(calls.filter(call => call.key === 'POST /api/servers').length, 1)
+  assert.deepEqual(calls.find(call => call.key === 'POST /api/servers/3/bootstrap').body, { password: 'fixture-password', become_password: null })
+}
+
+async function recoveryUnauthorized({ page, form, edit, recover, calls, routes }) {
+  routes.set('POST /api/servers/2/ssh-access/recover', (_body, respond) => respond({ detail: 'Synthetic recovery session expired' }, 401))
+  await edit('Node 2')
+  await form.getByRole('button', recover).click()
+  await page.locator('body[data-unauthorized="true"]').waitFor()
+  assert.equal(calls.filter(call => call.key === 'GET /api/servers').length, 1)
+}
+
 async function recoveryMenuKeepsDraft({ page, form, save, name, edit, recover, nodes, calls, routes }) {
   routes.set('POST /api/servers/1/ssh-access/preview', (body, respond) => respond({ token: 'fixture', sources: body.ssh_source_ips, unrestricted: false, firewall: 'add', actions: [], jump_user: null }))
   routes.set('POST /api/servers/2/ssh-access/recover', (_body, respond) => respond({ detail: 'Synthetic recovery failure' }, 409))
@@ -364,7 +389,7 @@ async function recoveryRestoresPolicy({ page, form, save, name, edit, recover, n
 }
 
 try {
-  const scenarios = [recoveryMenuKeepsDraft, recoveryRestoresPolicy]
+  const scenarios = [bootstrapUnauthorized, recoveryUnauthorized, recoveryMenuKeepsDraft, recoveryRestoresPolicy]
   const checks = await Promise.allSettled(scenarios.map(async check => {
     await editorWorkflow(check)
     console.log(`PASS ${check.name}`)

@@ -914,6 +914,7 @@ export function ServersPage({ onUnauthorized }: Props) {
           await load()
           setNotice(t('Сервер «{name}» настроен и подключён.', { name: created.name }))
         } catch (err) {
+          if (err instanceof ApiError && err.status === 401) throw err
           setFormOpen(false)
           await load()
           const msg = err instanceof Error ? err.message : t('ошибка')
@@ -952,6 +953,7 @@ export function ServersPage({ onUnauthorized }: Props) {
         ? { ...recovered, ssh_access_pending: false } : server))
       await load()
     } catch (err) {
+      if (err instanceof ApiError && err.status === 401) return onUnauthorized()
       await load()
       if (fromEditor) setFormError(err instanceof Error ? err.message : t('Неизвестная ошибка'))
       else handleError(err)
