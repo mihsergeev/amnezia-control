@@ -230,6 +230,7 @@ export async function downloadSavedBackup(filename: string, password: string): P
 // Перенос одного сервера между панелями (в отличие от бэкапа, который
 // переносит панель целиком и затирает принимающую).
 export type ServerImportResult = {
+  warnings?: string[]
   server_id: number
   name: string
   host: string
@@ -270,6 +271,11 @@ export async function importServerFile(file: File | Blob): Promise<ServerImportR
 }
 
 export type Server = {
+  ssh_access_pending?: boolean
+  ssh_jump_server_id?: number | null
+  ssh_source_mode?: 'panel' | 'custom' | 'any'
+  ssh_source_ips?: string[]
+  ssh_firewall_mode?: 'add' | 'preserve'
   id: number
   name: string
   host: string
@@ -335,6 +341,10 @@ export function reorderServers(
 }
 
 export type ServerForm = {
+  ssh_jump_server_id?: number | null
+  ssh_source_mode?: 'panel' | 'custom' | 'any'
+  ssh_source_ips?: string[]
+  ssh_firewall_mode?: 'add' | 'preserve'
   country_override?: string
   name: string
   host: string

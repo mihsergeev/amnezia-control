@@ -258,11 +258,9 @@ async def run_check(server, body: SiteCheck, management: list[str], settings, *,
             async with bounded_node(server):
                 try:
                     async with asyncio.timeout(11):
-                        connection = await asyncssh.connect(
-                            server.host, port=server.ssh_port, username=server.ssh_user,
-                            client_keys=[str(key)], known_hosts=str(known), connect_timeout=2,
-                            keepalive_interval=3, keepalive_count_max=1,
-                        )
+                        context = sshops.connect(server.host, server.ssh_port, server.ssh_user,
+                                                 key, 2, require_known=True, **sshops.route_options(server))
+                        connection = await context.__aenter__()
                         try:
                             command = "if command -v python3 >/dev/null 2>&1; then exec python3 -c " + shlex.quote(WORKER) + "; else printf '%s' '{\"unavailable\":\"python_missing\"}'; fi"
                             payload = {"management": management, "resolve_management": resolution if resolution is not None else [server.host]}
@@ -282,7 +280,7 @@ async def run_check(server, body: SiteCheck, management: list[str], settings, *,
                                     raise ValueError()
                                 outcomes = {d: SiteResult.model_validate(item).model_dump(exclude={"destination", "scheme"}) for d, item in outcomes.items()}
                         finally:
-                            connection.close()
+                            await context.__aexit__(None, None, None)
                 except TimeoutError:
                     outcomes = {d: {"status": "not_checked", "reason": "batch_deadline"} for d in ready}
                 except (asyncssh.Error, OSError):

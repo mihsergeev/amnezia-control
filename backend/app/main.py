@@ -95,6 +95,9 @@ def create_app() -> FastAPI:
         _enforce_secrets(settings)
         ensure_panel_key(settings.data_dir)
         await ensure_admin(session_factory, settings)
+        from app import ssh_access
+        async with session_factory() as session:
+            await ssh_access.recover(session, settings)
         task = asyncio.create_task(background(collector_loop(session_factory, settings), "system", "collect"))
         backup_task = asyncio.create_task(background(backup_loop(session_factory, settings), "backup", "backup"))
         expiry_task = asyncio.create_task(background(expiry_loop(session_factory, settings), "clients", "remove"))

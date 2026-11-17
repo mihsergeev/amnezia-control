@@ -55,7 +55,7 @@ def connect(server: Server, settings=None):
     key_path, _pub = key_paths(settings.data_dir)
     return sshops.connect(
         server.host, server.ssh_port, server.ssh_user, key_path,
-        settings.ssh_connect_timeout,
+        settings.ssh_connect_timeout, **sshops.route_options(server)
     )
 
 

@@ -14,7 +14,7 @@ from sqlalchemy import (
     false,
     func,
 )
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column, relationship, foreign
 
 from app.db import Base
 
@@ -45,6 +45,15 @@ class Server(Base):
     client_endpoint: Mapped[str] = mapped_column(String(255), default="", server_default="")
     ssh_port: Mapped[int] = mapped_column(Integer, default=22)
     ssh_user: Mapped[str] = mapped_column(String(64), default="root")
+    # Existing nodes remain direct; only an explicit access operation changes a node.
+    ssh_jump_server_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    ssh_source_mode: Mapped[str] = mapped_column(String(16), default="panel", server_default="panel")
+    ssh_source_ips: Mapped[list] = mapped_column(JSON, default=list, server_default="[]")
+    ssh_firewall_mode: Mapped[str] = mapped_column(String(16), default="add", server_default="add")
+    ssh_jump_server: Mapped["Server | None"] = relationship(
+        primaryjoin=lambda: foreign(Server.ssh_jump_server_id) == Server.id,
+        remote_side=lambda: Server.id, lazy="joined", join_depth=1, viewonly=True,
+    )
     note: Mapped[str] = mapped_column(Text, default="")
     group_name: Mapped[str] = mapped_column(String(64), default="")
     # ручной порядок карточек (drag-and-drop); в пределах группы и порядок групп
@@ -82,6 +91,14 @@ class Server(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )
+
+
+class SshAccessChange(Base):
+    __tablename__ = "ssh_access_changes"
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    server_id: Mapped[int] = mapped_column(Integer, index=True)
+    phase: Mapped[str] = mapped_column(String(16))
+    payload: Mapped[dict] = mapped_column(JSON)
 
 
 class AwgConfig(Base):

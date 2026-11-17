@@ -223,6 +223,7 @@ export function ServerImportModal({ onClose, onDone, onUnauthorized }: ImportPro
                 })}
               </div>
             )}
+            {result.warnings?.map(warning => <div className="transfer-note" key={warning}>{t(warning)}</div>)}
 
             <div className="transfer-section">
               <span className="transfer-label">{t('Что дальше')}</span>

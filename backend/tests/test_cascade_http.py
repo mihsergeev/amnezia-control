@@ -108,6 +108,7 @@ async def test_invalid_and_cidr_skip_ssh_and_duplicates_probe_once(tmp_path, mon
             targets = data.get("targets") or [{"destination": d, "scheme": data["scheme"]} for d in data["destinations"]]
             return SimpleNamespace(exit_status=0, stdout=json.dumps({"results": {(t["scheme"]+"://"+t["destination"] if "targets" in data else t["destination"]): {"status": "response", "http_status": 200, "scheme": t["scheme"]} for t in targets}}))
         def close(self):pass
+        async def wait_closed(self): pass
     async def connect(*a, **kw):
         assert kw["known_hosts"] and kw["connect_timeout"] == 2
         return Connection()
@@ -166,6 +167,7 @@ async def test_mixed_api_rejects_unicode_scheme_per_row_without_unsafe_ssh(clien
             assert payload['targets']==[{'destination':'example.com','scheme':'https'}]
             return SimpleNamespace(exit_status=0,stdout=json.dumps({'results':{'https://example.com':{'status':'response','http_status':200,'scheme':'https'}}}))
         def close(self):pass
+        async def wait_closed(self): pass
     async def connect(*a,**kw):return Connection()
     monkeypatch.setattr(cascade_http,'key_paths',lambda data:(key,key.with_suffix('.pub')))
     monkeypatch.setattr(cascade_http.sshops,'_host_known',lambda *a:True)
@@ -187,6 +189,7 @@ async def test_worker_transport_failures_are_honest_and_generic(tmp_path, monkey
             if failure == "ssh":raise cascade_http.asyncssh.ConnectionLost("private transport detail")
             return SimpleNamespace(exit_status=0, stdout='{"unavailable":"python_missing"}' if failure == "python" else '{"results":{"example.com":{"status":"error","reason":"private detail"}}}')
         def close(self):closed.append(True)
+        async def wait_closed(self): pass
     async def connect(*a, **kw):return Connection()
     monkeypatch.setattr(cascade_http.asyncssh, "connect", connect)
     monkeypatch.setattr(cascade_http.sshops, "_host_known", lambda *a: True)

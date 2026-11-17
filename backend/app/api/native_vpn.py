@@ -29,7 +29,7 @@ async def connection(server, protocol):
     ensure_panel_key(settings.data_dir)
     key, _ = key_paths(settings.data_dir)
     async with nodelock.connect(protocol, server.id, sshops.connect(
-        server.host, server.ssh_port, server.ssh_user, key, settings.ssh_connect_timeout,
+        server.host, server.ssh_port, server.ssh_user, key, settings.ssh_connect_timeout, **sshops.route_options(server)
     )) as conn:
         yield conn
 

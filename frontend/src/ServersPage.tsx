@@ -31,6 +31,8 @@ import { ImportModal } from './ImportModal'
 import { DeployModal } from './DeployModal'
 import { Menu, type MenuItem } from './Menu'
 import { ServerExportModal, ServerImportModal } from './ServerTransfer'
+import { SshAccessEditor } from './SshAccessEditor'
+import { accessChanged, accessPolicy, DEFAULT_ACCESS, type AccessPreview } from './sshAccess'
 import { copyText } from './clipboard'
 import { countryFlag, formatBytes, formatUptime } from './format'
 import { CascadeWizard } from './CascadeWizard'
@@ -70,6 +72,7 @@ function emptyForm(defaultUser: string): ServerForm {
     country_override: '',
     ssh_port: 22,
     ssh_user: defaultUser,
+    ...DEFAULT_ACCESS,
     note: '',
     group_name: '',
   }
@@ -622,6 +625,7 @@ export function ServersPage({ onUnauthorized }: Props) {
   const [password, setPassword] = useState('')
   const [sudoPassword, setSudoPassword] = useState('')
   const [showAdvanced, setShowAdvanced] = useState(false)
+  const [sshPreview, setSshPreview] = useState<AccessPreview | null>(null)
 
   const [checkingId, setCheckingId] = useState<number | null>(null)
   const [clientsFor, setClientsFor] = useState<Server | null>(null)
@@ -737,6 +741,7 @@ export function ServersPage({ onUnauthorized }: Props) {
   }, [load, invalidateLoads])
 
   function resetForm(defaultUser: string) {
+    setSshPreview(null)
     setForm(emptyForm(defaultUser))
     setFormError(null)
     setPassword('')
@@ -752,6 +757,7 @@ export function ServersPage({ onUnauthorized }: Props) {
   }
 
   function openEdit(server: Server) {
+    setSshPreview(null)
     setFormError(null)
     setForm({
       name: server.name,
@@ -760,6 +766,7 @@ export function ServersPage({ onUnauthorized }: Props) {
       country_override: server.country_override ?? '',
       ssh_port: server.ssh_port,
       ssh_user: server.ssh_user,
+      ...accessPolicy(server),
       note: server.note,
       group_name: server.group_name,
       torrent_block: server.torrent_block,
@@ -831,6 +838,20 @@ export function ServersPage({ onUnauthorized }: Props) {
       if (editingId !== null) {
         setBusyLabel('Сохранение…')
         const payload = { ...form }
+        const existing = servers.find(server => server.id === editingId)
+        if (existing && accessChanged(existing, form)) {
+          if (existing.host !== form.host || existing.ssh_port !== form.ssh_port || existing.ssh_user !== form.ssh_user) throw new Error(t('Сначала сохраните адрес SSH отдельно, затем измените способ доступа.'))
+          if (!sshPreview) {
+            setSshPreview(await api<AccessPreview>(`/api/servers/${editingId}/ssh-access/preview`, {
+              method: 'POST', body: JSON.stringify(accessPolicy(form)),
+            }))
+            return
+          }
+          await api<Server>(`/api/servers/${editingId}/ssh-access/apply`, {
+            method: 'POST', body: JSON.stringify({ token: sshPreview.token }),
+          })
+          setSshPreview(null)
+        }
         if (payload.manual_exit_name !== undefined) {
           const original = servers.find(server => server.id === editingId)
           const oldName = original ? parseCheckInfo(original)?.manual_cascade?.exit_name || '' : ''
@@ -843,6 +864,7 @@ export function ServersPage({ onUnauthorized }: Props) {
         })
         setFormOpen(false)
         await load()
+        if (existing?.ssh_jump_server_id && (existing.host !== form.host || existing.ssh_port !== form.ssh_port)) setNotice(t('Адрес SSH сохранен. В скрипте настройки подготовьте промежуточную ноду и проверьте подключение.'))
         return
       }
 
@@ -1140,6 +1162,10 @@ export function ServersPage({ onUnauthorized }: Props) {
     }
     items.push({ label: t('Выгрузить в файл'), onClick: () => setExportFor(s) })
     items.push({ label: t('Изменить'), onClick: () => openEdit(s) })
+    if (s.ssh_access_pending) items.push({ label: t('Восстановить настройку SSH'), onClick: async () => {
+      try { await api(`/api/servers/${s.id}/ssh-access/recover`, { method: 'POST' }); await load() }
+      catch (err) { handleError(err); await load() }
+    } })
     // опасное - в конце меню за чертой, подальше от выдачи конфигов в окне клиентов
     items.push({ divider: true })
     if (online) {
@@ -1525,6 +1551,14 @@ export function ServersPage({ onUnauthorized }: Props) {
                 />
               </label>
             </div>
+            <SshAccessEditor value={form} servers={servers} serverId={editingId} onChange={update => { setForm({ ...form, ...update }); setSshPreview(null) }} />
+            {sshPreview && <div className="bootstrap-block" role="status">
+              <b>{t('Предпросмотр изменения SSH')}</b>
+              <p>{t('Разрешенные источники')}: {sshPreview.unrestricted ? t('Без ограничения') : sshPreview.sources.join(', ')}</p>
+              <ul>{sshPreview.actions.map(action => <li key={action}>{t(action)}</li>)}</ul>
+              {sshPreview.jump_user && <p>{t('На промежуточной ноде будет настроен отдельный пользователь и его SSH drop-in, разрешающий только соединение к этой цели.')}</p>}
+              <p className="muted small">{t('При сбое панель восстанавливает прежний ключ и удаляет только свои новые правила firewall. Если подтверждение отката не получено, сохранится операция восстановления.')}</p>
+            </div>}
             <label>
               {t('Адрес VPN для клиентов (Client Endpoint)')}
               <input
@@ -1672,7 +1706,7 @@ export function ServersPage({ onUnauthorized }: Props) {
                   <>
                     <p className="muted small">
                       {t(
-                        'Панель один раз зайдёт по паролю, установит свой ключ и откроет SSH-порт только для IP панели. Пароль не сохраняется.',
+                        'Панель один раз зайдет по паролю, установит свой ключ с выбранными ограничениями и проверит вход по нему. Пароль не сохраняется.',
                       )}
                     </p>
                     <p className="muted small">
@@ -1713,7 +1747,7 @@ export function ServersPage({ onUnauthorized }: Props) {
                 ) : (
                   <p className="muted small">
                     {t(
-                      'После «Сохранить» панель покажет скрипт. Зайдите на сервер по SSH под root и вставьте его — он создаст пользователя «{user}», добавит ключ панели и откроет фаервол (если есть). Затем нажмите «Проверить» на карточке сервера — он подключится.',
+                      'После «Сохранить» панель покажет скрипт. Выполните его под root: он создаст пользователя «{user}», обновит только ключ панели и применит выбранный режим firewall. Затем нажмите «Проверить».',
                       { user: form.ssh_user },
                     )}
                   </p>
@@ -1727,7 +1761,7 @@ export function ServersPage({ onUnauthorized }: Props) {
                 {t('Отмена')}
               </button>
               <button type="submit" disabled={busy}>
-                {busy ? t(busyLabel) : t('Сохранить')}
+                {busy ? t(busyLabel) : sshPreview ? t('Применить SSH и сохранить') : t('Сохранить')}
               </button>
             </div>
           </form>
@@ -2069,11 +2103,17 @@ export function ServersPage({ onUnauthorized }: Props) {
             <h3>{t('Подготовка сервера «{name}»', { name: scriptFor.name })}</h3>
             <p className="muted small">
               {t('Выполните этот скрипт под root на сервере. Он добавит SSH-ключ панели пользователю')}{' '}
-              <b>{scriptFor.ssh_user}</b>{t(', разрешит SSH-порт только для IP панели (ufw / firewalld / hosts.allow; ничего лишнего наружу не открывает) и ответит')}{' '}
+              <b>{scriptFor.ssh_user}</b>{t(', применит выбранные ограничения ключа и режим firewall, сохранит остальные ключи и правила и ответит')}{' '}
               <span className="mono">ACONTROL SETUP OK</span>{t('. После этого нажмите «Проверить».')}
             </p>
             <pre className="script-box">{scriptText}</pre>
             <div className="modal-actions">
+              {scriptFor.ssh_jump_server_id && <button className="ghost" onClick={async () => {
+                try {
+                  await api(`/api/servers/${scriptFor.id}/ssh-access/prepare`, { method: 'POST' })
+                  setNotice(t('Промежуточная SSH-нода подготовлена. Выполните скрипт на целевом сервере.'))
+                } catch (err) { handleError(err) }
+              }}>{t('Подготовить промежуточную ноду')}</button>}
               <button className="ghost" onClick={() => setScriptFor(null)}>
                 {t('Закрыть')}
               </button>

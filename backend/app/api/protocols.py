@@ -40,7 +40,7 @@ async def rename_client(
     try:
         async with nodelock.connect(protocol, server.id, sshops.connect(
             server.host, server.ssh_port, server.ssh_user, key_path,
-            settings.ssh_connect_timeout,
+            settings.ssh_connect_timeout, **sshops.route_options(server)
         )) as conn:
             on_node, kind = await protoremove.rename_on_node(
                 conn, protocol, body.client_id, name
@@ -99,7 +99,7 @@ async def remove_protocol(
     try:
         async with nodelock.connect(protocol, server.id, sshops.connect(
             server.host, server.ssh_port, server.ssh_user, key_path,
-            settings.ssh_connect_timeout,
+            settings.ssh_connect_timeout, **sshops.route_options(server)
         )) as conn:
             native_listener = await native_vpn.metadata(conn, protocol) if protocol in native_vpn.PROTOCOLS else None
             res = await protoremove.remove(conn, protocol)

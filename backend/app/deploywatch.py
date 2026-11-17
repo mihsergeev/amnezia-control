@@ -46,8 +46,13 @@ async def _watch_job(host, port, user, tag, label, server_id, session_factory, s
     for _ in range(_MAX_POLLS):
         await asyncio.sleep(_POLL_SECONDS)
         try:
+            async with session_factory() as session:
+                target = await session.get(Server, server_id)
+            if target is None:
+                return
             async with asyncio.timeout(step), sshops.connect(
-                host, port, user, key_path, settings.ssh_connect_timeout
+                target.host, target.ssh_port, target.ssh_user, key_path, settings.ssh_connect_timeout,
+                **sshops.route_options(target),
             ) as conn:
                 st = await deploy.read_status(conn, tag=tag)
         except Exception as exc:  # noqa: BLE001 — нода моргнула, попробуем ещё

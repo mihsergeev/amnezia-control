@@ -121,10 +121,11 @@ async def test_bootstrap_success(
 
     async def fake_bootstrap(
         host, port, username, password, public_key, panel_ip,
-        become_password=None, timeout=10, key_path=None,
+        become_password=None, timeout=10, key_path=None, source_ips=None, firewall_mode="add",
     ):
         captured["password"] = password
         captured["panel_ip"] = panel_ip
+        assert source_ips == [panel_ip] and firewall_mode == "add"
         return sshops.BootstrapResult(ok=True, output="ACONTROL SETUP OK: de-hz-vpn")
 
     async def fake_check(host, port, username, key_path, timeout=10):

@@ -260,7 +260,7 @@ async def _sample_server(
         # плохая нода парализовала бы мониторинг всех остальных.
         async with asyncio.timeout(max(timeout * 4, 30)):
             async with sshops.connect(
-                server.host, server.ssh_port, server.ssh_user, key_path, timeout
+                server.host, server.ssh_port, server.ssh_user, key_path, timeout, **sshops.route_options(server)
             ) as conn:
                 agg = dict(_ZERO)
                 client_rows: list[dict] = []

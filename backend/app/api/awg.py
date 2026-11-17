@@ -44,7 +44,7 @@ def _connect(server: Server):
     # одна операция на ноде за раз, см. nodelock
     return nodelock.connect("awg", server.id, sshops.connect(
         server.host, server.ssh_port, server.ssh_user, key_path,
-        settings.ssh_connect_timeout,
+        settings.ssh_connect_timeout, **sshops.route_options(server)
     ))
 
 

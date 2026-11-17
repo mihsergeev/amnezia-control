@@ -5,7 +5,7 @@ from typing import Annotated, Literal
 from uuid import UUID
 
 import idna
-from pydantic import AfterValidator, BaseModel, ConfigDict, Field, computed_field, field_validator, model_validator
+from pydantic import AfterValidator, BaseModel, ConfigDict, Field, StrictInt, computed_field, field_validator, model_validator
 
 
 from app.cascade_routes import Route, RouteUpdate
@@ -14,6 +14,26 @@ from app.client_endpoint import normalize as normalize_client_endpoint
 from app.geo import country_override as validate_country_override, normalize_country_code
 from app.metadata_schemas import ClientLabels
 from app.xray import STATS_API_PORT
+from app.ssh_policy import normalize_sources
+
+SshSources = Annotated[list[str], Field(max_length=32), AfterValidator(normalize_sources)]
+
+
+class SshAccessFields(BaseModel):
+    ssh_jump_server_id: StrictInt | None = Field(default=None, gt=0)
+    ssh_source_mode: Literal["panel", "custom", "any"] = "panel"
+    ssh_source_ips: SshSources = Field(default_factory=list)
+    ssh_firewall_mode: Literal["add", "preserve"] = "add"
+
+    @model_validator(mode="after")
+    def check_sources(self):
+        if self.ssh_source_mode == "custom" and not self.ssh_source_ips:
+            raise ValueError("Укажите разрешенные источники SSH")
+        return self
+
+
+class SshAccessApply(BaseModel):
+    token: str = Field(pattern=r"^[a-f0-9]{32}$")
 
 
 class LoginRequest(BaseModel):
@@ -67,7 +87,7 @@ class UserOut(BaseModel):
 ClientEndpoint = Annotated[str, Field(max_length=255), AfterValidator(normalize_client_endpoint)]
 
 
-class ServerCreate(BaseModel):
+class ServerCreate(SshAccessFields):
     country_override: Annotated[str, AfterValidator(validate_country_override)] = ""
     name: str = Field(min_length=1, max_length=128)
     host: str = Field(min_length=1, max_length=255)
@@ -83,6 +103,17 @@ class ServerCreate(BaseModel):
 
 
 class ServerUpdate(BaseModel):
+    ssh_jump_server_id: StrictInt | None = Field(default=None, gt=0)
+    ssh_source_mode: Literal["panel", "custom", "any"] | None = None
+    ssh_source_ips: SshSources | None = None
+    ssh_firewall_mode: Literal["add", "preserve"] | None = None
+
+    @field_validator("ssh_source_mode", "ssh_source_ips", "ssh_firewall_mode", mode="before")
+    @classmethod
+    def nonnull_ssh_policy(cls, value):
+        if value is None:
+            raise ValueError("Настройка SSH не может быть null")
+        return value
     country_override: Annotated[str, AfterValidator(validate_country_override)] = ""
     name: str | None = Field(default=None, min_length=1, max_length=128)
     host: str | None = Field(default=None, min_length=1, max_length=255)
@@ -120,6 +151,11 @@ class ServerOut(BaseModel):
     client_endpoint: str = ""
     ssh_port: int
     ssh_user: str
+    ssh_jump_server_id: int | None = None
+    ssh_source_mode: str = "panel"
+    ssh_source_ips: list[str] = Field(default_factory=list)
+    ssh_firewall_mode: str = "add"
+    ssh_access_pending: bool = False
     note: str
     group_name: str
     position: int = 0

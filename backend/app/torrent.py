@@ -277,7 +277,7 @@ async def apply_now(server: Server, settings: Settings, session_factory=None) ->
     try:
         async with asyncio.timeout(max(timeout * 4, 30)):
             async with sshops.connect(
-                server.host, server.ssh_port, server.ssh_user, key_path, timeout
+                server.host, server.ssh_port, server.ssh_user, key_path, timeout, **sshops.route_options(server)
             ) as conn:
                 _cleared.discard(server.id)
                 await sample(conn, server, await node_nets(conn, server.host), session_factory)
@@ -302,7 +302,7 @@ async def _pause(server: Server, settings: Settings, protocol: str, client_id: s
     timeout = settings.ssh_connect_timeout
     async with asyncio.timeout(max(timeout * 4, 30)):
         async with nodelock.connect(protocol, server.id, sshops.connect(
-            server.host, server.ssh_port, server.ssh_user, key_path, timeout
+            server.host, server.ssh_port, server.ssh_user, key_path, timeout, **sshops.route_options(server)
         )) as conn:
             if protocol in native_vpn.PROTOCOLS:
                 return await native_vpn.pause(conn, protocol, client_id, server.host)

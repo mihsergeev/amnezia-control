@@ -41,7 +41,7 @@ async def _connection(server, protocol, *, write=False):
     ensure_panel_key(settings.data_dir)
     key_path, _ = key_paths(settings.data_dir)
     async with nodelock.connect(protocol, server.id, sshops.connect(
-        server.host, server.ssh_port, server.ssh_user, key_path, settings.ssh_connect_timeout,
+        server.host, server.ssh_port, server.ssh_user, key_path, settings.ssh_connect_timeout, **sshops.route_options(server)
     )) as conn:
         if write:
             await deploy.ensure_idle(conn, tag=protocol)

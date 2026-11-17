@@ -10,6 +10,24 @@ from pathlib import Path
 import asyncssh
 
 from app import cascade_manual, cascade_underlay
+from app.sshkeys import jump_key_path, jump_username
+
+
+@dataclass(frozen=True)
+class Jump:
+    host: str
+    port: int
+    target_id: int
+
+
+def route_options(server) -> dict:
+    """Keep direct call signatures stable; never infer a route from reachability."""
+    if not getattr(server, "ssh_jump_server_id", None):
+        return {}
+    jump = server.ssh_jump_server
+    if jump is None or jump.id == server.id or jump.ssh_jump_server_id:
+        raise ValueError("Некорректный маршрут SSH: допускается одна прямая промежуточная нода")
+    return {"jump": Jump(jump.host, jump.ssh_port, server.id)}
 
 # hostname + список docker-контейнеров (с фолбэком на sudo без пароля)
 # Определение РЕАЛЬНОГО протокола в каждом amnezia-контейнере — по содержимому
@@ -218,31 +236,31 @@ def _parse_check_output(output: str) -> CheckResult:
     return result
 
 
-def _firewall_snippet(panel_ip: str, ssh_port: int, sudo: str) -> str:
-    """Best-effort открытие порта для IP панели. Никогда не роняет скрипт.
-
-    Каждая ветка проверяет наличие инструмента; hosts.allow трогаем только
-    если файл уже существует (tcp-wrappers могут быть не установлены).
-    """
+def _firewall_snippet(panel_ip: str, ssh_port: int, sudo: str, *, strict: bool = False) -> str:
+    """Add source-specific rules only; never reload/enable/reset a firewall."""
     if not panel_ip:
         return 'FW="(panel_ip не задан)"\n'
-    rich = (
-        f'rule family=ipv4 source address={panel_ip} '
-        f'port port={ssh_port} protocol=tcp accept'
-    )
+    network = ipaddress.ip_network(panel_ip, strict=False)
+    address = str(network.network_address) if network.prefixlen == network.max_prefixlen else str(network)
+    family = "ipv4" if network.version == 4 else "ipv6"
+    rich = f"rule family={family} source address={address} port port={int(ssh_port)} protocol=tcp accept"
+    failure = 'FAILED=1' if strict else ':'
     return (
-        'FW=""\n'
-        "if command -v ufw >/dev/null 2>&1; then "
-        f"{sudo} ufw allow from {panel_ip} to any port {ssh_port} proto tcp "
-        '>/dev/null 2>&1 && FW="$FW ufw"; fi\n'
-        "if command -v firewall-cmd >/dev/null 2>&1; then "
+        'FW=""; FAILED=0\n'
+        'if command -v ufw >/dev/null 2>&1; then '
+        f'{sudo} ufw allow from {address} to any port {int(ssh_port)} proto tcp '
+        f'>/dev/null 2>&1 && FW="$FW ufw" || {failure}; fi\n'
+        'if command -v firewall-cmd >/dev/null 2>&1 && '
+        f'{sudo} firewall-cmd --state >/dev/null 2>&1; then '
         f'{sudo} firewall-cmd --permanent --add-rich-rule="{rich}" >/dev/null 2>&1 '
-        f'&& {sudo} firewall-cmd --reload >/dev/null 2>&1 && FW="$FW firewalld"; fi\n'
-        "if [ -f /etc/hosts.allow ]; then "
-        f"""{sudo} sh -c "grep -qs 'sshd: {panel_ip}' /etc/hosts.allow """
-        f"""|| echo 'sshd: {panel_ip}' >> /etc/hosts.allow" >/dev/null 2>&1 """
-        '&& FW="$FW hosts.allow"; fi\n'
-        '[ -n "$FW" ] || FW=" (не найден ufw/firewalld/hosts.allow)"\n'
+        f'&& {sudo} firewall-cmd --add-rich-rule="{rich}" >/dev/null 2>&1 '
+        f'&& FW="$FW firewalld" || {failure}; fi\n'
+        'if [ -f /etc/hosts.allow ]; then '
+        f"""{sudo} sh -c "grep -qs 'sshd: {address}' /etc/hosts.allow """
+        f"""|| echo 'sshd: {address}' >> /etc/hosts.allow" >/dev/null 2>&1 """
+        f'&& FW="$FW hosts.allow" || {failure}; fi\n'
+        '[ -n "$FW" ] || FW=" (не найден активный ufw/firewalld/hosts.allow)"\n'
+        + ('[ "$FAILED" = 0 ] || { echo "Не удалось добавить разрешение firewall" >&2; exit 1; }\n' if strict else '')
     )
 
 
@@ -270,13 +288,17 @@ def valid_ssh_user(name: object) -> bool:
 
 
 def build_setup_script(
-    public_key: str, ssh_user: str, ssh_port: int, panel_ip: str
+    public_key: str, ssh_user: str, ssh_port: int, panel_ip: str,
+    *, source_ips: list[str] | None = None, firewall_mode: str = "add",
 ) -> str:
     """Скрипт для ручного запуска админом под root на новой ноде."""
     if not valid_ssh_user(ssh_user):
         raise ValueError(f"недопустимое имя SSH-пользователя: {ssh_user!r}")
-    firewall = _firewall_snippet(panel_ip, ssh_port, sudo="")
-    opts = _key_options(panel_ip)
+    from app.ssh_access import options, write_key
+    addresses = source_ips if source_ips is not None else ([panel_ip] if panel_ip else [])
+    firewall = ''.join(_firewall_snippet(address, ssh_port, sudo="", strict=True) for address in addresses) if firewall_mode == "add" else 'FW="не изменен"\n'
+    firewall = firewall or 'FW="не изменен"\n'
+    writer = write_key(public_key, options(addresses))
     return f"""#!/bin/sh
 # Amnezia Control: подготовка сервера. Выполнить под root.
 set -e
@@ -289,30 +311,26 @@ echo '{ssh_user} ALL=(ALL) NOPASSWD:ALL' > "/etc/sudoers.d/{ssh_user}" 2>/dev/nu
 getent group docker >/dev/null 2>&1 && usermod -aG docker '{ssh_user}' 2>/dev/null || true
 HOME_DIR=$(getent passwd '{ssh_user}' | cut -d: -f6)
 [ -n "$HOME_DIR" ] || {{ echo "ACONTROL SETUP FAILED: не удалось создать пользователя {ssh_user}"; exit 1; }}
-mkdir -p "$HOME_DIR/.ssh" && chmod 700 "$HOME_DIR/.ssh"
-touch "$HOME_DIR/.ssh/authorized_keys"
-grep -qF "$KEY" "$HOME_DIR/.ssh/authorized_keys" || printf '{opts}%s\\n' "$KEY" >> "$HOME_DIR/.ssh/authorized_keys"
-chmod 600 "$HOME_DIR/.ssh/authorized_keys"
-chown -R '{ssh_user}:' "$HOME_DIR/.ssh"
+su -s /bin/sh '{ssh_user}' -c {_sh_quote(writer)}
 set +e  # фаервол — best-effort, не должен ронять настройку
 {firewall}echo "ACONTROL SETUP OK: $(hostname) [fw:$FW ]"
 """
 
 
-def _build_bootstrap_script(public_key: str, ssh_port: int, panel_ip: str) -> str:
+def _build_bootstrap_script(public_key: str, ssh_port: int, panel_ip: str, *, source_ips=None, firewall_mode="add", transaction=None) -> str:
     """Скрипт, который панель выполняет сама, зайдя по SSH-паролю как ssh_user.
 
     Ключ ставится в домашний каталог текущего пользователя; для фаервола
     используется sudo -S (пароль подаётся на stdin), если мы не root.
     """
-    firewall = _firewall_snippet(panel_ip, ssh_port, sudo="$SUDO")
-    opts = _key_options(panel_ip)
+    from app.ssh_access import options, write_key
+    addresses = source_ips if source_ips is not None else ([panel_ip] if panel_ip else [])
+    firewall = ''.join(_firewall_snippet(address, ssh_port, sudo="$SUDO", strict=bool(transaction)) for address in addresses) if firewall_mode == "add" else 'FW="не изменен"\n'
+    firewall = firewall or 'FW="не изменен"\n'
+    writer = write_key(public_key, options(addresses), transaction=transaction)
     return f"""set -e
 KEY='{public_key}'
-mkdir -p "$HOME/.ssh" && chmod 700 "$HOME/.ssh"
-touch "$HOME/.ssh/authorized_keys"
-grep -qF "$KEY" "$HOME/.ssh/authorized_keys" || printf '{opts}%s\\n' "$KEY" >> "$HOME/.ssh/authorized_keys"
-chmod 600 "$HOME/.ssh/authorized_keys"
+{writer}
 set +e
 if [ "$(id -u)" = 0 ]; then SUDO=""; else SUDO="sudo -S"; fi
 {firewall}echo "ACONTROL SETUP OK: $(hostname) [fw:$FW ]"
@@ -404,6 +422,8 @@ async def _tofu_connect(
     *,
     password: str | None = None,
     timeout: int = 10,
+    tunnel=None,
+    require_known: bool = False,
 ):
     kh = _kh_path(key_path)
     # keepalive: нода, пропавшая посреди операции (обрыв маршрута, зависший
@@ -411,7 +431,12 @@ async def _tofu_connect(
     common = dict(
         host=host, port=port, username=username, connect_timeout=timeout,
         keepalive_interval=15, keepalive_count_max=3,
+        config=None, agent_path=None,
     )
+    if tunnel is not None:
+        common["tunnel"] = tunnel
+    if require_known and not _host_known(kh, host, port):
+        raise HostKeyChangedError(f"{host}:{port}: host key не проверен")
     if password is not None:
         common["password"] = password
     else:
@@ -430,26 +455,46 @@ async def _tofu_connect(
 
 @asynccontextmanager
 async def connect(
-    host: str, port: int, username: str, key_path: Path, timeout: int = 10
+    host: str, port: int, username: str, key_path: Path, timeout: int = 10,
+    *, jump: Jump | None = None, password: str | None = None, require_known: bool = False,
 ):
     """Подключение панельным ключом с TOFU-пиннингом (для async with)."""
-    conn = await _tofu_connect(host, port, username, key_path, timeout=timeout)
+    parent = None
+    conn = None
     try:
+        options = {}
+        if password is not None:
+            options["password"] = password
+        if require_known:
+            options["require_known"] = True
+        if jump is not None:
+            path = jump_key_path(key_path, jump.target_id)
+            if not path.is_file():
+                raise ValueError("Сначала подготовьте SSH-доступ через промежуточную ноду")
+            parent = await _tofu_connect(jump.host, jump.port, jump_username(key_path, jump.target_id), path,
+                                        timeout=timeout, require_known=True)
+            options["tunnel"] = parent
+        conn = await _tofu_connect(host, port, username, key_path, timeout=timeout, **options)
         yield conn
     finally:
-        conn.close()
-        await conn.wait_closed()
+        # The target must close before the forwarding connection, including failed auth.
+        try:
+            if conn is not None:
+                conn.close()
+                await conn.wait_closed()
+        finally:
+            if parent is not None:
+                parent.close()
+                await parent.wait_closed()
 
 
 async def check_server(
-    host: str, port: int, username: str, key_path: Path, timeout: int = 10
+    host: str, port: int, username: str, key_path: Path, timeout: int = 10,
+    *, jump: Jump | None = None,
 ) -> CheckResult:
     try:
         async with asyncio.timeout(timeout * 2):
-            conn = await _tofu_connect(
-                host, port, username, key_path, timeout=timeout
-            )
-            async with conn:
+            async with connect(host, port, username, key_path, timeout, **({"jump": jump} if jump else {})) as conn:
                 run = await conn.run(CHECK_COMMAND, check=False)
     except asyncio.TimeoutError:
         return CheckResult(ok=False, error="Таймаут подключения")
@@ -502,19 +547,36 @@ async def bootstrap_server(
     timeout: int = 10,
     *,
     key_path: Path,
+    source_ips: list[str] | None = None,
+    firewall_mode: str = "add",
+    jump: Jump | None = None,
 ) -> BootstrapResult:
     """Заходит по паролю, ставит ключ панели и настраивает фаервол.
     Ключ хоста - как у остальных подключений (TOFU): у знакомой ноды
     проверяется строго, иначе пароли SSH и sudo ушли бы подменному хосту."""
-    script = _build_bootstrap_script(public_key, port, panel_ip)
+    import uuid
+    from app.ssh_access import options, write_key, _run
+    token = uuid.uuid4().hex
+    addresses = source_ips if source_ips is not None else ([panel_ip] if panel_ip else [])
+    script = _build_bootstrap_script(public_key, port, panel_ip, source_ips=addresses, firewall_mode=firewall_mode, transaction=token)
     sudo_input = (become_password or password) + "\n"
+    key_verified = False
     try:
         async with asyncio.timeout(timeout * 3):
-            conn = await _tofu_connect(
-                host, port, username, key_path, password=password, timeout=timeout
-            )
-            async with conn:
+            async with connect(host, port, username, key_path, timeout, password=password, **({"jump": jump} if jump else {})) as conn:
                 run = await conn.run(script, input=sudo_input, check=False)
+                if run.exit_status == 0 and "ACONTROL SETUP OK" in (run.stdout or ""):
+                    try:
+                        async with connect(host, port, username, key_path, timeout, **({"jump": jump} if jump else {})) as check:
+                            verified = await check.run("printf 'SOURCE=%s\\n' \"${SSH_CONNECTION%% *}\"", check=True, timeout=10)
+                            actual = ipaddress.ip_address(verified.stdout.strip().removeprefix("SOURCE="))
+                            if addresses and not any(actual in ipaddress.ip_network(item, strict=False) for item in addresses):
+                                raise ValueError("Фактический источник SSH не входит в разрешенный список")
+                        await _run(conn, write_key(public_key, options(addresses), transaction=token, operation="commit"), "ACONTROL_KEY_COMMITTED")
+                        key_verified = True
+                    except BaseException:
+                        await _run(conn, write_key(public_key, options(addresses), transaction=token, operation="rollback"), "ACONTROL_KEY_ROLLEDBACK")
+                        raise
     except asyncio.TimeoutError:
         return BootstrapResult(ok=False, error="Таймаут подключения")
     except HostKeyChangedError:
@@ -531,9 +593,11 @@ async def bootstrap_server(
         )
     except (OSError, asyncssh.Error) as exc:
         return BootstrapResult(ok=False, error=str(exc) or type(exc).__name__)
+    except (ValueError, RuntimeError) as exc:
+        return BootstrapResult(ok=False, error=str(exc))
 
     output = (run.stdout or "") + (run.stderr or "")
-    if "ACONTROL SETUP OK" in output:
+    if key_verified:
         return BootstrapResult(ok=True, output=output.strip())
     return BootstrapResult(
         ok=False,

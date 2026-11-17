@@ -33,6 +33,8 @@ import { CascadeSecurity } from './CascadeSecurity'
 import { cascadeEntryHasExistingRoute, cascadeServerEligible } from './serverList'
 import { useI18n } from './i18n'
 import { useModalDismiss } from './useModalDismiss'
+import { SshAccessEditor } from './SshAccessEditor'
+import { DEFAULT_ACCESS, type AccessPolicy } from './sshAccess'
 
 type Step = 'entry' | 'exit' | 'link' | 'install' | 'done'
 
@@ -152,6 +154,7 @@ export function CascadeWizard({
   const [busy, setBusy] = useState(false)
   // новый сервер: по паролю (панель сама ставит ключ) или скриптом
   const [nf, setNf] = useState(EMPTY_SERVER_FORM)
+  const [nfAccess, setNfAccess] = useState<AccessPolicy>(DEFAULT_ACCESS)
   const [nfMode, setNfMode] = useState<'password' | 'script'>('password')
   const [script, setScript] = useState<{ server: Server; text: string } | null>(null)
   const [copied, setCopied] = useState(false)
@@ -258,7 +261,7 @@ export function CascadeWizard({
       const name = nf.name.trim()
       server = await api<Server>(`/api/servers?reuse_ssh_endpoint=true${name ? '' : '&name_from_hostname=true'}`, {
         method: 'POST',
-        body: JSON.stringify({ ...target, name: name || target.host, note: '', group_name: groupName }),
+        body: JSON.stringify({ ...target, ...nfAccess, name: name || target.host, note: '', group_name: groupName }),
       })
       const currentCascades = await listCascades()
       if (!eligibleServer(server, currentCascades)) return null
@@ -741,6 +744,10 @@ export function CascadeWizard({
               <button className="ghost" onClick={async () => setCopied(await copyText(script.text))}>
                 {copied ? t('Скопировано ✓') : t('Скопировать')}
               </button>
+              {script.server.ssh_jump_server_id && <button className="ghost" disabled={busy} onClick={async () => {
+                try { await api(`/api/servers/${script.server.id}/ssh-access/prepare`, { method: 'POST' }); onChanged() }
+                catch (err) { handleError(err) }
+              }}>{t('Подготовить промежуточную ноду')}</button>}
             </div>
           </>
         ) : (
@@ -777,6 +784,7 @@ export function CascadeWizard({
                 />
               </label>
             </div>
+            <SshAccessEditor value={nfAccess} servers={servers} onChange={setNfAccess} />
             <div className="tabs">
               <button
                 className={nfMode === 'password' ? 'tab tab-active' : 'tab'}

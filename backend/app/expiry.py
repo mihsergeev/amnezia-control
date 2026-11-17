@@ -65,7 +65,7 @@ async def revoke_many_on_node(
     errors: dict[str, Exception] = {}
     async with asyncio.timeout(limit):
         async with nodelock.connect(protocol, server.id, sshops.connect(
-            server.host, server.ssh_port, server.ssh_user, key_path, timeout
+            server.host, server.ssh_port, server.ssh_user, key_path, timeout, **sshops.route_options(server)
         )) as conn:
             revoke_one = await _revoker(conn, server, protocol)
             for client_id in client_ids:

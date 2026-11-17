@@ -10,6 +10,7 @@ from sqlalchemy import update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import cascade_alias, geo, sshops
+from app import bulk_issue_state, ssh_access, ssh_policy
 from app.config import Settings
 from app.models import Server
 from app.sshkeys import ensure_panel_key, key_paths
@@ -21,7 +22,7 @@ _CHECK_RESULT_FIELDS = (
     "name", "country", "last_check_ok", "last_check_at", "last_check_info",
     "egress_ip", "egress_country", "egress_org", "egress_at",
 )
-_CHECK_GUARD_FIELDS = ("host", "ssh_port", "ssh_user", "client_endpoint", "country_override", *_CHECK_RESULT_FIELDS)
+_CHECK_GUARD_FIELDS = ("host", "ssh_port", "ssh_user", "ssh_jump_server_id", "client_endpoint", "country_override", *_CHECK_RESULT_FIELDS)
 
 
 def egress_due(server: Server, now: datetime) -> bool:
@@ -103,6 +104,7 @@ async def run_check(session: AsyncSession, server: Server, settings: Settings) -
     # Network awaits must never flush a partially prepared observation or
     # overwrite a manual edit made while SSH/GeoIP/egress checks were running.
     server = Server(id=current.id, **original)
+    server.ssh_jump_server = current.ssh_jump_server
     ensure_panel_key(settings.data_dir)
     key_path, _pub = key_paths(settings.data_dir)
     result = await sshops.check_server(
@@ -110,7 +112,7 @@ async def run_check(session: AsyncSession, server: Server, settings: Settings) -
         server.ssh_port,
         server.ssh_user,
         key_path,
-        settings.ssh_connect_timeout,
+        settings.ssh_connect_timeout, **sshops.route_options(server)
     )
     if not result.ok:
         await debug_context.arecord(operation="ssh", server_id=server.id, stage="connect", text=result.error)
@@ -135,7 +137,7 @@ async def run_check(session: AsyncSession, server: Server, settings: Settings) -
         try:
             async with sshops.connect(
                 server.host, server.ssh_port, server.ssh_user, key_path,
-                settings.ssh_connect_timeout,
+                settings.ssh_connect_timeout, **sshops.route_options(server)
             ) as conn:
                 if not server.country and not server.country_override:
                     try:
@@ -161,6 +163,7 @@ async def run_check(session: AsyncSession, server: Server, settings: Settings) -
     await session.refresh(current)
 
 
+@bulk_issue_state.guard()
 async def bootstrap_and_check(
     session: AsyncSession,
     server: Server,
@@ -173,6 +176,7 @@ async def bootstrap_and_check(
     Возвращает (успех, сообщение об ошибке).
     """
     public_key = ensure_panel_key(settings.data_dir)
+    await ssh_access.prepare_jump(session, server, settings)
     key_path, _pub = key_paths(settings.data_dir)
     result = await sshops.bootstrap_server(
         server.host,
@@ -184,6 +188,9 @@ async def bootstrap_and_check(
         become_password,
         settings.ssh_connect_timeout,
         key_path=key_path,
+        source_ips=ssh_policy.sources(server, settings.panel_ip),
+        firewall_mode=server.ssh_firewall_mode,
+        **sshops.route_options(server),
     )
     if not result.ok:
         detail = result.error
@@ -191,4 +198,6 @@ async def bootstrap_and_check(
             detail = f"{detail}: {result.output}"
         return False, detail
     await run_check(session, server, settings)
+    if server.last_check_ok is not True:
+        return False, "Ключ установлен, но вход по нему не подтвержден: " + json.loads(server.last_check_info or "{}").get("error", "SSH недоступен")
     return True, ""
