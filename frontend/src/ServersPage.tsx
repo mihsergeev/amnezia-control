@@ -868,6 +868,9 @@ export function ServersPage({ onUnauthorized }: Props) {
           }
           const accessWarning = parseCheckInfo(applied)?.ssh_access_warning
           if (accessWarning) setNotice(String(accessWarning))
+          // SSH is already committed even if saving the remaining form fails.
+          // Keep retries metadata-only instead of preparing the same SSH again.
+          setServers(previous => previous.map(server => server.id === applied.id ? applied : server))
           setSshPreview(null)
         }
         if (payload.manual_exit_name !== undefined) {
