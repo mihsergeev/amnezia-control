@@ -1,4 +1,5 @@
 """Validate archived SSH policy without making network or node changes."""
+import ipaddress
 import os
 import posixpath
 import re
@@ -6,6 +7,7 @@ import tempfile
 from pathlib import Path
 
 import asyncssh
+import idna
 
 from app.schemas import SshAccessFields
 
@@ -37,10 +39,27 @@ def policy(row: dict) -> dict:
         raise ValueError("Неверная политика доступа SSH в архиве") from exc
 
 
+def validate_endpoint(row: dict) -> None:
+    host = row.get("host")
+    if not isinstance(host, str) or not 1 <= len(host) <= 255 or any(char.isspace() for char in host):
+        raise ValueError("В архиве неверный адрес сервера SSH")
+    try:
+        ipaddress.ip_address(host)
+    except ValueError:
+        try:
+            idna.encode(host, uts46=True, std3_rules=True)
+        except idna.IDNAError as exc:
+            raise ValueError("В архиве неверный адрес сервера SSH") from exc
+    port = row.get("ssh_port", 22)
+    if type(port) is not int or not 1 <= port <= 65535:
+        raise ValueError("В архиве неверный SSH-порт сервера")
+
+
 def validate_servers(rows: list[dict]) -> None:
     """Reject dangling or chained hops before replacing any database rows."""
     by_id = {}
     for row in rows:
+        validate_endpoint(row)
         sid = row.get("id")
         if type(sid) is not int or sid <= 0 or sid in by_id:
             raise ValueError("Неверные идентификаторы серверов в архиве")

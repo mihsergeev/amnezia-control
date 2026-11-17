@@ -237,6 +237,7 @@ async def import_server_file(
     if spec.get("ssh_jump_server_id") is not None:
         raise HTTPException(400, "Номер промежуточной ноды относится к другой панели; используйте адрес ноды в файле переноса")
     try:
+        ssh_archives.validate_endpoint(spec)
         access_policy = ssh_archives.policy(spec)
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from None
@@ -247,6 +248,10 @@ async def import_server_file(
                 or not 1 <= len(descriptor["host"]) <= 255
                 or type(descriptor.get("ssh_port")) is not int or not 1 <= descriptor["ssh_port"] <= 65535):
             raise HTTPException(400, "В файле неверный адрес промежуточной ноды SSH")
+        try:
+            ssh_archives.validate_endpoint(descriptor)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from None
         jumps = list((await session.scalars(select(Server).where(
             Server.host == descriptor["host"], Server.ssh_port == descriptor["ssh_port"]))).all())
         if len(jumps) != 1 or jumps[0].ssh_jump_server_id is not None:
