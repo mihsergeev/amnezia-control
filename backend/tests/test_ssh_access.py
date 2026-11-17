@@ -83,6 +83,51 @@ def test_bootstrap_upserts_own_key_instead_of_duplicate(tmp_path):
     assert "BBB admin" in ak.read_text()
 
 
+def test_retire_key_removes_only_own_identity_and_preserves_foreign_comments(tmp_path):
+    directory = tmp_path / '.ssh'; directory.mkdir()
+    ak = directory / 'authorized_keys'
+    foreign = 'command="echo with spaces" ssh-ed25519 BBB admin mentions AAA'
+    ak.write_text('from="192.0.2.1",restrict ssh-ed25519 AAA panel\n' + foreign)
+    result = shell(ssh_access.write_key('ssh-ed25519 AAA panel', 'restrict', operation='revoke'), tmp_path)
+    assert result.returncode == 0, result.stderr
+    assert ak.read_text() == foreign + '\n'
+
+
+@pytest.mark.parametrize('failure', ['', 'owner-conflict', 'offline'])
+async def test_retire_role_is_owned_and_best_effort(tmp_path, monkeypatch, failure):
+    key, _ = key_paths(str(tmp_path)); ensure_panel_key(str(tmp_path)); ensure_jump_key(key, 2)
+    jump = Server(id=1, host='192.0.2.1', ssh_port=22, ssh_user='service')
+    target = Server(id=2, host='192.0.2.2', ssh_jump_server_id=1); target.ssh_jump_server = jump
+    settings = SimpleNamespace(data_dir=str(tmp_path), ssh_connect_timeout=1)
+    class Conn:
+        async def run(self, command, **kwargs):
+            assert "$(cat \"$STATE_DIR/owner\")" in command
+            assert 'sshd-sha' in command and 'sha256sum' in command
+            return SimpleNamespace(exit_status=1 if failure else 0, stdout='' if failure else 'ACONTROL_JUMP_REVOKED', stderr=failure)
+    @asynccontextmanager
+    async def connect(*args, **kwargs):
+        if failure == 'offline': raise OSError('offline')
+        yield Conn()
+    monkeypatch.setattr(sshops, 'connect', connect)
+    warning = await ssh_access.retire_jump(target, settings)
+    assert bool(warning) == bool(failure)
+    if failure: assert 'не отозван' in warning and failure in warning
+    assert (key.parent / 'jump_2').exists()  # Metadata/delete caller decides disposal.
+
+
+@pytest.mark.parametrize('operation', ['commit', 'rollback'])
+def test_staged_key_preserves_unterminated_admin_key_and_key_blob_in_comments(tmp_path, operation):
+    directory = tmp_path / '.ssh'; directory.mkdir()
+    ak = directory / 'authorized_keys'
+    foreign = 'command="printf with spaces",restrict ssh-ed25519 BBB administrator mentions ssh-ed25519 AAA'
+    ak.write_text('restrict ssh-ed25519 AAA panel\n' + foreign)
+    token = 'c' * 32
+    assert shell(ssh_access.write_key('ssh-ed25519 AAA panel', 'from="192.0.2.1",restrict', transaction=token), tmp_path).returncode == 0
+    result = shell(ssh_access.write_key('ssh-ed25519 AAA panel', 'from="192.0.2.1",restrict', transaction=token, operation=operation), tmp_path)
+    assert result.returncode == 0, result.stderr
+    assert foreign in ak.read_text().splitlines()
+
+
 async def test_jump_transport_pins_both_hosts_and_closes_parent_on_failed_auth(tmp_path, monkeypatch):
     key, _ = key_paths(str(tmp_path))
     ensure_panel_key(str(tmp_path))
@@ -121,7 +166,69 @@ async def test_jump_transport_pins_both_hosts_and_closes_parent_on_failed_auth(t
     assert closed == ["jump"]
 
 
-async def test_jump_graph_deletion_endpoint_guard_and_key_reuse(client, auth_headers):
+@pytest.mark.parametrize('observed', ['198.51.100.9', '2001:db8::9'])
+async def test_forwarding_identity_uses_observed_source_even_when_management_is_unrestricted(tmp_path, monkeypatch, observed):
+    ensure_panel_key(str(tmp_path))
+    settings = SimpleNamespace(data_dir=str(tmp_path), panel_ip='203.0.113.7', ssh_connect_timeout=10)
+    jump = Server(id=1, host='192.0.2.1', ssh_port=22, ssh_user='service', ssh_source_mode='any')
+    target = Server(id=2, host='192.0.2.2', ssh_port=2222, ssh_user='service', ssh_jump_server_id=1)
+    target.ssh_jump_server = jump
+    commands = []
+    class Conn:
+        async def run(self, command, **kwargs):
+            commands.append(command)
+            return SimpleNamespace(exit_status=0, stdout=observed if len(commands) == 1 else 'ACONTROL_JUMP_READY', stderr='')
+    @asynccontextmanager
+    async def connect(*args, **kwargs): yield Conn()
+    monkeypatch.setattr(sshops, 'connect', connect)
+    await ssh_access.prepare_jump(None, target, settings)
+    assert f'from="{observed}"' in commands[1]
+    assert 'from="203.0.113.7"' not in commands[1]
+    assert 'AllowTcpForwarding local' in commands[1]
+    assert 'AllowStreamLocalForwarding no' in commands[1]
+    assert 'PermitListen none' in commands[1]
+
+
+async def test_not_prepared_jump_is_an_offline_check_not_an_api_failure(tmp_path):
+    ensure_panel_key(str(tmp_path))
+    key, _ = key_paths(str(tmp_path))
+    result = await sshops.check_server('192.0.2.2', 22, 'service', key, jump=sshops.Jump('192.0.2.1', 22, 2))
+    assert result.ok is False and 'подготовьте' in result.error.lower()
+
+
+async def test_bootstrap_nonzero_exit_with_success_text_never_succeeds(tmp_path, monkeypatch):
+    key, _ = key_paths(str(tmp_path)); public = ensure_panel_key(str(tmp_path))
+    class Conn:
+        async def run(self, *args, **kwargs): return SimpleNamespace(exit_status=1, stdout='ACONTROL SETUP OK', stderr='failed')
+    @asynccontextmanager
+    async def connect(*args, **kwargs): yield Conn()
+    monkeypatch.setattr(sshops, 'connect', connect)
+    result = await sshops.bootstrap_server('192.0.2.1', 22, 'service', 'fixture', public, '192.0.2.7', key_path=key)
+    assert result.ok is False
+
+
+@pytest.mark.parametrize('failure', ['source', 'key'])
+async def test_bootstrap_second_session_failure_rolls_back_and_does_not_blame_password(tmp_path, monkeypatch, failure):
+    key, _ = key_paths(str(tmp_path)); public = ensure_panel_key(str(tmp_path))
+    commands=[]
+    class Conn:
+        async def run(self, command, **kwargs):
+            commands.append(command)
+            return SimpleNamespace(exit_status=0, stdout='ACONTROL SETUP OK' if len(commands) == 1 else 'ACONTROL_KEY_ROLLEDBACK', stderr='')
+    class Check:
+        async def run(self, *args, **kwargs): return SimpleNamespace(stdout='SOURCE=192.0.2.8')
+    @asynccontextmanager
+    async def connect(*args, **kwargs):
+        if 'password' in kwargs: yield Conn()
+        elif failure == 'key': raise asyncssh.PermissionDenied('fixture')
+        else: yield Check()
+    monkeypatch.setattr(sshops, 'connect', connect)
+    result = await sshops.bootstrap_server('192.0.2.1', 22, 'service', 'fixture', public, '192.0.2.7', key_path=key)
+    assert result.ok is False and 'Неверный пароль' not in result.error
+    assert len(commands)==2 and 'ACONTROL_KEY_ROLLEDBACK' in commands[1]
+
+
+async def test_jump_graph_deletion_endpoint_guard_and_key_reuse(client, auth_headers, monkeypatch):
     async def add(host, **fields):
         return await client.post('/api/servers', json={"name": host, "host": host, **fields}, headers=auth_headers)
     first = (await add("192.0.2.1")).json()
@@ -140,7 +247,12 @@ async def test_jump_graph_deletion_endpoint_guard_and_key_reuse(client, auth_hea
     assert repaired.json()['id'] == first['id']
     key, _ = key_paths(config.get_settings().data_dir)
     public = ensure_jump_key(key, second["id"])
-    assert (await client.delete(f'/api/servers/{second["id"]}', headers=auth_headers)).status_code == 200
+    async def retire(node, settings):
+        assert ensure_jump_key(key, node.id) == public  # Before local key deletion.
+        return 'Старый промежуточный доступ не отозван: offline'
+    monkeypatch.setattr(ssh_access, 'retire_jump', retire)
+    deleted = await client.delete(f'/api/servers/{second["id"]}', headers=auth_headers)
+    assert deleted.status_code == 200 and 'не отозван' in deleted.json()['message']
     third = (await add("192.0.2.3")).json()
     assert third["id"] == second["id"]
     assert ensure_jump_key(key, third["id"]) != public
@@ -183,6 +295,40 @@ async def test_failed_second_session_restores_original_policy_and_retry_does_not
         assert (await session.get(SshAccessChange, preview['token'])).phase == 'rolledback'
     await client.post(f'/api/servers/{sid}/ssh-access/apply', json={"token": preview['token']}, headers=auth_headers)
     assert len(scripts) == 2
+
+
+@pytest.mark.parametrize('warning', ['', 'Старый промежуточный доступ не отозван: offline'])
+async def test_successful_route_is_preserved_when_old_role_retirement_fails(client, auth_headers, monkeypatch, warning):
+    jump = (await client.post('/api/servers', json={'name': 'jump', 'host': '192.0.2.1'}, headers=auth_headers)).json()
+    node = (await client.post('/api/servers', json={'name': 'target', 'host': '192.0.2.2', 'ssh_jump_server_id': jump['id'], 'ssh_firewall_mode': 'preserve'}, headers=auth_headers)).json()
+    verified = []
+    class Conn:
+        async def run(self, *args, **kwargs):
+            return SimpleNamespace(exit_status=0, stdout='ACONTROL_KEY_READY ACONTROL_KEY_COMMITTED', stderr='')
+    @asynccontextmanager
+    async def connection(*args, **kwargs): yield Conn()
+    async def verify(target, settings):
+        assert target.ssh_jump_server_id is None
+        verified.append(True)
+        return '192.0.2.7'
+    async def retire(old, settings):
+        assert verified and old.ssh_jump_server_id == jump['id']
+        async with client.session_factory() as session:
+            change = await session.scalar(select(SshAccessChange).where(SshAccessChange.server_id == old.id))
+            assert change.phase == 'finalizing'  # Crash recovery still retries retirement.
+        return warning
+    monkeypatch.setattr(ssh_access, 'connection', connection)
+    monkeypatch.setattr(ssh_access, 'verify', verify)
+    monkeypatch.setattr(ssh_access, 'retire_jump', retire)
+    plan = (await client.post(f'/api/servers/{node["id"]}/ssh-access/preview', json={'ssh_jump_server_id': None, 'ssh_source_mode': 'custom', 'ssh_source_ips': ['192.0.2.7'], 'ssh_firewall_mode': 'preserve'}, headers=auth_headers)).json()
+    response = await client.post(f'/api/servers/{node["id"]}/ssh-access/apply', json={'token': plan['token']}, headers=auth_headers)
+    assert response.status_code == 200, response.text
+    assert response.json()['ssh_jump_server_id'] is None
+    if warning: assert warning in response.json()['last_check_info']
+    async with client.session_factory() as session:
+        change = await session.get(SshAccessChange, plan['token'])
+        assert change.phase == 'done'
+        assert change.payload['retired_jump'] == ('warning' if warning else 'revoked')
 
 
 async def test_bootstrap_success_marker_without_key_login_is_failure(client, auth_headers, monkeypatch):

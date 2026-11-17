@@ -847,9 +847,11 @@ export function ServersPage({ onUnauthorized }: Props) {
             }))
             return
           }
-          await api<Server>(`/api/servers/${editingId}/ssh-access/apply`, {
+          const applied = await api<Server>(`/api/servers/${editingId}/ssh-access/apply`, {
             method: 'POST', body: JSON.stringify({ token: sshPreview.token }),
           })
+          const accessWarning = parseCheckInfo(applied)?.ssh_access_warning
+          if (accessWarning) setNotice(String(accessWarning))
           setSshPreview(null)
         }
         if (payload.manual_exit_name !== undefined) {

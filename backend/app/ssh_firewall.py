@@ -98,7 +98,12 @@ if command -v firewall-cmd >/dev/null 2>&1 && firewall-cmd --state >/dev/null 2>
   done
 fi
 '''
-        guard = header + 'sleep 180\n' + lock + '[ ! -e "$STATE/committed" ] || exit 0\n' + rollback
+        guard = header + '''i=0
+while [ "$i" -lt 180 ]; do
+  [ ! -e "$STATE/committed" ] && [ ! -e "$STATE/rolledback" ] || exit 0
+  sleep 1; i=$((i + 1))
+done
+''' + lock + '[ ! -e "$STATE/committed" ] || exit 0\n' + rollback
         body += f'''nohup sh -c {sshops._sh_quote(guard)} </dev/null >/dev/null 2>&1 &
 echo ACONTROL_FIREWALL_READY
 '''

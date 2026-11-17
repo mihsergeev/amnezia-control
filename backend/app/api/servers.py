@@ -325,6 +325,10 @@ async def _delete_server(
                 f"(сервер недоступен?): {exc or type(exc).__name__}"
             )
 
+    retired_warning = await ssh_access.retire_jump(server, get_settings())
+    if retired_warning:
+        result.message = (result.message + " " + retired_warning).strip()
+
     # чистим ВСЕ панельные хвосты сервера (конфиги с секретами, заметки, сроки,
     # паузы, кэши имён, метрики) — на сам сервер не влияет
     for model in _server_scoped_models():
@@ -342,11 +346,11 @@ async def _delete_server(
     await session.delete(server)
     await session.commit()
     # SQLite IDs can be reused: a new node must never inherit a deleted node's
-    # forwarding identity. The remote account remains inert without this key.
+    # forwarding identity. Retirement failures are reported before discarding it.
     jump_key_path(key_paths(get_settings().data_dir)[0], server_id).unlink(missing_ok=True)
     await audit.record(
         session, user.username, "server_delete", server_name,
-        "ключ снят" if remove_key else "",
+        ("ключ снят. " if remove_key else "") + retired_warning,
     )
     return result
 

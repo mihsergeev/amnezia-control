@@ -13,9 +13,9 @@ import asyncssh
 from fastapi import HTTPException
 from sqlalchemy import select
 
-from app import bulk_issue_state, nodelock, ssh_firewall, ssh_policy, sshops
+from app import audit, bulk_issue_state, nodelock, ssh_firewall, ssh_policy, sshops
 from app.models import Server, SshAccessChange
-from app.sshkeys import ensure_jump_key, ensure_panel_key, jump_username, key_paths
+from app.sshkeys import ensure_jump_key, ensure_panel_key, jump_key_path, jump_username, key_paths
 
 ACCESS_FIELDS = ("ssh_jump_server_id", "ssh_source_mode", "ssh_source_ips", "ssh_firewall_mode")
 ACTIVE = ("applying", "finalizing")
@@ -78,9 +78,27 @@ def write_key(public_key, key_options, *, transaction=None, operation="set"):
     if transaction is not None and not re.fullmatch(r"[a-f0-9]{32}", transaction):
         raise ValueError("Некорректный идентификатор SSH-операции")
     token = transaction or "setup"
-    # All awk comparisons use complete key fields, not substring matches.
-    strip = "awk -v k=\"$BLOB\" '{ own=0; for(i=1;i<=NF;i++) if($i==k) own=1; if(!own) print }'"
-    own = "awk -v k=\"$BLOB\" '{ for(i=1;i<=NF;i++) if($i==k) { print; break } }'"
+    # Parse the actual key field, respecting spaces in quoted options. A key
+    # blob mentioned in another administrator's comment is not our identity.
+    selector = r'''function identity(line, i,c,q,esc,stop,first,rest,a) {
+      sub(/^[ \t]+/, "", line); if(line ~ /^#/ || line == "") return ""
+      q=0; esc=0; stop=length(line)+1
+      for(i=1;i<=length(line);i++) {
+        c=substr(line,i,1)
+        if(esc) { esc=0; continue }
+        if(c=="\\") { esc=1; continue }
+        if(c=="\"") { q=!q; continue }
+        if(!q && c ~ /[ \t]/) { stop=i; break }
+      }
+      first=substr(line,1,stop-1); rest=substr(line,stop+1); sub(/^[ \t]+/,"",rest)
+      split(rest,a,/[ \t]+/)
+      if(first ~ /^(ssh-|ecdsa-|sk-)/) return first ":" a[1]
+      return a[1] ":" a[2]
+    }
+    { mine=(identity($0)==want); if(mine==selected) print }'''
+    awk = f"awk -v want={sshops._sh_quote(public_key.split()[0] + ':' + blob)} "
+    strip = awk + '-v selected=0 ' + sshops._sh_quote(selector)
+    own = awk + '-v selected=1 ' + sshops._sh_quote(selector)
     rollback = f'''mkdir "$LOCK" 2>/dev/null || exit 1
 trap 'rmdir "$LOCK" 2>/dev/null || true' EXIT
 trap 'exit 1' HUP INT TERM
@@ -126,19 +144,33 @@ chmod 600 "$T" && mv -f "$T" "$AK"
 touch "$STATE.commit"
 echo ACONTROL_KEY_COMMITTED
 '''
+    if operation == "revoke":
+        return header + lock + f'''BEFORE=$(sha256sum "$AK" | cut -d' ' -f1)
+T=$(mktemp "$DIR/.acontrol-key.XXXXXX")
+{strip} "$AK" > "$T"
+[ "$(sha256sum "$AK" | cut -d' ' -f1)" = "$BEFORE" ] || {{ rm -f "$T"; exit 1; }}
+chmod 600 "$T" && mv -f "$T" "$AK"
+echo ACONTROL_JUMP_REVOKED
+'''
     script = header + lock
     script += f'''printf '%s\\n' '{token}' > "$DIR/.acontrol-current"
 '''
     if transaction:
         # A retry must not replace the only copy of the original authorization.
-        guard = header + 'sleep 120\n' + rollback
+        guard = header + f'''i=0
+while [ "$i" -lt 120 ]; do
+  [ ! -e "$STATE.commit" ] && [ ! -e "$STATE.rolledback" ] || exit 0
+  [ "$(cat "$DIR/.acontrol-current" 2>/dev/null)" = '{token}' ] || exit 0
+  sleep 1; i=$((i + 1))
+done
+''' + rollback
         script += f'''[ ! -e "$BACKUP" ] && [ ! -e "$STATE.rolledback" ] || exit 1
 cp -p "$AK" "$BACKUP" && chmod 600 "$BACKUP"
 nohup sh -c {sshops._sh_quote(guard)} </dev/null >/dev/null 2>&1 &
 '''
     script += '''T=$(mktemp "$DIR/.acontrol-key.XXXXXX")
 '''
-    script += ('cat "$AK" > "$T"\n' if transaction else f'{strip} "$AK" > "$T"\n')
+    script += ('''awk '{print}' "$AK" > "$T"\n''' if transaction else f'{strip} "$AK" > "$T"\n')
     script += '''printf '%s\n' "$LINE" >> "$T"
 chmod 600 "$T" && mv -f "$T" "$AK"
 echo ACONTROL_KEY_READY
@@ -266,10 +298,82 @@ async def prepare_jump(session, node, settings):
     jump = node.ssh_jump_server
     key, _ = key_paths(settings.data_dir)
     public = ensure_jump_key(key, node.id)
-    # The panel->jump source policy is independent from jump->target policy.
-    addresses = ssh_policy.sources(jump, settings.panel_ip)
     async with sshops.connect(jump.host, jump.ssh_port, jump.ssh_user, key, settings.ssh_connect_timeout) as conn:
+        observed = await conn.run("printf '%s\\n' \"${SSH_CONNECTION%% *}\"", check=True, timeout=10)
+        # The forwarding key is narrower than the management key policy, even
+        # when the jump card explicitly permits management from any source.
+        addresses = [str(ipaddress.ip_address(observed.stdout.strip()))]
         await _run(conn, jump_script(public, node, addresses, jump_username(key, node.id)), "ACONTROL_JUMP_READY")
+
+
+def revoke_jump_script(public, user):
+    """Remove only this panel's exact identity from an unchanged owned role."""
+    owner = hashlib.sha256(_identity(public).encode()).hexdigest()
+    if not re.fullmatch(r"acj[a-f0-9]{24}", user):
+        raise ValueError("Некорректный пользователь SSH-перехода")
+    writer = write_key(public, "restrict", operation="revoke")
+    return f'''set -eu
+if [ "$(id -u)" = 0 ]; then SUDO=""; else SUDO="sudo -n"; fi
+$SUDO sh -c {sshops._sh_quote(f'''set -eu
+for path in /lib65 /lib65/acontrol-ssh /lib65/acontrol-ssh/{user}; do
+  [ ! -L "$path" ] && [ -d "$path" ] && [ "$(stat -c %u "$path")" = 0 ] || exit 1
+done
+STATE_DIR='/lib65/acontrol-ssh/{user}'
+[ "$(stat -c %a /lib65/acontrol-ssh)" = 700 ] && [ "$(stat -c %a "$STATE_DIR")" = 700 ] || exit 1
+for path in "$STATE_DIR/owner" "$STATE_DIR/sshd-sha"; do
+  [ ! -L "$path" ] && [ -f "$path" ] && [ "$(stat -c %u "$path")" = 0 ] && [ "$(stat -c %h "$path")" = 1 ] || exit 1
+done
+[ "$(cat "$STATE_DIR/owner")" = '{owner}' ] || exit 1
+CONF='/etc/ssh/sshd_config.d/00-{user}.conf'
+[ ! -L "$CONF" ] && [ -f "$CONF" ] && [ "$(stat -c %u "$CONF")" = 0 ] || exit 1
+[ "$(sha256sum "$CONF" | cut -d' ' -f1)" = "$(cat "$STATE_DIR/sshd-sha")" ] || exit 1
+HOME_DIR=$(getent passwd '{user}' | cut -d: -f6)
+[ "$(id -u '{user}')" -ne 0 ] && [ "$(id -nG '{user}')" = '{user}' ] || exit 1
+[ ! -L "$HOME_DIR" ] && [ -d "$HOME_DIR" ] && [ "$(stat -c %u "$HOME_DIR")" = "$(id -u '{user}')" ] || exit 1
+su -s /bin/sh '{user}' -c {sshops._sh_quote(writer)}
+''')}
+'''
+
+
+async def retire_jump(node, settings):
+    """Best effort: a failed retirement must not undo a working replacement."""
+    if not node.ssh_jump_server_id:
+        return ""
+    key, _ = key_paths(settings.data_dir)
+    path = jump_key_path(key, node.id)
+    if not path.exists():
+        return "Старый промежуточный доступ не отозван: локальный ключ отсутствует, прежняя идентичность неизвестна"
+    try:
+        public = asyncssh.read_private_key(path).export_public_key().decode().strip()
+        jump = node.ssh_jump_server
+        if jump is None:
+            raise RuntimeError("промежуточная нода отсутствует")
+        async with sshops.connect(jump.host, jump.ssh_port, jump.ssh_user, key, settings.ssh_connect_timeout) as conn:
+            await _run(conn, revoke_jump_script(public, jump_username(key, node.id)), "ACONTROL_JUMP_REVOKED")
+    except Exception as exc:
+        return f"Старый промежуточный доступ не отозван: {str(exc)[:600] or type(exc).__name__}"
+    return ""
+
+
+async def retire_previous(session, server, change, settings):
+    old_id = change.payload["old"]["ssh_jump_server_id"]
+    if not old_id or old_id == server.ssh_jump_server_id:
+        return
+    try:
+        old = await candidate(session, server, {f: change.payload["old"][f] for f in ACCESS_FIELDS})
+        warning = await retire_jump(old, settings)
+    except Exception as exc:
+        warning = f"Старый промежуточный доступ не отозван: {str(exc)[:600] or type(exc).__name__}"
+    change.payload = {**change.payload, "retired_jump": "warning" if warning else "revoked", "retired_jump_warning": warning}
+    if warning:
+        try:
+            info = json.loads(server.last_check_info or "{}")
+        except (ValueError, TypeError):
+            info = {}
+        if not isinstance(info, dict):
+            info = {}
+        server.last_check_info = json.dumps({**info, "ssh_access_warning": warning}, ensure_ascii=False)
+    await audit.record(session, "", "ssh_jump_retire", server.name, warning or "Старый промежуточный ключ отозван")
 
 
 @asynccontextmanager
@@ -352,8 +456,8 @@ async def apply(session, server, token, settings):
                     await _run(old_conn, write_key(public, keyopts, transaction=token, operation="commit"), "ACONTROL_KEY_COMMITTED")
                     if proposed.ssh_firewall_mode == "add":
                         await _run(old_conn, ssh_firewall.script(token, [], proposed.ssh_port, "commit"), "ACONTROL_FIREWALL_COMMITTED")
-                    change.phase = "done"
-                    await session.commit()
+                    # Keep the durable finalizing phase until the best-effort
+                    # retirement is recorded; restart recovery can finish it.
                 except BaseException:
                     await _run(old_conn, write_key(public, keyopts, transaction=token, operation="rollback"), "ACONTROL_KEY_ROLLEDBACK")
                     if proposed.ssh_firewall_mode == "add":
@@ -374,6 +478,9 @@ async def apply(session, server, token, settings):
                 raise
             state = "откат ключа подтвержден" if locals().get("rollback_confirmed", False) else "откат не подтвержден, сохранен журнал восстановления"
             raise HTTPException(409, f"Настройка SSH не завершена ({state}): {exc}") from exc
+        await retire_previous(session, server, change, settings)
+        change.phase = "done"
+        await session.commit()
         await session.refresh(server)
         return server
 
@@ -427,4 +534,6 @@ async def recover(session, settings, server_id=None):
         if not restored:
             # Preserve the journal for an explicit retry; don't pretend recovery succeeded.
             continue
+        if change.phase == "done":
+            await retire_previous(session, server, change, settings)
         await session.commit()

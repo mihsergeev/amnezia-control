@@ -20,6 +20,10 @@ class Jump:
     target_id: int
 
 
+class JumpAccessError(asyncssh.PermissionDenied):
+    pass
+
+
 def route_options(server) -> dict:
     """Keep direct call signatures stable; never infer a route from reachability."""
     if not getattr(server, "ssh_jump_server_id", None):
@@ -267,8 +271,8 @@ def _firewall_snippet(panel_ip: str, ssh_port: int, sudo: str, *, strict: bool =
 def _key_options(panel_ip: str) -> str:
     """Опции для строки authorized_keys панельного ключа.
 
-    restrict — ключ только для выполнения команд (без pty/форвардингов/туннелей,
-    т.е. украденный ключ нельзя использовать как сетевой плацдарм).
+    restrict отключает штатные PTY и SSH-форвардинги. Это не ограничивает
+    команды пользователя и не заменяет изоляцию его sudo/docker-полномочий.
     from="<panel_ip>" — привязка к IP панели (ключ бесполезен с другого адреса).
     """
     ip = (panel_ip or "").strip()
@@ -470,9 +474,12 @@ async def connect(
         if jump is not None:
             path = jump_key_path(key_path, jump.target_id)
             if not path.is_file():
-                raise ValueError("Сначала подготовьте SSH-доступ через промежуточную ноду")
-            parent = await _tofu_connect(jump.host, jump.port, jump_username(key_path, jump.target_id), path,
-                                        timeout=timeout, require_known=True)
+                raise JumpAccessError("Сначала подготовьте SSH-доступ через промежуточную ноду")
+            try:
+                parent = await _tofu_connect(jump.host, jump.port, jump_username(key_path, jump.target_id), path,
+                                            timeout=timeout, require_known=True)
+            except asyncssh.PermissionDenied as exc:
+                raise JumpAccessError("Промежуточный SSH-ключ не принят. При смене исходящего IP панели повторите подготовку промежуточной ноды") from exc
             options["tunnel"] = parent
         conn = await _tofu_connect(host, port, username, key_path, timeout=timeout, **options)
         yield conn
@@ -504,6 +511,8 @@ async def check_server(
             error="Host-ключ ноды ИЗМЕНИЛСЯ — возможна подмена/MITM. Если вы "
             "пересоздавали ноду, удалите её строку из data/ssh/known_hosts.",
         )
+    except JumpAccessError as exc:
+        return CheckResult(ok=False, error=str(exc))
     except asyncssh.PermissionDenied:
         return CheckResult(
             ok=False,
@@ -516,6 +525,8 @@ async def check_server(
         )
     except (OSError, asyncssh.Error) as exc:
         return CheckResult(ok=False, error=str(exc) or type(exc).__name__)
+    except ValueError as exc:
+        return CheckResult(ok=False, error=str(exc))
 
     output = run.stdout if isinstance(run.stdout, str) else ""
     return _parse_check_output(output)
@@ -561,9 +572,11 @@ async def bootstrap_server(
     script = _build_bootstrap_script(public_key, port, panel_ip, source_ips=addresses, firewall_mode=firewall_mode, transaction=token)
     sudo_input = (become_password or password) + "\n"
     key_verified = False
+    password_connected = False
     try:
         async with asyncio.timeout(timeout * 3):
             async with connect(host, port, username, key_path, timeout, password=password, **({"jump": jump} if jump else {})) as conn:
+                password_connected = True
                 run = await conn.run(script, input=sudo_input, check=False)
                 if run.exit_status == 0 and "ACONTROL SETUP OK" in (run.stdout or ""):
                     try:
@@ -571,7 +584,7 @@ async def bootstrap_server(
                             verified = await check.run("printf 'SOURCE=%s\\n' \"${SSH_CONNECTION%% *}\"", check=True, timeout=10)
                             actual = ipaddress.ip_address(verified.stdout.strip().removeprefix("SOURCE="))
                             if addresses and not any(actual in ipaddress.ip_network(item, strict=False) for item in addresses):
-                                raise ValueError("Фактический источник SSH не входит в разрешенный список")
+                                raise ValueError(f"Фактический источник SSH {actual} не входит в разрешенный список: {', '.join(addresses)}")
                         await _run(conn, write_key(public_key, options(addresses), transaction=token, operation="commit"), "ACONTROL_KEY_COMMITTED")
                         key_verified = True
                     except BaseException:
@@ -585,11 +598,14 @@ async def bootstrap_server(
             error="Host-ключ ноды ИЗМЕНИЛСЯ — возможна подмена/MITM. Если вы "
             "пересоздавали ноду, удалите её строку из data/ssh/known_hosts.",
         )
+    except JumpAccessError as exc:
+        return BootstrapResult(ok=False, error=str(exc))
     except asyncssh.PermissionDenied:
         return BootstrapResult(
             ok=False,
-            error="Неверный пароль или на сервере запрещён вход по паролю "
-            "(PasswordAuthentication no) — используйте ручной скрипт",
+            error=("Ключ панели установлен, но повторный вход по ключу не принят" if password_connected else
+                   "Неверный пароль или на сервере запрещён вход по паролю "
+                   "(PasswordAuthentication no) — используйте ручной скрипт"),
         )
     except (OSError, asyncssh.Error) as exc:
         return BootstrapResult(ok=False, error=str(exc) or type(exc).__name__)

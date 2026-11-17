@@ -304,6 +304,7 @@ export type Server = {
 }
 
 export type CheckInfo = {
+  ssh_access_warning?: string
   error?: string
   hostname?: string
   docker?: boolean
