@@ -9,8 +9,8 @@ import pytest
 from app import ssh_firewall
 
 
-def execute(tmp_path, operation, *, extra=""):
-    generated = ssh_firewall.script("a" * 32, ["192.0.2.1"], 2222, operation)
+def execute(tmp_path, operation, *, extra="", addresses=None):
+    generated = ssh_firewall.script("a" * 32, ["192.0.2.1"] if addresses is None else addresses, 2222, operation)
     body = shlex.split(generated.split('$SUDO sh -c ', 1)[1])[0]
     body = body.replace('/lib65', tmp_path.as_posix() + '/rootdata')
     fixture = '''
@@ -89,6 +89,56 @@ def test_concurrent_manual_change_blocks_ambiguous_firewalld_cleanup(tmp_path):
     assert result.returncode != 0
     assert file.read_text() == before
     assert 'требуется проверка собственного правила' in result.stderr
+
+
+@pytest.mark.parametrize(('failed_mode', 'legacy_journal'), [('runtime', False), ('permanent', True)])
+def test_firewalld_rollback_resumes_after_partial_removal(tmp_path, failed_mode, legacy_journal):
+    init(tmp_path)
+    foreign = b'rule family="ipv4" source address="192.0.2.7" port port="2222" protocol="tcp" accept\n'
+    rulefiles = {mode: tmp_path / f'firewalld-{mode}' for mode in ('runtime', 'permanent')}
+    for rules in rulefiles.values():
+        rules.write_bytes(foreign)
+    addresses = ['192.0.2.1', '2001:db8::/64', '192.0.2.7', '203.0.113.1']
+    staged = execute(tmp_path, 'stage', addresses=addresses)
+    assert staged.returncode == 0, staged.stderr
+    state = tmp_path / 'rootdata/acontrol-ssh-firewall' / ('a' * 32)
+    for mode in rulefiles:
+        assert foreign not in (state / f'firewalld-{mode}-intents').read_bytes()
+        if legacy_journal:
+            (state / f'firewalld-{mode}-before').unlink()
+    extra = f'FAIL_MODE={failed_mode}\n' + '''eval "$(declare -f firewall-cmd | sed '1s/firewall-cmd/original_firewalld/')"
+firewall-cmd() {
+  if [ "$1" = --permanent ]; then mode=permanent; arg="$2"; else mode=runtime; arg="$1"; fi
+  case "$mode:$arg" in "$FAIL_MODE":--remove-rich-rule=*2001:db8::/64*) return 2 ;; esac
+  original_firewalld "$@"
+}
+'''
+    partial = execute(tmp_path, 'rollback', extra=extra)
+    assert partial.returncode != 0
+    remaining = b'rule family="ipv6" source address="2001:db8::/64" port port="2222" protocol="tcp" accept\n'
+    for mode, rules in rulefiles.items():
+        assert rules.read_bytes() == foreign + (remaining if mode == failed_mode else b'')
+    assert not (state / 'rolledback').exists()
+    assert 'ACONTROL_FIREWALL_STATE_STAGED' in execute(tmp_path, 'status').stdout
+
+    affected = rulefiles[failed_mode]
+    added = b'rule family="ipv4" source address="198.51.100.1" accept\n'
+    for changed in (foreign + remaining + added, remaining):
+        affected.write_bytes(changed)
+        refused = execute(tmp_path, 'rollback')
+        assert refused.returncode != 0
+        assert affected.read_bytes() == changed
+        assert not (state / 'rolledback').exists()
+    affected.write_bytes(foreign + remaining)
+
+    retry = execute(tmp_path, 'rollback')
+    assert retry.returncode == 0, retry.stderr
+    assert 'ACONTROL_FIREWALL_ROLLEDBACK' in retry.stdout
+    assert all(rules.read_bytes() == foreign for rules in rulefiles.values())
+    assert (state / 'rolledback').exists()
+    assert 'ACONTROL_FIREWALL_STATE_ROLLEDBACK' in execute(tmp_path, 'status').stdout
+    assert execute(tmp_path, 'rollback').returncode == 0
+    assert execute(tmp_path, 'commit').returncode != 0
 
 
 def test_committed_firewall_rejects_rollback_and_commit_is_idempotent(tmp_path):

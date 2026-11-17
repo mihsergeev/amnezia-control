@@ -38,13 +38,19 @@ if [ -f "$STATE/ufw-intents" ]; then
     fi
   done < "$STATE/ufw-intents"
 fi
+foreign_rules() {
+  grep -Fvx -f "$1" || [ "$?" = 1 ]
+}
 for mode in runtime permanent; do
   OPT=""; [ "$mode" = runtime ] || OPT="--permanent"
-  if [ -f "$STATE/firewalld-$mode-intents" ]; then
+  intents="$STATE/firewalld-$mode-intents"
+  if [ -f "$intents" ]; then
     raw=$(firewall-cmd $OPT --list-rich-rules) || { FAILED=1; continue; }
-    current=$(printf '%s\\n' "$raw" | LC_ALL=C sort)
-    expected=$(cat "$STATE/firewalld-$mode-after" 2>/dev/null) || { FAILED=1; continue; }
-    before=$(cat "$STATE/firewalld-$mode-before" 2>/dev/null) || before="$expected"
+    # An earlier rollback may already have removed some of its own rules.
+    # Every rule outside the recorded intents must still match the journal.
+    current=$(printf '%s\\n' "$raw" | LC_ALL=C sort | foreign_rules "$intents") || { FAILED=1; continue; }
+    expected=$(foreign_rules "$intents" 2>/dev/null < "$STATE/firewalld-$mode-after") || { FAILED=1; continue; }
+    before=$(foreign_rules "$intents" 2>/dev/null < "$STATE/firewalld-$mode-before") || before="$expected"
     while IFS= read -r rule; do
       if firewall-cmd $OPT --query-rich-rule="$rule" >/dev/null 2>&1; then
         if [ "$current" != "$expected" ] && [ "$current" != "$before" ]; then
@@ -56,7 +62,7 @@ for mode in runtime permanent; do
       else
         status=$?; [ "$status" = 1 ] || FAILED=1
       fi
-    done < "$STATE/firewalld-$mode-intents"
+    done < "$intents"
   fi
 done
 [ "$FAILED" = 0 ] || exit 1
