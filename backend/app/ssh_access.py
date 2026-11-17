@@ -527,11 +527,15 @@ async def recover(session, settings, server_id=None):
                             firewall_state = ""
                             if proposed.ssh_firewall_mode == "add":
                                 firewall_state = (await _run(conn, ssh_firewall.script(change.id, [], proposed.ssh_port, "status"), "ACONTROL_FIREWALL_STATE_")).stdout.strip()
-                            if "ROLLEDBACK" in key_state or "ROLLEDBACK" in firewall_state:
+                            if (
+                                "ROLLEDBACK" in key_state
+                                or "ROLLEDBACK" in firewall_state
+                                or "ROLLINGBACK" in firewall_state
+                            ):
                                 if "COMMITTED" in firewall_state:
                                     continue  # Conflicting proof: preserve the journal.
-                                # A watchdog already reverted part of this exact
-                                # generation; complete rollback while it is current.
+                                # A watchdog started rollback for this exact
+                                # generation; complete it while it is current.
                                 raise _RemoteRolledBack
                             await verify(proposed, settings)
                             await _run(conn, write_key(public, keyopts, transaction=change.id, operation="commit"), "ACONTROL_KEY_COMMITTED")

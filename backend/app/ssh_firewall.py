@@ -29,6 +29,9 @@ flock -w 5 9 || { echo 'Firewall operation busy' >&2; exit 1; }
 '''
     rollback = '''[ -d "$STATE" ] || { echo ACONTROL_FIREWALL_ROLLEDBACK; exit 0; }
 [ ! -e "$STATE/committed" ] || exit 1
+[ ! -e "$STATE/rolledback" ] || { echo ACONTROL_FIREWALL_ROLLEDBACK; exit 0; }
+# A partial rollback can only be retried. Never commit after removing rules.
+touch "$STATE/rollingback"
 FAILED=0
 if [ -f "$STATE/ufw-intents" ]; then
   while IFS= read -r rule; do
@@ -72,12 +75,13 @@ echo ACONTROL_FIREWALL_ROLLEDBACK
     if operation == "status":
         body = header + lock + '''if [ -e "$STATE/rolledback" ]; then echo ACONTROL_FIREWALL_STATE_ROLLEDBACK
 elif [ -e "$STATE/committed" ]; then echo ACONTROL_FIREWALL_STATE_COMMITTED
+elif [ -e "$STATE/rollingback" ]; then echo ACONTROL_FIREWALL_STATE_ROLLINGBACK
 else echo ACONTROL_FIREWALL_STATE_STAGED; fi
 '''
     elif operation == "rollback":
         body = header + lock + rollback
     elif operation == "commit":
-        body = header + lock + '''[ -d "$STATE" ] && [ ! -e "$STATE/rolledback" ] || exit 1
+        body = header + lock + '''[ ! -e "$STATE/rollingback" ] && [ ! -e "$STATE/rolledback" ] || exit 1
 touch "$STATE/committed"
 echo ACONTROL_FIREWALL_COMMITTED
 '''

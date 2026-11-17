@@ -348,10 +348,10 @@ async def test_successful_route_is_preserved_when_old_role_retirement_fails(clie
         assert change.payload['retired_jump'] == ('warning' if warning else 'revoked')
 
 
-@pytest.mark.parametrize('remote_after_loss', ['committed', 'firewall-watchdog', 'key-watchdog'])
+@pytest.mark.parametrize('remote_after_loss', ['committed', 'firewall-watchdog', 'partial-firewall-watchdog', 'key-watchdog'])
 async def test_lost_firewall_commit_reply_reconciles_without_blind_rollback(client, auth_headers, monkeypatch, remote_after_loss):
     node = (await client.post('/api/servers', json={'name': 'target', 'host': '192.0.2.2'}, headers=auth_headers)).json()
-    state = {'key': 'STAGED', 'firewall': 'STAGED', 'lost': False}
+    state = {'key': 'STAGED', 'firewall': 'STAGED', 'lost': False, 'firewall_blocked': False}
     operations = []
     class Conn:
         async def run(self, command, **kwargs):
@@ -363,16 +363,20 @@ async def test_lost_firewall_commit_reply_reconciles_without_blind_rollback(clie
                 assert state['key'] != 'ROLLEDBACK'
                 state['key'] = 'COMMITTED'; marker = 'ACONTROL_KEY_COMMITTED'
             elif 'ACONTROL_FIREWALL_COMMITTED' in command:
-                assert state['firewall'] != 'ROLLEDBACK'
-                state['firewall'] = 'COMMITTED'
+                assert state['firewall'] not in ('ROLLINGBACK', 'ROLLEDBACK')
                 if not state['lost']:
                     state['lost'] = True
-                    raise OSError('commit applied remotely; reply lost')
+                    if remote_after_loss != 'partial-firewall-watchdog':
+                        state['firewall'] = 'COMMITTED'
+                    raise OSError('firewall commit reply lost')
+                state['firewall'] = 'COMMITTED'
                 marker = 'ACONTROL_FIREWALL_COMMITTED'
             elif 'ACONTROL_KEY_ROLLEDBACK' in command:
                 state['key'] = 'ROLLEDBACK'; marker = 'ACONTROL_KEY_ROLLEDBACK'
             elif 'ACONTROL_FIREWALL_ROLLEDBACK' in command:
                 assert state['firewall'] != 'COMMITTED'
+                if state['firewall_blocked']:
+                    return SimpleNamespace(exit_status=1, stdout='', stderr='temporary firewall rollback failure')
                 state['firewall'] = 'ROLLEDBACK'; marker = 'ACONTROL_FIREWALL_ROLLEDBACK'
             else: raise AssertionError(command)
             operations.append(marker)
@@ -386,13 +390,25 @@ async def test_lost_firewall_commit_reply_reconciles_without_blind_rollback(clie
     result = await client.post(f'/api/servers/{node["id"]}/ssh-access/apply', json={'token': plan['token']}, headers=auth_headers)
     assert result.status_code == 409 and 'журнал' in result.text
     assert not any('ROLLEDBACK' in item for item in operations)
+    async with client.session_factory() as session:
+        assert (await session.get(SshAccessChange, plan['token'])).phase == 'finalizing'
     if remote_after_loss == 'firewall-watchdog': state['firewall'] = 'ROLLEDBACK'
+    if remote_after_loss == 'partial-firewall-watchdog':
+        state.update(firewall='ROLLINGBACK', firewall_blocked=True)
+        blocked = await client.post(f'/api/servers/{node["id"]}/ssh-access/recover', headers=auth_headers)
+        assert blocked.status_code == 409
+        async with client.session_factory() as session:
+            assert (await session.get(SshAccessChange, plan['token'])).phase == 'finalizing'
+        state['firewall_blocked'] = False
     if remote_after_loss == 'key-watchdog': state.update(key='ROLLEDBACK', firewall='STAGED')
     result = await client.post(f'/api/servers/{node["id"]}/ssh-access/recover', headers=auth_headers)
     assert result.status_code == 200, result.text
     async with client.session_factory() as session:
         change = await session.get(SshAccessChange, plan['token'])
         assert change.phase == ('done' if remote_after_loss == 'committed' else 'rolledback')
+    if remote_after_loss == 'partial-firewall-watchdog':
+        assert operations.count('ACONTROL_KEY_COMMITTED') == 1
+        assert operations[-2:] == ['ACONTROL_KEY_ROLLEDBACK', 'ACONTROL_FIREWALL_ROLLEDBACK']
     assert result.json()['ssh_source_mode'] == ('custom' if remote_after_loss == 'committed' else 'panel')
 
 

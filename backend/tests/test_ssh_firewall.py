@@ -119,7 +119,8 @@ firewall-cmd() {
     for mode, rules in rulefiles.items():
         assert rules.read_bytes() == foreign + (remaining if mode == failed_mode else b'')
     assert not (state / 'rolledback').exists()
-    assert 'ACONTROL_FIREWALL_STATE_STAGED' in execute(tmp_path, 'status').stdout
+    assert execute(tmp_path, 'commit').returncode != 0
+    assert 'ACONTROL_FIREWALL_STATE_ROLLINGBACK' in execute(tmp_path, 'status').stdout
 
     affected = rulefiles[failed_mode]
     added = b'rule family="ipv4" source address="198.51.100.1" accept\n'
@@ -137,7 +138,10 @@ firewall-cmd() {
     assert all(rules.read_bytes() == foreign for rules in rulefiles.values())
     assert (state / 'rolledback').exists()
     assert 'ACONTROL_FIREWALL_STATE_ROLLEDBACK' in execute(tmp_path, 'status').stdout
+    # After successful rollback this exact allow can independently reappear.
+    affected.write_bytes(foreign + remaining)
     assert execute(tmp_path, 'rollback').returncode == 0
+    assert affected.read_bytes() == foreign + remaining
     assert execute(tmp_path, 'commit').returncode != 0
 
 
