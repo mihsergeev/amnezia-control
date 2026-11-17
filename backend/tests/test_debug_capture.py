@@ -11,6 +11,7 @@ from fastapi import HTTPException
 from app import debug_context, deploywatch
 from app.deps import CurrentUser
 from app.debuglog import DebugLogStore
+from app.models import Server
 
 
 PRIVATE = "private-node.example.invalid 198.51.100.38 password=do-not-export token=keep-private"
@@ -103,7 +104,10 @@ async def test_accepted_task_is_not_reported_as_completed(client, auth_headers):
     assert events[0]["stage"] == "request"
 
 
-async def test_deploywatch_persists_detached_install_failure(tmp_path, monkeypatch):
+async def test_deploywatch_persists_detached_install_failure(tmp_path, monkeypatch, session_factory):
+    async with session_factory() as session:
+        session.add(Server(id=4, name="Synthetic node", host="203.0.113.40", ssh_port=2222, ssh_user="current-service"))
+        await session.commit()
     class Connection:
         async def __aenter__(self):
             return self
@@ -118,16 +122,23 @@ async def test_deploywatch_persists_detached_install_failure(tmp_path, monkeypat
         pass
 
     monkeypatch.setattr(deploywatch, "_POLL_SECONDS", 0)
-    monkeypatch.setattr(deploywatch.sshops, "connect", lambda *_args: Connection())
+    connections = []
+    def connect(*args, **kwargs):
+        connections.append((args[:3], kwargs))
+        assert args[:3] == ("203.0.113.40", 2222, "current-service")
+        assert kwargs == {}
+        return Connection()
+    monkeypatch.setattr(deploywatch.sshops, "connect", connect)
     monkeypatch.setattr(deploywatch.deploy, "read_status", status)
     monkeypatch.setattr(deploywatch.alerts, "maybe_alert", alert)
     store = DebugLogStore(tmp_path / "debug-logs")
-    await deploywatch._watch("198.51.100.38", 2221, "test", "awg3", PRIVATE, 4, None,
+    await deploywatch._watch("198.51.100.38", 2221, "test", "awg3", PRIVATE, 4, session_factory,
                              SimpleNamespace(data_dir=str(tmp_path), ssh_connect_timeout=1), store)
     events = DebugLogStore(tmp_path / "debug-logs").read()
     assert [event["code"] for event in events] == ["dependency_missing", "started"]
     assert all(event["operation"] == "deploy" and event["protocol"] == "awg3" for event in events)
     assert len({event["correlation_id"] for event in events}) == 1
+    assert len(connections) == 1
     assert PRIVATE not in (tmp_path / "debug-logs" / "events.jsonl").read_text(encoding="utf-8")
 
 
@@ -166,7 +177,11 @@ async def test_diagnostics_do_not_block_unrelated_async_work(tmp_path, monkeypat
     assert store.read()[0]["server_id"] == 3
 
 
-async def test_late_deploy_poll_failure_is_recorded(tmp_path, monkeypatch):
+async def test_late_deploy_poll_failure_is_recorded(tmp_path, monkeypatch, session_factory):
+    async with session_factory() as session:
+        session.add(Server(id=3, name="Synthetic relay", host="203.0.113.3", ssh_port=2203, ssh_user="relay-service"))
+        session.add(Server(id=4, name="Synthetic target", host="203.0.113.4", ssh_port=2204, ssh_user="current-service", ssh_jump_server_id=3))
+        await session.commit()
     class Connection:
         async def __aenter__(self):
             return self
@@ -180,6 +195,13 @@ async def test_late_deploy_poll_failure_is_recorded(tmp_path, monkeypatch):
         nonlocal calls
         calls += 1
         if calls == 1:
+            # The watcher must resolve current metadata on every poll; queued
+            # spawn arguments and the preceding SSH session can both be stale.
+            async with session_factory() as session:
+                target = await session.get(Server, 4)
+                target.host = "203.0.113.44"
+                target.ssh_port = 2205
+                await session.commit()
             return {"state": "running", "log": ""}
         if calls == 2:
             raise TimeoutError(PRIVATE)
@@ -189,13 +211,21 @@ async def test_late_deploy_poll_failure_is_recorded(tmp_path, monkeypatch):
         pass
 
     monkeypatch.setattr(deploywatch, "_POLL_SECONDS", 0)
-    monkeypatch.setattr(deploywatch.sshops, "connect", lambda *_args: Connection())
+    connections = []
+    def connect(*args, **kwargs):
+        connections.append(args[:3])
+        assert kwargs == {"jump": deploywatch.sshops.Jump("203.0.113.3", 2203, 4)}
+        return Connection()
+    monkeypatch.setattr(deploywatch.sshops, "connect", connect)
     monkeypatch.setattr(deploywatch.deploy, "read_status", status)
     monkeypatch.setattr(deploywatch.alerts, "maybe_alert", alert)
     store = DebugLogStore(tmp_path / "logs")
-    await deploywatch._watch("198.51.100.38", 2221, "test", "awg3", PRIVATE, 4, None,
+    await deploywatch._watch("198.51.100.38", 2221, "test", "awg3", PRIVATE, 4, session_factory,
                              SimpleNamespace(data_dir=str(tmp_path), ssh_connect_timeout=1), store)
     events = store.read()
     assert {event["code"] for event in events} == {"started", "timeout", "entry_ownership"}
     assert len({event["correlation_id"] for event in events}) == 1
+    assert connections == [("203.0.113.4", 2204, "current-service"),
+                           ("203.0.113.44", 2205, "current-service"),
+                           ("203.0.113.44", 2205, "current-service")]
     assert PRIVATE not in json.dumps(events)
