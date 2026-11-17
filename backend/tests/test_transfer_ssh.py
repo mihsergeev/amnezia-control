@@ -7,10 +7,11 @@ from sqlalchemy import delete, select
 from app.models import Server, SshAccessChange
 
 
-async def test_transfer_binds_hop_by_address_never_foreign_id(client, auth_headers, session_factory):
+@pytest.mark.parametrize("relay_host", ["203.0.113.41", "relay_node.example.test"])
+async def test_transfer_binds_hop_by_address_never_foreign_id(client, auth_headers, session_factory, relay_host):
     async with session_factory() as session:
         session.add_all([
-            Server(id=1, name="relay", host="203.0.113.41", ssh_port=2221, ssh_user="acontrol"),
+            Server(id=1, name="relay", host=relay_host, ssh_port=2221, ssh_user="acontrol"),
             Server(id=2, name="target", host="203.0.113.42", ssh_port=2221, ssh_user="acontrol",
                    ssh_jump_server_id=1, ssh_source_mode="custom", ssh_source_ips=["203.0.113.41"], ssh_firewall_mode="preserve"),
         ])
@@ -19,13 +20,13 @@ async def test_transfer_binds_hop_by_address_never_foreign_id(client, auth_heade
     assert exported.status_code == 200, exported.text
     data = exported.json()
     assert "ssh_jump_server_id" not in data["server"]
-    assert data["server"]["ssh_jump"]["host"] == "203.0.113.41"
+    assert data["server"]["ssh_jump"]["host"] == relay_host
     assert "ssh_access_changes" not in data["tables"]
     async with session_factory() as session:
         await session.execute(delete(Server))
         session.add_all([
             Server(id=1, name="unrelated", host="203.0.113.49", ssh_port=2221, ssh_user="acontrol"),
-            Server(id=77, name="local-relay", host="203.0.113.41", ssh_port=2221, ssh_user="acontrol"),
+            Server(id=77, name="local-relay", host=relay_host, ssh_port=2221, ssh_user="acontrol"),
         ])
         await session.commit()
     imported = await client.post("/api/servers/import-file", headers=auth_headers, content=exported.content)

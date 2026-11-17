@@ -65,13 +65,45 @@ async def test_transfer_rejects_invalid_host_without_insert(client, auth_headers
         assert await session.scalar(select(Server.id)) is None
 
 
-@pytest.mark.parametrize("host", ["192.0.2.10", "2001:db8::10", "node.example", "node.example.", "node", "пример.example"])
+@pytest.mark.parametrize("host", ["192.0.2.10", "2001:db8::10", "node.example", "node.example.", "node", "пример.example", "relay_node.example.test"])
 def test_archive_valid_endpoint_retains_original_bytes_and_legacy_default(host):
     row = {"host": host}
     validate_endpoint(row)
     assert row == {"host": host}
     for port in (1, 22, 2221, 65535):
         validate_endpoint({"host": host, "ssh_port": port})
+
+
+@pytest.mark.parametrize("operation", ["restore", "transfer"])
+async def test_archive_roundtrip_preserves_local_alias_and_profile(client, auth_headers, session_factory, operation):
+    host = "vpn_node"
+    headers = auth_headers | {"X-Confirm-Password": "testpass"}
+    created = await client.post("/api/servers", headers=auth_headers, json={"name": "fixture", "host": host})
+    assert created.status_code == 201, created.text
+    server_id = created.json()["id"]
+    async with session_factory() as session:
+        session.add(AwgConfig(server_id=server_id, public_key="fixture-client", name="fixture", config="stored profile"))
+        await session.commit()
+
+    if operation == "restore":
+        exported = await client.post("/api/backup/download", headers=auth_headers, json={"password": "testpass"})
+    else:
+        exported = await client.get(f"/api/servers/{server_id}/export", headers=headers)
+    assert exported.status_code == 200, exported.text
+
+    async with session_factory() as session:
+        original = await session.get(Server, server_id)
+        original.host = "original.example.test"
+        await session.commit()
+    if operation == "restore":
+        imported = await client.post("/api/backup/restore", headers=headers, content=exported.content)
+    else:
+        imported = await client.post("/api/servers/import-file", headers=auth_headers, content=exported.content)
+    assert imported.status_code == 200, imported.text
+    async with session_factory() as session:
+        restored = await session.scalar(select(Server).where(Server.host == host))
+        assert restored.ssh_port == 22
+        assert await session.scalar(select(AwgConfig.config).where(AwgConfig.server_id == restored.id)) == "stored profile"
 
 
 @pytest.mark.parametrize("fields", INVALID_ENDPOINTS)

@@ -47,7 +47,9 @@ def validate_endpoint(row: dict) -> None:
         ipaddress.ip_address(host)
     except ValueError:
         try:
-            idna.encode(host, uts46=True, std3_rules=True)
+            # The system resolver also supports local aliases with underscores.
+            # Substitute them for the syntax check only, preserving the stored address.
+            idna.encode(host.replace("_", "a"), uts46=True, std3_rules=True)
         except idna.IDNAError as exc:
             raise ValueError("В архиве неверный адрес сервера SSH") from exc
     port = row.get("ssh_port", 22)
