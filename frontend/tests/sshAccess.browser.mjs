@@ -35,6 +35,12 @@ const node = id => ({
   last_check_info: JSON.stringify({ hostname: `node-${id}`, amnezia_containers: [] }),
   ssh_jump_server_id: null, ssh_source_mode: 'panel', ssh_source_ips: [], ssh_firewall_mode: 'add', ssh_access_pending: false,
 })
+const policyFields = ['ssh_jump_server_id', 'ssh_source_mode', 'ssh_source_ips', 'ssh_firewall_mode']
+const partialSaveMessage = 'Настройки SSH применены. Остальные изменения еще не сохранены.'
+
+function assertMetadataOnly(body) {
+  assert.equal(policyFields.some(key => key in body), false, 'Metadata PATCH must omit SSH policy')
+}
 
 async function openMenu(page, name) {
   await page.locator('.srv-item').filter({ hasText: name }).click()
@@ -45,11 +51,10 @@ async function workflow(scenario) {
   const page = await browser.newPage({ viewport: { width: 1100, height: 1000 } })
   const pageErrors = []
   page.on('pageerror', error => pageErrors.push(error.message))
-  const nodes = [node(1), node(2)]
+  const nodes = [node(1), { ...node(2), ssh_source_ips: ['198.51.100.6'] }]
   const calls = []
   let metadataFailures = 2
   const previews = new Map()
-  const policyFields = ['ssh_jump_server_id', 'ssh_source_mode', 'ssh_source_ips', 'ssh_firewall_mode']
   function canonicalize(body) {
     if (JSON.stringify(body.ssh_source_ips) !== JSON.stringify(scenario.input)) return body
     return { ...body, ssh_source_ips: scenario.canonical }
@@ -82,6 +87,7 @@ async function workflow(scenario) {
       if (path === '/api/config') return respond({ default_ssh_user: 'acontrol', panel_ip: '203.0.113.7', protocols: [] })
       if (path === '/api/stats/overview') return respond({ per_server: [] })
       if (path === previewPath) {
+        if (body.ssh_source_mode !== 'custom') assert.deepEqual(body.ssh_source_ips, [], 'Hidden custom draft must be omitted from the preview')
         const token = String(previews.size + 1).padStart(32, '0')
         const policy = canonicalize(body)
         const sources = policy.ssh_source_ips
@@ -94,13 +100,10 @@ async function workflow(scenario) {
         return respond(nodes[0])
       }
       if (method === 'PATCH' && (path === patchPath || path === '/api/servers/2')) {
+        assertMetadataOnly(body)
         if (path === patchPath && metadataFailures) return respond({ detail: `Synthetic metadata save failure ${3 - metadataFailures--}` }, 409)
         const record = path === patchPath ? nodes[0] : nodes[1]
-        const changes = canonicalize(body)
-        if (policyFields.some(key => key in changes && JSON.stringify(changes[key]) !== JSON.stringify(record[key]))) {
-          return respond({ detail: 'SSH policy must already be applied' }, 409)
-        }
-        Object.assign(record, changes)
+        Object.assign(record, body)
         return respond(record)
       }
       return respond([])
@@ -132,6 +135,10 @@ async function workflow(scenario) {
     await edit('Node 1')
     await name.fill('Unsaved metadata')
     await form.locator('.ssh-access-options summary').click()
+    if (scenario.mode === 'any') {
+      await mode.selectOption('custom')
+      await sources.fill('unfinished CIDR draft')
+    }
     await mode.selectOption(scenario.mode)
     if (scenario.mode === 'custom') await sources.fill(scenario.input.join(', '))
     let expectedSources = scenario.canonical
@@ -179,12 +186,14 @@ async function workflow(scenario) {
       await apply.click()
     }
     await form.getByText('Synthetic metadata save failure 1', { exact: true }).waitFor()
+    await form.getByRole('status').getByText(partialSaveMessage).waitFor()
     assert.equal(nodes[0].ssh_source_mode, scenario.mode, 'SSH was already committed before the metadata failure')
     assert.equal(await form.getByLabel('Имя', { exact: true }).inputValue(), 'Unsaved metadata', 'Apply must retain unsaved metadata')
     if (scenario.mode === 'custom') assert.equal(await form.getByLabel('IP или CIDR через запятую').inputValue(), expectedSources.join(', '), 'Form must retain the canonical committed policy')
     await form.getByLabel('Заметка', { exact: true }).fill('New draft note')
     await save.click()
     await form.getByText('Synthetic metadata save failure 2', { exact: true }).waitFor()
+    await form.getByRole('status').getByText(partialSaveMessage).waitFor()
     assert.equal(calls.filter(call => call.path === patchPath && call.method === 'PATCH').at(-1).body.note, 'New draft note')
     assert.equal(calls.filter(call => call.path === previewPath).length, expectedPreviewCount)
     assert.equal(calls.filter(call => call.path === applyPath).length, 1)
@@ -212,6 +221,7 @@ async function workflow(scenario) {
     if (scenario.mode === 'custom') assert.equal(await form.getByLabel('IP или CIDR через запятую').inputValue(), expectedSources.join(', '))
     assert.equal(nodes[1].name, 'Other node')
     assert.equal(nodes[1].ssh_source_mode, 'panel')
+    assert.deepEqual(nodes[1].ssh_source_ips, ['198.51.100.6'])
     assert.deepEqual(nodes[0].ssh_source_ips, expectedSources)
     await page.keyboard.press('Escape')
     await form.waitFor({ state: 'hidden' })
@@ -278,9 +288,146 @@ async function bootstrapUnauthorized({ page, form, save, name, nodes, calls, rou
   await form.getByLabel(/^SSH-пароль пользователя/).fill('fixture-password')
   await save.click()
   await page.locator('body[data-unauthorized="true"]').waitFor()
+  await form.waitFor({ state: 'hidden' })
   assert.equal(calls.filter(call => call.key === 'GET /api/servers').length, 1)
   assert.equal(calls.filter(call => call.key === 'POST /api/servers').length, 1)
   assert.deepEqual(calls.find(call => call.key === 'POST /api/servers/3/bootstrap').body, { password: 'fixture-password', become_password: null })
+}
+
+async function manualOnboarding({ page, form, save, name, nodes, calls, routes }) {
+  const stored = ['203.0.113.10/32', '198.51.100.0/24', '2001:db8::/64']
+  const draft = '203.0.113.10/32,  198.51.100.0/24, 2001:db8::/64, '
+  const mode = form.getByLabel('Разрешенные источники ключа панели')
+  const sources = form.getByLabel('IP или CIDR через запятую')
+  const firewall = form.getByLabel('Firewall сервера')
+  let createAttempts = 0
+  routes.set('POST /api/servers', (body, respond) => {
+    createAttempts++
+    if (createAttempts === 1) {
+      assert.deepEqual(body.ssh_source_ips, [...stored, 'invalid'])
+      return respond({ detail: 'Источники SSH должны быть IP-адресами или CIDR' }, 422)
+    }
+    assert.equal(body.ssh_source_mode, 'panel')
+    assert.deepEqual(body.ssh_source_ips, [])
+    assert.equal(body.ssh_firewall_mode, 'preserve')
+    assert.equal(body.ssh_jump_server_id, 1)
+    assert.equal(body.name, 'Added manually')
+    assert.equal(body.host, '192.0.2.3')
+    assert.equal(body.ssh_port, 2221)
+    nodes.push({ ...node(3), ...body, last_check_ok: null })
+    return respond(nodes[2], 201)
+  })
+  let scriptAttempts = 0
+  routes.set('GET /api/servers/3/setup-script', (_body, respond) => {
+    scriptAttempts++
+    return scriptAttempts === 1
+      ? respond({ detail: 'Synthetic setup script error' }, 503)
+      : respond({ script: '# test setup script' })
+  })
+  await page.getByRole('button', { name: '+ Добавить сервер', exact: true }).click()
+  await name.fill('Added manually')
+  await form.getByLabel('Хост (IP или домен)').fill('192.0.2.3')
+  await form.getByLabel('SSH-порт', { exact: true }).fill('2221')
+  await form.locator('.ssh-access-options summary').click()
+  await form.getByLabel('Подключение', { exact: true }).selectOption('1')
+  await mode.selectOption('custom')
+  await sources.pressSequentially(draft)
+  assert.equal(await sources.inputValue(), draft)
+  // Inserting a space mid-list must preserve the caret for the next keystroke.
+  await sources.press('Home')
+  for (let index = 0; index < stored[0].length + 1; index++) await sources.press('ArrowRight')
+  await sources.press('Space')
+  assert.equal(await sources.inputValue(), draft.replace(',  ', ',   '))
+  assert.equal(await sources.evaluate(el => el.selectionStart), stored[0].length + 2)
+  await sources.press('End')
+  await sources.pressSequentially('invalid')
+  await firewall.selectOption('preserve')
+  await form.getByRole('radio', { name: /Скриптом/ }).check()
+  await save.click()
+  await form.getByRole('alert').getByText('Источники SSH должны быть IP-адресами или CIDR').waitFor()
+  assert.equal(await name.inputValue(), 'Added manually')
+  assert.equal(await firewall.inputValue(), 'preserve')
+  assert.equal(await sources.inputValue(), draft.replace(',  ', ',   ') + 'invalid')
+  await mode.selectOption('panel')
+  await mode.selectOption('custom')
+  assert.equal(await sources.inputValue(), draft.replace(',  ', ',   ') + 'invalid')
+  await mode.selectOption('panel')
+  await save.dblclick()
+  await form.waitFor({ state: 'hidden' })
+  await page.getByRole('heading', { name: 'Подготовка сервера «Added manually»', exact: true }).waitFor()
+  await page.getByRole('alert').getByText('Synthetic setup script error').waitFor()
+  await page.getByRole('button', { name: 'Повторить', exact: true }).click()
+  await page.getByText('# test setup script', { exact: true }).waitFor()
+  assert.equal(createAttempts, 2)
+  assert.equal(scriptAttempts, 2)
+  assert.equal(calls.filter(call => call.key.endsWith('/bootstrap') || call.key.endsWith('/ssh-access/preview')).length, 0)
+}
+
+async function passwordOnboarding({ page, form, save, name, nodes, calls, routes }, fail = false) {
+  const registration = Promise.withResolvers()
+  routes.set('POST /api/servers', async (body, respond) => {
+    assert.equal(body.ssh_source_mode, 'custom')
+    assert.deepEqual(body.ssh_source_ips, ['198.51.100.0/24', '2001:db8::/64'])
+    assert.equal(body.ssh_firewall_mode, 'preserve')
+    assert.ok(!('password' in body) && !('become_password' in body))
+    await registration.promise
+    nodes.push({ ...node(3), ...body, last_check_ok: null })
+    return respond(nodes[2], 201)
+  })
+  routes.set('POST /api/servers/3/bootstrap', (body, respond) => {
+    assert.deepEqual(body, { password: 'fixture-password', become_password: 'fixture-sudo' })
+    if (fail) return respond({ detail: 'Synthetic SSH authentication failure' }, 400)
+    nodes[2].last_check_ok = true
+    return respond(nodes[2])
+  })
+  routes.set('GET /api/servers/3/setup-script', (_body, respond) => respond({ script: '# fallback setup script' }))
+  await page.getByRole('button', { name: '+ Добавить сервер', exact: true }).click()
+  await name.fill('Added by password')
+  await form.getByLabel('Хост (IP или домен)').fill('192.0.2.3')
+  await form.locator('.ssh-access-options summary').click()
+  const mode = form.getByLabel('Разрешенные источники ключа панели')
+  await mode.selectOption('custom')
+  const sources = form.getByLabel('IP или CIDR через запятую')
+  await sources.pressSequentially('198.51.100.0/24, 2001:db8::/64, ')
+  await form.getByLabel('Firewall сервера').selectOption('preserve')
+  await save.click()
+  assert.equal(calls.filter(call => call.key === 'POST /api/servers').length, 0)
+  await form.getByLabel(/^SSH-пароль пользователя/).fill('fixture-password')
+  await form.getByRole('button', { name: 'Отдельный пароль для sudo?', exact: true }).click()
+  await form.getByLabel('Пароль для sudo (если отличается)').fill('fixture-sudo')
+  const started = page.waitForRequest(request => request.method() === 'POST' && new URL(request.url()).pathname === '/api/servers')
+  try {
+    await save.dblclick()
+    await started
+    assert.equal(await sources.isDisabled(), true)
+    assert.equal(await form.getByRole('button', { name: 'Создание…' }).isDisabled(), true)
+    await page.keyboard.press('Escape')
+    assert.equal(await form.isVisible(), true)
+  } finally {
+    registration.resolve()
+  }
+  await form.waitFor({ state: 'hidden' })
+  if (fail) {
+    await page.getByRole('alert').getByText(/Synthetic SSH authentication failure/).waitFor()
+    await page.getByText('# fallback setup script', { exact: true }).waitFor()
+    await page.getByRole('button', { name: 'Закрыть', exact: true }).click()
+  } else {
+    await page.getByText('Сервер «Added by password» настроен и подключён.', { exact: true }).waitFor()
+  }
+  assert.deepEqual(calls.filter(call => call.key.startsWith('POST ')).map(call => call.key),
+    ['POST /api/servers', 'POST /api/servers/3/bootstrap'])
+  assert.equal(calls.filter(call => call.key === 'GET /api/servers/3/setup-script').length, fail ? 1 : 0)
+  await page.getByRole('button', { name: '+ Добавить сервер', exact: true }).click()
+  assert.equal(await form.getByLabel(/^SSH-пароль пользователя/).inputValue(), '')
+  await form.getByRole('button', { name: 'Отдельный пароль для sudo?', exact: true }).click()
+  assert.equal(await form.getByLabel('Пароль для sudo (если отличается)').inputValue(), '')
+  await form.locator('.ssh-access-options summary').click()
+  await mode.selectOption('custom')
+  assert.equal(await sources.inputValue(), '')
+}
+
+async function passwordOnboardingFailure(context) {
+  await passwordOnboarding(context, true)
 }
 
 async function recoveryUnauthorized({ page, form, edit, recover, calls, routes }) {
@@ -386,8 +533,7 @@ async function recoveryRestoresPolicy({ page, form, save, name, edit, recover, n
       return respond({ ...nodes[1], ssh_access_pending: true })
     })
     routes.set('PATCH /api/servers/2', (body, respond) => {
-      assert.equal(body.ssh_source_mode, 'panel')
-      assert.deepEqual(body.ssh_source_ips, [])
+      assertMetadataOnly(body)
       Object.assign(nodes[1], body)
       return respond(nodes[1])
     })
@@ -405,14 +551,95 @@ async function recoveryRestoresPolicy({ page, form, save, name, edit, recover, n
   assert.equal(calls.filter(call => call.key.endsWith('/ssh-access/preview')).length, 0)
 }
 
+async function applyFailureRecovery({ form, save, name, edit, nodes, calls, routes }) {
+  const previewPath = 'POST /api/servers/1/ssh-access/preview'
+  const applyPath = 'POST /api/servers/1/ssh-access/apply'
+  const patchPath = 'PATCH /api/servers/1'
+  const rawSource = '2001:0db8::9/64'
+  const canonicalSource = '2001:db8::/64'
+  const warning = 'Synthetic SSH cleanup warning'
+  let previewCount = 0
+  routes.set(previewPath, (body, respond) => {
+    assert.deepEqual(body.ssh_source_ips, [rawSource])
+    const token = String(++previewCount).padStart(32, '0')
+    return respond({ token, sources: [canonicalSource], unrestricted: false, actions: [], jump_user: null })
+  })
+  routes.set(applyPath, (body, respond) => {
+    assert.equal(body.token, String(previewCount).padStart(32, '0'))
+    if (previewCount === 1) return respond({ detail: 'Synthetic expired preview' }, 409)
+    Object.assign(nodes[0], {
+      ssh_source_mode: 'custom',
+      ssh_source_ips: [canonicalSource],
+      last_check_info: JSON.stringify({ ssh_access_warning: warning }),
+    })
+    return respond({ detail: 'Synthetic lost apply reply' }, 502)
+  })
+  routes.set(patchPath, (body, respond) => {
+    assertMetadataOnly(body)
+    Object.assign(nodes[0], body)
+    return respond(nodes[0])
+  })
+  await edit('Node 1')
+  await name.fill('Unsaved node')
+  await form.locator('.ssh-access-options summary').click()
+  await form.getByLabel('Разрешенные источники ключа панели').selectOption('custom')
+  const sources = form.getByLabel('IP или CIDR через запятую')
+  const apply = form.getByRole('button', { name: 'Применить SSH и сохранить', exact: true })
+  await sources.fill(rawSource)
+  await save.click()
+  await apply.click()
+  await form.getByRole('alert').getByText('Synthetic expired preview').waitFor()
+  assert.equal(await sources.inputValue(), rawSource)
+  assert.equal(await name.inputValue(), 'Unsaved node')
+  assert.equal(await save.isEnabled(), true)
+  assert.equal(await apply.count(), 0)
+  assert.equal(nodes[0].ssh_source_mode, 'panel')
+
+  await save.click()
+  await apply.click()
+  await form.getByRole('alert').getByText('Synthetic lost apply reply').waitFor()
+  await form.getByRole('status').getByText(partialSaveMessage).waitFor()
+  await form.getByRole('status').getByText(warning).waitFor()
+  assert.equal(await sources.inputValue(), canonicalSource)
+  assert.equal(await name.inputValue(), 'Unsaved node')
+  assert.equal(nodes[0].name, 'Node 1')
+  await save.click()
+  await form.waitFor({ state: 'hidden' })
+  assert.equal(calls.filter(call => call.key === previewPath).length, 2)
+  assert.equal(calls.filter(call => call.key === applyPath).length, 2)
+  assert.equal(calls.filter(call => call.key === patchPath).length, 1)
+  assert.equal(nodes[0].name, 'Unsaved node')
+  assert.deepEqual(nodes[0].ssh_source_ips, [canonicalSource])
+}
+
+async function applyUnauthorized({ page, form, save, edit, calls, routes }) {
+  routes.set('POST /api/servers/1/ssh-access/preview', (_body, respond) => respond({ token: 'fixture', sources: [], unrestricted: true, actions: [], jump_user: null }))
+  routes.set('POST /api/servers/1/ssh-access/apply', (_body, respond) => respond({ detail: 'Synthetic apply session expired' }, 401))
+  await edit('Node 1')
+  await form.locator('.ssh-access-options summary').click()
+  await form.getByLabel('Разрешенные источники ключа панели').selectOption('any')
+  await save.click()
+  await form.getByRole('button', { name: 'Применить SSH и сохранить', exact: true }).click()
+  await page.locator('body[data-unauthorized="true"]').waitFor()
+  assert.equal(calls.filter(call => call.key === 'GET /api/servers').length, 1)
+  assert.equal(calls.filter(call => call.key === 'PATCH /api/servers/1').length, 0)
+}
+
 try {
-  const scenarios = [bootstrapUnauthorized, recoveryUnauthorized, recoveryMenuKeepsDraft, metadataWithFailedRefresh, recoveryRestoresPolicy]
+  const scenarios = [
+    manualOnboarding, passwordOnboarding, passwordOnboardingFailure, bootstrapUnauthorized,
+    recoveryUnauthorized, recoveryMenuKeepsDraft, metadataWithFailedRefresh, recoveryRestoresPolicy,
+  ]
   const checks = await Promise.allSettled(scenarios.map(async check => {
     await editorWorkflow(check)
     console.log(`PASS ${check.name}`)
   }))
   const failures = checks.flatMap((result, index) => result.status === 'rejected' ? [`${scenarios[index].name}: ${result.reason}`] : [])
   assert.deepEqual(failures, [])
+  for (const check of [applyFailureRecovery, applyUnauthorized]) {
+    await editorWorkflow(check)
+    console.log(`PASS ${check.name}`)
+  }
   for (const scenario of [
     { mode: 'any', input: [], canonical: [] },
     { mode: 'custom', input: ['203.0.113.7/32', '2001:0db8::7/128', '203.0.113.7/32'], canonical: ['203.0.113.7', '2001:db8::7'] },

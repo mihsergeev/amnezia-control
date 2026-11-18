@@ -1,14 +1,23 @@
-import { useId } from 'react'
+import { useId, useState } from 'react'
 import type { Server } from './api'
 import { useI18n } from './i18n'
 import type { AccessPolicy } from './sshAccess'
 
-export function SshAccessEditor({ value, servers, serverId, onChange }: {
-  value: AccessPolicy; servers: Server[]; serverId?: number | null; onChange: (update: AccessPolicy) => void
+export function SshAccessEditor({ value, servers, serverId, disabled = false, onChange }: {
+  value: AccessPolicy; servers: Server[]; serverId?: number | null; disabled?: boolean; onChange: (update: AccessPolicy) => void
 }) {
   const { t } = useI18n()
   const id = useId()
   const firewallMode = value.ssh_firewall_mode ?? 'add'
+  const [sourceDraft, setSourceDraft] = useState<{ text: string; ips: string[] } | null>(null)
+  const sourceText = sourceDraft && sourceDraft.ips === value.ssh_source_ips
+    ? sourceDraft.text : (value.ssh_source_ips ?? []).join(', ')
+
+  function changeSources(text: string) {
+    const ips = text.split(',').map(source => source.trim()).filter(Boolean)
+    setSourceDraft({ text, ips })
+    onChange({ ...value, ssh_source_ips: ips })
+  }
 
   return <div className="ssh-access-options" role="group" aria-labelledby={`${id}-title`}>
     <div>
@@ -20,6 +29,7 @@ export function SshAccessEditor({ value, servers, serverId, onChange }: {
       <div className="ssh-access-select">
         <select
           id={`${id}-connection`}
+          disabled={disabled}
           aria-describedby={value.ssh_jump_server_id ? `${id}-jump-help` : undefined}
           value={value.ssh_jump_server_id ?? ''}
           onChange={e => onChange({ ...value, ssh_jump_server_id: e.target.value ? Number(e.target.value) : null })}
@@ -38,6 +48,7 @@ export function SshAccessEditor({ value, servers, serverId, onChange }: {
           <div className="ssh-access-select">
             <select
               id={`${id}-source`}
+              disabled={disabled}
               aria-describedby={value.ssh_source_mode === 'any' ? `${id}-source-help` : undefined}
               value={value.ssh_source_mode ?? 'panel'}
               onChange={e => onChange({ ...value, ssh_source_mode: e.target.value as 'panel' | 'custom' | 'any' })}
@@ -50,13 +61,14 @@ export function SshAccessEditor({ value, servers, serverId, onChange }: {
           {value.ssh_source_mode === 'any' && <p className="muted small" id={`${id}-source-help`}>{t('Ключ принимается с любого IP. Это не открывает firewall и не меняет доступ других пользователей.')}</p>}
         </div>
         {value.ssh_source_mode === 'custom' && <label>{t('IP или CIDR через запятую')}
-          <input value={(value.ssh_source_ips ?? []).join(', ')} onChange={e => onChange({ ...value, ssh_source_ips: e.target.value.split(',').map(s => s.trim()) })} placeholder="203.0.113.10, 198.51.100.0/24" />
+          <input value={sourceText} disabled={disabled} onChange={e => changeSources(e.target.value)} placeholder="203.0.113.10, 198.51.100.0/24" />
         </label>}
         <div className="ssh-access-field">
           <label htmlFor={`${id}-firewall`}>{t('Firewall сервера')}</label>
           <div className="ssh-access-select">
             <select
               id={`${id}-firewall`}
+              disabled={disabled}
               aria-describedby={`${id}-firewall-help`}
               value={firewallMode}
               onChange={e => onChange({ ...value, ssh_firewall_mode: e.target.value as 'add' | 'preserve' })}

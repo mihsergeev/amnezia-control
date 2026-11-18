@@ -36,6 +36,8 @@ const EN: Record<string, string> = {
   "Подключение": "Connection",
   "После «Сохранить» панель покажет скрипт. Выполните его под root: он создаст пользователя «{user}», обновит только ключ панели и применит выбранный режим firewall. Затем нажмите «Проверить».": "After saving, run the provided script as root. It creates user \"{user}\", updates only the panel key, and applies the selected firewall mode. Then click \"Check\".",
   "Предпросмотр изменения SSH": "SSH access change preview",
+  "Не удалось подтвердить результат настройки SSH.": "Could not confirm the SSH access change.",
+  "Настройки SSH применены. Остальные изменения еще не сохранены.": "SSH access settings have been applied. Other changes are still unsaved.",
   "При неудаче прежний ключ сохраняется или восстанавливается. Добавленные разрешения firewall могут остаться, остальные правила не меняются.": "On failure, the previous key is preserved or restored. Added firewall permissions may remain; other rules are unchanged.",
   "Применить SSH и сохранить": "Apply SSH and save",
   "Промежуточная SSH-нода подготовлена. Выполните скрипт на целевом сервере.": "The jump node is ready. Run the script on the target server.",
@@ -1291,8 +1293,8 @@ const EN: Record<string, string> = {
   'Сервер «{name}» настроен и подключён.':
     'Server “{name}” configured and connected.',
   'Сервер «{name}» убран из панели.': 'Server “{name}” removed from the panel.',
-  'Сервер создан, но автонастройка не удалась: {msg}. ':
-    'Server created, but auto-setup failed: {msg}. ',
+  'Сервер создан. Автонастройка не удалась. {msg}':
+    'Server created. Automatic setup failed. {msg}',
   'Отозвать клиента «{name}»? Он потеряет доступ.':
     'Revoke client “{name}”? It will lose access.',
   'Отозвать OpenVPN-клиента «{name}»? Он потеряет доступ.':
@@ -1308,6 +1310,7 @@ const EN: Record<string, string> = {
 
   // --- скрипт настройки / форма сервера ---
   'Подготовка сервера «{name}»': 'Setting up server “{name}”',
+  'Повторить': 'Retry',
   'Выполните этот скрипт под root на сервере. Он добавит SSH-ключ панели пользователю':
     'Run this script as root on the server. It adds the panel SSH key for user',
   ', разрешит SSH-порт только для IP панели (ufw / firewalld / hosts.allow; ничего лишнего наружу не открывает) и ответит':
@@ -1327,14 +1330,14 @@ const EN: Record<string, string> = {
   'Панель сама зайдёт по паролю и всё настроит':
     'The panel connects with the password and sets everything up',
   'Скриптом — запущу на сервере сам': 'With a script — I run it on the server',
-  'Панель даст скрипт: создаст юзера, ключ, откроет фаервол':
-    'The panel gives a script: creates the user, key, opens the firewall',
+  'Панель подготовит скрипт с выбранными настройками SSH и firewall':
+    'The panel prepares a script with the selected SSH and firewall settings',
   'После «Сохранить» панель покажет скрипт. Зайдите на сервер по SSH под root и вставьте его — он создаст пользователя «{user}», добавит ключ панели и откроет фаервол (если есть). Затем нажмите «Проверить» на карточке сервера — он подключится.':
     'After “Save”, the panel shows a script. SSH into the server as root and paste it — it creates the “{user}” user, adds the panel key and opens the firewall (if any). Then click “Check” on the server card — it will connect.',
   'Панель один раз зайдёт по паролю, установит свой ключ и откроет SSH-порт только для IP панели. Пароль не сохраняется.':
     'The panel connects once via password, installs its key and opens the SSH port only for the panel IP. The password is not stored.',
-  '⚠️ Если на сервере включён фаервол и он блокирует SSH с IP панели — подключиться не получится (будет таймаут). В этом случае снимите галку и запустите ручной скрипт прямо на сервере — он откроет доступ панели.':
-    '⚠️ If the server has a firewall that blocks SSH from the panel IP, connecting will fail (timeout). In that case uncheck the box and run the manual script on the server — it opens access for the panel.',
+  'Если firewall блокирует вход по SSH со стороны панели или промежуточной ноды, выберите ручную настройку и запустите скрипт на целевом сервере.':
+    'If the firewall blocks SSH from the panel or jump node, select manual setup and run the script on the target server.',
   'После создания панель покажет скрипт для ручного запуска на сервере.':
     'After creation, the panel shows a script to run manually on the server.',
   'подсеть': 'subnet',
@@ -1509,6 +1512,7 @@ const EN: Record<string, string> = {
   'Ответ на создание каскада не получен. Нажмите «Собрать каскад» еще раз, чтобы продолжить.': 'No response was received when creating the cascade. Click “Build the cascade” again to continue.',
   'Сервер недоступен для выбранной роли в каскаде.': 'The server is unavailable for the selected cascade role.',
   'В панели несколько записей с этим адресом SSH. Выберите сервер в панели.': 'The panel has multiple records for this SSH endpoint. Select a server from the panel.',
+  'Сервер с этим адресом уже сохранен с другими настройками SSH. Измените доступ в карточке сервера или выберите существующую запись.': 'A server with this SSH endpoint is already saved with different SSH settings. Update its access settings in the server card or select the existing record.',
   'Этот запрос уже использован с другими параметрами каскада': 'This request has already been used with different cascade parameters',
   'Запустить еще раз': 'Run again',
   'вход': 'entry',

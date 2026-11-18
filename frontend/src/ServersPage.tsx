@@ -32,7 +32,7 @@ import { DeployModal } from './DeployModal'
 import { Menu, type MenuItem } from './Menu'
 import { ServerExportModal, ServerImportModal } from './ServerTransfer'
 import { SshAccessEditor } from './SshAccessEditor'
-import { accessChanged, accessPolicy, DEFAULT_ACCESS, type AccessPreview } from './sshAccess'
+import { accessChanged, accessPolicy, accessPolicyPayload, DEFAULT_ACCESS, type AccessPreview } from './sshAccess'
 import { copyText } from './clipboard'
 import { countryFlag, formatBytes, formatUptime } from './format'
 import { CascadeWizard } from './CascadeWizard'
@@ -619,6 +619,7 @@ export function ServersPage({ onUnauthorized }: Props) {
   const [busy, setBusy] = useState(false)
   // храним ключ, а не перевод: подпись должна меняться вместе с языком
   const [busyLabel, setBusyLabel] = useState('Сохранить')
+  const [savedSsh, setSavedSsh] = useState<{ warning?: string } | null>(null)
 
   // автонастройка по паролю (только при создании)
   const [useBootstrap, setUseBootstrap] = useState(true)
@@ -650,13 +651,17 @@ export function ServersPage({ onUnauthorized }: Props) {
   // степ-ап: сервер, для которого запрашиваем повторный пароль перед выдачей ключа
   const [faStepUp, setFaStepUp] = useState<Server | null>(null)
   const [faPassword, setFaPassword] = useState('')
-  const [scriptFor, setScriptFor] = useState<Server | null>(null)
+  const [scriptFor, setScriptFor] = useState<{
+    server: Server
+    onboardingError?: string
+    text?: string
+    error?: string
+  } | null>(null)
   const [deleteFor, setDeleteFor] = useState<Server | null>(null)
   // удаление протокола целиком: из меню «Ещё», после подтверждения и пароля
   const [removeProto, setRemoveProto] = useState<{ server: Server; protocol: Protocol } | null>(null)
   const [deleteRemoveKey, setDeleteRemoveKey] = useState(false)
   const [deleting, setDeleting] = useState(false)
-  const [scriptText, setScriptText] = useState('')
   const [copied, setCopied] = useState(false)
   const [cascades, setCascades] = useState<Cascade[]>([])
   // мастер каскада: новый (resume нет) или ход установки уже созданного
@@ -668,6 +673,7 @@ export function ServersPage({ onUnauthorized }: Props) {
   const [casCheck, setCasCheck] = useState<Cascade | null>(null)
   const [egressCheck, setEgressCheck] = useState<Server | null>(null)
   const [siteCheckFor, setSiteCheckFor] = useState<Server | null>(null)
+  const editingServer = servers.find(server => server.id === editingId)
 
   useEffect(() => {
     const state = window.history.state && typeof window.history.state === 'object' ? window.history.state : {}
@@ -687,7 +693,7 @@ export function ServersPage({ onUnauthorized }: Props) {
       else if (scriptFor) setScriptFor(null)
       else if (deleteFor) setDeleteFor(null)
       else if (unbuild) setUnbuild(null)
-      else if (formOpen && !busy) setFormOpen(false)
+      else if (formOpen && !busy) closeForm()
     }
     document.addEventListener('keydown', onKey)
     return () => document.removeEventListener('keydown', onKey)
@@ -725,6 +731,7 @@ export function ServersPage({ onUnauthorized }: Props) {
       api<Overview>('/api/stats/overview')
         .then((o) => { if (sequence === loadSequence.current) setStats(Object.fromEntries(o.per_server.map((r) => [r.id, r]))) })
         .catch(() => {})
+      return loaded
     } catch (err) {
       if (sequence === loadSequence.current) handleError(err)
     } finally {
@@ -750,6 +757,12 @@ export function ServersPage({ onUnauthorized }: Props) {
     setUseBootstrap(true)
   }
 
+  function closeForm() {
+    setPassword('')
+    setSudoPassword('')
+    setFormOpen(false)
+  }
+
   function openCreate() {
     if (busy) return
     resetForm(config?.default_ssh_user ?? FALLBACK_USER)
@@ -760,6 +773,7 @@ export function ServersPage({ onUnauthorized }: Props) {
   function openEdit(server: Server) {
     if (busy) return
     setSshPreview(null)
+    setSavedSsh(null)
     setFormError(null)
     setForm({
       name: server.name,
@@ -780,21 +794,28 @@ export function ServersPage({ onUnauthorized }: Props) {
     setFormOpen(true)
   }
 
-  async function openScript(server: Server) {
+  async function openScript(server: Server, onboardingError?: string) {
+    const request = { server, onboardingError }
+    setScriptFor(request)
+    setCopied(false)
     try {
       const { script } = await api<{ script: string }>(
         `/api/servers/${server.id}/setup-script`,
       )
-      setScriptText(script)
-      setScriptFor(server)
-      setCopied(false)
+      setScriptFor(current => current === request ? { ...request, text: script } : current)
     } catch (err) {
-      handleError(err)
+      if (err instanceof ApiError && err.status === 401) {
+        setScriptFor(current => current === request ? null : current)
+        handleError(err)
+        return
+      }
+      const error = err instanceof Error ? err.message : t('Неизвестная ошибка')
+      setScriptFor(current => current === request ? { ...request, error } : current)
     }
   }
 
   async function copyScript() {
-    setCopied(await copyText(scriptText))
+    if (scriptFor?.text !== undefined) setCopied(await copyText(scriptFor.text))
   }
 
   async function check(server: Server) {
@@ -831,10 +852,21 @@ export function ServersPage({ onUnauthorized }: Props) {
     }
   }
 
+  function rememberSavedSsh(server: Server) {
+    const warning = parseCheckInfo(server)?.ssh_access_warning
+    invalidateLoads()
+    setServers(previous => previous.map(item => item.id === server.id ? server : item))
+    setForm(previous => ({ ...previous, ...accessPolicy(server) }))
+    setSshPreview(null)
+    setSavedSsh({ warning })
+    if (warning) setNotice(warning)
+    return warning
+  }
+
   async function submit(e: FormEvent) {
     e.preventDefault()
     if (busy) return
-    if (editingId !== null && servers.find(server => server.id === editingId)?.ssh_access_pending) {
+    if (editingServer?.ssh_access_pending) {
       setSshPreview(null)
       setFormError(t('Восстановить настройку SSH'))
       return
@@ -845,13 +877,21 @@ export function ServersPage({ onUnauthorized }: Props) {
     try {
       if (editingId !== null) {
         setBusyLabel('Сохранение…')
-        const payload = { ...form }
-        const existing = servers.find(server => server.id === editingId)
+        const {
+          ssh_jump_server_id: _jumpServerId,
+          ssh_source_mode: _sourceMode,
+          ssh_source_ips: _sourceIps,
+          ssh_firewall_mode: _firewallMode,
+          ...payload
+        } = form
+        const existing = editingServer
+        let accessWarning = savedSsh?.warning
         if (existing && accessChanged(existing, form)) {
           if (existing.host !== form.host || existing.ssh_port !== form.ssh_port || existing.ssh_user !== form.ssh_user) throw new Error(t('Сначала сохраните адрес SSH отдельно, затем измените способ доступа.'))
+          const proposed = accessPolicyPayload(form)
           if (!sshPreview) {
             setSshPreview(await api<AccessPreview>(`/api/servers/${editingId}/ssh-access/preview`, {
-              method: 'POST', body: JSON.stringify(accessPolicy(form)),
+              method: 'POST', body: JSON.stringify(proposed),
             }))
             return
           }
@@ -860,26 +900,24 @@ export function ServersPage({ onUnauthorized }: Props) {
             applied = await api<Server>(`/api/servers/${editingId}/ssh-access/apply`, {
               method: 'POST', body: JSON.stringify({ token: sshPreview.token }),
             })
+            if (applied?.id !== editingId) throw new Error(t('Не удалось подтвердить результат настройки SSH.'))
           } catch (err) {
-            // A failed reply can leave either a terminal preview or an active
-            // remote transaction. Never resend its token or guess it is idle.
             setSshPreview(null)
+            if (err instanceof ApiError && err.status === 401) throw err
+            // A lost response can leave an active transaction or an already saved policy.
             setServers(previous => previous.map(server => server.id === editingId
               ? { ...server, ssh_access_pending: true } : server))
-            await load()
+            const refreshed = (await load())?.find(server => server.id === editingId)
+            const expected = proposed.ssh_source_mode === 'custom' ? { ...proposed, ssh_source_ips: sshPreview.sources } : proposed
+            if (refreshed && !refreshed.ssh_access_pending && !accessChanged(refreshed, expected)) {
+              rememberSavedSsh(refreshed)
+            }
             throw err
           }
-          const accessWarning = parseCheckInfo(applied)?.ssh_access_warning
-          if (accessWarning) setNotice(String(accessWarning))
-          // SSH is already committed even if saving the remaining form fails.
-          // Keep retries metadata-only instead of preparing the same SSH again.
-          setServers(previous => previous.map(server => server.id === applied.id ? applied : server))
-          setForm(previous => ({ ...previous, ...accessPolicy(applied) }))
-          setSshPreview(null)
+          accessWarning = rememberSavedSsh(applied)
         }
         if (payload.manual_exit_name !== undefined) {
-          const original = servers.find(server => server.id === editingId)
-          const oldName = original ? parseCheckInfo(original)?.manual_cascade?.exit_name || '' : ''
+          const oldName = existing ? parseCheckInfo(existing)?.manual_cascade?.exit_name || '' : ''
           payload.manual_exit_name = manualExitNameChange(payload.manual_exit_name, oldName)
           if (payload.manual_exit_name === undefined) delete payload.manual_exit_name
         }
@@ -891,42 +929,43 @@ export function ServersPage({ onUnauthorized }: Props) {
         setFormOpen(false)
         await load()
         if (existing?.ssh_jump_server_id && (existing.host !== form.host || existing.ssh_port !== form.ssh_port)) setNotice(t('Адрес SSH сохранен. В скрипте настройки подготовьте промежуточную ноду и проверьте подключение.'))
+        else if (accessWarning) setNotice(accessWarning)
         return
       }
 
       setBusyLabel('Создание…')
       const created = await api<Server>('/api/servers', {
         method: 'POST',
-        body: JSON.stringify(form),
+        body: JSON.stringify({ ...form, ...accessPolicyPayload(form) }),
       })
+      invalidateLoads()
+      setServers(previous => [...previous.filter(server => server.id !== created.id), created])
 
       if (useBootstrap && password) {
         // панель сама зайдёт по паролю, поставит ключ и настроит фаервол
         setBusyLabel('Подключаюсь и настраиваю…')
         try {
-          await api<Server>(`/api/servers/${created.id}/bootstrap`, {
+          const configured = await api<Server>(`/api/servers/${created.id}/bootstrap`, {
             method: 'POST',
             body: JSON.stringify({
               password,
               become_password: sudoPassword || null,
             }),
           })
-          setFormOpen(false)
+          setServers(previous => previous.map(server => server.id === configured.id ? configured : server))
+          closeForm()
           await load()
           setNotice(t('Сервер «{name}» настроен и подключён.', { name: created.name }))
         } catch (err) {
+          closeForm()
           if (err instanceof ApiError && err.status === 401) throw err
-          setFormOpen(false)
           await load()
           const msg = err instanceof Error ? err.message : t('ошибка')
-          setError(
-            t('Сервер создан, но автонастройка не удалась: {msg}. ', { msg }) +
-              t('Откройте «Скрипт» для ручной установки.'),
-          )
+          await openScript(created, t('Сервер создан. Автонастройка не удалась. {msg}', { msg: t(msg) }))
         }
       } else {
         // ручной путь — показываем скрипт для запуска на сервере
-        setFormOpen(false)
+        closeForm()
         await load()
         await openScript(created)
       }
@@ -1606,7 +1645,7 @@ export function ServersPage({ onUnauthorized }: Props) {
                 </label>
               </div>
               <SshAccessEditor value={form} servers={servers} serverId={editingId} onChange={update => { setForm({ ...form, ...update }); setSshPreview(null) }} />
-              {editingId !== null && servers.find(server => server.id === editingId)?.ssh_access_pending && (
+              {editingId !== null && editingServer?.ssh_access_pending && (
                 <button type="button" className="ghost" disabled={busy} onClick={() => { void recoverSshAccess(editingId, true) }}>
                   {t('Восстановить настройку SSH')}
                 </button>
@@ -1756,7 +1795,7 @@ export function ServersPage({ onUnauthorized }: Props) {
                           {t('Скриптом — запущу на сервере сам')}
                         </span>
                         <span className="setup-option-desc">
-                          {t('Панель даст скрипт: создаст юзера, ключ, откроет фаервол')}
+                          {t('Панель подготовит скрипт с выбранными настройками SSH и firewall')}
                         </span>
                       </div>
                     </label>
@@ -1770,7 +1809,7 @@ export function ServersPage({ onUnauthorized }: Props) {
                       </p>
                       <p className="muted small">
                         {t(
-                          '⚠️ Если на сервере включён фаервол и он блокирует SSH с IP панели — подключиться не получится (будет таймаут). В этом случае снимите галку и запустите ручной скрипт прямо на сервере — он откроет доступ панели.',
+                          'Если firewall блокирует вход по SSH со стороны панели или промежуточной ноды, выберите ручную настройку и запустите скрипт на целевом сервере.',
                         )}
                       </p>
                       <label>
@@ -1815,12 +1854,18 @@ export function ServersPage({ onUnauthorized }: Props) {
               )}
             </fieldset>
 
+            {savedSsh && editingServer && !accessChanged(editingServer, form) && (
+              <div className="bootstrap-block" role="status">
+                <p>{t('Настройки SSH применены. Остальные изменения еще не сохранены.')}</p>
+                {savedSsh.warning && <p>{t(savedSsh.warning)}</p>}
+              </div>
+            )}
             {formError && <p className="error" role="alert">{t(formError)}</p>}
             <div className="modal-actions">
-              <button type="button" className="ghost" disabled={busy} onClick={() => setFormOpen(false)}>
+              <button type="button" className="ghost" disabled={busy} onClick={closeForm}>
                 {t('Отмена')}
               </button>
-              <button type="submit" disabled={busy || (editingId !== null && !!servers.find(server => server.id === editingId)?.ssh_access_pending)}>
+              <button type="submit" disabled={busy || editingServer?.ssh_access_pending}>
                 {busy ? t(busyLabel) : sshPreview ? t('Применить SSH и сохранить') : t('Сохранить')}
               </button>
             </div>
@@ -2160,26 +2205,34 @@ export function ServersPage({ onUnauthorized }: Props) {
       {scriptFor && (
         <div className="modal-backdrop">
           <div className="card modal modal-wide" onClick={(e) => e.stopPropagation()}>
-            <h3>{t('Подготовка сервера «{name}»', { name: scriptFor.name })}</h3>
-            <p className="muted small">
-              {t('Выполните этот скрипт под root на сервере. Он добавит SSH-ключ панели пользователю')}{' '}
-              <b>{scriptFor.ssh_user}</b>{t(', применит выбранные ограничения ключа и режим firewall, сохранит остальные ключи и правила и ответит')}{' '}
-              <span className="mono">ACONTROL SETUP OK</span>{t('. После этого нажмите «Проверить».')}
-            </p>
-            <pre className="script-box">{scriptText}</pre>
+            <h3>{t('Подготовка сервера «{name}»', { name: scriptFor.server.name })}</h3>
+            {scriptFor.onboardingError && <p className="error" role="alert">{scriptFor.onboardingError}</p>}
+            {scriptFor.error && <p className="error" role="alert">{t(scriptFor.error)}</p>}
+            {scriptFor.text === undefined && !scriptFor.error && <p className="muted" role="status">{t('загрузка…')}</p>}
+            {scriptFor.text !== undefined && <>
+              <p className="muted small">
+                {t('Выполните этот скрипт под root на сервере. Он добавит SSH-ключ панели пользователю')}{' '}
+                <b>{scriptFor.server.ssh_user}</b>{t(', применит выбранные ограничения ключа и режим firewall, сохранит остальные ключи и правила и ответит')}{' '}
+                <span className="mono">ACONTROL SETUP OK</span>{t('. После этого нажмите «Проверить».')}
+              </p>
+              <pre className="script-box">{scriptFor.text}</pre>
+            </>}
             <div className="modal-actions">
-              {scriptFor.ssh_jump_server_id && <button className="ghost" onClick={async () => {
+              {scriptFor.error && <button className="ghost" onClick={() => openScript(scriptFor.server, scriptFor.onboardingError)}>
+                {t('Повторить')}
+              </button>}
+              {scriptFor.text !== undefined && scriptFor.server.ssh_jump_server_id && <button className="ghost" onClick={async () => {
                 try {
-                  await api(`/api/servers/${scriptFor.id}/ssh-access/prepare`, { method: 'POST' })
+                  await api(`/api/servers/${scriptFor.server.id}/ssh-access/prepare`, { method: 'POST' })
                   setNotice(t('Промежуточная SSH-нода подготовлена. Выполните скрипт на целевом сервере.'))
                 } catch (err) { handleError(err) }
               }}>{t('Подготовить промежуточную ноду')}</button>}
               <button className="ghost" onClick={() => setScriptFor(null)}>
                 {t('Закрыть')}
               </button>
-              <button onClick={copyScript}>
+              {scriptFor.text !== undefined && <button onClick={copyScript}>
                 {copied ? t('Скопировано ✓') : t('Скопировать')}
-              </button>
+              </button>}
             </div>
           </div>
         </div>

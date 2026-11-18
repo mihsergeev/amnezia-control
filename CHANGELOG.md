@@ -4,6 +4,12 @@ All notable changes to Amnezia Control are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.84.56] - 2026-11-18
+
+- Keep SSH source input intact while typing and use only the active source mode. Offer the setup script for the same server after automatic setup fails, and retry a failed script download without registering the server again.
+- Save server details separately after SSH access is applied. Reuse the confirmed settings if the apply response is lost and the panel can verify the saved policy.
+- Keep entry and exit SSH settings separate in the cascade wizard, wait for jump server preparation, and clear the one-time password after sending it or switching to script setup. Reject reuse of an SSH endpoint when its saved access settings differ from those requested.
+
 ## [0.84.55] - 2026-11-18
 
 - Style the SSH settings card and controls consistently in light and dark themes. Clarify advanced settings and firewall choices, and prevent SSH port and user fields from overflowing narrow dialogs. Applies to adding and editing servers and to the cascade wizard.

@@ -71,6 +71,21 @@ async def list_servers(_: CurrentUser, session: SessionDep) -> list[Server]:
     return servers
 
 
+def _same_ssh_policy(server: Server, requested: ServerCreate) -> bool:
+    if any(getattr(server, field) != getattr(requested, field)
+           for field in ssh_access.ACCESS_FIELDS if field != "ssh_source_ips"):
+        return False
+    if requested.ssh_source_mode != "custom":
+        return True
+    if not isinstance(server.ssh_source_ips, list):
+        return False
+    try:
+        saved_sources = ssh_policy.normalize_sources(server.ssh_source_ips)
+    except ValueError:
+        return False
+    return set(saved_sources) == set(requested.ssh_source_ips)
+
+
 @router.post("", response_model=ServerOut, status_code=status.HTTP_201_CREATED, responses={200: {"model": ServerOut}})
 @bulk_issue_state.guard()
 @ssh_access.serialized
@@ -90,8 +105,14 @@ async def create_server(
             if len(matches) > 1:
                 raise HTTPException(status.HTTP_409_CONFLICT, "В панели несколько записей с этим адресом SSH. Выберите сервер в панели.")
             if matches:
+                existing = matches[0]
+                if not _same_ssh_policy(existing, body):
+                    raise HTTPException(
+                        status.HTTP_409_CONFLICT,
+                        "Сервер с этим адресом уже сохранен с другими настройками SSH. Измените доступ в карточке сервера или выберите существующую запись.",
+                    )
                 response.status_code = status.HTTP_200_OK
-                return matches[0]
+                return existing
         # новый сервер — в конец списка
         max_pos = await session.scalar(select(func.max(Server.position)))
         server = Server(**body.model_dump(), position=(max_pos or 0) + 1)

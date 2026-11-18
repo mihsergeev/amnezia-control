@@ -34,7 +34,7 @@ import { cascadeEntryHasExistingRoute, cascadeServerEligible } from './serverLis
 import { useI18n } from './i18n'
 import { useModalDismiss } from './useModalDismiss'
 import { SshAccessEditor } from './SshAccessEditor'
-import { DEFAULT_ACCESS, type AccessPolicy } from './sshAccess'
+import { accessPolicyPayload, DEFAULT_ACCESS, type AccessPolicy } from './sshAccess'
 
 type Step = 'entry' | 'exit' | 'link' | 'install' | 'done'
 
@@ -168,8 +168,9 @@ export function CascadeWizard({
   const [createNeedsRecovery, setCreateNeedsRecovery] = useState(false)
   const recoveryBusy = entryRecovery?.state === 'checking' || entryRecovery?.state === 'removing'
   const recoveryConfirm = entryRecovery?.state === 'confirm'
+  const onboardingBusy = busy && (step === 'entry' || step === 'exit')
   function close() {
-    if (!activeProbe.current?.preparing && !recoveryBusy) onClose()
+    if (!activeProbe.current?.preparing && !recoveryBusy && !onboardingBusy) onClose()
   }
   const dismiss = useModalDismiss(close)
   const [transport, setTransport] = useState<CascadeTransport>(replacement?.transport ?? DEFAULT_CASCADE_TRANSPORT)
@@ -261,7 +262,7 @@ export function CascadeWizard({
       const name = nf.name.trim()
       server = await api<Server>(`/api/servers?reuse_ssh_endpoint=true${name ? '' : '&name_from_hostname=true'}`, {
         method: 'POST',
-        body: JSON.stringify({ ...target, ...nfAccess, name: name || target.host, note: '', group_name: groupName }),
+        body: JSON.stringify({ ...target, ...accessPolicyPayload(nfAccess), name: name || target.host, note: '', group_name: groupName }),
       })
       const currentCascades = await listCascades()
       if (!eligibleServer(server, currentCascades)) return null
@@ -275,6 +276,7 @@ export function CascadeWizard({
         setCopied(false)
         return null
       }
+      setNf(current => ({ ...current, password: '' }))
       const ready = await api<Server>(`/api/servers/${server.id}/bootstrap`, {
         method: 'POST',
         body: JSON.stringify({ password: nf.password, become_password: null }),
@@ -285,6 +287,20 @@ export function CascadeWizard({
       return null
     } finally {
       if (server) onChanged()
+      setBusy(false)
+    }
+  }
+
+  async function prepareScriptJump() {
+    if (!script || busy) return
+    setBusy(true)
+    setError(null)
+    try {
+      await api(`/api/servers/${script.server.id}/ssh-access/prepare`, { method: 'POST' })
+      onChanged()
+    } catch (err) {
+      handleError(err)
+    } finally {
       setBusy(false)
     }
   }
@@ -412,6 +428,15 @@ export function CascadeWizard({
     setError(null)
   }
 
+  function resetNewServer() {
+    setNf(EMPTY_SERVER_FORM)
+    setNfAccess(DEFAULT_ACCESS)
+    setNfMode('password')
+    setScript(null)
+    setCopied(false)
+    setTab('panel')
+  }
+
   async function next() {
     setError(null)
     if (step === 'entry' || step === 'exit') {
@@ -425,9 +450,7 @@ export function CascadeWizard({
         picked = added
       }
       if (!picked) return
-      setNf(EMPTY_SERVER_FORM)
-      setScript(null)
-      setTab('panel')
+      resetNewServer()
       if (step === 'entry') {
         setStep('exit')
       } else {
@@ -744,10 +767,9 @@ export function CascadeWizard({
               <button className="ghost" onClick={async () => setCopied(await copyText(script.text))}>
                 {copied ? t('Скопировано ✓') : t('Скопировать')}
               </button>
-              {script.server.ssh_jump_server_id && <button className="ghost" disabled={busy} onClick={async () => {
-                try { await api(`/api/servers/${script.server.id}/ssh-access/prepare`, { method: 'POST' }); onChanged() }
-                catch (err) { handleError(err) }
-              }}>{t('Подготовить промежуточную ноду')}</button>}
+              {script.server.ssh_jump_server_id && <button className="ghost" disabled={busy} onClick={prepareScriptJump}>
+                {t('Подготовить промежуточную ноду')}
+              </button>}
             </div>
           </>
         ) : (
@@ -784,7 +806,7 @@ export function CascadeWizard({
                 />
               </label>
             </div>
-            <SshAccessEditor value={nfAccess} servers={servers} onChange={setNfAccess} />
+            <SshAccessEditor value={nfAccess} servers={all} onChange={setNfAccess} disabled={busy} />
             <div className="tabs">
               <button
                 className={nfMode === 'password' ? 'tab tab-active' : 'tab'}
@@ -796,7 +818,10 @@ export function CascadeWizard({
               <button
                 className={nfMode === 'script' ? 'tab tab-active' : 'tab'}
                 disabled={busy}
-                onClick={() => setNfMode('script')}
+                onClick={() => {
+                  setNfMode('script')
+                  setNf(current => ({ ...current, password: '' }))
+                }}
               >
                 {t('Скрипт')}
               </button>
@@ -850,7 +875,7 @@ export function CascadeWizard({
     <div className="clients-head">
       <h3>{title}</h3>
       {closable && (
-        <button className="ghost" disabled={preparing || recoveryBusy} onClick={close}>
+        <button className="ghost" disabled={preparing || recoveryBusy || onboardingBusy} onClick={close}>
           {t('Закрыть')}
         </button>
       )}
@@ -1017,8 +1042,7 @@ export function CascadeWizard({
                 setError(null)
                 setCreateNeedsRecovery(false)
                 setEntryRecovery(null)
-                setTab('panel')
-                setScript(null)
+                resetNewServer()
                 setStep(step === 'exit' ? 'entry' : 'exit')
               }}
             >

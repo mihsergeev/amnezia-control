@@ -1,9 +1,17 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { accessChanged, accessPolicy } from '../src/sshAccess.ts'
+import { accessChanged, accessPolicy, accessPolicyPayload } from '../src/sshAccess.ts'
 
 test('legacy nodes retain direct access and missing fields do not trigger an apply', () => {
   assert.equal(accessChanged({}, { ssh_jump_server_id: null, ssh_source_mode: 'panel', ssh_source_ips: [], ssh_firewall_mode: 'add' }), false)
+})
+
+test('inactive custom sources stay in the draft and do not affect the API policy', () => {
+  const draft = { ssh_source_mode: 'any' as const, ssh_source_ips: ['invalid'] }
+  assert.deepEqual(accessPolicy(draft).ssh_source_ips, ['invalid'])
+  assert.deepEqual(accessPolicyPayload(draft).ssh_source_ips, [])
+  assert.equal(accessChanged(draft, { ssh_source_mode: 'any', ssh_source_ips: [] }), false)
+  assert.deepEqual(accessPolicyPayload({ ...draft, ssh_source_mode: 'custom' }).ssh_source_ips, ['invalid'])
 })
 
 test('only SSH policy fields are sent to preview and unrestricted is always explicit', () => {

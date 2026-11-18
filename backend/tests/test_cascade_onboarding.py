@@ -14,7 +14,7 @@ ONBOARDING = "/api/servers?reuse_ssh_endpoint=true&name_from_hostname=true"
 def mock_check(monkeypatch, *, ok=True, hostname="entry.example.com", country="fi"):
     lookups = []
 
-    async def check(*_args):
+    async def check(*_args, **_kwargs):
         return sshops.CheckResult(ok=ok, hostname=hostname, error="" if ok else "SSH failed")
 
     async def lookup(host):
@@ -93,6 +93,71 @@ async def test_reused_existing_server_name_is_never_changed(client, auth_headers
     checked = await client.post(f"/api/servers/{original.json()['id']}/check", headers=auth_headers)
     assert checked.json()["name"] == name
     assert checked.json()["country"] == "FI"
+
+
+@pytest.mark.parametrize("mode", ["panel", "any", "custom"])
+async def test_wizard_retry_reuses_equivalent_ssh_policy(client, auth_headers, monkeypatch, mode):
+    requested = TARGET | {
+        "ssh_source_mode": mode,
+        "ssh_source_ips": ["198.51.100.42/24", "2001:db8::1/128"],
+        "ssh_firewall_mode": "preserve",
+    }
+    created = await client.post(ONBOARDING, json=requested, headers=auth_headers)
+    assert created.status_code == 201
+    sid = created.json()["id"]
+    mock_check(monkeypatch, ok=False)
+    checked = await client.post(f"/api/servers/{sid}/check", headers=auth_headers)
+    assert checked.status_code == 200 and checked.json()["last_check_ok"] is False
+
+    sources = ["2001:db8::1", "198.51.100.0/24"] if mode == "custom" else []
+    retry = await client.post(ONBOARDING, json=requested | {"ssh_source_ips": sources}, headers=auth_headers)
+    assert retry.status_code == 200 and retry.json()["id"] == sid
+    assert retry.json()["ssh_source_ips"] == ["198.51.100.0/24", "2001:db8::1"]
+
+
+@pytest.mark.parametrize("changes", [
+    {"ssh_jump_server_id": None},
+    {"ssh_source_mode": "panel"},
+    {"ssh_source_ips": ["192.0.2.0/24"]},
+    {"ssh_firewall_mode": "add"},
+])
+async def test_wizard_retry_conflicts_with_different_ssh_policy(client, auth_headers, monkeypatch, changes):
+    jump = await client.post("/api/servers", json={"name": "Jump", "host": "192.0.2.10"}, headers=auth_headers)
+    assert jump.status_code == 201
+    requested = TARGET | {
+        "ssh_jump_server_id": jump.json()["id"],
+        "ssh_source_mode": "custom",
+        "ssh_source_ips": ["198.51.100.0/24"],
+        "ssh_firewall_mode": "preserve",
+    }
+    created = await client.post(ONBOARDING, json=requested, headers=auth_headers)
+    assert created.status_code == 201
+    sid = created.json()["id"]
+    mock_check(monkeypatch, ok=False)
+    checked = await client.post(f"/api/servers/{sid}/check", headers=auth_headers)
+    assert checked.status_code == 200 and checked.json()["last_check_ok"] is False
+
+    retry = await client.post(ONBOARDING, json=requested | changes, headers=auth_headers)
+    assert retry.status_code == 409
+    assert "другими настройками SSH" in retry.json()["detail"]
+    listed = await client.get("/api/servers", headers=auth_headers)
+    assert listed.json() == [jump.json(), checked.json()]
+
+
+@pytest.mark.parametrize("sources", [["not-a-cidr"], [None], {"198.51.100.0/24": True}])
+async def test_wizard_retry_conflicts_with_malformed_saved_ssh_sources(client, auth_headers, sources):
+    requested = TARGET | {"ssh_source_mode": "custom", "ssh_source_ips": ["198.51.100.0/24"]}
+    created = await client.post(ONBOARDING, json=requested, headers=auth_headers)
+    assert created.status_code == 201
+    sid = created.json()["id"]
+    async with client.session_factory() as session:
+        server = await session.get(Server, sid)
+        server.ssh_source_ips = sources
+        await session.commit()
+
+    retry = await client.post(ONBOARDING, json=requested, headers=auth_headers)
+    assert retry.status_code == 409
+    assert "другими настройками SSH" in retry.json()["detail"]
 
 
 async def test_explicit_wizard_name_and_later_manual_edit_take_precedence(client, auth_headers, monkeypatch):
