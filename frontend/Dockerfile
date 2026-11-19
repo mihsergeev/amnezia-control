@@ -6,7 +6,7 @@ RUN npm ci
 COPY . .
 RUN npm run build
 
-FROM nginx:1.31-alpine
+FROM nginx:1.31.9-alpine3.24@sha256:90b6bd2aec278b16b98221d64deb1d6d35d164567f507ab0716e6053878315aa
 
 # The upstream image can lag behind Alpine's libxslt and zlib security fixes.
 RUN apk add --no-cache --upgrade 'libxslt>=1.1.43-r4' 'zlib>=1.4-r0'

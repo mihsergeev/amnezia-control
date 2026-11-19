@@ -4,6 +4,11 @@ All notable changes to Amnezia Control are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.84.57] - 2026-11-19
+
+- Update the frontend NGINX image to 1.31.9 with upstream security fixes.
+- Pin the default Compose database to PostgreSQL 18.7 and the optional standalone TLS proxy to Caddy 2.11.9, including their security updates.
+
 ## [0.84.56] - 2026-11-18
 
 - Keep SSH source input intact while typing and use only the active source mode. Offer the setup script for the same server after automatic setup fails, and retry a failed script download without registering the server again.
