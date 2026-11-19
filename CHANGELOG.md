@@ -4,6 +4,10 @@ All notable changes to Amnezia Control are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.84.58] - 2026-11-19
+
+- Restore AmneziaWG 3.1 client listing and statistics for a running container whose local image is explicitly tagged `acontrol-awg3:managed-local`. The tag must point to the exact image the container uses.
+
 ## [0.84.57] - 2026-11-19
 
 - Update the frontend to NGINX 1.31.9 and apply Alpine's OpenSSL security fixes.

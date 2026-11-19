@@ -61,6 +61,7 @@ AWG3_TOOLS_TAG = "v3.1.20260812"  # amneziawg-tools (awg / awg-quick)
 AWG3_PROTOCOL_VERSION = "3.1"
 AWG3_VERSION_MARKER = "/opt/acontrol/awg3-version"
 IMAGE_V3 = "acontrol-awg3"
+MANAGED_LOCAL_IMAGE_V3 = f"{IMAGE_V3}:managed-local"
 CONTAINER_V3 = "amnezia-awg3"
 SUBNET_V3 = "10.8.3.0/24"  # НЕ пересекается с 2.0 (10.8.1.0/24) на той же ноде
 # конфиг 3.0 живёт в отдельном каталоге хоста, а внутрь контейнера монтируется на
@@ -1112,14 +1113,16 @@ def port_busy_detail(port: int, proto: str, owner: str, what: str) -> str:
 
 
 async def awg3_containers(conn: asyncssh.SSHClientConnection) -> list[str]:
-    """Контейнеры AmneziaWG 3.0 на ноде (по образу панели, а не по имени —
-    имя мог бы занять кто угодно)."""
-    cmd = (
+    """Find running AWG 3.x containers by their panel image or an approved local image."""
+    docker = (
         'D=$({ [ -w /var/run/docker.sock ] || [ -w /run/docker.sock ]; } && echo docker || echo "sudo -n docker"); '
-        '$D ps --format "{{.Names}}\t{{.Image}}" | grep -iE "awg3" || true'
     )
-    result = await conn.run(cmd, check=False)
+    result = await conn.run(
+        docker + '$D ps --format "{{.Names}}\t{{.Image}}" | grep -iE "awg3" || true',
+        check=False,
+    )
     names: list[str] = []
+    local_candidate = False
     for line in (result.stdout or "").splitlines():
         parts = line.split("\t")
         if len(parts) < 2:
@@ -1127,6 +1130,23 @@ async def awg3_containers(conn: asyncssh.SSHClientConnection) -> list[str]:
         name, image = parts[0].strip(), parts[1].strip()
         if name and image.split(":", 1)[0] == IMAGE_V3:
             names.append(name)
+        elif name == CONTAINER_V3:
+            local_candidate = True
+    if not names and local_candidate:
+        # A tag added after container creation does not replace the original
+        # image reference in its configuration. Compare the Docker image IDs.
+        result = await conn.run(
+            docker
+            + f'$D image inspect --format "{{{{.Id}}}}" {MANAGED_LOCAL_IMAGE_V3}'
+            + f' && $D container inspect --format "{{{{.State.Running}}}} {{{{.Image}}}}" {CONTAINER_V3}',
+            check=False,
+        )
+        image_ids = re.fullmatch(
+            r"(sha256:[0-9a-f]{64})\ntrue (sha256:[0-9a-f]{64})",
+            (result.stdout or "").strip(),
+        )
+        if result.exit_status == 0 and image_ids and image_ids[1] == image_ids[2]:
+            names.append(CONTAINER_V3)
     return names
 
 

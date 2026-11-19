@@ -6,6 +6,9 @@ amneziawg-tools v3.0.20260730) и проверены на живой ноде.
 
 import base64
 import re
+from types import SimpleNamespace
+
+import pytest
 
 from app import awg, deploy
 
@@ -135,6 +138,34 @@ def test_panel_awg3_container_not_treated_as_foreign() -> None:
         "amnezia-awg\tamneziavpn/amnezia-wg:latest\n"
     )
     assert deploy._parse_foreign_awg(out) == ["amnezia-awg"]
+
+
+@pytest.mark.parametrize(
+    ("container", "image", "inspects", "expected"),
+    [
+        ("amnezia-awg3", "acontrol-awg3:stable", None, ["amnezia-awg3"]),
+        ("amnezia-awg3", "example-awg3:local", (0, "a", "true", "a"), ["amnezia-awg3"]),
+        ("amnezia-awg3", "example-awg3:local", (0, "a", "true", "b"), []),
+        ("amnezia-awg3", "example-awg3:local", (0, "a", "false", "a"), []),
+        ("amnezia-awg3", "example-awg3:local", (1, "a", "true", "a"), []),
+        ("amnezia-awg3-other", "example-awg3:local", None, []),
+    ],
+)
+async def test_awg3_detection_requires_exact_approved_local_image(container, image, inspects, expected):
+    class FakeConn:
+        async def run(self, cmd, **kwargs):
+            if "$D ps" in cmd:
+                return SimpleNamespace(stdout=f"{container}\t{image}\n", exit_status=0)
+            assert inspects is not None
+            assert "image inspect" in cmd and deploy.MANAGED_LOCAL_IMAGE_V3 in cmd
+            assert cmd.endswith(f" {deploy.CONTAINER_V3}")
+            status, alias, running, actual = inspects
+            return SimpleNamespace(
+                stdout=f"sha256:{alias * 64}\n{running} sha256:{actual * 64}\n",
+                exit_status=status,
+            )
+
+    assert await deploy.awg3_containers(FakeConn()) == expected
 
 
 async def test_awg2_detection_excludes_awg3_container() -> None:
