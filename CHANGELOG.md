@@ -6,7 +6,7 @@ All notable changes to Amnezia Control are documented here. The format is based 
 
 ## [0.84.57] - 2026-11-19
 
-- Update the frontend NGINX image to 1.31.9 with upstream security fixes.
+- Update the frontend to NGINX 1.31.9 and apply Alpine's OpenSSL security fixes.
 - Pin the default Compose database to PostgreSQL 18.7 and the optional standalone TLS proxy to Caddy 2.11.9, including their security updates.
 
 ## [0.84.56] - 2026-11-18
