@@ -1,5 +1,4 @@
 """Validate archived SSH policy without making network or node changes."""
-import ipaddress
 import os
 import posixpath
 import re
@@ -7,8 +6,8 @@ import tempfile
 from pathlib import Path
 
 import asyncssh
-import idna
 
+from app import ssh_host
 from app.schemas import SshAccessFields
 
 POLICY_FIELDS = ("ssh_source_mode", "ssh_source_ips", "ssh_firewall_mode")
@@ -40,18 +39,8 @@ def policy(row: dict) -> dict:
 
 
 def validate_endpoint(row: dict) -> None:
-    host = row.get("host")
-    if not isinstance(host, str) or not 1 <= len(host) <= 255 or any(char.isspace() for char in host):
+    if not ssh_host.valid(row.get("host")):
         raise ValueError("В архиве неверный адрес сервера SSH")
-    try:
-        ipaddress.ip_address(host)
-    except ValueError:
-        try:
-            # The system resolver also supports local aliases with underscores.
-            # Substitute them for the syntax check only, preserving the stored address.
-            idna.encode(host.replace("_", "a"), uts46=True, std3_rules=True)
-        except idna.IDNAError as exc:
-            raise ValueError("В архиве неверный адрес сервера SSH") from exc
     port = row.get("ssh_port", 22)
     if type(port) is not int or not 1 <= port <= 65535:
         raise ValueError("В архиве неверный SSH-порт сервера")

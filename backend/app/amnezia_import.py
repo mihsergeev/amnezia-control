@@ -11,7 +11,7 @@ import zlib
 from collections.abc import Iterator
 from dataclasses import dataclass, field
 
-from app import sshops
+from app import ssh_host, sshops
 
 
 class ImportParseError(Exception):
@@ -134,7 +134,7 @@ def parse_amnezia_link(text: str) -> ServerSpec:
         )
 
     host = creds.get("hostName") or creds.get("host")
-    if not isinstance(host, str) or not host:
+    if not ssh_host.valid(host):
         raise ImportParseError("в конфиге неверный адрес сервера")
 
     user = (
@@ -183,6 +183,8 @@ def parse_bulk(text: str, default_user: str = "root") -> list[ServerSpec]:
         host, _, port_str = host_port.partition(":")
         if not host:
             continue
+        if not ssh_host.valid(host):
+            raise ImportParseError(f"неверный адрес сервера в строке {line_no}")
         port = _ssh_port(port_str, f"некорректный порт SSH в строке {line_no}")
         user = parts[1] if len(parts) > 1 else default_user
         if not sshops.valid_ssh_user(user):

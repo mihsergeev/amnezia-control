@@ -11,6 +11,7 @@ from pydantic import AfterValidator, BaseModel, ConfigDict, Field, StrictInt, co
 from app.cascade_routes import Route, RouteUpdate
 from app.cascade_endpoints import endpoint as normalize_cascade_endpoint
 from app.client_endpoint import normalize as normalize_client_endpoint
+from app.ssh_host import normalize as normalize_ssh_host
 from app.geo import country_override as validate_country_override, normalize_country_code
 from app.metadata_schemas import ClientLabels
 from app.xray import STATS_API_PORT
@@ -85,12 +86,14 @@ class UserOut(BaseModel):
 
 
 ClientEndpoint = Annotated[str, Field(max_length=255), AfterValidator(normalize_client_endpoint)]
+# адрес уходит в SSH, скрипты нод и конфиги клиентов: только IP или DNS-имя
+SshHost = Annotated[str, Field(min_length=1, max_length=255), AfterValidator(normalize_ssh_host)]
 
 
 class ServerCreate(SshAccessFields):
     country_override: Annotated[str, AfterValidator(validate_country_override)] = ""
     name: str = Field(min_length=1, max_length=128)
-    host: str = Field(min_length=1, max_length=255)
+    host: SshHost
     client_endpoint: ClientEndpoint = ""
     ssh_port: int = Field(default=22, ge=1, le=65535)
     # только безопасный набор символов для имени пользователя (без shell-метасимволов)
@@ -116,7 +119,7 @@ class ServerUpdate(BaseModel):
         return value
     country_override: Annotated[str, AfterValidator(validate_country_override)] = ""
     name: str | None = Field(default=None, min_length=1, max_length=128)
-    host: str | None = Field(default=None, min_length=1, max_length=255)
+    host: SshHost | None = None
     client_endpoint: ClientEndpoint = ""
     ssh_port: int | None = Field(default=None, ge=1, le=65535)
     ssh_user: str | None = Field(

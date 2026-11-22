@@ -171,6 +171,37 @@ async def test_create_validates_port(client: httpx.AsyncClient, auth_headers) ->
     assert response.status_code == 422
 
 
+# адрес попадает в SSH, скрипты нод и конфиги клиентов: пробелы, переводы строк,
+# порт и синтаксис shell или опций ssh не проходят
+BAD_HOSTS = ["a b", "$(id)", "203.0.113.10\nPostUp = id", "-oProxyCommand=id", "node.example.test:22",
+             "[2001:db8::1]", "node;id", "", "x" * 256]
+
+
+@pytest.mark.parametrize("host", BAD_HOSTS)
+async def test_create_rejects_unsafe_host(client: httpx.AsyncClient, auth_headers, host) -> None:
+    response = await client.post("/api/servers", json=dict(NEW_SERVER, host=host), headers=auth_headers)
+    assert response.status_code == 422
+    assert (await client.get("/api/servers", headers=auth_headers)).json() == []
+
+
+@pytest.mark.parametrize("host, stored", [("203.0.113.11", "203.0.113.11"), ("2001:db8::11", "2001:db8::11"),
+                                          ("node.example.test", "node.example.test"), ("local_alias", "local_alias"),
+                                          (" 203.0.113.12 ", "203.0.113.12")])
+async def test_create_accepts_ip_and_dns_host(client: httpx.AsyncClient, auth_headers, host, stored) -> None:
+    response = await client.post("/api/servers", json=dict(NEW_SERVER, host=host), headers=auth_headers)
+    assert response.status_code == 201
+    assert response.json()["host"] == stored
+
+
+@pytest.mark.parametrize("host", BAD_HOSTS)
+async def test_update_rejects_unsafe_host_and_keeps_address(client: httpx.AsyncClient, auth_headers, host) -> None:
+    created = (await client.post("/api/servers", json=NEW_SERVER, headers=auth_headers)).json()
+    response = await client.patch(f"/api/servers/{created['id']}", json={"host": host}, headers=auth_headers)
+    assert response.status_code == 422
+    current = await client.get(f"/api/servers/{created['id']}", headers=auth_headers)
+    assert current.json()["host"] == NEW_SERVER["host"]
+
+
 async def test_cascade_onboarding_reuses_one_exact_ssh_endpoint(client: httpx.AsyncClient, auth_headers) -> None:
     url = "/api/servers?reuse_ssh_endpoint=true"
     original = dict(NEW_SERVER, host="node.example.com")

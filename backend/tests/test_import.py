@@ -32,6 +32,23 @@ AMNEZIA_CONFIG = {
 }
 
 
+@pytest.mark.parametrize("host", ["$(id)", "203.0.113.10\nPostUp = id", "-oProxyCommand=id", "a b", "node;id"])
+def test_link_with_unsafe_host_is_rejected(host) -> None:
+    with pytest.raises(ImportParseError):
+        amnezia_import.parse_amnezia_link(_make_vpn_link(dict(AMNEZIA_CONFIG, hostName=host)))
+
+
+@pytest.mark.parametrize("line", ["$(id) root", "-oProxyCommand=id root", "node;id:22 root", "node`id` root"])
+def test_bulk_line_with_unsafe_host_is_rejected(line) -> None:
+    with pytest.raises(ImportParseError, match="строке 2"):
+        amnezia_import.parse_bulk("203.0.113.10 root\n" + line)
+
+
+def test_bulk_keeps_ip_and_dns_hosts() -> None:
+    specs = amnezia_import.parse_bulk("203.0.113.10:2221 ms-dev\nnode.example.test root\nlocal_alias")
+    assert [(s.host, s.ssh_port) for s in specs] == [("203.0.113.10", 2221), ("node.example.test", 22), ("local_alias", 22)]
+
+
 def test_parse_amnezia_compressed() -> None:
     spec = amnezia_import.parse_amnezia_link(_make_vpn_link(AMNEZIA_CONFIG))
     assert spec.host == "203.0.113.10"
