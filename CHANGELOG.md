@@ -4,6 +4,10 @@ All notable changes to Amnezia Control are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.84.60] - 2026-11-22
+
+- Validate the server SSH address everywhere it enters the panel: the server form and the Amnezia link and bulk imports now accept only an IP address or a DNS name, as transfer files and backups already did. Spaces, line breaks, ports and shell or ssh option syntax are rejected, and spaces around an address typed into the form are trimmed.
+
 ## [0.84.59] - 2026-11-22
 
 - Block cascade clients' ping (ICMP) on the entry server. The entry gateway only carries TCP and UDP, so ICMP to internet hosts was forwarded from the entry address, including while the exit was down. Existing cascades pick up the rule on their next periodic check, without a reinstall.
