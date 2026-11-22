@@ -4,6 +4,11 @@ All notable changes to Amnezia Control are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.84.61] - 2026-11-22
+
+- Report in the server check whether the SSH user can use sudo without a password, and warn on the server card when it cannot. Protocol installs and node changes need it; before, the problem surfaced only when a deployment was refused.
+- Run CI weekly and on demand so dependency audits and image scans pick up new advisories between releases. These runs also scan the published images, which is what panels run.
+
 ## [0.84.60] - 2026-11-22
 
 - Validate the server SSH address everywhere it enters the panel: the server form and the Amnezia link and bulk imports now accept only an IP address or a DNS name, as transfer files and backups already did. Spaces, line breaks, ports and shell or ssh option syntax are rejected, and spaces around an address typed into the form are trimmed.
