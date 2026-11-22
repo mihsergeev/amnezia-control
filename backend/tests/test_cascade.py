@@ -752,6 +752,7 @@ iptables() {
       echo '-A ACONTROL_CASCADE -m conntrack --ctstate DNAT -j RETURN'
       echo '-A ACONTROL_CASCADE -p tcp -j TPROXY --on-port 12350 --on-ip 127.0.0.1 --tproxy-mark 0x100/0x100'
       echo '-A ACONTROL_CASCADE -p udp -j TPROXY --on-port 12350 --on-ip 127.0.0.1 --tproxy-mark 0x100/0x100'
+      echo '-A ACONTROL_CASCADE -p icmp -j DROP'
       if [ "${live_jump_removed:-no}" = no ]; then
         echo '-A PREROUTING -i docker0 -j ACONTROL_CASCADE'
       fi
@@ -813,6 +814,7 @@ ip() {
             "iptables -w -t mangle -D ACONTROL_CASCADE -m conntrack --ctstate DNAT -j RETURN",
             "iptables -w -t mangle -D ACONTROL_CASCADE -p tcp -j TPROXY --on-port 12350 --on-ip 127.0.0.1 --tproxy-mark 0x100/0x100",
             "iptables -w -t mangle -D ACONTROL_CASCADE -p udp -j TPROXY --on-port 12350 --on-ip 127.0.0.1 --tproxy-mark 0x100/0x100",
+            "iptables -w -t mangle -D ACONTROL_CASCADE -p icmp -j DROP",
             "iptables -w -t mangle -X ACONTROL_CASCADE",
             "ip -4 rule del pref 100 from all fwmark 0x100 lookup 241",
             "ip -4 rule del pref 101 from all fwmark 0x100 lookup 241",
@@ -848,6 +850,73 @@ iptables() {
         capture_output=True, text=True,
     )
     assert result.returncode == int(fails), result.stderr
+
+_TPROXY_FAKES = r'''
+export PATH="/usr/bin:/bin:$PATH"
+modprobe() { return 0; }
+docker() { return 1; }
+logger() { return 0; }
+ip() {
+  case "$*" in
+    'rule show') echo '100: from all fwmark 0x100 lookup 241' ;;
+    'route show table 241') echo 'local default dev lo scope host' ;;
+    '-4 -o addr show scope global') echo '2: eth0 inet 192.0.2.10/24 brd 192.0.2.255 scope global eth0' ;;
+    *) return 0 ;;
+  esac
+}
+iptables() {
+  echo "iptables $*" >> "$LOG"
+  case "$*" in
+    '-t mangle -S ACONTROL_CASCADE')
+      [ "$CHAIN_STATE" = legacy ] || return 1
+      echo '-A ACONTROL_CASCADE -p tcp -j TPROXY --on-port 12350 --on-ip 127.0.0.1 --tproxy-mark 0x100/0x100'
+      echo '-A ACONTROL_CASCADE -p udp -j TPROXY --on-port 12350 --on-ip 127.0.0.1 --tproxy-mark 0x100/0x100' ;;
+    '-t mangle -C ACONTROL_CASCADE -p icmp -j DROP') return 1 ;;
+    *'-C '*) return 0 ;;
+    *) return 0 ;;
+  esac
+}
+'''
+
+
+def _run_tproxy(action: str, chain_state: str, tmp_path) -> list[str]:
+    log = tmp_path / "iptables.log"
+    log.write_text("")
+    result = subprocess.run(
+        [shutil.which("bash"), "-s", "--", action],
+        input=f"LOG={log}\nCHAIN_STATE={chain_state}\n" + _TPROXY_FAKES + cascade._fill(cascade._TPROXY_SH),
+        capture_output=True, text=True, timeout=10,
+    )
+    assert result.returncode == 0, result.stderr
+    return [line for line in log.read_text().splitlines() if " -A ACONTROL_CASCADE " in line or " -F ACONTROL_CASCADE" in line]
+
+
+@pytest.mark.skipif(shutil.which("bash") is None, reason="requires bash")
+def test_tproxy_chain_drops_client_icmp_after_local_exceptions(tmp_path) -> None:
+    # ping клиентов не проходит через шлюз (только TCP/UDP) и не должен уходить с адреса входа
+    appended = _run_tproxy("up", "fresh", tmp_path)
+    rules = [line.split(" -A ACONTROL_CASCADE ", 1)[1] for line in appended if " -A " in line]
+    assert rules[-1] == "-p icmp -j DROP"
+    assert rules.index("-p icmp -j DROP") > max(i for i, rule in enumerate(rules) if rule.endswith("-j RETURN"))
+    assert "-d 10.0.0.0/8 -j RETURN" in rules and "-d 192.0.2.10 -j RETURN" in rules
+
+
+@pytest.mark.skipif(shutil.which("bash") is None, reason="requires bash")
+def test_heal_adds_icmp_drop_to_a_legacy_chain_without_flushing(tmp_path) -> None:
+    # цепочка прошлой ревизии: TPROXY на месте, запрета ICMP нет. Без -F, чтобы не
+    # открыть окно, в котором клиенты выходят мимо шлюза
+    changes = _run_tproxy("heal", "legacy", tmp_path)
+    assert changes == ["iptables -t mangle -A ACONTROL_CASCADE -p icmp -j DROP"]
+
+
+def test_entry_upgrade_triggered_by_new_script_revision() -> None:
+    # действующие каскады получают запрет ICMP через обновление скриптов по ревизии
+    assert int(cascade.SCRIPTS_REV) >= 7
+    assert f"# rev {cascade.SCRIPTS_REV}" in cascade._fill(cascade._TPROXY_SH)
+    script = cascade._fill(cascade._TPROXY_SH)
+    assert "-p icmp -j DROP" in script
+    assert cascade._put(f"{cascade.DIR}/cascade-tproxy.sh", script, "755") in cascade.build_entry_upgrade()
+
 
 def test_lost_gre_rule_drops_instead_of_leaking() -> None:
     tp = cascade._fill(cascade._TPROXY_SH)

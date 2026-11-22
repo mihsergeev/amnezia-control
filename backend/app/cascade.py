@@ -59,7 +59,7 @@ TAG = "cascade"  # каталог деплоя на нодах ($HOME/.acontrol/
 TRANSPORTS = ("vless", "gre", "awg")
 # ревизия скриптов входа: проверка видит старую и обновляет их на месте
 # (upgrade_entry), без переустановки каскада
-SCRIPTS_REV = "6"
+SCRIPTS_REV = "7"
 
 # проверка канала: сколько отправляем со входа на выход и сколько ждем
 PROBE_BYTES = 20 * 1024 * 1024
@@ -272,7 +272,15 @@ chain() {
   # ответы контейнеров на входящие к опубликованным портам
   iptables -t mangle -A $CHAIN -m conntrack --ctstate DNAT -j RETURN || return 1
   iptables -t mangle -A $CHAIN -p tcp -j TPROXY --on-ip 127.0.0.1 --on-port $PORT --tproxy-mark $MARK/$MARK || return 1
-  iptables -t mangle -A $CHAIN -p udp -j TPROXY --on-ip 127.0.0.1 --on-port $PORT --tproxy-mark $MARK/$MARK
+  iptables -t mangle -A $CHAIN -p udp -j TPROXY --on-ip 127.0.0.1 --on-port $PORT --tproxy-mark $MARK/$MARK || return 1
+  icmp_drop
+}
+
+# tproxy принимает только TCP и UDP: остальной трафик клиентов (ping и т.п.) ушел
+# бы мимо шлюза с адреса входа, в том числе при упавшем выходе. Локальные и
+# служебные сети пропущены раньше, поэтому ping шлюза туннеля и docker работает
+icmp_drop() {
+  iptables -t mangle -C $CHAIN -p icmp -j DROP 2>/dev/null || iptables -t mangle -A $CHAIN -p icmp -j DROP
 }
 
 # переходы в цепочку с мостов: только недостающие (-C || -A/-I)
@@ -300,6 +308,8 @@ heal() {
     ok=0
     chain || return 1
   fi
+  # цепочка прошлой ревизии без запрета ICMP: дописываем его в конец, без -F
+  iptables -t mangle -C $CHAIN -p icmp -j DROP 2>/dev/null || { ok=0; icmp_drop || return 1; }
   for IF in $(bridges); do
     iptables -t mangle -C PREROUTING -i $IF -j $CHAIN 2>/dev/null || ok=0
     iptables -C INPUT -i $IF -m mark --mark $MARK/$MARK -j ACCEPT 2>/dev/null || ok=0
@@ -319,6 +329,7 @@ tproxy_preflight() {
     NF == 6 && $3 == "-d" && $5 == "-j" && $6 == "RETURN" &&
       ($4 in allowed || $4 ~ /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+\/32$/) { next }
     $0 == "-A " chain " -m conntrack --ctstate DNAT -j RETURN" { next }
+    $0 == "-A " chain " -p icmp -j DROP" { next }
     NF == 12 && $3 == "-p" && ($4 == "tcp" || $4 == "udp") && $5 == "-j" && $6 == "TPROXY" {
       for (i=7; i<=NF; i+=2) options[$i]=$(i+1)
       if (options["--on-port"] == port && options["--on-ip"] == "127.0.0.1" && options["--tproxy-mark"] == mark) {
