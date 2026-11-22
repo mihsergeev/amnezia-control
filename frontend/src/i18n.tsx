@@ -906,6 +906,8 @@ const EN: Record<string, string> = {
   'Протоколы появятся после успешной проверки сервера.':
     'Protocols appear after a successful server check.',
   'Docker на сервере недоступен.': 'Docker is not available on the server.',
+  'У пользователя SSH нет sudo без пароля: установка протоколов и изменения на сервере не сработают.':
+    'The SSH user has no passwordless sudo: installing protocols and changing the server will fail.',
   'Протоколов нет. Развернуть можно в меню «Ещё».':
     'No protocols yet. Deploy one from the "More" menu.',
 

@@ -307,6 +307,8 @@ export type CheckInfo = {
   ssh_access_warning?: string
   error?: string
   hostname?: string
+  // root | yes | no | '' - может ли пользователь SSH выполнять sudo без пароля
+  sudo?: string
   docker?: boolean
   containers?: string[]
   amnezia_containers?: string[]

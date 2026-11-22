@@ -79,6 +79,9 @@ _TUNNEL_PROBE = (
 
 CHECK_COMMAND = (
     'echo "HOST=$(hostname)"; '
+    # развертывание и изменения на ноде идут через sudo -n: без него проверка
+    # проходила, а ошибка всплывала только при установке протокола
+    'if [ "$(id -u)" = 0 ]; then echo SUDO=root; elif sudo -n true 2>/dev/null; then echo SUDO=yes; else echo SUDO=no; fi; '
     + _TUNNEL_PROBE + cascade_underlay.PROBE_COMMAND + cascade_manual.PROBE_COMMAND +
     "if docker ps --format '{{.Names}}' 2>/dev/null; then D=docker; "
     "elif sudo -n docker ps --format '{{.Names}}' 2>/dev/null; then D='sudo -n docker'; "
@@ -162,6 +165,8 @@ class CheckResult:
     ok: bool
     error: str = ""
     hostname: str = ""
+    # root | yes (sudo -n работает) | no (нет sudo без пароля) | "" (не проверялось)
+    sudo: str = ""
     docker: bool = False
     containers: list[str] = field(default_factory=list)
     amnezia_containers: list[str] = field(default_factory=list)
@@ -178,6 +183,7 @@ class CheckResult:
         return {
             "error": self.error,
             "hostname": self.hostname,
+            "sudo": self.sudo,
             "docker": self.docker,
             "containers": self.containers,
             "amnezia_containers": self.amnezia_containers,
@@ -217,6 +223,8 @@ def _parse_check_output(output: str) -> CheckResult:
             continue
         if line.startswith("HOST="):
             result.hostname = line.removeprefix("HOST=")
+        elif line in ("SUDO=root", "SUDO=yes", "SUDO=no"):
+            result.sudo = line.removeprefix("SUDO=")
         elif line == "DOCKER_UNAVAILABLE":
             result.docker = False
         elif line.startswith("GRELINK="):

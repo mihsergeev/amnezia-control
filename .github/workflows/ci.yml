@@ -4,6 +4,11 @@ on:
   push:
     branches: [main]
   pull_request:
+  # раз в неделю: свежие базы уязвимостей для зависимостей main и опубликованных
+  # образов, даже если в репозитории ничего не менялось
+  schedule:
+    - cron: "17 3 * * 1"
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -70,6 +75,28 @@ jobs:
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           image-ref: acontrol-frontend
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: "1"
+
+  # Опубликованные образы последнего релиза - то, что реально стоит на панелях.
+  # Свежая сборка из main подтягивает новые базовые слои и может пройти скан,
+  # пока уже выпущенный образ уязвим. Только по расписанию и вручную.
+  published-image-scan:
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trivy scan (published backend image)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: ghcr.io/mihsergeev/amnezia-control-backend:latest
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: "1"
+      - name: Trivy scan (published frontend image)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: ghcr.io/mihsergeev/amnezia-control-frontend:latest
           severity: HIGH,CRITICAL
           ignore-unfixed: true
           exit-code: "1"

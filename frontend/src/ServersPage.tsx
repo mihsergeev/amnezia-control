@@ -543,6 +543,12 @@ function ServerDetail({
         </div>
       )}
 
+      {online && info?.sudo === 'no' && (
+        <p className="small res-warn" role="status">
+          {t('У пользователя SSH нет sudo без пароля: установка протоколов и изменения на сервере не сработают.')}
+        </p>
+      )}
+
       <div className="srv-protos">
         <div className="srv-protos-title">{t('Протоколы')}</div>
         {protocols.length === 0 ? (
