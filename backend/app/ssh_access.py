@@ -33,8 +33,12 @@ def serialized(handler):
     return wrapped
 
 
-async def require_idle(session, server_id):
-    if await session.scalar(select(SshAccessChange.id).where(SshAccessChange.server_id == server_id, SshAccessChange.phase.in_(ACTIVE)).limit(1)):
+async def require_idle(session, server_id, *, deleting=False):
+    # Deleting a node may drop its own unconfirmed stage. In "applying" the
+    # saved policy is still the old one and the node-side watchdog undoes the
+    # stage, so a node destroyed mid-change cannot block the panel forever.
+    own = ("finalizing",) if deleting else ACTIVE
+    if await session.scalar(select(SshAccessChange.id).where(SshAccessChange.server_id == server_id, SshAccessChange.phase.in_(own)).limit(1)):
         raise HTTPException(409, "Сначала завершите восстановление незавершенной настройки SSH")
     for row in await session.scalars(select(SshAccessChange).where(SshAccessChange.phase.in_(ACTIVE))):
         if any(row.payload.get(part, {}).get('ssh_jump_server_id') == server_id for part in ('old', 'proposed')):
@@ -136,7 +140,15 @@ LOCK="$DIR/.acontrol-key.lock"
 if [ -e "$LOCK" ]; then [ -f "$LOCK" ] && [ "$(stat -c %u "$LOCK")" = "$(id -u)" ] && [ "$(stat -c %h "$LOCK")" = 1 ] || exit 1; fi
 '''
     if operation == "rollback":
-        return header + rollback.replace('[ ! -e "$STATE.commit" ] || exit 0\n', '') + 'echo ACONTROL_KEY_ROLLEDBACK\n'
+        # A stage that never made its backup never changed authorized_keys,
+        # whatever stopped it (no flock, unsafe layout, lost connection).
+        # Report that before the layout checks, or the journal can never be
+        # closed. A stage still running right now arms its own watchdog.
+        untouched = f'''set -eu
+S="$HOME/.ssh/.acontrol-{token}"
+[ -e "$S.backup" ] || [ -e "$S.commit" ] || [ -e "$S.rolledback" ] || {{ echo ACONTROL_KEY_ROLLEDBACK; exit 0; }}
+'''
+        return untouched + header + rollback.replace('[ ! -e "$STATE.commit" ] || exit 0\n', '') + 'echo ACONTROL_KEY_ROLLEDBACK\n'
     if operation == "watchdog":
         return header + rollback
     if operation == "status":
@@ -453,8 +465,10 @@ async def apply(session, server, token, settings):
             async with connection(server, settings) as old_conn:
                 await prepare_jump(session, proposed, settings)
                 mutation_started = True
-                await _run(old_conn, write_key(public, keyopts, transaction=token), "ACONTROL_KEY_READY")
                 try:
+                    # A failed or unanswered stage is rolled back right away
+                    # while the original connection still works.
+                    await _run(old_conn, write_key(public, keyopts, transaction=token), "ACONTROL_KEY_READY")
                     # Add-only firewall changes cannot revoke existing SSH access.
                     if proposed.ssh_firewall_mode == "add":
                         await _run(old_conn, ssh_firewall.script(token, ssh_policy.sources(proposed, settings.panel_ip), proposed.ssh_port), "ACONTROL_FIREWALL_READY")

@@ -88,6 +88,32 @@ def test_atomic_key_updates_preserve_admin_lines_and_stale_watchdogs(tmp_path):
     assert ak.read_text() == final
 
 
+def test_rollback_of_a_stage_that_never_ran_closes_without_changes(tmp_path):
+    public = "ssh-ed25519 AAA panel"
+    directory = tmp_path / ".ssh"
+    directory.mkdir()
+    ak = directory / "authorized_keys"
+    original = 'ssh-ed25519 BBB administrator\nfrom="192.0.2.20",restrict ' + public + '\n'
+    ak.write_text(original)
+    # Another generation is current; this one stopped before its backup.
+    other, lost = "d" * 32, "e" * 32
+    assert shell(ssh_access.write_key(public, 'from="192.0.2.10",restrict', transaction=other), tmp_path).returncode == 0
+    staged = ak.read_text()
+    result = shell(ssh_access.write_key(public, 'from="192.0.2.11",restrict', transaction=lost, operation="rollback"), tmp_path)
+    assert result.returncode == 0, result.stderr
+    assert "ACONTROL_KEY_ROLLEDBACK" in result.stdout
+    assert ak.read_text() == staged
+    assert not (directory / f".acontrol-{lost}.rolledback").exists()
+    # Without any panel state at all, even an unsafe layout cannot block closing.
+    bare = tmp_path / "bare"
+    (bare / ".ssh").mkdir(parents=True)
+    (bare / ".ssh" / "authorized_keys").write_text(original)
+    (bare / ".ssh" / ".acontrol-key.lock").mkdir()
+    result = shell(ssh_access.write_key(public, 'restrict', transaction=lost, operation="rollback"), bare)
+    assert result.returncode == 0 and "ACONTROL_KEY_ROLLEDBACK" in result.stdout, result.stderr
+    assert (bare / ".ssh" / "authorized_keys").read_text() == original
+
+
 def test_bootstrap_upserts_own_key_instead_of_duplicate(tmp_path):
     directory = tmp_path / ".ssh"
     directory.mkdir()
@@ -312,6 +338,46 @@ async def test_failed_second_session_restores_original_policy_and_retry_does_not
         assert (await session.get(SshAccessChange, preview['token'])).phase == 'rolledback'
     await client.post(f'/api/servers/{sid}/ssh-access/apply', json={"token": preview['token']}, headers=auth_headers)
     assert len(scripts) == 2
+
+
+async def test_failed_stage_is_rolled_back_at_once(client, auth_headers, monkeypatch):
+    node = (await client.post('/api/servers', json={"name": "test", "host": "192.0.2.1", "ssh_firewall_mode": "preserve"}, headers=auth_headers)).json()
+    sid = node['id']
+    scripts = []
+    class Conn:
+        async def run(self, command, **kwargs):
+            scripts.append(command)
+            if 'ACONTROL_KEY_READY' in command:
+                return SimpleNamespace(exit_status=1, stdout='', stderr='Требуется flock для безопасного изменения SSH')
+            return SimpleNamespace(exit_status=0, stdout='ACONTROL_KEY_ROLLEDBACK', stderr='')
+    @asynccontextmanager
+    async def connect(*args, **kwargs): yield Conn()
+    monkeypatch.setattr(ssh_access, 'connection', connect)
+    preview = (await client.post(f'/api/servers/{sid}/ssh-access/preview', json={"ssh_source_mode": "custom", "ssh_source_ips": ["192.0.2.7"], "ssh_firewall_mode": "preserve"}, headers=auth_headers)).json()
+    response = await client.post(f'/api/servers/{sid}/ssh-access/apply', json={"token": preview['token']}, headers=auth_headers)
+    assert response.status_code == 409 and 'откат ключа подтвержден' in response.text
+    assert len(scripts) == 2 and 'ACONTROL_KEY_ROLLEDBACK' in scripts[1]
+    async with client.session_factory() as session:
+        assert (await session.get(SshAccessChange, preview['token'])).phase == 'rolledback'
+    assert (await client.get(f'/api/servers/{sid}', headers=auth_headers)).json()['ssh_access_pending'] is False
+
+
+@pytest.mark.parametrize('phase', ['applying', 'finalizing'])
+async def test_unreachable_node_with_unconfirmed_stage_can_be_deleted(client, auth_headers, phase):
+    node = (await client.post('/api/servers', json={"name": "gone", "host": "192.0.2.1"}, headers=auth_headers)).json()
+    sid = node['id']
+    async with client.session_factory() as session:
+        session.add(SshAccessChange(id='c' * 32, server_id=sid, phase=phase, payload={}))
+        await session.commit()
+    assert (await client.post('/api/backup/now', headers=auth_headers)).status_code == 409
+    response = await client.delete(f'/api/servers/{sid}', headers=auth_headers)
+    if phase == 'finalizing':
+        # The saved policy may already be the new one: never guess, keep the journal.
+        assert response.status_code == 409
+        return
+    assert response.status_code == 200, response.text
+    async with client.session_factory() as session:
+        assert await session.get(SshAccessChange, 'c' * 32) is None
 
 
 @pytest.mark.parametrize('warning', ['', 'Старый промежуточный доступ не отозван: offline'])

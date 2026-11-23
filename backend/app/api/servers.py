@@ -319,7 +319,7 @@ async def _delete_server(
     server_id: int, user: CurrentUser, session: SessionDep, remove_key: bool
 ) -> DeleteServerResult:
     server = await _get_or_404(server_id, session)
-    await ssh_access.require_idle(session, server.id)
+    await ssh_access.require_idle(session, server.id, deleting=True)
     if await session.scalar(select(Server.id).where(Server.ssh_jump_server_id == server_id).limit(1)):
         raise HTTPException(409, "Сервер используется как промежуточная SSH-нода")
     from app.api.awg_settings import recover
