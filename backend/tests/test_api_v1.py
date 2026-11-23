@@ -92,6 +92,7 @@ async def test_api_key_cannot_manage_servers(client, auth_headers):
     assert (
         await client.post("/api/servers/1/fullaccess", json={"password": "x"}, headers=hdr)
     ).status_code == 401
+    assert (await client.delete("/api/servers/1/fullaccess", headers=hdr)).status_code == 401
     assert (
         await client.post("/api/apikeys", json={"name": "self", "password": "testpass"}, headers=hdr)
     ).status_code == 401

@@ -65,6 +65,34 @@ async def install_desktop_key(
         raise FullAccessError(err)
 
 
+# Только строки, у которых комментарий ровно метка desktop-ключа: чужой ключ,
+# где это слово лишь упомянуто, остается. Под тем же flock, что и смена ключа
+# панели (ssh_access.write_key), чтобы не перезаписать ее подготовку.
+REVOKE_COMMAND = (
+    'D="$HOME/.ssh"; f="$D/authorized_keys"; '
+    '[ -f "$f" ] || { echo REVOKED=0; exit 0; }; '
+    '[ ! -L "$D" ] && [ ! -L "$f" ] || { echo "authorized_keys: символическая ссылка не поддерживается" >&2; exit 1; }; '
+    'if command -v flock >/dev/null 2>&1; then L="$D/.acontrol-key.lock"; [ ! -L "$L" ] || exit 1; '
+    'exec 9>"$L"; flock -w 5 9 || { echo "Другая операция меняет SSH-ключ" >&2; exit 1; }; fi; '
+    f'n=$(awk \'$NF == "{DESKTOP_KEY_TAG}"\' "$f" | wc -l); '
+    '[ "$n" -gt 0 ] || { echo REVOKED=0; exit 0; }; '
+    't=$(mktemp "$D/.acontrol-desktop.XXXXXX") || exit 1; '
+    f'if awk \'$NF != "{DESKTOP_KEY_TAG}"\' "$f" > "$t" && chmod 600 "$t" && mv -f "$t" "$f"; '
+    'then echo "REVOKED=$n"; else rm -f "$t"; exit 1; fi'
+)
+
+
+async def revoke_desktop_key(conn: asyncssh.SSHClientConnection) -> int:
+    """Убирает desktop-ключ полного доступа из authorized_keys ssh_user.
+
+    Возвращает число снятых строк (0 - ключа не было)."""
+    result = await conn.run(REVOKE_COMMAND, check=False)
+    for line in (result.stdout or "").splitlines():
+        if line.startswith("REVOKED=") and result.exit_status == 0:
+            return int(line.removeprefix("REVOKED=").strip() or 0)
+    raise FullAccessError((result.stderr or "").strip()[:300] or "не удалось отозвать ключ полного доступа")
+
+
 async def detect_containers(conn: asyncssh.SSHClientConnection) -> list[str]:
     cmd = _DOCKER + "$DOCKER ps --format '{{.Names}}' | grep -i amnezia"
     result = await conn.run(cmd, check=False)

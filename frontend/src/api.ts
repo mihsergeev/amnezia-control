@@ -309,6 +309,8 @@ export type CheckInfo = {
   hostname?: string
   // root | yes | no | '' - может ли пользователь SSH выполнять sudo без пароля
   sudo?: string
+  // на сервере стоит ключ полного доступа (приложение AmneziaVPN)
+  fullaccess_key?: boolean
   docker?: boolean
   containers?: string[]
   amnezia_containers?: string[]

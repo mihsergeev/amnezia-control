@@ -851,8 +851,27 @@ export function ServersPage({ onUnauthorized }: Props) {
       setFaPassword('')
       setFaCopied(false)
       setFullAccess({ server, config: r.config, user: r.ssh_user })
+      void check(server) // карточка узнает, что ключ полного доступа выдан
     } catch (err) {
       handleError(err) // на неверный пароль (403) окно остаётся, показываем ошибку
+    } finally {
+      setFaBusyId(null)
+    }
+  }
+
+  async function revokeFullAccess(server: Server) {
+    if (!window.confirm(t('Отозвать полный доступ к серверу «{name}»? Приложение AmneziaVPN, куда добавлена ссылка, потеряет управление сервером.', { name: server.name }))) return
+    setFaBusyId(server.id)
+    setError(null)
+    setNotice(null)
+    try {
+      const r = await api<{ removed: boolean }>(`/api/servers/${server.id}/fullaccess`, { method: 'DELETE' })
+      setNotice(r.removed
+        ? t('Полный доступ к серверу «{name}» отозван.', { name: server.name })
+        : t('Ключа полного доступа на сервере «{name}» уже не было.', { name: server.name }))
+      void check(server)
+    } catch (err) {
+      handleError(err)
     } finally {
       setFaBusyId(null)
     }
@@ -1239,6 +1258,13 @@ export function ServersPage({ onUnauthorized }: Props) {
           setFaPassword('')
           setFaStepUp(s)
         },
+      })
+    }
+    if (online && info?.fullaccess_key) {
+      items.push({
+        label: t('Отозвать полный доступ'),
+        disabled: faBusyId === s.id,
+        onClick: () => void revokeFullAccess(s),
       })
     }
     if (!online) {
@@ -2037,7 +2063,7 @@ export function ServersPage({ onUnauthorized }: Props) {
             </p>
             <p className="form-error small">
               {t(
-                '⚠️ Ссылка содержит приватный SSH-ключ управления сервером — не публикуйте её и не пересылайте. Панель поставила отдельный ключ для этого доступа; при повторной генерации прежний перестаёт работать.',
+                '⚠️ Ссылка содержит приватный SSH-ключ управления сервером — не публикуйте её и не пересылайте. Ключ работает с любого адреса, без срока, пока его не отзовут: «Отозвать полный доступ» в меню сервера. При повторной генерации прежний ключ перестаёт работать.',
               )}
             </p>
             <pre className="script-box">{fullAccess.config}</pre>
@@ -2190,7 +2216,7 @@ export function ServersPage({ onUnauthorized }: Props) {
                 checked={deleteRemoveKey}
                 onChange={(e) => setDeleteRemoveKey(e.target.checked)}
               />
-              {t('Также убрать SSH-ключ панели с сервера (панель зайдёт по SSH)')}
+              {t('Также убрать с сервера SSH-ключ панели и ключ полного доступа (панель зайдёт по SSH)')}
             </label>
             <div className="modal-actions">
               <button className="ghost" onClick={() => setDeleteFor(null)}>

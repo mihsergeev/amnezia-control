@@ -5,7 +5,7 @@ from fastapi import APIRouter, HTTPException, Request, Response, status
 from sqlalchemy import delete as sa_delete
 from sqlalchemy import func, select, update as sa_update
 
-from app import audit, bulk_issue_state, cascade_alias, cascade_http, cascadejob, client_endpoint, egresscheck, geo, limits, native_snapshots, nodelock, server_ops, ssh_access, ssh_policy, sshops, torrent
+from app import audit, bulk_issue_state, cascade_alias, cascade_http, cascadejob, client_endpoint, egresscheck, fullaccess, geo, limits, native_snapshots, nodelock, server_ops, ssh_access, ssh_policy, sshops, torrent
 from app.config import get_settings
 from app.db import Base
 from app.deps import CurrentUser, SessionDep
@@ -336,9 +336,19 @@ async def _delete_server(
                 server.host, server.ssh_port, server.ssh_user, key_path,
                 settings.ssh_connect_timeout, **sshops.route_options(server)
             ) as conn:
+                # Ключ полного доступа выдан панелью и работает с любого
+                # адреса: снимаем его вместе с ключом панели.
+                desktop_removed, desktop_error = 0, ""
+                try:
+                    desktop_removed = await fullaccess.revoke_desktop_key(conn)
+                except fullaccess.FullAccessError as exc:
+                    desktop_error = str(exc)
                 await sshops.remove_authorized_key(conn, public_key)
             result.key_removed = True
-            result.message = "Ключ панели убран с сервера."
+            result.message = ("Ключ панели и ключ полного доступа убраны с сервера." if desktop_removed
+                              else "Ключ панели убран с сервера.")
+            if desktop_error:
+                result.message += f" Ключ полного доступа снять не удалось: {desktop_error}"
         except Exception as exc:  # noqa: BLE001 — удаление из панели важнее
             result.key_removed = False
             result.message = (

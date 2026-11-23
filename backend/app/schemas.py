@@ -650,6 +650,10 @@ class FullAccessOut(BaseModel):
     ssh_user: str
 
 
+class FullAccessRevokeOut(BaseModel):
+    removed: bool  # False - ключа полного доступа на сервере не было
+
+
 class AlertConfigOut(BaseModel):
     telegram_token_set: bool
     telegram_chat: str

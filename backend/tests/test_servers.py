@@ -3,6 +3,8 @@ import asyncio
 import httpx
 import pytest
 
+from app import fullaccess
+
 NEW_SERVER = {
     "name": "kz-admin",
     "host": "203.0.113.10",
@@ -256,8 +258,13 @@ async def test_delete_with_key_removal(
     async def fake_remove(conn, public_key):
         captured["key"] = public_key
 
+    async def fake_revoke(conn):
+        captured["desktop"] = True
+        return 1
+
     monkeypatch.setattr(sshops, "connect", lambda *a, **k: _Dummy())
     monkeypatch.setattr(sshops, "remove_authorized_key", fake_remove)
+    monkeypatch.setattr(fullaccess, "revoke_desktop_key", fake_revoke)
 
     created = await client.post("/api/servers", json=NEW_SERVER, headers=auth_headers)
     sid = created.json()["id"]
@@ -267,6 +274,38 @@ async def test_delete_with_key_removal(
     assert response.status_code == 200
     assert response.json()["key_removed"] is True
     assert captured["key"].startswith("ssh-ed25519")
+    # ключ полного доступа выдан панелью и снимается вместе с ее ключом
+    assert captured["desktop"] is True
+    assert "полного доступа" in response.json()["message"]
+
+
+async def test_delete_removes_panel_key_even_if_desktop_key_fails(
+    client: httpx.AsyncClient, auth_headers, monkeypatch
+) -> None:
+    from app import sshops
+
+    class _Dummy:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return False
+
+    removed = []
+
+    async def fake_remove(conn, public_key):
+        removed.append(public_key)
+
+    async def broken_revoke(conn):
+        raise fullaccess.FullAccessError("authorized_keys: символическая ссылка не поддерживается")
+
+    monkeypatch.setattr(sshops, "connect", lambda *a, **k: _Dummy())
+    monkeypatch.setattr(sshops, "remove_authorized_key", fake_remove)
+    monkeypatch.setattr(fullaccess, "revoke_desktop_key", broken_revoke)
+    sid = (await client.post("/api/servers", json=NEW_SERVER, headers=auth_headers)).json()["id"]
+    response = await client.delete(f"/api/servers/{sid}?remove_key=true", headers=auth_headers)
+    assert response.status_code == 200 and response.json()["key_removed"] is True
+    assert removed and "снять не удалось" in response.json()["message"]
 
 
 async def test_delete_key_removal_failure_still_deletes(

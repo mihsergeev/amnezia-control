@@ -89,6 +89,7 @@ const LABELS: Record<string, string> = {
   cascade_delete: 'Каскад разобран',
   fullaccess_export: 'Экспорт полного доступа',
   fullaccess_denied: 'Экспорт полного доступа отклонён',
+  fullaccess_revoke: 'Отзыв полного доступа',
   restore: 'Восстановление из бэкапа',
   restore_denied: 'Восстановление из бэкапа отклонено',
   backup_restore: 'Восстановление из бэкапа',

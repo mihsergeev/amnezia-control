@@ -788,8 +788,8 @@ const EN: Record<string, string> = {
   'Удалить сервер «{name}»?': 'Delete server “{name}”?',
   'Сервер и VPN не тронутся — он только пропадёт из панели. Все выданные клиентские конфиги останутся рабочими.':
     'The server and VPN are untouched — it just disappears from the panel. All issued client configs keep working.',
-  'Также убрать SSH-ключ панели с сервера (панель зайдёт по SSH)':
-    'Also remove the panel SSH key from the server (panel will connect over SSH)',
+  'Также убрать с сервера SSH-ключ панели и ключ полного доступа (панель зайдёт по SSH)':
+    'Also remove the panel SSH key and the full-access key from the server (the panel will connect over SSH)',
   'Удалить': 'Delete',
   'Удаление…': 'Deleting…',
 
@@ -1157,8 +1157,14 @@ const EN: Record<string, string> = {
     'Paste this link into the AmneziaVPN app (on desktop or phone): “+” → “Set up your own server” → paste from clipboard. The server is added as managed — you can issue configs and install protocols from the app. It connects over SSH as user',
   '(нужен доступ к docker — группа docker или sudo).':
     '(needs docker access — the docker group or sudo).',
-  '⚠️ Ссылка содержит приватный SSH-ключ управления сервером — не публикуйте её и не пересылайте. Панель поставила отдельный ключ для этого доступа; при повторной генерации прежний перестаёт работать.':
-    '⚠️ The link contains a private SSH key that manages the server — do not publish or forward it. The panel installed a dedicated key for this access; regenerating invalidates the previous one.',
+  '⚠️ Ссылка содержит приватный SSH-ключ управления сервером — не публикуйте её и не пересылайте. Ключ работает с любого адреса, без срока, пока его не отзовут: «Отозвать полный доступ» в меню сервера. При повторной генерации прежний ключ перестаёт работать.':
+    '⚠️ The link contains a private SSH key that manages the server — do not publish or forward it. The key works from any address and does not expire until it is revoked: "Revoke full access" in the server menu. Regenerating invalidates the previous key.',
+  'Отозвать полный доступ': 'Revoke full access',
+  'Отозвать полный доступ к серверу «{name}»? Приложение AmneziaVPN, куда добавлена ссылка, потеряет управление сервером.':
+    'Revoke full access to server "{name}"? The AmneziaVPN app the link was added to will lose control of the server.',
+  'Полный доступ к серверу «{name}» отозван.': 'Full access to server "{name}" has been revoked.',
+  'Ключа полного доступа на сервере «{name}» уже не было.': 'Server "{name}" had no full-access key.',
+  'Отзыв полного доступа': 'Full-access revoke',
 
   // --- импорт ---
   'Импорт серверов': 'Import servers',

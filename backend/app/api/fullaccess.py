@@ -6,7 +6,7 @@ from app.conflict import conflict
 from app.config import get_settings
 from app.deps import CurrentUser, SessionDep
 from app.models import Server
-from app.schemas import FullAccessOut, StepUpRequest
+from app.schemas import FullAccessOut, FullAccessRevokeOut, StepUpRequest
 from app.sshkeys import ensure_panel_key, key_paths
 
 router = APIRouter(prefix="/servers/{server_id}/fullaccess", tags=["fullaccess"])
@@ -90,3 +90,26 @@ async def export_full_access(
     )
     await audit.record(session, user.username, "fullaccess_export", server.name)
     return FullAccessOut(config=link, ssh_user=server.ssh_user)
+
+
+@router.delete("", response_model=FullAccessRevokeOut)
+async def revoke_full_access(
+    server_id: int, user: CurrentUser, session: SessionDep,
+) -> FullAccessRevokeOut:
+    """Снимает desktop-ключ полного доступа с сервера. Ключ работает с любого
+    адреса и без срока, поэтому отзыв нужен отдельно от удаления сервера."""
+    server = await _get_or_404(server_id, session)
+    try:
+        async with _connect(server) as conn:
+            removed = await fullaccess.revoke_desktop_key(conn)
+    except fullaccess.FullAccessError as exc:
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(exc)) from exc
+    except (asyncssh.Error, OSError) as exc:
+        raise HTTPException(
+            status.HTTP_502_BAD_GATEWAY, f"Ошибка SSH: {exc or type(exc).__name__}"
+        ) from exc
+    await audit.record(
+        session, user.username, "fullaccess_revoke", server.name,
+        "ключ снят" if removed else "ключа на сервере не было",
+    )
+    return FullAccessRevokeOut(removed=removed > 0)

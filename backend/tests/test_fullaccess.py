@@ -178,3 +178,70 @@ def test_awg3_never_sent_as_legacy() -> None:
     assert "amnezia-awg3" not in types
     # и главное: 3.0 не выдаётся за legacy
     assert "amnezia-awg" not in types
+
+
+def _bash(script: str, home) -> "subprocess.CompletedProcess[str]":
+    import os
+    import shutil
+    import subprocess
+    from pathlib import Path
+    bash = "C:/Program Files/Git/usr/bin/bash.exe" if os.name == "nt" else shutil.which("bash")
+    env = {**os.environ, "HOME": home.as_posix(), "PATH": str(Path(bash).parent) + os.pathsep + os.environ["PATH"]}
+    return subprocess.run([bash, "-c", script], text=True, capture_output=True, env=env)
+
+
+def test_revoke_removes_only_the_desktop_key_and_check_reports_it(tmp_path) -> None:
+    """Ключ полного доступа работает с любого адреса: его надо уметь отозвать,
+    не задев ключ панели, ключи администратора и строки, где метка лишь упомянута."""
+    from app.fullaccess import DESKTOP_KEY_TAG, REVOKE_COMMAND
+    from app.sshops import CHECK_COMMAND, _parse_check_output
+
+    ssh = tmp_path / ".ssh"
+    ssh.mkdir()
+    ak = ssh / "authorized_keys"
+    keep = (
+        'from="192.0.2.1",restrict ssh-ed25519 AAA acontrol-panel\n'
+        "ssh-ed25519 BBB admin notes about acontrol-desktop keys\n"
+        "# acontrol-desktop was exported once\n"
+    )
+    ak.write_text(keep + f"ssh-rsa CCC {DESKTOP_KEY_TAG}\n")
+    probe = next(part for part in CHECK_COMMAND.split("; ") if "FULLACCESS_KEY" in part)
+    assert _parse_check_output(_bash(probe, tmp_path).stdout).fullaccess_key is True
+    result = _bash(REVOKE_COMMAND, tmp_path)
+    assert result.returncode == 0 and "REVOKED=1" in result.stdout, result.stderr
+    assert ak.read_text() == keep
+    assert _parse_check_output(_bash(probe, tmp_path).stdout).fullaccess_key is False
+    # повторный отзыв ничего не меняет
+    again = _bash(REVOKE_COMMAND, tmp_path)
+    assert again.returncode == 0 and "REVOKED=0" in again.stdout
+    assert ak.read_text() == keep
+
+
+async def test_revoke_endpoint_reports_and_audits(client, auth_headers, session_factory, monkeypatch) -> None:
+    from app.api import fullaccess as api
+
+    async with session_factory() as session:
+        server = Server(name="srv", host="192.0.2.21")
+        session.add(server)
+        await session.commit()
+        sid = server.id
+
+    @asynccontextmanager
+    async def connect(server):
+        yield object()
+
+    results = iter([1, 0])
+
+    async def revoke(conn):
+        return next(results)
+
+    monkeypatch.setattr(api, "_connect", connect)
+    monkeypatch.setattr(api.fullaccess, "revoke_desktop_key", revoke)
+    first = await client.delete(f"/api/servers/{sid}/fullaccess", headers=auth_headers)
+    assert first.status_code == 200 and first.json() == {"removed": True}
+    second = await client.delete(f"/api/servers/{sid}/fullaccess", headers=auth_headers)
+    assert second.status_code == 200 and second.json() == {"removed": False}
+    audit = (await client.get("/api/audit", headers=auth_headers)).json()
+    rows = audit["items"] if isinstance(audit, dict) else audit
+    assert sum(1 for row in rows if row.get("action") == "fullaccess_revoke") == 2
+    assert (await client.delete("/api/servers/99999/fullaccess", headers=auth_headers)).status_code == 404
