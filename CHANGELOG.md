@@ -4,6 +4,10 @@ All notable changes to Amnezia Control are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.84.62] - 2026-11-23
+
+- Fix SSH access changes that could stay unfinished forever. When preparing a change stopped early on the node (for example without `flock`, or on a lost connection), the panel could not undo it even once the node was healthy again. An unfinished change blocks panel backups, including automatic ones, server deletion and further SSH changes. Such a change is now undone at once or closed by recovery, and a server whose change never got past preparation can be deleted even if the node is gone.
+
 ## [0.84.61] - 2026-11-22
 
 - Report in the server check whether the SSH user can use sudo without a password, and warn on the server card when it cannot. Protocol installs and node changes need it; before, the problem surfaced only when a deployment was refused.
