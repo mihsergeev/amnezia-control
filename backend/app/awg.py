@@ -21,6 +21,8 @@ import asyncssh
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey
 
+from app import ssh_host
+
 AWG_DIR = "/opt/amnezia/awg"
 # Параметры, добавленные AmneziaWG 3.0. Клиент обязан повторять их за сервером
 # (как и H1–H4): HeaderProtectionKey — общий секрет защиты заголовков, остальные
@@ -388,10 +390,9 @@ def _safe_interface(name: str) -> str:
 
 def _safe_ip(ip: str) -> str:
     try:
-        ipaddress.ip_address(ip)
+        return ssh_host.ip_literal(ip)
     except ValueError as exc:
         raise AwgError("Недопустимый IP-адрес клиента") from exc
-    return ip
 
 
 async def detect_container(conn: asyncssh.SSHClientConnection) -> str:

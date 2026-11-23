@@ -55,6 +55,42 @@ async def test_restore_rejects_oversized_body(
     assert r.status_code == 413
 
 
+@pytest.mark.parametrize("bomb", ["one-huge-member", "many-members"])
+async def test_restore_rejects_archive_that_unpacks_too_large(
+    client: httpx.AsyncClient, auth_headers, tmp_path, monkeypatch, bomb
+):
+    """Сжатый архив в пределах лимита, но распаковывается огромным: отказ до
+    чтения содержимого и без изменений в базе и data/."""
+    from app.api import backup
+
+    data_dir = tmp_path / "data"
+    if bomb == "one-huge-member":
+        # Один заголовок обещает 4 ГиБ, а данных за ним нет: проверка обязана
+        # остановиться на заголовке, не пытаясь распаковать содержимое.
+        import gzip
+
+        info = tarfile.TarInfo("data/huge.bin")
+        info.size = 4 * 1024 ** 3
+        archive = gzip.compress(info.tobuf(format=tarfile.GNU_FORMAT))
+    else:
+        monkeypatch.setattr(backup, "_MAX_RESTORE_MEMBERS", 50)
+        buf = io.BytesIO()
+        with tarfile.open(fileobj=buf, mode="w:gz") as tar:
+            for i in range(60):
+                info = tarfile.TarInfo(f"data/many/{i}.txt")
+                info.size = 1
+                tar.addfile(info, io.BytesIO(b"x"))
+        archive = buf.getvalue()
+    before = (await client.get("/api/servers", headers=auth_headers)).json()
+    r = await client.post(
+        "/api/backup/restore", content=archive,
+        headers={**auth_headers, "X-Confirm-Password": "testpass"},
+    )
+    assert r.status_code == 413, r.text
+    assert (await client.get("/api/servers", headers=auth_headers)).json() == before
+    assert not (data_dir / "huge.bin").exists() and not (data_dir / "many").exists()
+
+
 async def test_password_change_invalidates_old_tokens(
     client: httpx.AsyncClient
 ):

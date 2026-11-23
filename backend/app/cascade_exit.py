@@ -257,7 +257,7 @@ def remove(cid: int, transport: str, params: dict) -> str:
 if sudo test -L {p['base']}/exit.env || sudo test -L {script}; then exit 73; fi
 if sudo test -f {p['base']}/exit.env; then
   sudo grep -qx 'OWNER={params["runtime_owner"]}' {p['base']}/exit.env || exit 73
-  sudo grep -qx 'TRANSPORT={transport}' {p['base']}/exit.env || exit 73
+  sudo grep -qx {shlex.quote('TRANSPORT=' + transport)} {p['base']}/exit.env || exit 73
   if sudo test -x {script}; then
     sudo {script} down || exit 73
   else

@@ -33,7 +33,7 @@ import asyncssh
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey
 
-from app import cascade_awg, cascade_exit, cascade_gateway, cascade_routes
+from app import cascade_awg, cascade_exit, cascade_gateway, cascade_routes, ssh_host
 from app.cascade_underlay import CASCADE_PROBE_COMMAND
 
 # Оба конца каскада обновляются вместе; наш chrome-профиль поддерживает
@@ -587,6 +587,7 @@ def _gre_defaults(role: str, remote: str, inner: str, net: str, key: int | None 
 def _gre_install(role: str, remote: str, inner: str, net: str, key: int | None = None) -> list[str]:
     """Строки скрипта: поставить и поднять GRE-службу. LOCAL - адрес, с которого
     нода ходит к соседу (за NAT это внутренний адрес), EGRESS - внешний интерфейс."""
+    remote = ssh_host.ip_literal(remote)
     defaults = _gre_defaults(role, remote, inner, net, key)
     return [
         f'LOCAL=$(ip -{ipaddress.ip_address(remote).version} route get {remote} | {_SRC_OF} | head -1)',
@@ -634,6 +635,7 @@ def build_exit_script(transport: str, entry_ip: str, cascade_id: int, params: di
         ]
     else:
         port = int(params["port"])
+        entry_ip = ssh_host.ip_literal(entry_ip)
         lines += [
             'log "[1/3] docker"',
             _DOCKER,
@@ -1073,7 +1075,7 @@ def parse_kv(text: str) -> dict[str, str]:
 
 def _ip_or_empty(value: str) -> str:
     try:
-        return str(ipaddress.ip_address(value.strip()))
+        return ssh_host.ip_literal(value.strip())
     except ValueError:
         return ""
 
@@ -1276,6 +1278,10 @@ def _remove_common(verify: str = "") -> str:
 
 
 def ufw_cleanup(peer_ip: str, port: int | None) -> str:
+    try:
+        peer_ip = ssh_host.ip_literal(peer_ip) if peer_ip else ""
+    except ValueError:
+        peer_ip = ""  # never run a stored value that is not a plain address
     if not peer_ip:
         return "true\n"
     cmds = [f"sudo ufw delete allow proto gre from {peer_ip}"]

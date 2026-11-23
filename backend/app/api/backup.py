@@ -51,6 +51,12 @@ router = APIRouter(prefix="/backup", tags=["backup"])
 log = logging.getLogger(__name__)
 
 _MAX_RESTORE_BYTES = 100 * 1024 * 1024  # 100 МБ — бэкапы много меньше
+# Лимит выше - на сжатый архив. Распакованный gzip может быть в тысячи раз
+# больше: db.json и файлы читаются в память и пишутся в data/, и такой архив
+# занял бы всю память и диск хоста. Настоящие бэкапы - сотни килобайт, с
+# историей трафика - сотни мегабайт.
+_MAX_RESTORE_UNPACKED = 512 * 1024 * 1024
+_MAX_RESTORE_MEMBERS = 5000
 
 # ВСЕ таблицы БД (нет FK, но держим осмысленный порядок: зависимые после
 # servers). Раньше сюда не входили client_limits (сроки авто-отзыва),
@@ -221,6 +227,17 @@ def _restore_files(tar: tarfile.TarFile, data_dir: str, sqlite_paths: set[str]) 
     ):
         raise ValueError("конфликт файла и каталога при восстановлении данных")
     return files
+
+
+def _check_unpacked_size(tar: tarfile.TarFile) -> None:
+    """Размеры берем из заголовков tar до чтения содержимого и прерываемся на
+    первом превышении: огромный член архива даже не распаковывается."""
+    total = count = 0
+    for member in tar:
+        count += 1
+        total += max(member.size, 0)
+        if count > _MAX_RESTORE_MEMBERS or total > _MAX_RESTORE_UNPACKED:
+            raise HTTPException(413, "архив в распакованном виде слишком большой для бэкапа панели")
 
 
 def verify_archive(archive: bytes) -> list[str]:
@@ -585,6 +602,7 @@ async def restore_backup(
     body = b"".join(chunks)
     try:
         tar = tarfile.open(fileobj=io.BytesIO(body), mode="r:gz")
+        _check_unpacked_size(tar)
     except (tarfile.TarError, OSError, EOFError) as exc:
         raise HTTPException(
             status.HTTP_400_BAD_REQUEST, "не удалось прочитать архив (ожидается .tar.gz)"

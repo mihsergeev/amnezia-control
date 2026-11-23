@@ -1,11 +1,11 @@
 """Native protocol requests; legacy Amnezia response contracts remain unchanged."""
 
-import ipaddress
 from datetime import datetime
 from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
+from app import ssh_host
 from app.metadata_schemas import ClientLabels
 
 
@@ -25,7 +25,7 @@ class NativeCreateRequest(ClientLabels):
     def valid_dns(cls, value: str) -> str:
         if not value.strip():
             return ""
-        values = [str(ipaddress.ip_address(part.strip())) for part in value.split(",")]
+        values = [ssh_host.ip_literal(part.strip()) for part in value.split(",")]
         return ", ".join(values)
 
 

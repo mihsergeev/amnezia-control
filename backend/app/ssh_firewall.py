@@ -9,6 +9,8 @@ def script(token: str, addresses: list[str], port: int, operation: str = "stage"
     if not re.fullmatch(r"[a-f0-9]{32}", token) or operation not in {"stage", "commit", "rollback", "status"}:
         raise ValueError("Некорректная операция firewall")
     port = int(port)
+    if any(not isinstance(item, str) or "%" in item for item in addresses):
+        raise ValueError("Некорректный источник SSH для firewall")
     networks = [ipaddress.ip_network(item, strict=False) for item in addresses]
     header = f'''set -eu
 umask 077

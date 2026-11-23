@@ -260,6 +260,8 @@ def _firewall_snippet(panel_ip: str, ssh_port: int, sudo: str, *, strict: bool =
     """Add source-specific rules only; never reload/enable/reset a firewall."""
     if not panel_ip:
         return 'FW="(panel_ip не задан)"\n'
+    if "%" in panel_ip:  # an IPv6 zone keeps any characters, even inside quotes
+        raise ValueError("Некорректный источник SSH для firewall")
     network = ipaddress.ip_network(panel_ip, strict=False)
     address = str(network.network_address) if network.prefixlen == network.max_prefixlen else str(network)
     family = "ipv4" if network.version == 4 else "ipv6"

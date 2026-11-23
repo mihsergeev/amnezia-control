@@ -1,13 +1,17 @@
 """Validated access policies. No network access or implicit node migration."""
 import ipaddress
 
+from app import ssh_host
+
 
 def normalize_sources(values: list[str]) -> list[str]:
     result = []
     for value in values:
         try:
+            if "%" in value:  # an IPv6 zone keeps any characters and reaches firewall scripts
+                raise ValueError(value)
             network = ipaddress.ip_network(value.strip(), strict=False)
-        except (ValueError, AttributeError) as exc:
+        except (ValueError, AttributeError, TypeError) as exc:
             raise ValueError("Источники SSH должны быть IP-адресами или CIDR") from exc
         if network.is_unspecified or network.is_multicast or network.prefixlen == 0:
             raise ValueError("Для доступа без ограничения выберите отдельный режим")
@@ -31,7 +35,7 @@ def sources(server, panel_ip: str) -> list[str]:
     if getattr(server, "ssh_jump_server_id", None) and mode == "panel":
         jump = getattr(server, "ssh_jump_server", None)
         try:
-            candidate = str(ipaddress.ip_address(jump.host))
+            candidate = ssh_host.ip_literal(jump.host)
         except (ValueError, AttributeError) as exc:
             raise ValueError("У промежуточной ноды указан домен. В расширенных настройках укажите IP/CIDR источника SSH") from exc
         result = normalize_sources([*result, candidate])
