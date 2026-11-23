@@ -4,6 +4,10 @@ All notable changes to Amnezia Control are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.84.64] - 2026-11-23
+
+- Confirm the server's SSH host key before the panel sends a setup password. When a new server is set up with a password, the panel now shows the host key fingerprint (ed25519 when available) with the `ssh-keygen -lf` command to compare it on the server, and sends the SSH and sudo passwords only after confirmation, to that exact key. Before, the first key seen was trusted and the passwords went to whoever answered on that address. Imports from links and host lists still trust the first key.
+
 ## [0.84.63] - 2026-11-23
 
 - Let the full-access SSH key be revoked from the panel. The key from the "Full access" export is root-equivalent and works from any address with no expiry, so the server menu now offers "Revoke full access" while one is installed, and the export dialog says so. Deleting a server with key removal now removes the full-access key too, not only the panel key.
