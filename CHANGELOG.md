@@ -4,6 +4,10 @@ All notable changes to Amnezia Control are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.84.63] - 2026-11-23
+
+- Let the full-access SSH key be revoked from the panel. The key from the "Full access" export is root-equivalent and works from any address with no expiry, so the server menu now offers "Revoke full access" while one is installed, and the export dialog says so. Deleting a server with key removal now removes the full-access key too, not only the panel key.
+
 ## [0.84.62] - 2026-11-23
 
 - Fix SSH access changes that could stay unfinished forever. When preparing a change stopped early on the node (for example without `flock`, or on a lost connection), the panel could not undo it even once the node was healthy again. An unfinished change blocks panel backups, including automatic ones, server deletion and further SSH changes. Such a change is now undone at once or closed by recovery, and a server whose change never got past preparation can be deleted even if the node is gone.
