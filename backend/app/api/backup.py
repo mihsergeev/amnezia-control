@@ -16,7 +16,7 @@ from fastapi.responses import Response
 from sqlalchemy import DateTime, Integer, delete, insert, select, text, update
 from sqlalchemy.exc import DBAPIError, IntegrityError
 
-from app import alerts, audit, backup_files, bulk_issue_state, ssh_archives, sshops, stepup
+from app import alerts, audit, backup_files, bulk_issue_state, ssh_access, ssh_archives, sshops, stepup
 from app.clientip import client_ip
 from app.config import get_settings
 from app.deps import CurrentUser, SessionDep
@@ -376,7 +376,7 @@ def _coerce_row(model, row: dict) -> dict:
 
 async def _require_no_ssh_change(session) -> None:
     if await session.scalar(select(SshAccessChange.id).where(
-            SshAccessChange.phase.not_in(("preview", "done", "rolledback"))).limit(1)):
+            SshAccessChange.phase.not_in(ssh_access.TERMINAL)).limit(1)):
         raise HTTPException(409, "Завершите восстановление незавершенной настройки SSH перед резервным копированием или восстановлением панели")
 
 
@@ -607,7 +607,7 @@ async def restore_backup(
     ssh_journal = dump.get(SshAccessChange.__tablename__, [])
     if not isinstance(ssh_journal, list) or any(not isinstance(row, dict) for row in ssh_journal):
         raise HTTPException(400, "В архиве неверный журнал настройки SSH")
-    if any(row.get("phase") not in ("preview", "done", "rolledback") for row in ssh_journal):
+    if any(row.get("phase") not in ssh_access.TERMINAL for row in ssh_journal):
         raise HTTPException(409, "В архиве есть незавершенная настройка SSH; сначала восстановите ее на исходной панели")
     # Проверяем структуру и даты до DELETE: поврежденный expires_at нельзя
     # превращать в NULL, иначе ограниченный клиент становится бессрочным.

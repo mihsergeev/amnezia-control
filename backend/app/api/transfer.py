@@ -133,7 +133,7 @@ async def _export_payload(server_id: int, session, history: bool) -> tuple[Serve
         raise HTTPException(409, _AWG_SETTINGS_PENDING)
     if await session.scalar(select(SshAccessChange.id).where(
             SshAccessChange.server_id == server_id,
-            SshAccessChange.phase.not_in(("preview", "done", "rolledback"))).limit(1)):
+            SshAccessChange.phase.not_in(ssh_access.TERMINAL)).limit(1)):
         raise HTTPException(409, "Сначала завершите восстановление настройки SSH этого сервера")
 
     jump_descriptor = None

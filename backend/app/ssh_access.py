@@ -19,6 +19,10 @@ from app.sshkeys import ensure_jump_key, ensure_panel_key, jump_key_path, jump_u
 
 ACCESS_FIELDS = ("ssh_jump_server_id", "ssh_source_mode", "ssh_source_ips", "ssh_firewall_mode")
 ACTIVE = ("applying", "finalizing")
+# "abandoned": the owner closed a journal whose node can no longer be reached.
+TERMINAL = ("preview", "done", "rolledback", "abandoned")
+FIREWALL_LEFT = ("Разрешения firewall для новых источников SSH остались на сервере, "
+                 "хотя настройка доступа отменена: {sources}. Уберите их вручную, если они не нужны")
 
 
 class _RemoteRolledBack(Exception):
@@ -399,6 +403,23 @@ async def retire_previous(session, server, change, settings):
     await audit.record(session, "", "ssh_jump_retire", server.name, warning or "Старый промежуточный ключ отозван")
 
 
+def keyopts_sources(node, settings) -> list[str]:
+    try:
+        return ssh_policy.sources(node, settings.panel_ip)
+    except ValueError:
+        return []
+
+
+def _warn(server, warning: str) -> None:
+    try:
+        info = json.loads(server.last_check_info or "{}")
+    except (ValueError, TypeError):
+        info = {}
+    if not isinstance(info, dict):
+        info = {}
+    server.last_check_info = json.dumps({**info, "ssh_access_warning": warning}, ensure_ascii=False)
+
+
 @asynccontextmanager
 async def connection(node, settings, **extra):
     key, _ = key_paths(settings.data_dir)
@@ -478,9 +499,12 @@ async def apply(session, server, token, settings):
                     change.phase = "finalizing"
                     change.payload = {**change.payload, "source": source}
                     await session.commit()
-                    await _run(old_conn, write_key(public, keyopts, transaction=token, operation="commit"), "ACONTROL_KEY_COMMITTED")
+                    # The add-only allow is committed first: keeping it is
+                    # harmless, while a committed key without its allow could
+                    # lock the panel out once the firewall watchdog fires.
                     if proposed.ssh_firewall_mode == "add":
                         await _run(old_conn, ssh_firewall.script(token, [], proposed.ssh_port, "commit"), "ACONTROL_FIREWALL_COMMITTED")
+                    await _run(old_conn, write_key(public, keyopts, transaction=token, operation="commit"), "ACONTROL_KEY_COMMITTED")
                     # Keep the durable finalizing phase until the best-effort
                     # retirement is recorded; restart recovery can finish it.
                 except BaseException:
@@ -533,6 +557,7 @@ async def recover(session, settings, server_id=None):
         # In finalizing, either the staged or original key can still connect.
         restored = False
         for target in (old, proposed):
+            firewall_kept = False
             try:
                 async with connection(target, settings) as conn:
                     if change.phase == "finalizing":
@@ -547,14 +572,19 @@ async def recover(session, settings, server_id=None):
                                 or "ROLLINGBACK" in firewall_state
                             ):
                                 if "COMMITTED" in firewall_state:
-                                    continue  # Conflicting proof: preserve the journal.
+                                    if "ROLLEDBACK" not in key_state:
+                                        continue  # Conflicting proof: preserve the journal.
+                                    # The allow is committed first and the key
+                                    # watchdog undid the key: keep the add-only
+                                    # allow, undo the rest and say so.
+                                    firewall_kept = True
                                 # A watchdog started rollback for this exact
                                 # generation; complete it while it is current.
                                 raise _RemoteRolledBack
                             await verify(proposed, settings)
-                            await _run(conn, write_key(public, keyopts, transaction=change.id, operation="commit"), "ACONTROL_KEY_COMMITTED")
                             if proposed.ssh_firewall_mode == "add":
                                 await _run(conn, ssh_firewall.script(change.id, [], proposed.ssh_port, "commit"), "ACONTROL_FIREWALL_COMMITTED")
+                            await _run(conn, write_key(public, keyopts, transaction=change.id, operation="commit"), "ACONTROL_KEY_COMMITTED")
                             for field in ACCESS_FIELDS:
                                 setattr(server, field, getattr(proposed, field))
                             change.phase = "done"
@@ -565,11 +595,17 @@ async def recover(session, settings, server_id=None):
                         except Exception:
                             continue  # Lost replies are reconciled, never guessed.
                     await _run(conn, write_key(public, keyopts, transaction=change.id, operation="rollback"), "ACONTROL_KEY_ROLLEDBACK")
-                    if proposed.ssh_firewall_mode == "add":
+                    if proposed.ssh_firewall_mode == "add" and not firewall_kept:
                         await _run(conn, ssh_firewall.script(change.id, [], proposed.ssh_port, "rollback"), "ACONTROL_FIREWALL_ROLLEDBACK")
                     for field in ACCESS_FIELDS:
                         setattr(server, field, getattr(old, field))
                     change.phase = "rolledback"
+                    if firewall_kept:
+                        # The card's warning lasts until the next check; the
+                        # audit log keeps the leftover allow on record.
+                        left = ", ".join(keyopts_sources(proposed, settings)) or "-"
+                        _warn(server, FIREWALL_LEFT.format(sources=left))
+                        await audit.record(session, "", "ssh_access_firewall_left", server.name, left)
                     restored = True
                     break
             except Exception:
@@ -580,3 +616,26 @@ async def recover(session, settings, server_id=None):
         if change.phase == "done":
             await retire_previous(session, server, change, settings)
         await session.commit()
+
+
+ABANDONED = ("Незавершенная настройка SSH закрыта без связи с сервером. Состояние ключа панели "
+             "и firewall на нем неизвестно: проверьте сервер или удалите его из панели")
+
+
+async def abandon(session, settings, server, user):
+    """Close a journal whose node is gone. Recovery is tried first and wins;
+    only what it cannot reach is closed, with the saved policy kept as is."""
+    await recover(session, settings, server.id)
+    async with nodelock.hold("ssh-access", 0):
+        changes = list(await session.scalars(select(SshAccessChange).where(
+            SshAccessChange.server_id == server.id, SshAccessChange.phase.in_(ACTIVE))))
+        if not changes:
+            return False
+        for change in changes:
+            change.payload = {**change.payload, "abandoned_from": change.phase, "abandoned_at": time.time()}
+            change.phase = "abandoned"
+        _warn(server, ABANDONED)
+        await session.commit()
+    await audit.record(session, user, "ssh_access_abandon", server.name,
+                       ", ".join(sorted({c.payload["abandoned_from"] for c in changes})))
+    return True

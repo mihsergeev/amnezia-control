@@ -90,6 +90,8 @@ const LABELS: Record<string, string> = {
   fullaccess_export: 'Экспорт полного доступа',
   fullaccess_denied: 'Экспорт полного доступа отклонён',
   fullaccess_revoke: 'Отзыв полного доступа',
+  ssh_access_abandon: 'Настройка SSH закрыта без сервера',
+  ssh_access_firewall_left: 'Разрешение firewall осталось после отмены настройки SSH',
   restore: 'Восстановление из бэкапа',
   restore_denied: 'Восстановление из бэкапа отклонено',
   backup_restore: 'Восстановление из бэкапа',

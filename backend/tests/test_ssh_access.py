@@ -1,3 +1,4 @@
+import json
 import os
 import shutil
 import subprocess
@@ -414,7 +415,7 @@ async def test_successful_route_is_preserved_when_old_role_retirement_fails(clie
         assert change.payload['retired_jump'] == ('warning' if warning else 'revoked')
 
 
-@pytest.mark.parametrize('remote_after_loss', ['committed', 'firewall-watchdog', 'partial-firewall-watchdog', 'key-watchdog'])
+@pytest.mark.parametrize('remote_after_loss', ['committed', 'firewall-watchdog', 'partial-firewall-watchdog', 'key-watchdog', 'key-watchdog-after-firewall-commit'])
 async def test_lost_firewall_commit_reply_reconciles_without_blind_rollback(client, auth_headers, monkeypatch, remote_after_loss):
     node = (await client.post('/api/servers', json={'name': 'target', 'host': '192.0.2.2'}, headers=auth_headers)).json()
     state = {'key': 'STAGED', 'firewall': 'STAGED', 'lost': False, 'firewall_blocked': False}
@@ -456,6 +457,9 @@ async def test_lost_firewall_commit_reply_reconciles_without_blind_rollback(clie
     result = await client.post(f'/api/servers/{node["id"]}/ssh-access/apply', json={'token': plan['token']}, headers=auth_headers)
     assert result.status_code == 409 and 'журнал' in result.text
     assert not any('ROLLEDBACK' in item for item in operations)
+    # The add-only firewall allow is committed before the key: a lost reply
+    # there leaves the key staged, so its watchdog can still restore access.
+    assert 'ACONTROL_KEY_COMMITTED' not in operations
     async with client.session_factory() as session:
         assert (await session.get(SshAccessChange, plan['token'])).phase == 'finalizing'
     if remote_after_loss == 'firewall-watchdog': state['firewall'] = 'ROLLEDBACK'
@@ -467,14 +471,25 @@ async def test_lost_firewall_commit_reply_reconciles_without_blind_rollback(clie
             assert (await session.get(SshAccessChange, plan['token'])).phase == 'finalizing'
         state['firewall_blocked'] = False
     if remote_after_loss == 'key-watchdog': state.update(key='ROLLEDBACK', firewall='STAGED')
+    if remote_after_loss == 'key-watchdog-after-firewall-commit': state.update(key='ROLLEDBACK')
     result = await client.post(f'/api/servers/{node["id"]}/ssh-access/recover', headers=auth_headers)
     assert result.status_code == 200, result.text
     async with client.session_factory() as session:
         change = await session.get(SshAccessChange, plan['token'])
         assert change.phase == ('done' if remote_after_loss == 'committed' else 'rolledback')
     if remote_after_loss == 'partial-firewall-watchdog':
-        assert operations.count('ACONTROL_KEY_COMMITTED') == 1
+        assert operations.count('ACONTROL_KEY_COMMITTED') == 0
         assert operations[-2:] == ['ACONTROL_KEY_ROLLEDBACK', 'ACONTROL_FIREWALL_ROLLEDBACK']
+    if remote_after_loss == 'committed':
+        # recovery also commits the allow before the key
+        assert operations[-2:] == ['ACONTROL_FIREWALL_COMMITTED', 'ACONTROL_KEY_COMMITTED']
+    if remote_after_loss == 'key-watchdog-after-firewall-commit':
+        # A committed allow with an undone key used to keep the journal open
+        # forever. The allow stays (add-only), the key is undone, the card says so.
+        assert operations[-1] == 'ACONTROL_KEY_ROLLEDBACK' and 'ACONTROL_FIREWALL_ROLLEDBACK' not in operations
+        assert '192.0.2.7' in json.loads(result.json()['last_check_info'])['ssh_access_warning']
+        audit = (await client.get('/api/audit', headers=auth_headers)).json()
+        assert any(row['action'] == 'ssh_access_firewall_left' and '192.0.2.7' in row['detail'] for row in audit)
     assert result.json()['ssh_source_mode'] == ('custom' if remote_after_loss == 'committed' else 'panel')
 
 
@@ -495,3 +510,60 @@ def test_firewall_ipv6_adds_runtime_and_permanent_without_reload():
     assert '--permanent --add-rich-rule' in script and 'firewall-cmd --add-rich-rule' in script
     assert '--reload' not in script
     assert 'FAILED' in script
+
+
+@pytest.mark.parametrize('phase', ['applying', 'finalizing'])
+async def test_journal_of_a_lost_node_is_closed_only_with_password(client, auth_headers, monkeypatch, phase):
+    node = (await client.post('/api/servers', json={'name': 'gone', 'host': '192.0.2.40', 'ssh_firewall_mode': 'preserve'}, headers=auth_headers)).json()
+    sid = node['id']
+    plan = (await client.post(f'/api/servers/{sid}/ssh-access/preview', json={'ssh_source_mode': 'custom', 'ssh_source_ips': ['192.0.2.7'], 'ssh_firewall_mode': 'preserve'}, headers=auth_headers)).json()
+    async with client.session_factory() as session:
+        change = await session.get(SshAccessChange, plan['token'])
+        change.phase = phase
+        await session.commit()
+
+    @asynccontextmanager
+    async def unreachable(*args, **kwargs):
+        raise OSError('node is gone')
+        yield
+
+    monkeypatch.setattr(ssh_access, 'connection', unreachable)
+    assert (await client.post('/api/backup/now', headers=auth_headers)).status_code == 409
+    denied = await client.post(f'/api/servers/{sid}/ssh-access/abandon', json={'password': 'wrong'}, headers=auth_headers)
+    assert denied.status_code == 403
+    async with client.session_factory() as session:
+        assert (await session.get(SshAccessChange, plan['token'])).phase == phase
+    closed = await client.post(f'/api/servers/{sid}/ssh-access/abandon', json={'password': 'testpass'}, headers=auth_headers)
+    assert closed.status_code == 200, closed.text
+    assert closed.json()['ssh_access_pending'] is False
+    assert 'неизвестно' in json.loads(closed.json()['last_check_info'])['ssh_access_warning']
+    async with client.session_factory() as session:
+        change = await session.get(SshAccessChange, plan['token'])
+        assert change.phase == 'abandoned' and change.payload['abandoned_from'] == phase
+    audit = (await client.get('/api/audit', headers=auth_headers)).json()
+    assert any(row['action'] == 'ssh_access_abandon' for row in audit)
+    assert (await client.post('/api/backup/now', headers=auth_headers)).status_code == 200
+    assert (await client.delete(f'/api/servers/{sid}', headers=auth_headers)).status_code == 200
+
+
+async def test_abandon_prefers_real_recovery(client, auth_headers, monkeypatch):
+    node = (await client.post('/api/servers', json={'name': 'back', 'host': '192.0.2.41', 'ssh_firewall_mode': 'preserve'}, headers=auth_headers)).json()
+    plan = (await client.post(f'/api/servers/{node["id"]}/ssh-access/preview', json={'ssh_source_mode': 'custom', 'ssh_source_ips': ['192.0.2.7'], 'ssh_firewall_mode': 'preserve'}, headers=auth_headers)).json()
+    async with client.session_factory() as session:
+        (await session.get(SshAccessChange, plan['token'])).phase = 'applying'
+        await session.commit()
+
+    class Conn:
+        async def run(self, command, **kwargs):
+            return SimpleNamespace(exit_status=0, stdout='ACONTROL_KEY_ROLLEDBACK', stderr='')
+
+    @asynccontextmanager
+    async def reachable(*args, **kwargs): yield Conn()
+
+    monkeypatch.setattr(ssh_access, 'connection', reachable)
+    closed = await client.post(f'/api/servers/{node["id"]}/ssh-access/abandon', json={'password': 'testpass'}, headers=auth_headers)
+    assert closed.status_code == 200, closed.text
+    async with client.session_factory() as session:
+        assert (await session.get(SshAccessChange, plan['token'])).phase == 'rolledback'
+    audit = (await client.get('/api/audit', headers=auth_headers)).json()
+    assert not any(row['action'] == 'ssh_access_abandon' for row in audit)

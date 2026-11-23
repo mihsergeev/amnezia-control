@@ -1160,6 +1160,17 @@ const EN: Record<string, string> = {
   '⚠️ Ссылка содержит приватный SSH-ключ управления сервером — не публикуйте её и не пересылайте. Ключ работает с любого адреса, без срока, пока его не отзовут: «Отозвать полный доступ» в меню сервера. При повторной генерации прежний ключ перестаёт работать.':
     '⚠️ The link contains a private SSH key that manages the server — do not publish or forward it. The key works from any address and does not expire until it is revoked: "Revoke full access" in the server menu. Regenerating invalidates the previous key.',
   'Отозвать полный доступ': 'Revoke full access',
+  'Закрыть настройку SSH без сервера…': 'Close the SSH change without the server…',
+  'Закрыть настройку SSH · {name}': 'Close the SSH change · {name}',
+  'Панель сначала попробует обычное восстановление. Если сервер недоступен, незавершенная настройка будет закрыта без проверки сервера: состояние ключа панели и firewall на нем останется неизвестным. Используйте это, только если сервер удален или недоступен навсегда. После этого снова работают бэкапы, удаление сервера и настройка SSH.':
+    'The panel tries a normal recovery first. If the server is unreachable, the unfinished change is closed without checking the server: the state of the panel key and the firewall on it stays unknown. Use this only when the server is deleted or unreachable for good. Backups, server deletion and SSH changes work again afterwards.',
+  'Восстановление…': 'Recovering…',
+  'Закрыть настройку': 'Close the change',
+  'Настройка SSH завершена восстановлением.': 'The SSH change was finished by recovery.',
+  'Настройка SSH закрыта без сервера': 'SSH change closed without the server',
+  'Разрешение firewall осталось после отмены настройки SSH': 'Firewall allow left after an SSH change was undone',
+  'Незавершенная настройка SSH закрыта без связи с сервером. Состояние ключа панели и firewall на нем неизвестно: проверьте сервер или удалите его из панели':
+    'The unfinished SSH change was closed without reaching the server. The state of the panel key and the firewall on it is unknown: check the server or delete it from the panel',
   'Получаю ключ сервера…': 'Fetching the server key…',
   'Сервер добавлен. Перед отправкой пароля сверьте ключ SSH сервера:': 'The server is added. Check its SSH key before the password is sent:',
   'На самом сервере (консоль хостера или уже открытая сессия) выполните': 'On the server itself (the hosting console or an existing session) run',

@@ -62,3 +62,39 @@ def test_until_due_skips_backup_after_restart(tmp_path):
     (d / _name(NOW + timedelta(hours=1))).unlink()
     _touch(d, NOW - timedelta(days=2))
     assert autobackup._until_due(str(data), 86400, now=NOW) == 22 * 3600
+
+
+async def test_blocked_backup_alert_names_the_real_reason(tmp_path, monkeypatch):
+    """Открытый журнал SSH останавливает бэкап сознательно: алерт говорит об
+    этом, а не советует проверить место на диске."""
+    import asyncio
+
+    from fastapi import HTTPException
+
+    cards = []
+    sleeps = []
+
+    async def blocked(session_factory, settings):
+        raise HTTPException(409, "Завершите восстановление незавершенной настройки SSH перед резервным копированием или восстановлением панели")
+
+    async def capture(session_factory, settings, card):
+        cards.append(card)
+
+    async def fake_sleep(seconds):
+        sleeps.append(seconds)
+        if len(sleeps) > 1:
+            raise asyncio.CancelledError
+
+    settings = type("S", (), {"backup_interval_hours": 24, "data_dir": str(tmp_path)})()
+    monkeypatch.setattr(autobackup, "write_backup", blocked)
+    monkeypatch.setattr(autobackup.alerts, "maybe_alert", capture)
+    monkeypatch.setattr(autobackup.asyncio, "sleep", fake_sleep)
+    monkeypatch.setattr(autobackup, "_last_backup_ok", True)
+    try:
+        await autobackup.backup_loop(None, settings)
+    except asyncio.CancelledError:
+        pass
+    assert len(cards) == 1
+    rendered = cards[0].render()[0]
+    assert "настройки SSH" in rendered and "место на диске" not in rendered
+    assert "waiting for another operation" in cards[0].render(lang="en")[0]

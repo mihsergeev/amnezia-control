@@ -640,6 +640,10 @@ export function ServersPage({ onUnauthorized }: Props) {
   const [sudoPassword, setSudoPassword] = useState('')
   const [showAdvanced, setShowAdvanced] = useState(false)
   const [sshPreview, setSshPreview] = useState<AccessPreview | null>(null)
+  // закрыть незавершенную настройку SSH, когда сервер недоступен навсегда
+  const [abandonFor, setAbandonFor] = useState<Server | null>(null)
+  const [abandonPassword, setAbandonPassword] = useState('')
+  const [abandonError, setAbandonError] = useState<string | null>(null)
   // отпечаток ключа нового сервера, который надо подтвердить до отправки пароля
   const [hostKeyConfirm, setHostKeyConfirm] = useState<{ server: Server; fingerprint: string; key_type: string } | null>(null)
 
@@ -1068,11 +1072,36 @@ export function ServersPage({ onUnauthorized }: Props) {
       setServers(previous => previous.map(server => server.id === serverId
         ? { ...recovered, ssh_access_pending: false } : server))
       await load()
+      const warning = parseCheckInfo(recovered)?.ssh_access_warning
+      if (warning) setNotice(t(warning))
     } catch (err) {
       if (err instanceof ApiError && err.status === 401) return onUnauthorized()
       await load()
       if (fromEditor) setFormError(err instanceof Error ? err.message : t('Неизвестная ошибка'))
       else handleError(err)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function abandonSshAccess() {
+    const target = abandonFor
+    if (!target || busy) return
+    setBusy(true)
+    setAbandonError(null)
+    try {
+      const closed = await api<Server>(`/api/servers/${target.id}/ssh-access/abandon`, {
+        method: 'POST', body: JSON.stringify({ password: abandonPassword }),
+      })
+      setServers(previous => previous.map(server => server.id === target.id ? { ...closed, ssh_access_pending: false } : server))
+      setAbandonFor(null)
+      setAbandonPassword('')
+      await load()
+      const warning = parseCheckInfo(closed)?.ssh_access_warning
+      setNotice(warning ? t(warning) : t('Настройка SSH завершена восстановлением.'))
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 401) return onUnauthorized()
+      setAbandonError(err instanceof Error ? err.message : t('Неизвестная ошибка'))
     } finally {
       setBusy(false)
     }
@@ -1339,6 +1368,11 @@ export function ServersPage({ onUnauthorized }: Props) {
       label: t('Восстановить настройку SSH'),
       disabled: busy || formOpen,
       onClick: () => { void recoverSshAccess(s.id) },
+    })
+    if (s.ssh_access_pending) items.push({
+      label: t('Закрыть настройку SSH без сервера…'),
+      disabled: busy || formOpen,
+      onClick: () => { setAbandonPassword(''); setAbandonError(null); setAbandonFor(s) },
     })
     // опасное - в конце меню за чертой, подальше от выдачи конфигов в окне клиентов
     items.push({ divider: true })
@@ -2067,6 +2101,38 @@ export function ServersPage({ onUnauthorized }: Props) {
           onDone={() => check(deployFor.server)}
           onUnauthorized={onUnauthorized}
         />
+      )}
+
+      {abandonFor && (
+        <div className="modal-backdrop">
+          <form
+            className="card modal"
+            onClick={(e) => e.stopPropagation()}
+            onSubmit={(e) => { e.preventDefault(); void abandonSshAccess() }}
+          >
+            <h3>{t('Закрыть настройку SSH · {name}', { name: abandonFor.name })}</h3>
+            <p className="muted small">
+              {t('Панель сначала попробует обычное восстановление. Если сервер недоступен, незавершенная настройка будет закрыта без проверки сервера: состояние ключа панели и firewall на нем останется неизвестным. Используйте это, только если сервер удален или недоступен навсегда. После этого снова работают бэкапы, удаление сервера и настройка SSH.')}
+            </p>
+            {abandonError && <p className="form-error">{t(abandonError)}</p>}
+            <input
+              type="password"
+              autoFocus
+              autoComplete="current-password"
+              placeholder={t('Пароль')}
+              value={abandonPassword}
+              onChange={(e) => setAbandonPassword(e.target.value)}
+            />
+            <div className="modal-actions">
+              <button type="button" className="ghost" disabled={busy} onClick={() => setAbandonFor(null)}>
+                {t('Отмена')}
+              </button>
+              <button type="submit" className="danger-solid" disabled={!abandonPassword || busy}>
+                {busy ? t('Восстановление…') : t('Закрыть настройку')}
+              </button>
+            </div>
+          </form>
+        </div>
       )}
 
       {faStepUp && (

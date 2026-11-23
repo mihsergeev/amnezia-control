@@ -6,6 +6,7 @@ import os
 import re
 from datetime import datetime, timezone
 
+from fastapi import HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app import alerts
@@ -188,7 +189,14 @@ async def backup_loop(
                 )
         elif _last_backup_ok:  # переход ok → проблема: алертим один раз
             _last_backup_ok = False
-            if exc is not None:
+            if isinstance(exc, HTTPException) and exc.status_code == 409:
+                # Бэкап сознательно остановлен (незавершенная настройка SSH,
+                # идущее восстановление), а не сломан: говорим, что делать.
+                card = alerts.Card(
+                    "crit", "🗄", alerts.t("Авто-бэкап не создан"),
+                    alerts.t("Бэкап ждет завершения другой операции: {err}", err=str(exc.detail)),
+                )
+            elif exc is not None:
                 card = alerts.Card(
                     "crit", "🗄", alerts.t("Авто-бэкап не создан"),
                     alerts.t("{err}. Проверьте место на диске и логи backend",

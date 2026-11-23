@@ -6,7 +6,7 @@ from fastapi import APIRouter, HTTPException, Request, Response, status
 from sqlalchemy import delete as sa_delete
 from sqlalchemy import func, select, update as sa_update
 
-from app import audit, bulk_issue_state, cascade_alias, cascade_http, cascadejob, client_endpoint, egresscheck, fullaccess, geo, limits, native_snapshots, nodelock, server_ops, ssh_access, ssh_policy, sshops, torrent
+from app import audit, bulk_issue_state, cascade_alias, cascade_http, cascadejob, client_endpoint, egresscheck, fullaccess, geo, limits, native_snapshots, nodelock, server_ops, ssh_access, ssh_policy, sshops, stepup, torrent
 from app.config import get_settings
 from app.db import Base
 from app.deps import CurrentUser, SessionDep
@@ -24,6 +24,7 @@ from app.schemas import (
     SetupScriptOut,
     SshAccessFields,
     SshAccessApply,
+    StepUpRequest,
     TorrentClientOut,
     TorrentOut,
 )
@@ -522,6 +523,21 @@ async def prepare_ssh_access(server_id: int, _: CurrentUser, session: SessionDep
     except Exception as exc:
         raise HTTPException(409, f"Промежуточный доступ подготовлен, но вход на целевой сервер не подтвержден: {exc}") from exc
     await server_ops.run_check(session, server, get_settings())
+    return server
+
+
+@router.post("/{server_id}/ssh-access/abandon", response_model=ServerOut)
+async def abandon_ssh_access(server_id: int, body: StepUpRequest, user: CurrentUser, session: SessionDep, request: Request):
+    """Закрыть незавершенную настройку SSH, когда сервер недоступен навсегда.
+
+    Сначала пробует обычное восстановление. Требует повторного ввода пароля:
+    состояние ключа и firewall на ноде после этого никто не сверяет."""
+    server = await _get_or_404(server_id, session)
+    await stepup.verify(user, body.password, request, body.otp)
+    await ssh_access.abandon(session, get_settings(), server, user.username)
+    await ssh_access.require_idle(session, server.id)
+    await session.refresh(server)
+    server.ssh_access_pending = False
     return server
 
 

@@ -84,6 +84,7 @@ EN = {
     "самопроверка ок": "self-test passed",
     "Авто-бэкап не создан": "Auto-backup failed",
     "{err}. Проверьте место на диске и логи backend": "{err}. Check disk space and the backend logs",
+    "Бэкап ждет завершения другой операции: {err}": "The backup is waiting for another operation to finish: {err}",
     "Бэкап не прошел самопроверку": "Backup failed its self-test",
     "{problems}. Восстановиться из него может не выйти": "{problems}. Restoring from it may fail",
     "Пароль «{user}» сброшен из .env": "Password for \"{user}\" reset from .env",
