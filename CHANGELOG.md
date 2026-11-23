@@ -4,6 +4,12 @@ All notable changes to Amnezia Control are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.84.66] - 2026-11-23
+
+- Never lose a node when an SSH access change is interrupted. The firewall allow is now committed before the new panel key, so a connection drop between the two leaves the key staged and its watchdog restores the previous one. Before, the key could be final while the firewall watchdog removed its allow. If an allow is left after a change is undone, the server card and the audit log name the sources.
+- Close an SSH access change whose server is gone. "Close the SSH change without the server…" in the server menu tries recovery first and, after the password is entered again, closes what it cannot reach, so backups, server deletion and SSH changes work again.
+- The auto-backup alert now says when a backup waits for another operation instead of suggesting to check disk space.
+
 ## [0.84.65] - 2026-11-23
 
 - Keep users signed in when the server clock steps back slightly. A clock correction of a second or two (NTP, a virtual machine catching up) made a freshly issued login token look "not yet valid", so the next request was refused and the user was logged out right after sign-in. Tokens now tolerate 30 seconds of clock difference; their lifetime is unchanged.
