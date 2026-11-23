@@ -4,6 +4,11 @@ All notable changes to Amnezia Control are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.84.67] - 2026-11-23
+
+- Security: validate IP addresses strictly before they are used on nodes. Some address checks accepted values that are not plain IP addresses, which could then reach node setup and firewall scripts. SSH hosts and sources, jump hosts, paused client addresses, cascade peers and client DNS values now accept only plain IPv4 and IPv6 addresses or DNS names, and the scripts check them again where they are used. Restoring a backup now also checks each server's client address. Update recommended.
+- Panel restore refuses archives that unpack to more than 512 MiB or 5000 entries, so an oversized archive can no longer exhaust the host's memory or disk. Real backups are far smaller.
+
 ## [0.84.66] - 2026-11-23
 
 - Never lose a node when an SSH access change is interrupted. The firewall allow is now committed before the new panel key, so a connection drop between the two leaves the key staged and its watchdog restores the previous one. Before, the key could be final while the firewall watchdog removed its allow. If an allow is left after a change is undone, the server card and the audit log name the sources.
