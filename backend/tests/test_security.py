@@ -257,3 +257,28 @@ def test_enforce_secrets_rejects_weak():
     _enforce_secrets(
         Settings(jwt_secret="a" * 40, admin_password="strong-enough-pass")
     )
+
+
+def test_token_survives_a_small_backward_clock_step_but_not_expiry():
+    """Часы хоста шагнули назад: свежий токен с iat "в будущем" остается рабочим,
+    а истекший давно и подделанный - нет."""
+    from datetime import datetime, timedelta, timezone
+
+    import secrets
+
+    import jwt
+
+    from app.security import CLOCK_LEEWAY_SECONDS, create_access_token, decode_access_token
+
+    key, other = secrets.token_hex(32), secrets.token_hex(32)
+    now = datetime.now(timezone.utc)
+
+    def token(iat, exp, signing=key):
+        return jwt.encode({"sub": "admin", "ver": 0, "iat": iat, "exp": exp}, signing, algorithm="HS256")
+
+    assert decode_access_token(create_access_token("admin", key, 60), key)["sub"] == "admin"
+    stepped = token(now + timedelta(seconds=2), now + timedelta(hours=1))
+    assert decode_access_token(stepped, key)["sub"] == "admin"
+    assert decode_access_token(token(now + timedelta(seconds=CLOCK_LEEWAY_SECONDS + 30), now + timedelta(hours=1)), key) is None
+    assert decode_access_token(token(now - timedelta(hours=2), now - timedelta(seconds=CLOCK_LEEWAY_SECONDS + 30)), key) is None
+    assert decode_access_token(token(now, now + timedelta(hours=1), signing=other), key) is None

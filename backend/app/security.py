@@ -42,10 +42,17 @@ def create_access_token(
     return jwt.encode(payload, secret, algorithm="HS256")
 
 
+# Часы хоста могут шагнуть назад (синхронизация NTP, виртуалка): свежий токен
+# тогда выглядит выпущенным "в будущем", и PyJWT его отвергает, выкидывая из
+# панели сразу после входа. Несколько секунд допуска это закрывают, а срок
+# действия токена (часы) почти не меняют.
+CLOCK_LEEWAY_SECONDS = 30
+
+
 def decode_access_token(token: str, secret: str) -> dict | None:
     """Возвращает payload (sub/ver/…) при валидной подписи и сроке, иначе None."""
     try:
-        payload = jwt.decode(token, secret, algorithms=["HS256"])
+        payload = jwt.decode(token, secret, algorithms=["HS256"], leeway=CLOCK_LEEWAY_SECONDS)
     except jwt.PyJWTError:
         return None
     if not isinstance(payload.get("sub"), str):
