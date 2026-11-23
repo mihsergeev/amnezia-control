@@ -122,8 +122,10 @@ async def test_bootstrap_success(
     async def fake_bootstrap(
         host, port, username, password, public_key, panel_ip,
         become_password=None, timeout=10, key_path=None, source_ips=None, firewall_mode="add",
+        host_key_fingerprint=None, trust_first_key=False,
     ):
         captured["password"] = password
+        captured["fingerprint"] = (host_key_fingerprint, trust_first_key)
         captured["panel_ip"] = panel_ip
         assert source_ips == [panel_ip] and firewall_mode == "add"
         return sshops.BootstrapResult(ok=True, output="ACONTROL SETUP OK: de-hz-vpn")
@@ -140,12 +142,14 @@ async def test_bootstrap_success(
     server_id = await _create_server(client, auth_headers)
     response = await client.post(
         f"/api/servers/{server_id}/bootstrap",
-        json={"password": "s3cret"},
+        json={"password": "s3cret", "host_key_fingerprint": "SHA256:fixture"},
         headers=auth_headers,
     )
     assert response.status_code == 200
     assert response.json()["last_check_ok"] is True
     assert captured["password"] == "s3cret"
+    # ручная настройка не доверяет первому ключу: подтвержденный отпечаток доходит до входа
+    assert captured["fingerprint"] == ("SHA256:fixture", False)
     assert captured["panel_ip"] == "203.0.113.7"
 
 
@@ -172,25 +176,42 @@ async def test_bootstrap_real_signature_and_host_key(
 ) -> None:
     """Настоящий bootstrap_server (без подмены): вызов из server_ops совпадает с
     его сигнатурой (раньше лишний key_path ронял настройку в 500), а подключение
-    идет через TOFU и подмену ключа хоста не пропускает."""
-    seen = {}
+    идет к подтвержденному ключу и подмену ключа хоста не пропускает."""
+    import asyncssh
 
-    async def fake_tofu(host, port, username, key_path, *, password=None, timeout=10):
+    seen = {}
+    shown = asyncssh.generate_private_key("ssh-ed25519").convert_to_public()
+
+    async def fake_tofu(host, port, username, key_path, *, password=None, timeout=10, pinned_key=None, **kwargs):
         seen["password"] = password
         seen["key_path"] = key_path
+        seen["pinned"] = pinned_key
         raise sshops.HostKeyChangedError(f"{host}:{port}")
 
+    async def fake_fetch(host, port, key_path, timeout=10, *, jump=None):
+        return shown, False
+
     monkeypatch.setattr(sshops, "_tofu_connect", fake_tofu)
+    monkeypatch.setattr(sshops, "fetch_host_key", fake_fetch)
     server_id = await _create_server(client, auth_headers)
+    # без подтвержденного отпечатка пароль никуда не уходит
     response = await client.post(
         f"/api/servers/{server_id}/bootstrap",
         json={"password": "s3cret"},
+        headers=auth_headers,
+    )
+    assert response.status_code == 400 and "отпечаток" in response.json()["detail"]
+    assert seen == {}
+    response = await client.post(
+        f"/api/servers/{server_id}/bootstrap",
+        json={"password": "s3cret", "host_key_fingerprint": sshops.fingerprint(shown)},
         headers=auth_headers,
     )
     assert response.status_code == 400
     assert "MITM" in response.json()["detail"]
     assert seen["password"] == "s3cret"
     assert seen["key_path"].name
+    assert seen["pinned"] is shown
 
 
 async def test_config_endpoint(client: httpx.AsyncClient, auth_headers) -> None:

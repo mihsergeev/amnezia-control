@@ -56,8 +56,10 @@ async def _import_spec(session: SessionDep, spec: ServerSpec) -> ImportResult:
         )
 
     try:
+        # Импорт настраивает сразу много серверов и подтверждать каждый ключ
+        # не просит: доверие при первом подключении здесь сохранено явно.
         ok, _ = await server_ops.bootstrap_and_check(
-            session, server, spec.password, settings
+            session, server, spec.password, settings, trust_first_key=True
         )
     except Exception:  # noqa: BLE001
         ok = False

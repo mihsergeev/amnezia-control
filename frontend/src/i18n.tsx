@@ -1160,6 +1160,13 @@ const EN: Record<string, string> = {
   '⚠️ Ссылка содержит приватный SSH-ключ управления сервером — не публикуйте её и не пересылайте. Ключ работает с любого адреса, без срока, пока его не отзовут: «Отозвать полный доступ» в меню сервера. При повторной генерации прежний ключ перестаёт работать.':
     '⚠️ The link contains a private SSH key that manages the server — do not publish or forward it. The key works from any address and does not expire until it is revoked: "Revoke full access" in the server menu. Regenerating invalidates the previous key.',
   'Отозвать полный доступ': 'Revoke full access',
+  'Получаю ключ сервера…': 'Fetching the server key…',
+  'Сервер добавлен. Перед отправкой пароля сверьте ключ SSH сервера:': 'The server is added. Check its SSH key before the password is sent:',
+  'На самом сервере (консоль хостера или уже открытая сессия) выполните': 'On the server itself (the hosting console or an existing session) run',
+  'Отпечатки должны совпасть. Пароль уйдет только серверу с этим ключом.': 'The fingerprints must match. The password goes only to a server with this key.',
+  'Не отправлять пароль': 'Do not send the password',
+  'Ключ совпадает, подключиться': 'Key matches, connect',
+  'Сервер создан. Пароль не отправлен: ключ сервера не подтвержден.': 'Server created. The password was not sent: the server key was not confirmed.',
   'Отозвать полный доступ к серверу «{name}»? Приложение AmneziaVPN, куда добавлена ссылка, потеряет управление сервером.':
     'Revoke full access to server "{name}"? The AmneziaVPN app the link was added to will lose control of the server.',
   'Полный доступ к серверу «{name}» отозван.': 'Full access to server "{name}" has been revoked.',

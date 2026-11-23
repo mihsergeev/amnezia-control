@@ -382,7 +382,7 @@ protocol), use "Roll back" on the protocol tab in the panel — it lists snapsho
 
 - Set a strong `ACONTROL_JWT_SECRET` (`openssl rand -hex 32`) and admin password — **the panel refuses to start** on empty/default values.
 - Change the admin password from the UI (⚙ > Change password); it invalidates all existing sessions. Enable **2FA** (⚙ > Two-factor authentication).
-- The panel **pins each node's SSH host key** on first connect (TOFU) and verifies it after. If you rebuild a node, delete its line from `data/ssh/known_hosts` so the new key can be pinned.
+- The panel **pins each node's SSH host key** on first connect (TOFU) and verifies it after. If you rebuild a node, delete its line from `data/ssh/known_hosts` so the new key can be pinned. When a new server is set up with a password, the panel first shows the host key fingerprint and sends the SSH and sudo passwords only after you confirm it (compare with `ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub` on the server). Imports from links or a host list still trust the first key.
 - Keep the edge **IP allow-list** tight (Caddy labels) — an **empty** `ACONTROL_ALLOW_IPS` means "allow all", leaving only the login in front.
 - Never put Docker subnets (`172.16.0.0/12`) or private ranges into `ACONTROL_ALLOW_IPS`. On a host with IPv6 they let every IPv6 client in (see *IPv6 and the allow-list* above).
 - Put **HTTPS** in front (Caddy edge or your own proxy) — the full-access link and QR configs are secrets in transit.

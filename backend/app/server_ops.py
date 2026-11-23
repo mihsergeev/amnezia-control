@@ -170,6 +170,9 @@ async def bootstrap_and_check(
     password: str,
     settings: Settings,
     become_password: str | None = None,
+    *,
+    host_key_fingerprint: str | None = None,
+    trust_first_key: bool = False,
 ) -> tuple[bool, str]:
     """Заходит по паролю, ставит ключ панели, затем проверяет по ключу.
 
@@ -190,6 +193,8 @@ async def bootstrap_and_check(
         key_path=key_path,
         source_ips=ssh_policy.sources(server, settings.panel_ip),
         firewall_mode=server.ssh_firewall_mode,
+        host_key_fingerprint=host_key_fingerprint,
+        trust_first_key=trust_first_key,
         **sshops.route_options(server),
     )
     if not result.ok:

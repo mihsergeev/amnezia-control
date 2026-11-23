@@ -444,6 +444,7 @@ async def _tofu_connect(
     timeout: int = 10,
     tunnel=None,
     require_known: bool = False,
+    pinned_key: "asyncssh.SSHKey | None" = None,
 ):
     kh = _kh_path(key_path)
     # keepalive: нода, пропавшая посреди операции (обрыв маршрута, зависший
@@ -467,48 +468,114 @@ async def _tofu_connect(
             return await asyncssh.connect(known_hosts=str(kh), **common)
         except asyncssh.HostKeyNotVerifiable as exc:
             raise HostKeyChangedError(f"{host}:{port}") from exc
+    if pinned_key is not None:
+        # Ключ, отпечаток которого подтвердил человек: сверяется при обмене
+        # ключами, до отправки пароля, и запоминается после входа.
+        trusted = asyncssh.import_known_hosts(
+            f"{_kh_host(host, port)} {pinned_key.export_public_key().decode().strip()}")
+        try:
+            conn = await asyncssh.connect(known_hosts=trusted, **common)
+        except asyncssh.HostKeyNotVerifiable as exc:
+            raise HostKeyChangedError(f"{host}:{port}") from exc
+        _record_host_key(kh, host, port, conn)
+        return conn
     # первый контакт — принимаем и запоминаем (TOFU)
     conn = await asyncssh.connect(known_hosts=None, **common)
     _record_host_key(kh, host, port, conn)
     return conn
 
 
+def _known_keys(kh: Path, host: str, port: int) -> list:
+    if not _host_known(kh, host, port):
+        return []
+    try:
+        return list(asyncssh.read_known_hosts(str(kh)).match(host, host, port)[0])
+    except (OSError, ValueError, asyncssh.Error):
+        return []
+
+
+PREFERRED_HOST_KEY_ALGS = [
+    "ssh-ed25519", "ecdsa-sha2-nistp256", "ecdsa-sha2-nistp384", "ecdsa-sha2-nistp521",
+    "rsa-sha2-512", "rsa-sha2-256", "ssh-rsa",
+]
+
+
+def fingerprint(key) -> str:
+    return key.get_fingerprint("sha256")
+
+
+def same_fingerprint(expected: str, key) -> bool:
+    """SHA256-отпечаток как его показывает ssh-keygen -lf, с префиксом или без."""
+    want = (expected or "").strip().removeprefix("SHA256:").rstrip("=")
+    return bool(want) and want == fingerprint(key).removeprefix("SHA256:").rstrip("=")
+
+
+@asynccontextmanager
+async def _jump_tunnel(key_path: Path, jump: "Jump | None", timeout: int):
+    if jump is None:
+        yield None
+        return
+    path = jump_key_path(key_path, jump.target_id)
+    if not path.is_file():
+        raise JumpAccessError("Сначала подготовьте SSH-доступ через промежуточную ноду")
+    try:
+        parent = await _tofu_connect(jump.host, jump.port, jump_username(key_path, jump.target_id), path,
+                                     timeout=timeout, require_known=True)
+    except asyncssh.PermissionDenied as exc:
+        raise JumpAccessError("Промежуточный SSH-ключ не принят. При смене исходящего IP панели повторите подготовку промежуточной ноды") from exc
+    try:
+        yield parent
+    finally:
+        parent.close()
+        await parent.wait_closed()
+
+
+async def fetch_host_key(host: str, port: int, key_path: Path, timeout: int = 10, *, jump: "Jump | None" = None):
+    """Ключ хоста без входа: (ключ, уже закреплен ли он в known_hosts панели).
+
+    У закрепленного хоста запрашиваются те же типы ключей, и несовпадение -
+    HostKeyChangedError, как при обычном подключении."""
+    known = _known_keys(_kh_path(key_path), host, port)
+    # Алгоритмы подписи, а не тип ключа: для RSA это rsa-sha2-*, ssh-rsa (SHA-1)
+    # в новых OpenSSH выключен. Новому хосту - сначала ed25519: его отпечаток
+    # человеку проще всего сверить.
+    algs = list(dict.fromkeys(a.decode() for k in known for a in k.sig_algorithms)) if known else PREFERRED_HOST_KEY_ALGS
+    options = {"server_host_key_algs": algs}
+    async with asyncio.timeout(timeout * 2):
+        async with _jump_tunnel(key_path, jump, timeout) as parent:
+            key = await asyncssh.get_server_host_key(host, port, tunnel=parent if parent is not None else (),
+                                                     config=None, **options)
+    if key is None:
+        raise OSError("сервер не показал ключ SSH")
+    if known and not any(k.public_data == key.public_data for k in known):
+        raise HostKeyChangedError(f"{host}:{port}")
+    return key, bool(known)
+
+
 @asynccontextmanager
 async def connect(
     host: str, port: int, username: str, key_path: Path, timeout: int = 10,
     *, jump: Jump | None = None, password: str | None = None, require_known: bool = False,
+    pinned_key: "asyncssh.SSHKey | None" = None,
 ):
     """Подключение панельным ключом с TOFU-пиннингом (для async with)."""
-    parent = None
-    conn = None
-    try:
-        options = {}
-        if password is not None:
-            options["password"] = password
-        if require_known:
-            options["require_known"] = True
-        if jump is not None:
-            path = jump_key_path(key_path, jump.target_id)
-            if not path.is_file():
-                raise JumpAccessError("Сначала подготовьте SSH-доступ через промежуточную ноду")
-            try:
-                parent = await _tofu_connect(jump.host, jump.port, jump_username(key_path, jump.target_id), path,
-                                            timeout=timeout, require_known=True)
-            except asyncssh.PermissionDenied as exc:
-                raise JumpAccessError("Промежуточный SSH-ключ не принят. При смене исходящего IP панели повторите подготовку промежуточной ноды") from exc
+    options = {}
+    if password is not None:
+        options["password"] = password
+    if require_known:
+        options["require_known"] = True
+    if pinned_key is not None:
+        options["pinned_key"] = pinned_key
+    # The target must close before the forwarding connection, including failed auth.
+    async with _jump_tunnel(key_path, jump, timeout) as parent:
+        if parent is not None:
             options["tunnel"] = parent
         conn = await _tofu_connect(host, port, username, key_path, timeout=timeout, **options)
-        yield conn
-    finally:
-        # The target must close before the forwarding connection, including failed auth.
         try:
-            if conn is not None:
-                conn.close()
-                await conn.wait_closed()
+            yield conn
         finally:
-            if parent is not None:
-                parent.close()
-                await parent.wait_closed()
+            conn.close()
+            await conn.wait_closed()
 
 
 async def check_server(
@@ -577,6 +644,8 @@ async def bootstrap_server(
     source_ips: list[str] | None = None,
     firewall_mode: str = "add",
     jump: Jump | None = None,
+    host_key_fingerprint: str | None = None,
+    trust_first_key: bool = False,
 ) -> BootstrapResult:
     """Заходит по паролю, ставит ключ панели и настраивает фаервол.
     Ключ хоста - как у остальных подключений (TOFU): у знакомой ноды
@@ -589,9 +658,22 @@ async def bootstrap_server(
     sudo_input = (become_password or password) + "\n"
     key_verified = False
     password_connected = False
+    pinned = {}
     try:
+        if not _host_known(_kh_path(key_path), host, port):
+            # Пароли SSH и sudo уходят только хосту, чей ключ подтвердил человек.
+            # Импорт списком явно оставляет доверие при первом подключении.
+            if host_key_fingerprint:
+                key, _known = await fetch_host_key(host, port, key_path, timeout, jump=jump)
+                if not same_fingerprint(host_key_fingerprint, key):
+                    return BootstrapResult(ok=False, error=(
+                        f"Ключ сервера ({fingerprint(key)}) не совпадает с подтвержденным отпечатком. "
+                        "Пароль не отправлен. Проверьте сервер и повторите"))
+                pinned = {"pinned_key": key}
+            elif not trust_first_key:
+                return BootstrapResult(ok=False, error="Подтвердите отпечаток ключа сервера: пароль отправляется только после этого")
         async with asyncio.timeout(timeout * 3):
-            async with connect(host, port, username, key_path, timeout, password=password, **({"jump": jump} if jump else {})) as conn:
+            async with connect(host, port, username, key_path, timeout, password=password, **pinned, **({"jump": jump} if jump else {})) as conn:
                 password_connected = True
                 run = await conn.run(script, input=sudo_input, check=False)
                 if run.exit_status == 0 and "ACONTROL SETUP OK" in (run.stdout or ""):

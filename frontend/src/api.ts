@@ -303,6 +303,13 @@ export type Server = {
   updated_at: string
 }
 
+// ключ SSH сервера до входа: отпечаток подтверждают перед отправкой пароля
+export type HostKey = {
+  known: boolean
+  fingerprint: string
+  key_type: string
+}
+
 export type CheckInfo = {
   ssh_access_warning?: string
   error?: string

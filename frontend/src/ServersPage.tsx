@@ -23,6 +23,7 @@ import {
   type Protocol,
   type Server,
   type ServerForm,
+  type HostKey,
   type ServerStat,
 } from './api'
 import { ClientsModal } from './ClientsModal'
@@ -86,6 +87,12 @@ type Props = {
 // fullaccess._canonical на бэкенде): amnezia-awg3 туда не попадает. Если на
 // ноде кроме него ничего нет, пункт меню бесполезен. Пока проверки нет
 // (список пуст) - показываем, решит бэкенд.
+// имя файла ключа хоста для ssh-keygen -lf: ssh-ed25519 -> ed25519, ecdsa-sha2-* -> ecdsa
+function keyFileType(keyType: string): string {
+  if (keyType.startsWith('ecdsa-')) return 'ecdsa'
+  return keyType.replace(/^ssh-/, '').replace(/^rsa-sha2-\d+$/, 'rsa') || 'ed25519'
+}
+
 function fullAccessSupported(containers: string[]): boolean {
   if (!containers.length) return true
   return containers.some(
@@ -633,6 +640,8 @@ export function ServersPage({ onUnauthorized }: Props) {
   const [sudoPassword, setSudoPassword] = useState('')
   const [showAdvanced, setShowAdvanced] = useState(false)
   const [sshPreview, setSshPreview] = useState<AccessPreview | null>(null)
+  // отпечаток ключа нового сервера, который надо подтвердить до отправки пароля
+  const [hostKeyConfirm, setHostKeyConfirm] = useState<{ server: Server; fingerprint: string; key_type: string } | null>(null)
 
   const [checkingId, setCheckingId] = useState<number | null>(null)
   const [clientsFor, setClientsFor] = useState<Server | null>(null)
@@ -766,6 +775,7 @@ export function ServersPage({ onUnauthorized }: Props) {
   function closeForm() {
     setPassword('')
     setSudoPassword('')
+    setHostKeyConfirm(null)
     setFormOpen(false)
   }
 
@@ -888,9 +898,56 @@ export function ServersPage({ onUnauthorized }: Props) {
     return warning
   }
 
+  // панель сама зайдёт по паролю, поставит ключ и настроит фаервол
+  async function bootstrapCreated(created: Server, fingerprint: string | null) {
+    setBusyLabel('Подключаюсь и настраиваю…')
+    try {
+      const configured = await api<Server>(`/api/servers/${created.id}/bootstrap`, {
+        method: 'POST',
+        body: JSON.stringify({
+          password,
+          become_password: sudoPassword || null,
+          host_key_fingerprint: fingerprint,
+        }),
+      })
+      setServers(previous => previous.map(server => server.id === configured.id ? configured : server))
+      closeForm()
+      await load()
+      setNotice(t('Сервер «{name}» настроен и подключён.', { name: created.name }))
+    } catch (err) {
+      closeForm()
+      if (err instanceof ApiError && err.status === 401) throw err
+      await load()
+      const msg = err instanceof Error ? err.message : t('ошибка')
+      await openScript(created, t('Сервер создан. Автонастройка не удалась. {msg}', { msg: t(msg) }))
+    }
+  }
+
+  async function declineHostKey() {
+    const created = hostKeyConfirm?.server
+    closeForm()
+    if (!created) return
+    await load()
+    await openScript(created, t('Сервер создан. Пароль не отправлен: ключ сервера не подтвержден.'))
+  }
+
   async function submit(e: FormEvent) {
     e.preventDefault()
     if (busy) return
+    if (hostKeyConfirm) {
+      setBusy(true)
+      setFormError(null)
+      try {
+        await bootstrapCreated(hostKeyConfirm.server, hostKeyConfirm.fingerprint)
+      } catch (err) {
+        if (err instanceof ApiError && err.status === 401) onUnauthorized()
+        else setFormError(err instanceof Error ? err.message : t('Неизвестная ошибка'))
+      } finally {
+        setBusy(false)
+        setBusyLabel('Сохранить')
+      }
+      return
+    }
     if (editingServer?.ssh_access_pending) {
       setSshPreview(null)
       setFormError(t('Восстановить настройку SSH'))
@@ -967,27 +1024,21 @@ export function ServersPage({ onUnauthorized }: Props) {
       setServers(previous => [...previous.filter(server => server.id !== created.id), created])
 
       if (useBootstrap && password) {
-        // панель сама зайдёт по паролю, поставит ключ и настроит фаервол
-        setBusyLabel('Подключаюсь и настраиваю…')
+        // Пароль уходит только серверу, чей ключ подтвержден: сначала отпечаток.
+        setBusyLabel('Получаю ключ сервера…')
+        let hostKey: HostKey
         try {
-          const configured = await api<Server>(`/api/servers/${created.id}/bootstrap`, {
-            method: 'POST',
-            body: JSON.stringify({
-              password,
-              become_password: sudoPassword || null,
-            }),
-          })
-          setServers(previous => previous.map(server => server.id === configured.id ? configured : server))
-          closeForm()
-          await load()
-          setNotice(t('Сервер «{name}» настроен и подключён.', { name: created.name }))
+          hostKey = await api<HostKey>(`/api/servers/${created.id}/host-key`, { method: 'POST' })
         } catch (err) {
           closeForm()
           if (err instanceof ApiError && err.status === 401) throw err
           await load()
           const msg = err instanceof Error ? err.message : t('ошибка')
           await openScript(created, t('Сервер создан. Автонастройка не удалась. {msg}', { msg: t(msg) }))
+          return
         }
+        if (hostKey.known) await bootstrapCreated(created, null)
+        else setHostKeyConfirm({ server: created, fingerprint: hostKey.fingerprint, key_type: hostKey.key_type })
       } else {
         // ручной путь — показываем скрипт для запуска на сервере
         closeForm()
@@ -1892,13 +1943,24 @@ export function ServersPage({ onUnauthorized }: Props) {
                 {savedSsh.warning && <p>{t(savedSsh.warning)}</p>}
               </div>
             )}
+            {hostKeyConfirm && (
+              <div className="bootstrap-block" role="status">
+                <p>{t('Сервер добавлен. Перед отправкой пароля сверьте ключ SSH сервера:')}</p>
+                <p className="mono">{hostKeyConfirm.fingerprint} ({hostKeyConfirm.key_type})</p>
+                <p className="muted small">
+                  {t('На самом сервере (консоль хостера или уже открытая сессия) выполните')}{' '}
+                  <span className="mono">ssh-keygen -lf /etc/ssh/ssh_host_{keyFileType(hostKeyConfirm.key_type)}_key.pub</span>.{' '}
+                  {t('Отпечатки должны совпасть. Пароль уйдет только серверу с этим ключом.')}
+                </p>
+              </div>
+            )}
             {formError && <p className="error" role="alert">{t(formError)}</p>}
             <div className="modal-actions">
-              <button type="button" className="ghost" disabled={busy} onClick={closeForm}>
-                {t('Отмена')}
+              <button type="button" className="ghost" disabled={busy} onClick={hostKeyConfirm ? () => void declineHostKey() : closeForm}>
+                {hostKeyConfirm ? t('Не отправлять пароль') : t('Отмена')}
               </button>
               <button type="submit" disabled={busy || editingServer?.ssh_access_pending}>
-                {busy ? t(busyLabel) : sshPreview ? t('Применить SSH и сохранить') : t('Сохранить')}
+                {busy ? t(busyLabel) : hostKeyConfirm ? t('Ключ совпадает, подключиться') : sshPreview ? t('Применить SSH и сохранить') : t('Сохранить')}
               </button>
             </div>
           </form>

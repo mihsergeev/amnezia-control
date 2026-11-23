@@ -246,7 +246,7 @@ async def test_bootstrap_nonzero_exit_with_success_text_never_succeeds(tmp_path,
     @asynccontextmanager
     async def connect(*args, **kwargs): yield Conn()
     monkeypatch.setattr(sshops, 'connect', connect)
-    result = await sshops.bootstrap_server('192.0.2.1', 22, 'service', 'fixture', public, '192.0.2.7', key_path=key)
+    result = await sshops.bootstrap_server('192.0.2.1', 22, 'service', 'fixture', public, '192.0.2.7', key_path=key, trust_first_key=True)
     assert result.ok is False
 
 
@@ -266,7 +266,7 @@ async def test_bootstrap_second_session_failure_rolls_back_and_does_not_blame_pa
         elif failure == 'key': raise asyncssh.PermissionDenied('fixture')
         else: yield Check()
     monkeypatch.setattr(sshops, 'connect', connect)
-    result = await sshops.bootstrap_server('192.0.2.1', 22, 'service', 'fixture', public, '192.0.2.7', key_path=key)
+    result = await sshops.bootstrap_server('192.0.2.1', 22, 'service', 'fixture', public, '192.0.2.7', key_path=key, trust_first_key=True)
     assert result.ok is False and 'Неверный пароль' not in result.error
     assert len(commands)==2 and 'ACONTROL_KEY_ROLLEDBACK' in commands[1]
 

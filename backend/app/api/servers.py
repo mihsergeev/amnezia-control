@@ -1,6 +1,7 @@
 import json
 from datetime import datetime, timezone
 
+import asyncssh
 from fastapi import APIRouter, HTTPException, Request, Response, status
 from sqlalchemy import delete as sa_delete
 from sqlalchemy import func, select, update as sa_update
@@ -14,6 +15,7 @@ from app.schemas import (
     BootstrapRequest,
     DeleteServerResult,
     EgressCheckOut,
+    HostKeyOut,
     ReorderRequest,
     ServerCreate,
     ServerOut,
@@ -467,11 +469,34 @@ async def bootstrap_server(
     server = await _get_or_404(server_id, session)
     await ssh_access.require_idle(session, server.id)
     ok, error = await server_ops.bootstrap_and_check(
-        session, server, body.password, get_settings(), body.become_password
+        session, server, body.password, get_settings(), body.become_password,
+        host_key_fingerprint=body.host_key_fingerprint,
     )
     if not ok:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, error)
     return server
+
+
+@router.post("/{server_id}/host-key", response_model=HostKeyOut)
+@bulk_issue_state.guard()
+@ssh_access.serialized
+async def server_host_key(server_id: int, _: CurrentUser, session: SessionDep) -> HostKeyOut:
+    """Ключ SSH сервера без входа: отпечаток для подтверждения перед паролем."""
+    server = await _get_or_404(server_id, session)
+    await ssh_access.require_idle(session, server.id)
+    settings = get_settings()
+    key_path, _pub = key_paths(settings.data_dir)
+    try:
+        if server.ssh_jump_server_id and not jump_key_path(key_path, server.id).is_file():
+            await ssh_access.prepare_jump(session, server, settings)
+        key, known = await sshops.fetch_host_key(server.host, server.ssh_port, key_path,
+                                                 settings.ssh_connect_timeout, **sshops.route_options(server))
+    except sshops.HostKeyChangedError as exc:
+        raise HTTPException(status.HTTP_409_CONFLICT, "Ключ сервера не совпадает с закрепленным в панели — возможна подмена. "
+                            "Если сервер пересоздан, удалите его строку из data/ssh/known_hosts.") from exc
+    except (OSError, asyncssh.Error, TimeoutError, ValueError, RuntimeError) as exc:
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, f"Не удалось получить ключ сервера: {exc or type(exc).__name__}") from exc
+    return HostKeyOut(known=known, fingerprint=sshops.fingerprint(key), key_type=key.get_algorithm())
 
 
 @router.post("/{server_id}/ssh-access/preview")

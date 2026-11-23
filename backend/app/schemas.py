@@ -211,6 +211,15 @@ class DeleteServerResult(BaseModel):
 class BootstrapRequest(BaseModel):
     password: str = Field(min_length=1)
     become_password: str | None = None
+    # SHA256-отпечаток ключа сервера, который подтвердил пользователь. Нужен,
+    # пока ключ не закреплен: иначе пароль ушел бы непроверенному хосту.
+    host_key_fingerprint: str | None = Field(default=None, max_length=128)
+
+
+class HostKeyOut(BaseModel):
+    known: bool  # ключ уже закреплен в known_hosts панели
+    fingerprint: str  # SHA256:... как у ssh-keygen -lf
+    key_type: str
 
 
 class ConfigOut(BaseModel):
