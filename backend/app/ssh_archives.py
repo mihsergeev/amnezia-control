@@ -41,19 +41,18 @@ def policy(row: dict) -> dict:
 def validate_endpoint(row: dict) -> None:
     if not ssh_host.valid(row.get("host")):
         raise ValueError("В архиве неверный адрес сервера SSH")
-    endpoint = row.get("client_endpoint", "")
-    if endpoint is None:
-        return
-    try:
-        # It goes into client configs: the form's checks apply to archives too.
-        if not isinstance(endpoint, str) or len(endpoint) > 255:
-            raise ValueError(endpoint)
-        row["client_endpoint"] = client_endpoint.normalize(endpoint)
-    except ValueError:
-        raise ValueError("В архиве неверный адрес подключения клиентов сервера") from None
     port = row.get("ssh_port", 22)
     if type(port) is not int or not 1 <= port <= 65535:
         raise ValueError("В архиве неверный SSH-порт сервера")
+    endpoint = row.get("client_endpoint")
+    if endpoint is not None:  # legacy archives keep their default
+        try:
+            # It goes into client configs: the form's checks apply to archives too.
+            if not isinstance(endpoint, str) or len(endpoint) > 255:
+                raise ValueError(endpoint)
+            row["client_endpoint"] = client_endpoint.normalize(endpoint)
+        except ValueError:
+            raise ValueError("В архиве неверный адрес подключения клиентов сервера") from None
 
 
 def validate_servers(rows: list[dict]) -> None:
