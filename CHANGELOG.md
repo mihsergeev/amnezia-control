@@ -4,6 +4,10 @@ All notable changes to Amnezia Control are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.84.65] - 2026-11-23
+
+- Keep users signed in when the server clock steps back slightly. A clock correction of a second or two (NTP, a virtual machine catching up) made a freshly issued login token look "not yet valid", so the next request was refused and the user was logged out right after sign-in. Tokens now tolerate 30 seconds of clock difference; their lifetime is unchanged.
+
 ## [0.84.64] - 2026-11-23
 
 - Confirm the server's SSH host key before the panel sends a setup password. When a new server is set up with a password, the panel now shows the host key fingerprint (ed25519 when available) with the `ssh-keygen -lf` command to compare it on the server, and sends the SSH and sudo passwords only after confirmation, to that exact key. Before, the first key seen was trusted and the passwords went to whoever answered on that address. Imports from links and host lists still trust the first key.
