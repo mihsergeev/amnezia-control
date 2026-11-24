@@ -4,6 +4,11 @@ All notable changes to Amnezia Control are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.84.68] - 2026-11-24
+
+- Harden every value the panel puts into node scripts. A review of deployment, protocols, clients and cascades found no path from the API, a transfer file or a backup to an unquoted shell token; the remaining spots that relied on a caller or on an outside service are now safe on their own. Docker Hub digests are used only when they are real digests, container names and node-reported values are checked strictly and quoted, and the legacy GRE settings file keeps node values quoted.
+- Client DNS no longer accepts line breaks, and refreshing a client profile keeps a stored endpoint literal.
+
 ## [0.84.67] - 2026-11-23
 
 - Security: validate IP addresses strictly before they are used on nodes. Some address checks accepted values that are not plain IP addresses, which could then reach node setup and firewall scripts. SSH hosts and sources, jump hosts, paused client addresses, cascade peers and client DNS values now accept only plain IPv4 and IPv6 addresses or DNS names, and the scripts check them again where they are used. Restoring a backup now also checks each server's client address. Update recommended.
