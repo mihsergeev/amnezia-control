@@ -54,6 +54,21 @@ SOCKS_PORT = 10818
 DOMAIN_STRATEGY = "AsIs"
 # Installed gateways still on the old strategy are moved by cascadewatch.
 _STRATEGY_PY = "import json,sys;print(json.load(open(sys.argv[1])).get('routing',{}).get('domainStrategy','AsIs'))"
+# Addresses the gateway never forwards (the entry's own LAN, loopback, link-local
+# and cloud metadata, carrier NAT, multicast, reserved). Listed explicitly instead
+# of geoip:private: the gateway's geo databases are a third-party download, and an
+# altered "private" list would open the entry's internal networks to VPN clients.
+PRIVATE_NETS = [
+    "0.0.0.0/8", "10.0.0.0/8", "100.64.0.0/10", "127.0.0.0/8", "169.254.0.0/16",
+    "172.16.0.0/12", "192.0.0.0/24", "192.168.0.0/16", "198.18.0.0/15",
+    "224.0.0.0/4", "240.0.0.0/4",
+    "::/128", "::1/128", "fc00::/7", "fe80::/10", "ff00::/8",
+]
+PRIVATE_RULE = {"ip": PRIVATE_NETS, "outboundTag": "block"}
+LEGACY_PRIVATE_RULE = {"ip": ["geoip:private"], "outboundTag": "block"}
+# Installed gateways still on geoip:private are moved by cascadewatch.
+_PRIVATE_PY = ("import json,sys;r=json.load(open(sys.argv[1])).get('routing',{}).get('rules',[]);"
+               "print('geoip' if r and r[0].get('ip')==['geoip:private'] else 'explicit')")
 # метки и таблицы маршрутизации - свои, чтобы не задеть чужие правила на ноде
 TPROXY_MARK = "0x100"
 TPROXY_TABLE = 241
@@ -704,6 +719,8 @@ def exit_vless_config(params: dict) -> str:
             {"tag": "block", "protocol": "blackhole"},
         ],
         "routing": {"rules": [
+            # the exit reads geoip.dat bundled in the digest-pinned xray image,
+            # not the downloaded geo databases of the entry gateway
             {"ip": ["geoip:private"], "outboundTag": "block"},
             {"protocol": ["bittorrent"], "outboundTag": "block"},
         ]},
@@ -800,7 +817,7 @@ def entry_gateway_config(transport: str, exit_ip: str, params: dict, bootstrap: 
             # system resolver, sending client site names to the entry's ISP.
             "domainStrategy": DOMAIN_STRATEGY,
             "rules": [
-                {"ip": ["geoip:private"], "outboundTag": "block"},
+                dict(PRIVATE_RULE, ip=list(PRIVATE_NETS)),
                 *cascade_routes.xray_rules(params.get("routes", [])),
                 *local_rules(country),
             ],
@@ -987,6 +1004,7 @@ def build_check_command(country: str = "") -> str:
         'wait',
         "} &",
         f'echo "CASCADE_DNSSTRATEGY=$(sudo -n python3 -c {shlex.quote(_STRATEGY_PY)} {DIR}/config/config.json 2>/dev/null)"',
+        f'echo "CASCADE_PRIVATERULE=$(sudo -n python3 -c {shlex.quote(_PRIVATE_PY)} {DIR}/config/config.json 2>/dev/null)"',
         cascade_awg.check_command(),
         CASCADE_PROBE_COMMAND,
         _reality_encryption_command(),

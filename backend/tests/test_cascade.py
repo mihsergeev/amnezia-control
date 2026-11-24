@@ -709,7 +709,8 @@ def test_local_rules_follow_entry_country() -> None:
     assert "geosite:category-ir" in json.dumps(rules("IR"))
     ru = json.dumps(rules("RU"))
     assert "geosite:ru-blocked" in ru and "geoip:ru" in ru and "domain:xn--p1ai" in ru
-    assert rules("")[0] == {"ip": ["geoip:private"], "outboundTag": "block"}
+    assert rules("")[0] == cascade.PRIVATE_RULE
+    assert "geoip:private" not in json.dumps(rules(""))
     assert all(rule["outboundTag"] == "exit" for rule in rules("")[1:])
 
 

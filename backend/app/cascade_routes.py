@@ -135,8 +135,7 @@ _UPDATE = r"""
 import json, os, pathlib, socket, stat, subprocess, sys, tempfile, time
 
 payload = json.loads(sys.argv[1])
-directory, gateway, owner, port, prefix, rules = payload[:6]
-country_rules, legacy_groups = payload[6:] if len(payload) > 6 else (None, [])
+directory, gateway, owner, port, prefix, rules, country_rules, legacy_groups, private_rule, legacy_private = payload
 directory = pathlib.Path(directory)
 path = directory / 'config.json'
 pending = directory / '.routes-pending'
@@ -201,7 +200,10 @@ elif not container['State']['Running']:
 original = path.read_bytes()
 config = json.loads(original)
 current = config['routing']['rules']
-if not current or current[0].get('outboundTag') != 'block' or 'geoip:private' not in current[0].get('ip', []):
+# The first rule blocks private networks and marks a gateway this panel wrote.
+# Older gateways used geoip:private; the update replaces it with the explicit list.
+first = {key: value for key, value in current[0].items() if key in ('ip', 'outboundTag')} if current else None
+if first not in (private_rule, legacy_private):
     sys.exit(73)
 base = [rule for rule in current if not rule.get('ruleTag', '').startswith(prefix)]
 if country_rules is not None:
@@ -212,7 +214,7 @@ if country_rules is not None:
         if group and base[-len(group):] == group:
             base = base[:-len(group)]
             break
-updated = base[:1] + rules + base[1:]
+updated = [private_rule] + rules + base[1:]
 if country_rules is not None:
     updated += country_rules
 config['routing']['rules'] = updated
@@ -243,10 +245,11 @@ def country_rules(country: str) -> list[dict]:
 
 def update_script(directory: str, gateway: str, port: int, owner: str, routes: list[dict],
                   country: str | None = None) -> str:
-    payload = [directory, gateway, owner, port, RULE_TAG, xray_rules(routes)]
+    from app.cascade import LEGACY_PRIVATE_RULE, PRIVATE_RULE, local_rules
+    payload = [directory, gateway, owner, port, RULE_TAG, xray_rules(routes), None, [],
+               PRIVATE_RULE, LEGACY_PRIVATE_RULE]
     if country is not None:
-        from app.cascade import local_rules
-        payload += [country_rules(country), [local_rules(code) for code in sorted(geo._COUNTRY_CODES)]]
+        payload[6:8] = [country_rules(country), [local_rules(code) for code in sorted(geo._COUNTRY_CODES)]]
     return "sudo -n python3 -c " + shlex.quote(_UPDATE) + " " + shlex.quote(json.dumps(payload))
 
 
@@ -294,8 +297,8 @@ def read_script(directory: str, gateway: str, owner: str) -> str:
 
 def routing_state(rules: list[dict], country: str, routes: list[dict]) -> dict:
     """Describe a live file observation without confusing desired metadata with it."""
-    from app.cascade import local_rules
-    if not isinstance(rules, list) or not rules or rules[0] != {"ip": ["geoip:private"], "outboundTag": "block"}:
+    from app.cascade import LEGACY_PRIVATE_RULE, PRIVATE_RULE, local_rules
+    if not isinstance(rules, list) or not rules or rules[0] not in (PRIVATE_RULE, LEGACY_PRIVATE_RULE):
         return {"state": "unknown", "applied_country": None}
     tail = [rule for rule in rules[1:] if not rule.get("ruleTag", "").startswith(RULE_TAG)]
     def without_country_tag(rule):
@@ -309,6 +312,7 @@ def routing_state(rules: list[dict], country: str, routes: list[dict]) -> dict:
     expected_manual = xray_rules(routes)
     if applied is None:
         return {"state": "unknown", "applied_country": None}
-    expected = [rules[0], *expected_manual, *local_rules(country)]
+    # a gateway still on geoip:private is "pending" until cascadewatch moves it
+    expected = [PRIVATE_RULE, *expected_manual, *local_rules(country)]
     return {"state": "synced" if [without_country_tag(rule) for rule in rules] == expected else "pending",
             "applied_country": applied}

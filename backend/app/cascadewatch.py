@@ -37,8 +37,10 @@ async def _ssh_check(entry: Server, country: str, settings: Settings) -> str:
 
 
 async def _move_domain_strategy(c: Cascade, entry: Server, settings: Settings) -> None:
-    """One-time move of an installed gateway off IPIfNonMatch, through the same
-    tested in-place update as a routes change (lock, xray -test, restore)."""
+    """One-time move of an installed gateway to the current routing base (AsIs
+    instead of IPIfNonMatch, explicit private networks instead of geoip:private),
+    through the same tested in-place update as a routes change (lock, xray -test,
+    restore)."""
     params = json.loads(c.params or "{}")
     owner = params.get("runtime_owner", "")
     country = (geo.normalize_country_code(params.get("entry_country_override", params.get("entry_country")))
@@ -49,9 +51,9 @@ async def _move_domain_strategy(c: Cascade, entry: Server, settings: Settings) -
     async with nodelock.connect("cascade", entry.id, cascadejob.connect(entry, settings)) as conn:
         result = await conn.run(command, check=False, timeout=125)
     if result.exit_status == 0:
-        log.info("каскад %s: шлюз входа больше не разрешает имена клиентов сам", c.id)
+        log.info("каскад %s: правила шлюза входа обновлены", c.id)
     else:
-        log.warning("каскад %s: не удалось обновить стратегию DNS шлюза (код %s)", c.id, result.exit_status)
+        log.warning("каскад %s: не удалось обновить правила шлюза (код %s)", c.id, result.exit_status)
 
 
 def _since(health: dict, now: datetime) -> datetime:
@@ -119,11 +121,11 @@ async def watch_once(session_factory, settings: Settings, *, now: datetime | Non
             log.info("каскад %s: вход не проверить: %s", c.id, exc)
             continue
         kv = cascade.parse_kv(out)
-        if kv.get("dnsstrategy") == "IPIfNonMatch":
+        if kv.get("dnsstrategy") == "IPIfNonMatch" or kv.get("privaterule") == "geoip":
             try:
                 await (move_strategy or _move_domain_strategy)(c, entry, settings)
             except Exception as exc:  # noqa: BLE001 - the next round tries again
-                log.warning("каскад %s: стратегия DNS шлюза не обновлена: %s", c.id, exc)
+                log.warning("каскад %s: правила шлюза не обновлены: %s", c.id, exc)
         res = cascade.check_result(kv)
         ok, reason = cascade.health(c.transport, kv, res)
         stamp = now or datetime.now(timezone.utc)

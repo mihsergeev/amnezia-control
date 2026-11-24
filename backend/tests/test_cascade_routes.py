@@ -76,7 +76,8 @@ def test_retry_after_config_replace_reloads_the_gateway(tmp_path, monkeypatch, r
     original = [{"ip": ["geoip:private"], "outboundTag": "block"}]
     path.write_text(json.dumps({"routing": {"rules": original}}), encoding="utf-8")
     rules = cascade_routes.xray_rules([{"destination": "example.org", "via": "entry"}])
-    payload = [str(tmp_path), "gateway", "owner", 1080, cascade_routes.RULE_TAG, rules]
+    payload = [str(tmp_path), "gateway", "owner", 1080, cascade_routes.RULE_TAG, rules,
+               None, [], cascade.PRIVATE_RULE, cascade.LEGACY_PRIVATE_RULE]
     monkeypatch.setattr(sys, "argv", ["-c", json.dumps(payload)])
     restarts = []
     running = True
@@ -124,7 +125,9 @@ def test_retry_after_config_replace_reloads_the_gateway(tmp_path, monkeypatch, r
     else:
         running = False
     exec(cascade_routes._UPDATE, {})
-    assert restarts == ([[new_base, *rules]] if reinstalled else [original, original + rules])
+    # the update also moves the base rule from geoip:private to the explicit list
+    assert restarts == ([[cascade.PRIVATE_RULE, *rules]] if reinstalled
+                        else [original, [cascade.PRIVATE_RULE, *rules]])
     assert not (tmp_path / ".routes-pending").exists()
 
 
@@ -139,6 +142,7 @@ def test_failed_route_update_retains_last_working_configuration(tmp_path, monkey
     monkeypatch.setattr(sys, "argv", ["-c", json.dumps([
         str(tmp_path), "gateway", "owner", 1080, cascade_routes.RULE_TAG,
         cascade_routes.xray_rules([{"destination": "example.org", "via": "entry"}]),
+        None, [], cascade.PRIVATE_RULE, cascade.LEGACY_PRIVATE_RULE,
     ])])
     restarts = []
 
@@ -193,3 +197,31 @@ def test_blocked_route_goes_to_the_blackhole_and_health_rules_stay_first():
     assert rules[2]["domain"] == ["domain:probe.example"] and rules[2]["outboundTag"] == "block"
     assert rules[3]["ip"] == ["198.51.100.0/24"] and rules[3]["outboundTag"] == "block"
     assert rules[4]["outboundTag"] == "direct"
+
+
+def test_private_networks_are_listed_not_taken_from_the_geo_databases():
+    cfg = json.loads(cascade.entry_gateway_config("gre", "198.51.100.20", {"routes": []}, country="ru"))
+    first = cfg["routing"]["rules"][0]
+    assert first == cascade.PRIVATE_RULE
+    for net in ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "169.254.0.0/16", "100.64.0.0/10",
+                "127.0.0.0/8", "fc00::/7", "fe80::/10"):
+        assert net in first["ip"]
+    assert "geoip:private" not in json.dumps(cfg)
+
+
+def test_sync_state_accepts_the_legacy_base_as_pending():
+    synced = [cascade.PRIVATE_RULE, *cascade_routes.xray_rules([]), *cascade.local_rules("ru")]
+    legacy = [cascade.LEGACY_PRIVATE_RULE, *synced[1:]]
+    assert cascade_routes.routing_state(synced, "ru", [])["state"] == "synced"
+    assert cascade_routes.routing_state(legacy, "ru", [])["state"] == "pending"
+    assert cascade_routes.routing_state([{"ip": ["geoip:ru"], "outboundTag": "block"}], "ru", [])["state"] == "unknown"
+
+
+def test_update_script_carries_the_private_rule():
+    import shlex
+    script = cascade_routes.update_script("/d", "gw", 1080, "owner", [], "ru")
+    payload = json.loads(shlex.split(script)[-1])
+    assert payload[8] == cascade.PRIVATE_RULE and payload[9] == cascade.LEGACY_PRIVATE_RULE
+    assert len(payload) == 10
+    payload = json.loads(shlex.split(cascade_routes.update_script("/d", "gw", 1080, "owner", []))[-1])
+    assert payload[6] is None and payload[7] == [] and len(payload) == 10

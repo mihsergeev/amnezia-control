@@ -351,6 +351,25 @@ async def test_gateway_on_the_old_dns_strategy_is_moved_once(factory, sent) -> N
     assert (await _health(factory)).get("ok") is True
 
 
+async def test_gateway_on_geoip_private_is_moved(factory, sent) -> None:
+    """geoip:private came from the downloaded geo databases. A gateway still on it
+    is moved to the explicit list; one already on the list is left alone."""
+    settings = config.get_settings()
+    moved = []
+
+    async def move(c, entry, settings):
+        moved.append(c.id)
+
+    await cascadewatch.watch_once(factory, settings, now=NOW,
+                                  check=_check(OK + "CASCADE_DNSSTRATEGY=AsIs\nCASCADE_PRIVATERULE=geoip\n"),
+                                  move_strategy=move)
+    assert moved == [1]
+    await cascadewatch.watch_once(factory, settings, now=NOW,
+                                  check=_check(OK + "CASCADE_DNSSTRATEGY=AsIs\nCASCADE_PRIVATERULE=explicit\n"),
+                                  move_strategy=move)
+    assert moved == [1]
+
+
 def test_new_gateways_never_resolve_names_themselves() -> None:
     from app import cascade_routes
 
