@@ -4,6 +4,10 @@ All notable changes to Amnezia Control are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.84.74] - 2026-11-25
+
+- Security: cascade geo databases are vetted by the panel. Entry gateways used to take the latest release of the third-party geo database repository every day on their own, although its "direct" lists decide which traffic leaves through the entry's provider instead of the exit. The panel now checks each new release (digests, the categories the gateway uses, no country-wide catch-all networks, no foreign addresses in the Russian list, no generic zones or well-known blocked sites in the direct lists, blocked lists that did not shrink sharply) and gives gateways the exact release and hashes it accepted. A release that fails the checks raises an alert and is not used. Installed cascades switch through the periodic cascade check, without a reinstall.
+
 ## [0.84.73] - 2026-11-24
 
 - Security: the cascade entry gateway lists private networks itself instead of taking them from its geo databases. The databases are a third-party download refreshed daily, and an altered "private" list would have let VPN clients reach the entry's own networks, loopback, link-local and cloud metadata addresses. Installed gateways are moved by the periodic cascade check, without a reinstall.
