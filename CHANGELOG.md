@@ -4,6 +4,13 @@ All notable changes to Amnezia Control are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.84.70] - 2026-11-24
+
+- Security: sign-in and password confirmation attempts are now checked one at a time per address and per login. Parallel requests could pass the lockout check before the first failure was counted, so a burst got more password or 2FA guesses than the limit allows. Update recommended.
+- After a restart the panel restores recent successful sign-in addresses from the audit log, so a brute-force lock on the login does not keep the admin out of their usual address.
+- The break-glass password reset from `.env` also revokes API keys, and enabling 2FA signs out other sessions.
+- Deleting a server removes it from API key restrictions. A key that was limited to deleted servers only is revoked instead of getting access to all servers; leftovers from earlier deletions are cleaned up on startup.
+
 ## [0.84.69] - 2026-11-24
 
 - Stop the cascade entry from resolving client site names itself (#22). The entry gateway routed with `IPIfNonMatch` and no DNS section, so names of client sites that matched no domain rule were looked up in clear text with the entry hosting provider's resolver. Gateways now use `AsIs`: domain rules use the sniffed name, IP rules use the original destination, and nothing is resolved on the way. Installed cascades are switched by the panel's periodic check, without a reinstall.
