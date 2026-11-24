@@ -1049,8 +1049,10 @@ def build_check_command(country: str = "") -> str:
         'echo "CASCADE_TUN=$TUN"',
         'echo "CASCADE_RULE=$RULE"',
         'echo "CASCADE_GRERULE=$GRERULE"',
-        # скрипт без строки rev - ставили до ревизий, это 0
-        f"if [ -f {DIR}/cascade-tproxy.sh ]; then REV=$(sed -n 's/^# rev //p' {DIR}/cascade-tproxy.sh); "
+        # скрипт без строки rev - ставили до ревизий, это 0. Через sudo: каталог
+        # каскада бывает закрыт (700), и без sudo панель не под root его не видела -
+        # такие входы никогда не получали новые скрипты
+        f"if sudo -n test -f {DIR}/cascade-tproxy.sh; then REV=$(sudo -n sed -n 's/^# rev //p' {DIR}/cascade-tproxy.sh); "
         'echo "CASCADE_REV=${REV:-0}"; fi',
         'wait',
     ]) + "\n"
@@ -1085,7 +1087,14 @@ except Exception:
 def build_entry_upgrade() -> str:
     """Новые скрипты входа поверх старых: шлюз, туннель и клиентов не трогает.
     Недостающие правила ставит служба heal на первом же круге."""
-    lines = [_HEAD, _put(f"{DIR}/cascade-tproxy.sh", _fill(_TPROXY_SH), "755")]
+    lines = [
+        _HEAD,
+        # scripts here run as root (heal service, geo timer): nobody but root may write
+        # to the directory; some older entries had it group- or world-writable
+        f"sudo chmod go-w {DIR} || fail 'cascade dir mode'",
+        f"if sudo test -d {DIR}/geo; then sudo chmod go-w {DIR}/geo || fail 'geo dir mode'; fi",
+        _put(f"{DIR}/cascade-tproxy.sh", _fill(_TPROXY_SH), "755"),
+    ]
     lines.append(_put(f"{DIR}/geo-update.sh", _fill(_GEO_SH), "755"))
     # GRE-скрипт только там, где каскад на GRE: его параметры уже лежат рядом
     lines.append(f"if [ -f {GRE_DEFAULTS} ]; then")

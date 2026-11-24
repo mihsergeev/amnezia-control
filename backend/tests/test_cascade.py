@@ -1038,3 +1038,19 @@ async def test_probe_reports_nat_without_python() -> None:
                               "203.0.113.10", "198.51.100.20")
     assert res["exit_nat"] is True and res["entry_nat"] is False
     assert res["recommend"] == ""
+
+
+def test_revision_is_read_even_from_a_closed_cascade_dir() -> None:
+    """The cascade dir can be 0700; a panel that logs in as a regular user must
+    still see the scripts revision, or the entry never gets new scripts."""
+    check = cascade.build_check_command("ru")
+    line = next(part for part in check.splitlines() if "CASCADE_REV" in part or "cascade-tproxy.sh; then REV" in part)
+    assert f"sudo -n test -f {cascade.DIR}/cascade-tproxy.sh" in check
+    assert f"REV=$(sudo -n sed -n" in check
+    assert f"if [ -f {cascade.DIR}/cascade-tproxy.sh ]" not in check and line
+
+
+def test_upgrade_closes_writable_cascade_dirs() -> None:
+    script = cascade.build_entry_upgrade()
+    assert f"sudo chmod go-w {cascade.DIR} " in script
+    assert script.index("chmod go-w") < script.index("cascade-tproxy.sh")
