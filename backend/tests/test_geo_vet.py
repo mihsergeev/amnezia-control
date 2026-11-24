@@ -179,8 +179,12 @@ async def test_round_accepts_then_skips_then_refuses_with_one_alert(client, sess
 
 @pytest.mark.parametrize("pin", [None, "202611241408 " + "a" * 64 + " " + "b" * 64])
 def test_entry_install_writes_the_pin_before_the_geo_download(pin):
-    from tests.test_cascade import VLESS
-    script = cascade.build_entry_script("vless", "198.51.100.20", 3, VLESS, "ru", geo_pin=pin)
+    params = {
+        "entry_ip": "203.0.113.10", "exit_ip": "198.51.100.20", "port": 443,
+        "uuid": "11111111-2222-3333-4444-555555555555", "private_key": "priv",
+        "public_key": "pub", "short_id": "0123456789abcdef", "sni": "www.example.com",
+    }
+    script = cascade.build_entry_script("vless", "198.51.100.20", 3, params, "ru", geo_pin=pin)
     download = script.index('geo-update.sh "$GW_TX/config"')
     if pin is None:
         assert "/geo/pin" not in script
