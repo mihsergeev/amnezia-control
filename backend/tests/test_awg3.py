@@ -351,14 +351,19 @@ def test_awg2_update_never_pulls_v3_image() -> None:
 def test_hub_info_separates_2x_line_from_latest(monkeypatch) -> None:
     """hub_info должен отдавать отдельно «последнее в ветке 2.x» — и выбирать по
     ДАТЕ, а не по номеру: тег 2.0.0 старше, чем 0.2.19."""
+    import hashlib
+
     import httpx
 
+    def digest(tag):  # real digests only: anything else never reaches a node script
+        return "sha256:" + hashlib.sha256(tag.encode()).hexdigest()
+
     payload = {"results": [
-        {"name": "latest", "digest": "sha256:v303", "last_updated": "2026-07-31T00:00:00Z"},
-        {"name": "3.0.3", "digest": "sha256:v303", "last_updated": "2026-07-31T00:00:00Z"},
-        {"name": "3.0.2", "digest": "sha256:v302", "last_updated": "2026-07-28T00:00:00Z"},
-        {"name": "0.2.19", "digest": "sha256:v0219", "last_updated": "2026-06-17T00:00:00Z"},
-        {"name": "2.0.0", "digest": "sha256:v200", "last_updated": "2025-12-01T00:00:00Z"},
+        {"name": "latest", "digest": digest("v303"), "last_updated": "2026-07-31T00:00:00Z"},
+        {"name": "3.0.3", "digest": digest("v303"), "last_updated": "2026-07-31T00:00:00Z"},
+        {"name": "3.0.2", "digest": digest("v302"), "last_updated": "2026-07-28T00:00:00Z"},
+        {"name": "0.2.19", "digest": digest("v0219"), "last_updated": "2026-06-17T00:00:00Z"},
+        {"name": "2.0.0", "digest": digest("v200"), "last_updated": "2025-12-01T00:00:00Z"},
     ]}
 
     class FakeResp:
@@ -382,8 +387,8 @@ def test_hub_info_separates_2x_line_from_latest(monkeypatch) -> None:
     import asyncio
 
     info = asyncio.run(deploy.hub_info())
-    assert info["latest_digest"] == "sha256:v303"          # latest — третья версия
-    assert info["line_latest_digest"] == "sha256:v0219"    # ветка 2.x — по дате
+    assert info["latest_digest"] == digest("v303")          # latest — третья версия
+    assert info["line_latest_digest"] == digest("v0219")    # ветка 2.x — по дате
     assert info["line_latest_version"] == "0.2.19"
 
 

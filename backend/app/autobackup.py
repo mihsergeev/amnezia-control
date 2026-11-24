@@ -41,7 +41,7 @@ def ensure_backups_dir(data_dir: str) -> str:
 
 
 def is_backup_name(name: str) -> bool:
-    return bool(_NAME_RE.match(name))
+    return bool(_NAME_RE.fullmatch(name))
 
 
 def list_backups(data_dir: str) -> list[dict]:
@@ -50,7 +50,7 @@ def list_backups(data_dir: str) -> list[dict]:
         return []
     out: list[dict] = []
     for fn in os.listdir(d):
-        if not _NAME_RE.match(fn):
+        if not _NAME_RE.fullmatch(fn):
             continue
         st = os.stat(os.path.join(d, fn))
         out.append({
@@ -73,7 +73,7 @@ def _prune(d: str, keep: int) -> None:
     keep штук, и частые релизы (копия на каждый старт, "Сделать бэкап")
     вытесняли все старые копии за пару дней."""
     files = sorted(
-        (fn for fn in os.listdir(d) if _NAME_RE.match(fn)), reverse=True
+        (fn for fn in os.listdir(d) if _NAME_RE.fullmatch(fn)), reverse=True
     )
     if not files:
         return
@@ -147,7 +147,7 @@ def save_checked(d: str, name: str, archive: bytes) -> tuple[str, list[str]]:
 def _until_due(data_dir: str, interval: float, now: datetime | None = None) -> float:
     """Сколько секунд до следующего бэкапа по времени последней копии (0 - пора)."""
     d = backups_dir(data_dir)
-    names = sorted(fn for fn in os.listdir(d) if _NAME_RE.match(fn)) if os.path.isdir(d) else []
+    names = sorted(fn for fn in os.listdir(d) if _NAME_RE.fullmatch(fn)) if os.path.isdir(d) else []
     if not names:
         return 0
     age = ((now or datetime.now(timezone.utc)) - _stamp(names[-1])).total_seconds()

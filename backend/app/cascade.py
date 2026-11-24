@@ -573,12 +573,12 @@ _DEV_OF = "sed -n 's/.* dev \\([^ ]*\\).*/\\1/p'"
 
 def _gre_defaults(role: str, remote: str, inner: str, net: str, key: int | None = None) -> str:
     lines = [
-        f"IF={GRE_IF}", "LOCAL=$LOCAL", f"REMOTE={remote}", f"INNER={inner}", f"ROLE={role}",
+        f"IF={GRE_IF}", "LOCAL=$(printf %q \"$LOCAL\")", f"REMOTE={remote}", f"INNER={inner}", f"ROLE={role}",
     ]
     if key is not None:
         lines.append(f"KEY={int(key)}")
     if role == "exit":
-        lines += ["EGRESS=$EGRESS", f"NET={net}"]
+        lines += ["EGRESS=$(printf %q \"$EGRESS\")", f"NET={net}"]
     else:
         lines += [f"MARK={hex(GRE_MARK)}", f"TABLE={GRE_TABLE}"]
     return "\n".join(lines) + "\n"
@@ -1396,6 +1396,7 @@ async def _pair(
 
 
 async def probe_tcp(exit_conn, entry_conn, entry_ip: str, exit_ip: str) -> dict:
+    entry_ip, exit_ip = ssh_host.ip_literal(entry_ip), ssh_host.ip_literal(exit_ip)
     port = random.randint(40000, 49999)
     allow = f"INPUT -p tcp -s {entry_ip} --dport {port} -j ACCEPT"
     firewall = "ip6tables" if ipaddress.ip_address(exit_ip).version == 6 else "iptables"
@@ -1452,6 +1453,7 @@ def pick_source(route_src: str, exit_ip: str, nat_ip: str) -> str:
 
 
 async def entry_source_ip(conn: asyncssh.SSHClientConnection, exit_ip: str) -> str:
+    exit_ip = ssh_host.ip_literal(exit_ip)
     version = ipaddress.ip_address(exit_ip).version
     r = await conn.run(f"ip -{version} route get {exit_ip} | {_SRC_OF} | head -1", check=False)
     src = _ip_or_empty(r.stdout if isinstance(r.stdout, str) else "")
@@ -1483,6 +1485,7 @@ def _internal(ip: str) -> bool:
 
 
 async def _route_src(conn, peer: str) -> str:
+    peer = ssh_host.ip_literal(peer)
     r = await conn.run(f"ip -{ipaddress.ip_address(peer).version} route get {peer} | {_SRC_OF} | head -1", check=False)
     return _ip_or_empty(r.stdout if isinstance(r.stdout, str) else "")
 

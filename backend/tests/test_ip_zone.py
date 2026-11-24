@@ -104,3 +104,21 @@ async def test_restore_and_import_reject_zoned_values(client, auth_headers):
     r = await client.post("/api/servers/import-file", content=json.dumps(payload), headers=auth_headers)
     assert r.status_code == 400, r.text
     assert (await client.get("/api/servers", headers=auth_headers)).json() == []
+
+
+@pytest.mark.skipif(__import__("shutil").which("bash") is None or __import__("os").name == "nt", reason="needs bash")
+def test_gre_defaults_file_keeps_node_values_inert(tmp_path):
+    """LOCAL and EGRESS come from the node; the defaults file is sourced by root."""
+    import subprocess
+
+    lines = cascade._gre_install("exit", "192.0.2.1", "10.0.0.2/30", "10.0.0.0/30")
+    heredoc = next(line for line in lines if "<<EOF" in line)
+    target = tmp_path / "defaults"
+    script = heredoc.split("\n", 1)[1].rsplit("EOF", 1)[0]
+    for egress, local in (("eth0", "192.0.2.5"), ("e;touch pwned", "192.0.2.5")):
+        body = f'LOCAL={local!r}; EGRESS={egress!r}; cat > {target} <<EOF\n{script}EOF\n'
+        subprocess.run(["bash", "-c", body], check=True, cwd=tmp_path)
+        sourced = subprocess.run(["bash", "-c", f". {target}; printf '%s|%s' \"$LOCAL\" \"$EGRESS\""],
+                                 capture_output=True, text=True, cwd=tmp_path, check=True)
+        assert sourced.stdout == f"{local}|{egress}"
+        assert not (tmp_path / "pwned").exists()

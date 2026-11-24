@@ -261,7 +261,8 @@ class AwgStateOut(BaseModel):
 # DNS уходит строкой "DNS = ..." в конфиг клиента: перевод строки дописал бы
 # туда любые директивы (PostUp = ... выполнит awg-quick от root). Только адреса
 # IPv4/IPv6 через запятую.
-_DNS_PATTERN = r"^[0-9A-Fa-f:.]+(\s*,\s*[0-9A-Fa-f:.]+){0,3}$"
+# Spaces and tabs only, not \s: a line break would split the "DNS =" line.
+_DNS_PATTERN = r"^[0-9A-Fa-f:.]+([ \t]*,[ \t]*[0-9A-Fa-f:.]+){0,3}$"
 
 
 class CreateClientRequest(ClientLabels):

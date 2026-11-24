@@ -13,6 +13,7 @@ import ipaddress
 import random
 import re
 import secrets
+import shlex
 
 import asyncssh
 import httpx
@@ -443,6 +444,9 @@ def generate_server_config_v3(port: int, address: str = SUBNET_V3, params: dict 
     return {"priv": priv, "pub": pub, "psk": psk, "conf": conf}
 
 
+_DIGEST_RE = re.compile(r"sha256:[0-9a-f]{64}")
+
+
 def build_script(
     mode: str, port: int, cfg: dict[str, str], base_ref: str | None = None
 ) -> str:
@@ -466,6 +470,10 @@ def build_script(
         base_ref = base_ref or BASE_IMAGE_PINNED
     else:
         base_ref = BASE_IMAGE_PINNED
+    # base_ref reaches `docker pull` and `docker inspect` unquoted: only this
+    # repository pinned by a digest is accepted.
+    if not (base_ref.startswith(BASE_REPO + "@") and _DIGEST_RE.fullmatch(base_ref[len(BASE_REPO) + 1:])):
+        raise ValueError("Неверная ссылка на базовый образ AmneziaWG")
     parts = [
         "#!/bin/bash",
         "set -e",
@@ -852,7 +860,7 @@ async def snapshot_config(
     spec = _SNAP_SPECS[tag]
     cont = container or spec["container"]
     cmd = (
-        f'umask 077; C={cont}; R={SNAP_ROOT}/{tag}; '
+        f'umask 077; C={shlex.quote(cont)}; R={SNAP_ROOT}/{tag}; '
         f'sudo docker ps --format "{{{{.Names}}}}" | grep -qx "$C" || {{ echo NO_CONT; exit 0; }}; '
         # TS уникален посекундно; при снимке нескольких контейнеров подряд
         # (пре-оп бэкап) ждём смены секунды, иначе второй снимок затёр бы первый.
@@ -1200,11 +1208,12 @@ async def awg_adoptable(
     wg0.conf) содержит параметры обфускации (Jc/H1...). Обычный WireGuard их не
     имеет: перенос в AmneziaWG-контейнер сломал бы клиентов (у них нет обфускации).
     Поэтому признак совместимости — наличие Jc/H1 в конфиге, а не имя файла."""
-    if not container or not _CONT_NAME_RE.match(container):
+    # fullmatch: with match() "$" also accepts a trailing newline, which splits the command
+    if not container or not _CONT_NAME_RE.fullmatch(container):
         return False
     cmd = (
         'D=$({ [ -w /var/run/docker.sock ] || [ -w /run/docker.sock ]; } && echo docker || echo "sudo -n docker"); '
-        "$D exec " + container + " sh -c '"
+        "$D exec " + shlex.quote(container) + " sh -c '"
         "for f in awg0.conf wg0.conf; do "
         'grep -qiE "^(Jc|H1) *=" "/opt/amnezia/awg/$f" 2>/dev/null '
         "&& { echo YES; exit 0; }; done; echo NO' 2>/dev/null || echo NO"
@@ -1342,6 +1351,10 @@ async def hub_info() -> dict:
     for tag in data.get("results", []):
         name = tag.get("name", "")
         digest = tag.get("digest", "")
+        # The update script pulls this digest on every node as root: a value
+        # from a third-party API is never a shell token unless it is a digest.
+        if not isinstance(digest, str) or not _DIGEST_RE.fullmatch(digest):
+            digest = ""
         if name == "latest":
             latest_digest = digest
             latest_updated = tag.get("last_updated", "")

@@ -112,7 +112,7 @@ async def remove(conn, protocol: str) -> RemoveResult:
     if found is None:
         raise LookupError("Протокол на сервере не найден")
     container, kind = found
-    if not deploy._CONT_NAME_RE.match(container):
+    if not deploy._CONT_NAME_RE.fullmatch(container):
         raise RemoveError(f"Странное имя контейнера: {container}")
     snap = await deploy.snapshot_config(conn, _SNAP_TAG[protocol], container=container)
     if not snap:

@@ -292,7 +292,8 @@ def refresh_profile(conf: str, params: dict, address: str, port: int, subnet: st
     if not host:
         invalid("Сохраненный профиль не содержит endpoint")
     updated = replace_interface(conf, {**params, "Address": address}, server=False)
-    updated = re.sub(r"(?im)^\s*Endpoint\s*=.*$", f"Endpoint = {host}:{port}", updated)
+    # A function, not a template: backslashes in a stored endpoint stay literal.
+    updated = re.sub(r"(?im)^\s*Endpoint\s*=.*$", lambda _m: f"Endpoint = {host}:{port}", updated)
     updated = re.sub(r"(?m)^# ac-subnet = .*\n?", "", updated)
     return f"# ac-subnet = {subnet}\n" + updated
 

@@ -279,6 +279,8 @@ def foreign_guard() -> str:
 
 
 def preflight_command(cascade_id: int | None = None, *, scoped_exit: bool = False) -> str:
+    if cascade_id is not None:
+        cascade_id = int(cascade_id)  # a marker read from a node is never a shell token
     if scoped_exit:
         paths = resources(cascade_id)
         base, cont, iface = paths["base"], paths["container"], paths["interface"]
