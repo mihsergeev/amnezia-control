@@ -4,6 +4,11 @@ All notable changes to Amnezia Control are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.84.69] - 2026-11-24
+
+- Stop the cascade entry from resolving client site names itself (#22). The entry gateway routed with `IPIfNonMatch` and no DNS section, so names of client sites that matched no domain rule were looked up in clear text with the entry hosting provider's resolver. Gateways now use `AsIs`: domain rules use the sniffed name, IP rules use the original destination, and nothing is resolved on the way. Installed cascades are switched by the panel's periodic check, without a reinstall.
+- Cascade routes can block a destination (#21): a manual rule can send a domain or an IP network to the gateway's blackhole instead of through the entry or the exit, for example networks known to probe for VPN servers.
+
 ## [0.84.68] - 2026-11-24
 
 - Harden every value the panel puts into node scripts. A review of deployment, protocols, clients and cascades found no path from the API, a transfer file or a backup to an unquoted shell token; the remaining spots that relied on a caller or on an outside service are now safe on their own. Docker Hub digests are used only when they are real digests, container names and node-reported values are checked strictly and quoted, and the legacy GRE settings file keeps node values quoted.
