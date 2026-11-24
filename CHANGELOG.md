@@ -4,6 +4,12 @@ All notable changes to Amnezia Control are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.84.72] - 2026-11-24
+
+- Security: what nodes download is pinned to content. The Cloak server binary is checked against its sha256, the cascade xray image is pulled by digest, the AmneziaWG 3.x sources are checked against their commits before the build, and an xray release without a pinned hash is refused instead of being installed unchecked. Images already built on nodes are not touched; the checks apply to the next build.
+- Release images carry signed build provenance, so an image under a release tag can be checked against the workflow run that built it from that tag. A manual workflow run no longer overwrites the image of a released version, and the release build no longer uses a shared build cache.
+- Base images, the build tools and the hatchling build backend are pinned by digest or hash, so the image scanned in CI and the released image are built from the same parts. Dependabot proposes updates to these pins.
+
 ## [0.84.71] - 2026-11-24
 
 - Security: large uploads (backup restore, server import) are streamed to the backend instead of being buffered by nginx, so a client without a login can no longer make the panel store hundreds of megabytes on disk before it is refused. Update recommended.
