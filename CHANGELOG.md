@@ -4,6 +4,15 @@ All notable changes to Amnezia Control are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.84.71] - 2026-11-24
+
+- Security: large uploads (backup restore, server import) are streamed to the backend instead of being buffered by nginx, so a client without a login can no longer make the panel store hundreds of megabytes on disk before it is refused. Update recommended.
+- Wrong API keys are checked one at a time per address, so a parallel burst stops at the limit. An API key with an unreadable server list allows no servers instead of all of them.
+- Adding a share service over plain http needs explicit consent, and such services are marked in the list: the profile with its private key travels to the service and to the link recipient in clear text. Replies from a share service are limited in size and total time.
+- Requests without a login no longer write to the diagnostics log, so they cannot push real events out of it.
+- Brute-force lockout alerts are sent at most once per kind every 10 minutes, with a count of the lockouts in between, and never repeat a login that does not exist on the panel.
+- README: a custom reverse proxy in front of the panel must replace `X-Forwarded-For`, not append to it.
+
 ## [0.84.70] - 2026-11-24
 
 - Security: sign-in and password confirmation attempts are now checked one at a time per address and per login. Parallel requests could pass the lockout check before the first failure was counted, so a burst got more password or 2FA guesses than the limit allows. Update recommended.
