@@ -212,6 +212,8 @@ updated = base[:1] + rules + base[1:]
 if country_rules is not None:
     updated += country_rules
 config['routing']['rules'] = updated
+# Unmatched names are never resolved by the entry's own resolver.
+config['routing']['domainStrategy'] = 'AsIs'
 
 with tempfile.TemporaryDirectory(prefix='.routes-test-', dir=directory) as staging:
     candidate = temporary(json.dumps(config, indent=2).encode(), staging)

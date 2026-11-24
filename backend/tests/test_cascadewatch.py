@@ -323,3 +323,40 @@ async def test_manual_check_rejects_result_after_route_change(factory, monkeypat
     async with factory() as s:
         item = (await cascades.list_cascades(None, s))[0]
     assert item.result == {} and item.routes[0].destination == "example.test"
+
+
+async def test_gateway_on_the_old_dns_strategy_is_moved_once(factory, sent) -> None:
+    """An entry on IPIfNonMatch resolved unmatched client site names with its own
+    system resolver. The watch moves such a gateway; an AsIs gateway is left alone."""
+    settings = config.get_settings()
+    moved = []
+
+    async def move(c, entry, settings):
+        moved.append((c.id, entry.id))
+
+    await cascadewatch.watch_once(factory, settings, now=NOW, check=_check(OK + "CASCADE_DNSSTRATEGY=IPIfNonMatch\n"),
+                                  move_strategy=move)
+    assert moved == [(1, 1)]
+    await cascadewatch.watch_once(factory, settings, now=NOW, check=_check(OK + "CASCADE_DNSSTRATEGY=AsIs\n"),
+                                  move_strategy=move)
+    await cascadewatch.watch_once(factory, settings, now=NOW, check=_check(OK), move_strategy=move)
+    assert moved == [(1, 1)]
+
+    async def broken(c, entry, settings):
+        raise OSError("entry unreachable")
+
+    # A failed move never breaks the health check; the next round tries again.
+    await cascadewatch.watch_once(factory, settings, now=NOW + timedelta(minutes=1),
+                                  check=_check(OK + "CASCADE_DNSSTRATEGY=IPIfNonMatch\n"), move_strategy=broken)
+    assert (await _health(factory)).get("ok") is True
+
+
+def test_new_gateways_never_resolve_names_themselves() -> None:
+    from app import cascade_routes
+
+    for transport in ("gre", "awg"):
+        cfg = json.loads(cascade.entry_gateway_config(transport, "203.0.113.9", {}, country="ru"))
+        assert cfg["routing"]["domainStrategy"] == "AsIs" and "dns" not in cfg
+        assert cfg["inbounds"][0]["sniffing"]["routeOnly"] is True
+    assert "CASCADE_DNSSTRATEGY=" in cascade.build_check_command("ru")
+    assert "config['routing']['domainStrategy'] = 'AsIs'" in cascade_routes._UPDATE

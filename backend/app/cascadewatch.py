@@ -19,7 +19,8 @@ from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import select
 
-from app import alerts, cascade, cascade_observations, cascadejob, nodelock, settings_store
+from app import (alerts, cascade, cascade_lock, cascade_observations, cascade_routes, cascadejob, geo,
+                 nodelock, settings_store)
 from app.config import Settings
 from app.models import Cascade, Server
 
@@ -33,6 +34,24 @@ START_DELAY = 60
 async def _ssh_check(entry: Server, country: str, settings: Settings) -> str:
     async with nodelock.connect("cascade", entry.id, cascadejob.connect(entry, settings)) as conn:
         return await cascade.run_check(conn, country, timeout=90)
+
+
+async def _move_domain_strategy(c: Cascade, entry: Server, settings: Settings) -> None:
+    """One-time move of an installed gateway off IPIfNonMatch, through the same
+    tested in-place update as a routes change (lock, xray -test, restore)."""
+    params = json.loads(c.params or "{}")
+    owner = params.get("runtime_owner", "")
+    country = (geo.normalize_country_code(params.get("entry_country_override", params.get("entry_country")))
+               or geo.normalize_country_code(entry.country)) or None
+    script = cascade_routes.update_script(f"{cascade.DIR}/config", cascade.GATEWAY, cascade.SOCKS_PORT,
+                                          owner, params.get("routes", []), country)
+    command = cascade_lock.wrap(c.id, script, owner, edit=True)
+    async with nodelock.connect("cascade", entry.id, cascadejob.connect(entry, settings)) as conn:
+        result = await conn.run(command, check=False, timeout=125)
+    if result.exit_status == 0:
+        log.info("каскад %s: шлюз входа больше не разрешает имена клиентов сам", c.id)
+    else:
+        log.warning("каскад %s: не удалось обновить стратегию DNS шлюза (код %s)", c.id, result.exit_status)
 
 
 def _since(health: dict, now: datetime) -> datetime:
@@ -75,7 +94,7 @@ async def _send(session, settings: Settings, entry: str, exit_: str, event: str,
 
 
 async def watch_once(session_factory, settings: Settings, *, now: datetime | None = None,
-                     check=None) -> None:
+                     check=None, move_strategy=None) -> None:
     """Одна проверка всех готовых каскадов. check(entry) -> вывод проверки (для тестов)."""
     grace = timedelta(minutes=max(0, settings.cascade_down_minutes))
     async with session_factory() as session:
@@ -100,6 +119,11 @@ async def watch_once(session_factory, settings: Settings, *, now: datetime | Non
             log.info("каскад %s: вход не проверить: %s", c.id, exc)
             continue
         kv = cascade.parse_kv(out)
+        if kv.get("dnsstrategy") == "IPIfNonMatch":
+            try:
+                await (move_strategy or _move_domain_strategy)(c, entry, settings)
+            except Exception as exc:  # noqa: BLE001 - the next round tries again
+                log.warning("каскад %s: стратегия DNS шлюза не обновлена: %s", c.id, exc)
         res = cascade.check_result(kv)
         ok, reason = cascade.health(c.transport, kv, res)
         stamp = now or datetime.now(timezone.utc)

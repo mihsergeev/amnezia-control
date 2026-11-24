@@ -47,6 +47,9 @@ GRE_IF = "acgre"
 GRE_DEFAULTS = "/etc/default/acontrol-gre"
 TPROXY_PORT = 12350
 SOCKS_PORT = 10818
+DOMAIN_STRATEGY = "AsIs"
+# Installed gateways still on the old strategy are moved by cascadewatch.
+_STRATEGY_PY = "import json,sys;print(json.load(open(sys.argv[1])).get('routing',{}).get('domainStrategy','AsIs'))"
 # метки и таблицы маршрутизации - свои, чтобы не задеть чужие правила на ноде
 TPROXY_MARK = "0x100"
 TPROXY_TABLE = 241
@@ -787,7 +790,11 @@ def entry_gateway_config(transport: str, exit_ip: str, params: dict, bootstrap: 
             {"tag": "block", "protocol": "blackhole"},
         ],
         "routing": {
-            "domainStrategy": "IPIfNonMatch",
+            # AsIs with routeOnly sniffing: domain rules use the sniffed name,
+            # IP rules use the original destination, and no name is resolved.
+            # IPIfNonMatch resolved every unmatched name with the entry's
+            # system resolver, sending client site names to the entry's ISP.
+            "domainStrategy": DOMAIN_STRATEGY,
             "rules": [
                 {"ip": ["geoip:private"], "outboundTag": "block"},
                 *cascade_routes.xray_rules(params.get("routes", [])),
@@ -975,6 +982,7 @@ def build_check_command(country: str = "") -> str:
         *([f'echo "CASCADE_RU=$(client_https {local_url.removeprefix("https://")} 2>/dev/null | {_IP_FROM_HTML})"'] if local_url else []),
         'wait',
         "} &",
+        f'echo "CASCADE_DNSSTRATEGY=$(sudo -n python3 -c {shlex.quote(_STRATEGY_PY)} {DIR}/config/config.json 2>/dev/null)"',
         cascade_awg.check_command(),
         CASCADE_PROBE_COMMAND,
         _reality_encryption_command(),
