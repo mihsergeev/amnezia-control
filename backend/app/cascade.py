@@ -38,7 +38,11 @@ from app.cascade_underlay import CASCADE_PROBE_COMMAND
 
 # Оба конца каскада обновляются вместе; наш chrome-профиль поддерживает
 # X25519MLKEM768. UUID и ключи каскада при обновлении сохраняются.
-XRAY_IMAGE = "ghcr.io/xtls/xray-core:26.10.31"
+# Tag plus digest: a tag on GHCR can be moved, the digest cannot. The digest is the
+# one already running on production cascades (checked 2026-11-24).
+XRAY_VERSION = "26.10.31"
+XRAY_DIGEST = "sha256:ceabeac03a89d991d2a247361825c1d1d2e9c91cd5dc010f298c7dc0c2f325c9"
+XRAY_IMAGE = f"ghcr.io/xtls/xray-core:{XRAY_VERSION}@{XRAY_DIGEST}"
 DIR = "/opt/acontrol/cascade"
 EXIT_DIR = "/opt/acontrol/cascade-exit"
 GATEWAY = "acontrol-cascade"

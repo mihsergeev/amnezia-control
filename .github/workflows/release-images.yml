@@ -12,6 +12,15 @@ on:
 permissions:
   contents: read
   packages: write
+  # signed build provenance (Sigstore through GitHub OIDC): rollout checks that
+  # an image under a release tag was built by this workflow from that tag
+  id-token: write
+  attestations: write
+
+# a second run for the same ref waits instead of racing the first one to the tags
+concurrency:
+  group: release-images-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
   images:
@@ -25,9 +34,17 @@ jobs:
             context: ./frontend
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
+      # QEMU and BuildKit images by digest: the actions are pinned, but by
+      # default they pull these images by moving tags
       - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
+        with:
+          image: docker.io/tonistiigi/binfmt:latest@sha256:400a4873b838d1b89194d982c45e5fb3cda4593fbfd7e08a02e76b03b21166f0
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+        with:
+          driver-opts: image=moby/buildkit:buildx-stable-1@sha256:baf6138eb8c37644800c7c913fba051e840ebb9ba13eaf92d92ef9a1712d0b4c
 
       - name: Log in to GHCR
         uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
@@ -41,15 +58,14 @@ jobs:
         uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
         with:
           images: ghcr.io/${{ github.repository_owner }}/amnezia-control-${{ matrix.name }}
-          # latest ставим сами и только на опубликованный стабильный релиз: без
-          # latest=false metadata-action добавил бы его и к semver-тегам при ручном
-          # запуске (workflow_dispatch) на теге. Ручной запуск latest не трогает,
-          # а с ветки получает только тег sha-<коммит>, чтобы было что публиковать.
+          # Версионные теги и latest - только при публикации релиза. Ручной запуск
+          # (workflow_dispatch) получает лишь тег sha-<коммит>: иначе запуск на
+          # теге v* пересобирал бы и перезаписывал образ уже выпущенной версии.
           flavor: |
             latest=false
           tags: |
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{version}},enable=${{ github.event_name == 'release' }}
+            type=semver,pattern={{major}}.{{minor}},enable=${{ github.event_name == 'release' }}
             type=raw,value=latest,enable=${{ github.event_name == 'release' && !github.event.release.prerelease }}
             type=sha,enable=${{ github.event_name == 'workflow_dispatch' }}
 
@@ -83,7 +99,10 @@ jobs:
               raise SystemExit(f"Backend version {actual} does not match release version {expected}")
           ' "$expected_version"
 
+      # Без кэша GHA: кэш scope main пишут прогоны CI, которые ставят пакеты с
+      # PyPI, а слой из кэша релизная сборка взяла бы как свой.
       - name: Build and push
+        id: push
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: ${{ matrix.context }}
@@ -91,5 +110,24 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+
+      - name: Smoke test of the published image (both platforms)
+        env:
+          IMAGE: ghcr.io/${{ github.repository_owner }}/amnezia-control-${{ matrix.name }}@${{ steps.push.outputs.digest }}
+          NAME: ${{ matrix.name }}
+        run: |
+          for platform in linux/amd64 linux/arm64; do
+            if [[ "$NAME" == backend ]]; then
+              docker run --rm --platform "$platform" --entrypoint python "$IMAGE" -c 'import app.main'
+            else
+              # nginx -t needs the backend host from compose; check the built app instead
+              docker run --rm --platform "$platform" --entrypoint sh "$IMAGE" -c 'test -s /usr/share/nginx/html/index.html'
+            fi
+          done
+
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-name: ghcr.io/${{ github.repository_owner }}/amnezia-control-${{ matrix.name }}
+          subject-digest: ${{ steps.push.outputs.digest }}
+          push-to-registry: true

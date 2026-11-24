@@ -54,6 +54,10 @@ SUBNET = "10.8.1.0/24"
 # мог раздуть пакет больше UDP-окна
 AWG3_GO_TAG = "v3.1.20260828"  # amneziawg-go (движок)
 AWG3_TOOLS_TAG = "v3.1.20260812"  # amneziawg-tools (awg / awg-quick)
+# Коммиты этих тегов: тег в git можно переставить, поэтому после clone сверяем
+# HEAD (код собирается и запускается в privileged-контейнере)
+AWG3_GO_COMMIT = "b5928efb6ca19f0153958460c3d141f04abc5c2e"
+AWG3_TOOLS_COMMIT = "ee0f0a9aa34ff0a0da4b3433b9512781cfe02843"
 # Версия протокола в vpn://-ссылке. У приложения это СТРОКА «3.1»
 # (protocolConstants.h: awgV3[] = "3.1"), а не «3»: наши прежние ссылки с "3"
 # приложение не распознавало и рисовало сервер без номера версии. Более того,
@@ -135,11 +139,13 @@ _V3_GO_PKGS = "git make"
 _V3_TOOLS_PKGS = "git make build-base linux-headers bash"
 _V3_GO_MAKE = (
     f"git clone --depth 1 --branch {AWG3_GO_TAG} "
-    "https://github.com/amnezia-vpn/amneziawg-go /src && make -C /src"
+    "https://github.com/amnezia-vpn/amneziawg-go /src && "
+    f'test "$(git -C /src rev-parse HEAD)" = {AWG3_GO_COMMIT} && make -C /src'
 )
 _V3_TOOLS_MAKE = (
     f"git clone --depth 1 --branch {AWG3_TOOLS_TAG} "
     "https://github.com/amnezia-vpn/amneziawg-tools /src && "
+    f'test "$(git -C /src rev-parse HEAD)" = {AWG3_TOOLS_COMMIT} && '
     "make -C /src/src install DESTDIR=/out PREFIX=/usr WITH_WGQUICK=yes"
 )
 

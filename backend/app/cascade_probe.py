@@ -721,7 +721,7 @@ async def run(exit_conn, entry_conn, entry_ip: str, exit_ip: str, transport: str
     subnet = ipaddress.ip_network(f"198.18.{secrets.randbelow(256)}.{secrets.randbelow(64) * 4}/30")
     entry_inner, exit_inner = str(subnet[1]), str(subnet[2])
     images = [cascade_awg.IMAGE, deploy.IMAGE_V3, AWG_PROBE_IMAGE] if transport == "awg" else [cascade.XRAY_IMAGE, "amnezia-xray"]
-    xray_version = cascade.XRAY_IMAGE.rsplit(":", 1)[1]
+    xray_version = cascade.XRAY_VERSION
     base = {"tag": run_id, "transport": transport, "address_family": version, "token": secrets.token_hex(24),
             "total": PAYLOAD_BYTES, "lease": LEASE_SECONDS, "images": images, "network": str(subnet),
             "gre_key": int(run_id[:8], 16) or 1, "xray_version": xray_version}

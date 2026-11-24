@@ -151,7 +151,10 @@ def test_mptcp_optout_covers_gateway_exit_and_geo_check() -> None:
 
 
 def test_cascade_security_release_keeps_reality_identity() -> None:
-    assert cascade.XRAY_IMAGE == "ghcr.io/xtls/xray-core:26.10.31"
+    assert cascade.XRAY_IMAGE == (
+        "ghcr.io/xtls/xray-core:26.10.31"
+        "@sha256:ceabeac03a89d991d2a247361825c1d1d2e9c91cd5dc010f298c7dc0c2f325c9"
+    )
     entry = json.loads(cascade.entry_gateway_config("vless", "198.51.100.20", VLESS))
     exit_cfg = json.loads(cascade.exit_vless_config(VLESS))
     out = entry["outbounds"][0]

@@ -1,8 +1,11 @@
-FROM node:26-alpine AS build
+# Base image by digest, so the CI scan and the release build use the same base.
+FROM node:26-alpine@sha256:6bd9ab43c0ec0190ca7b2d193906cb8b7edf6e7f4afa43ddeccd6452710bffb5 AS build
 
 WORKDIR /build
 COPY package.json package-lock.json ./
-RUN npm ci
+# no install scripts: none of the dependencies needs one, and swagger-ui pulls a
+# telemetry postinstall (@scarf/scarf)
+RUN npm ci --ignore-scripts
 COPY . .
 RUN npm run build
 

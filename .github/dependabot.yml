@@ -1,0 +1,19 @@
+version: 2
+# Base images and actions are pinned by digest and commit SHA. Without updates
+# the pins would freeze security fixes, so Dependabot proposes new ones weekly;
+# they land through the same CI and review as any other change.
+updates:
+  - package-ecosystem: docker
+    directories: ["/backend", "/frontend"]
+    schedule:
+      interval: weekly
+    groups:
+      base-images:
+        patterns: ["*"]
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ["*"]

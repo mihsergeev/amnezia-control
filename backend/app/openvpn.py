@@ -464,6 +464,7 @@ RUN apk add --no-cache openvpn easy-rsa iptables ip6tables net-tools psmisc \\
   dumb-init shadowsocks-rust openssl bash curl ca-certificates
 RUN curl -fsSL -o /usr/local/bin/ck-server \\
   https://github.com/cbeuw/Cloak/releases/download/v2.12.0/ck-server-linux-amd64-v2.12.0 \\
+  && echo 'f2bea92c99195ac26cd5749e80d07339d5582c103f73934b414150c6070dae4e  /usr/local/bin/ck-server' | sha256sum -c - \\
   && chmod +x /usr/local/bin/ck-server
 ENTRYPOINT ["dumb-init","/opt/amnezia/start.sh"]
 """

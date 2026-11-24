@@ -840,9 +840,11 @@ RUN apk --update upgrade --no-cache
 RUN mkdir -p /opt/amnezia/xray
 RUN curl -fsSL --retry 3 --connect-timeout 15 --max-time 180 \\
   https://github.com/XTLS/Xray-core/releases/download/${XRAY_RELEASE}/Xray-linux-64.zip -o /root/xray.zip \\
-  && if [ "$XRAY_RELEASE" = "v26.10.31" ]; then \\
-    echo 'e4bd9119f50ae7c41658b1abd0679ae06f98bd864a2907ff33f2f2cf7081b214  /root/xray.zip' | sha256sum -c -; \\
-  fi \\
+  && case "$XRAY_RELEASE" in \\
+    v26.10.31) SUM=e4bd9119f50ae7c41658b1abd0679ae06f98bd864a2907ff33f2f2cf7081b214 ;; \\
+    *) echo "no pinned sha256 for $XRAY_RELEASE" >&2; exit 1 ;; \\
+  esac \\
+  && echo "$SUM  /root/xray.zip" | sha256sum -c - \\
   && unzip -q /root/xray.zip -d /usr/bin/ \\
   && chmod a+x /usr/bin/xray \\
   && /usr/bin/xray version \\
