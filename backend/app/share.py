@@ -9,6 +9,8 @@
   pwpush      - Password Pusher (POST /api/v2/pushes, ссылка /p/<token>/r)
 Движок определяется по самому сервису при добавлении (detect_engine)."""
 
+import asyncio
+import json
 from urllib.parse import quote, urlsplit, urlunsplit
 
 import httpx
@@ -16,7 +18,11 @@ import httpx
 ENGINES = ("sup3rs3cret", "pwpush")
 TTL_DAYS = 7  # сколько живет ссылка, если ее никто не открыл
 TIMEOUT = 15
-MAX_TEXT = 100_000
+# Таймаут httpx действует на каждую фазу отдельно: сервис, отдающий ответ по
+# байту, держал бы запрос бесконечно. Общий срок и потолок размера ответа -
+# сверху (ответы обоих движков - короткий JSON или страница).
+TOTAL_TIMEOUT = 25
+MAX_RESPONSE = 256 * 1024
 
 
 class ShareError(Exception):
@@ -30,6 +36,46 @@ def public_url(url: str) -> str:
     except ValueError as exc:
         raise ShareError("неверный адрес сервиса") from exc
     return urlunsplit(parts._replace(netloc=parts.netloc.rsplit("@", 1)[-1]))
+
+
+def insecure(url: str) -> bool:
+    """Сервис без TLS: конфиг с ключом идет к нему и к получателю открытым текстом."""
+    return urlsplit(url).scheme == "http"
+
+
+class _Reply:
+    """Прочитанный с потолком ответ сервиса."""
+
+    def __init__(self, status_code: int, body: bytes, encoding: str | None) -> None:
+        self.status_code = status_code
+        self.body = body
+        self.encoding = encoding or "utf-8"
+
+    @property
+    def text(self) -> str:
+        return self.body.decode(self.encoding, errors="replace")
+
+    def json(self):
+        return json.loads(self.body)
+
+
+async def _send(http: httpx.AsyncClient, method: str, url: str, **kwargs) -> _Reply:
+    try:
+        async with asyncio.timeout(TOTAL_TIMEOUT):
+            async with http.stream(method, url, follow_redirects=False, **kwargs) as r:
+                body = bytearray()
+                async for chunk in r.aiter_bytes():
+                    body += chunk
+                    if len(body) > MAX_RESPONSE:
+                        raise ShareError("сервис ответил слишком большим ответом")
+                return _Reply(r.status_code, bytes(body), r.encoding)
+    except TimeoutError as exc:
+        raise ShareError("сервис не отвечает") from exc
+
+
+def _check_status(r: _Reply) -> None:
+    if not 200 <= r.status_code < 300:
+        raise ShareError(f"сервис ответил {r.status_code}")
 
 
 def normalize_url(url: str) -> str:
@@ -54,13 +100,13 @@ def normalize_url(url: str) -> str:
 async def detect_engine(base: str, client: httpx.AsyncClient | None = None) -> str:
     async with _client(client) as http:
         try:
-            r = await http.get(f"{base}/api/v2/version", follow_redirects=False)
+            r = await _send(http, "GET", f"{base}/api/v2/version")
             if r.status_code == 200 and isinstance(r.json(), dict) and "application_version" in r.json():
                 return "pwpush"
-        except (httpx.HTTPError, ValueError):
+        except (httpx.HTTPError, ValueError, ShareError):
             pass
         try:
-            r = await http.get(f"{base}/msg", follow_redirects=False)
+            r = await _send(http, "GET", f"{base}/msg")
             if r.status_code == 200 and "sup3rS3cretMes5age" in r.text:
                 return "sup3rs3cret"
         except httpx.HTTPError as exc:
@@ -75,28 +121,26 @@ async def create_link(
     async with _client(client) as http:
         try:
             if engine == "sup3rs3cret":
-                r = await http.post(
-                    f"{base}/secret",
+                r = await _send(
+                    http, "POST", f"{base}/secret",
                     files={"msg": (None, text), "ttl": (None, f"{TTL_DAYS * 24}h")},
-                    follow_redirects=False,
                 )
-                r.raise_for_status()
+                _check_status(r)
                 data = r.json()
                 token = data.get("token") if isinstance(data, dict) else None
                 if not isinstance(token, str) or not token:
                     raise ShareError("сервис не вернул токен")
                 return f"{public_url(base)}/getmsg?token={quote(token, safe='')}"
             if engine == "pwpush":
-                r = await http.post(
-                    f"{base}/api/v2/pushes",
+                r = await _send(
+                    http, "POST", f"{base}/api/v2/pushes",
                     json={"push": {
                         "payload": text,
                         "expire_after_days": TTL_DAYS,
                         "expire_after_views": 1,
                     }},
-                    follow_redirects=False,
                 )
-                r.raise_for_status()
+                _check_status(r)
                 data = r.json()
                 if not isinstance(data, dict):
                     raise ShareError("сервис не вернул ссылку")
@@ -108,8 +152,6 @@ async def create_link(
                         raise ShareError("ссылка ведет на другой сервис")
                     return url
                 raise ShareError("сервис не вернул ссылку")
-        except httpx.HTTPStatusError as exc:
-            raise ShareError(f"сервис ответил {exc.response.status_code}") from exc
         except httpx.HTTPError as exc:
             # Исключение может содержать полный URL со старыми credentials.
             raise ShareError("сервис не отвечает") from exc

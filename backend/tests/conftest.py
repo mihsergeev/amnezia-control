@@ -49,6 +49,8 @@ def _reset_ratelimit():
         auth._known_ips.clear()
         auth._known_loaded = False
         ratelimit._queues.clear()
+        auth._alert_last.clear()
+        auth._alert_skipped.clear()
         apikeys._ok_cache.clear()
 
     reset()

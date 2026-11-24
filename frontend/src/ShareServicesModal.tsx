@@ -31,7 +31,9 @@ export function ShareServicesModal({ onClose, onUnauthorized }: Props) {
   const [url, setUrl] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [pending, setPending] = useState<{ name: string; url: string } | null>(null)
+  const [allowHttp, setAllowHttp] = useState(false)
+  const [pending, setPending] = useState<{ name: string; url: string; allowHttp: boolean } | null>(null)
+  const plainHttp = /^\s*http:\/\//i.test(url)
 
   useEffect(() => {
     getShareServices()
@@ -63,10 +65,11 @@ export function ShareServicesModal({ onClose, onUnauthorized }: Props) {
     if (!pending) return
     setBusy(true)
     try {
-      setServices(await addShareService(pending.name, pending.url, password))
+      setServices(await addShareService(pending.name, pending.url, password, pending.allowHttp))
       resetShareServices()
       setName('')
       setUrl('')
+      setAllowHttp(false)
       setError(null)
       setPending(null)
     } catch (err) {
@@ -98,7 +101,8 @@ export function ShareServicesModal({ onClose, onUnauthorized }: Props) {
           <a href="https://github.com/pglombardo/PasswordPusher" target="_blank" rel="noreferrer">
             Password Pusher
           </a>.{' '}
-          {t('Разверните любой из этих сервисов и укажите его адрес. В окне конфига появится кнопка «Ссылка».')}
+          {t('Разверните любой из этих сервисов и укажите его адрес. В окне конфига появится кнопка «Ссылка».')}{' '}
+          {t('Сервис видит конфиг целиком, вместе с ключом клиента: подключайте только сервис, которому доверяете как самой панели.')}
         </p>
 
         {loading ? (
@@ -113,6 +117,9 @@ export function ShareServicesModal({ onClose, onUnauthorized }: Props) {
                       <b>{s.name}</b>
                       <div className="muted small mono">{s.url}</div>
                       <div className="muted small">{ENGINE_LABEL[s.engine] ?? s.engine}</div>
+                      {s.insecure && (
+                        <div className="form-error small">{t('Без HTTPS: конфиги идут по сети открытым текстом')}</div>
+                      )}
                     </div>
                     <button
                       className="ghost danger"
@@ -144,6 +151,16 @@ export function ShareServicesModal({ onClose, onUnauthorized }: Props) {
                   placeholder="https://secret.example.com"
                 />
               </label>
+              {plainHttp && (
+                <label className="checkbox">
+                  <input
+                    type="checkbox"
+                    checked={allowHttp}
+                    onChange={(e) => setAllowHttp(e.currentTarget.checked)}
+                  />
+                  {t('Разрешить адрес без HTTPS: конфиг с ключом пойдет к сервису и к получателю ссылки открытым текстом. Только для сервиса в доверенной сети.')}
+                </label>
+              )}
               <p className="muted small">
                 {t(
                   'Если название совпадает с группой сервера, этот сервис предлагается первым для его клиентов.',
@@ -154,7 +171,10 @@ export function ShareServicesModal({ onClose, onUnauthorized }: Props) {
             {error && <p className="form-error">{error}</p>}
 
             <div className="modal-actions">
-              <button onClick={() => setPending({ name: name.trim(), url: url.trim() })} disabled={busy || !name.trim() || !url.trim()}>
+              <button
+                onClick={() => setPending({ name: name.trim(), url: url.trim(), allowHttp: plainHttp && allowHttp })}
+                disabled={busy || !name.trim() || !url.trim() || (plainHttp && !allowHttp)}
+              >
                 {busy ? t('Проверяю…') : t('Добавить')}
               </button>
             </div>

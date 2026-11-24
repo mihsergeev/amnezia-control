@@ -14,7 +14,8 @@ router = APIRouter(prefix="/share", tags=["share"])
 def _public_services(services: list[dict]) -> list[dict]:
     # Старые записи могут содержать Basic Auth: запросы сервиса продолжают
     # работать, но credentials не попадают в ответы UI.
-    return [{**svc, "url": share.public_url(svc["url"])} for svc in services]
+    return [{**svc, "url": share.public_url(svc["url"]), "insecure": share.insecure(svc["url"])}
+            for svc in services]
 
 
 @router.get("/services", response_model=list[ShareServiceOut])
@@ -30,6 +31,11 @@ async def add_service(
     await stepup.verify(user, body.password, request, otp=body.otp)
     try:
         base = share.normalize_url(body.url)
+        if share.insecure(base) and not body.allow_http:
+            raise share.ShareError(
+                "адрес без HTTPS: конфиг с ключом пойдет к сервису и к получателю открытым "
+                "текстом. Разрешите http явно, только если сервис в доверенной сети"
+            )
         engine = await share.detect_engine(base)
     except share.ShareError as exc:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
@@ -40,7 +46,8 @@ async def add_service(
         "id": secrets.token_hex(4), "name": body.name.strip(), "url": base, "engine": engine,
     })
     await settings_store.set_share_services(session, services)
-    await audit.record(session, user.username, "share_service_add", body.name, base)
+    await audit.record(session, user.username, "share_service_add", body.name,
+                       base + (" (без HTTPS)" if share.insecure(base) else ""))
     return _public_services(services)
 
 

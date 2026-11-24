@@ -231,7 +231,7 @@ docker network inspect caddy -f '{{(index .IPAM.Config 0).Gateway}}'
 
 Встроенный Caddy (`compose.tls.yml`) публикует порты из собственной сети панели, а у нее IPv6 нет: при заданном списке клиенты по IPv6 получают 403. Заходите в панель по IPv4 или включите IPv6 у этой сети в compose-override (`networks: internal: enable_ipv6: true`, Docker 27+).
 
-**Любой другой прокси** (обычный Caddy с Caddyfile, nginx, Traefik) эти метки не читает — используйте standalone: опубликуйте порт (`ACONTROL_BIND`) и направьте прокси на него, либо подключите свой прокси к сети `acontrol_internal` и проксируйте на `acontrol-frontend-1:80`.
+**Любой другой прокси** (обычный Caddy с Caddyfile, nginx, Traefik) эти метки не читает — используйте standalone: опубликуйте порт (`ACONTROL_BIND`) и направьте прокси на него, либо подключите свой прокси к сети `acontrol_internal` и проксируйте на `acontrol-frontend-1:80`. Прокси должен заменять `X-Forwarded-For` адресом клиента, а не дописывать к нему (nginx: `proxy_set_header X-Forwarded-For $remote_addr;`, Caddy делает так по умолчанию): панель по умолчанию доверяет docker-сетям, и дописанный заголовок позволяет клиенту выбрать адрес, который увидят лимит входа и журнал. Не держите чужие контейнеры в сетях, из которых виден фронтенд панели.
 
 ---
 

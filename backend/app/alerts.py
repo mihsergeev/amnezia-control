@@ -88,6 +88,7 @@ EN = {
     "Бэкап не прошел самопроверку": "Backup failed its self-test",
     "{problems}. Восстановиться из него может не выйти": "{problems}. Restoring from it may fail",
     "Пароль «{user}» сброшен из .env": "Password for \"{user}\" reset from .env",
+    "{what}. Еще блокировок после прошлого алерта: {n}": "{what}. More lockouts since the previous alert: {n}",
     "2FA отключена, API-ключи отозваны. Уберите флаг сброса из .env, иначе это повторится при каждом перезапуске":
         "2FA is off and API keys are revoked. Remove the reset flag from .env, or this repeats on every restart",
     "Развертывание {proto} не удалось": "{proto} deployment failed",

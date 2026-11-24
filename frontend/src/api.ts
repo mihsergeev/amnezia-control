@@ -1044,16 +1044,19 @@ export const PROTOCOL_LABEL: Record<string, string> = {
 }
 
 // --- одноразовые ссылки на конфиг через сервисы секретов ---
-export type ShareService = { id: string; name: string; url: string; engine: string }
+// insecure: сервис без HTTPS (добавлен с явным разрешением http)
+export type ShareService = { id: string; name: string; url: string; engine: string; insecure?: boolean }
 
 export function getShareServices(): Promise<ShareService[]> {
   return api<ShareService[]>('/api/share/services')
 }
 
-export function addShareService(name: string, url: string, password: string): Promise<ShareService[]> {
+export function addShareService(
+  name: string, url: string, password: string, allowHttp = false,
+): Promise<ShareService[]> {
   return api<ShareService[]>('/api/share/services', {
     method: 'POST',
-    body: JSON.stringify({ name, url, password }),
+    body: JSON.stringify({ name, url, password, allow_http: allowHttp }),
   })
 }
 

@@ -6,6 +6,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app import apikeys, ratelimit
+from app.debug_context import mark_authenticated
 from app.clientip import client_ip
 from app.config import get_settings
 from app.db import get_session
@@ -44,6 +45,7 @@ async def get_current_user(
     # токен, выпущенный до смены пароля (иная version), больше не действителен
     if payload.get("ver", 0) != user.token_version:
         raise unauthorized
+    mark_authenticated()
     return user
 
 
@@ -66,17 +68,22 @@ async def get_api_client(
             status.HTTP_401_UNAUTHORIZED, "Требуется заголовок X-API-Key"
         )
     limit_key = f"apikey:{ratelimit.ip_key(client_ip(request))}"
-    if ratelimit.is_locked(limit_key):
-        raise HTTPException(
-            status.HTTP_429_TOO_MANY_REQUESTS,
-            "Слишком много неверных API-ключей с этого адреса, подождите",
-        )
-    row = await apikeys.authenticate(session, key)
-    if row is None:
-        ratelimit.record_failure(limit_key, max_failures=APIKEY_MAX_FAILURES)
-        raise HTTPException(
-            status.HTTP_401_UNAUTHORIZED, "Недействительный или отозванный API-ключ"
-        )
+    # проверки с одного адреса по очереди: иначе пачка параллельных запросов
+    # проходила is_locked раньше первой записанной неудачи, и каждый гонял
+    # bcrypt в общем пуле потоков (тормозя вход и степ-ап)
+    async with ratelimit.serialized(limit_key):
+        if ratelimit.is_locked(limit_key):
+            raise HTTPException(
+                status.HTTP_429_TOO_MANY_REQUESTS,
+                "Слишком много неверных API-ключей с этого адреса, подождите",
+            )
+        row = await apikeys.authenticate(session, key)
+        if row is None:
+            ratelimit.record_failure(limit_key, max_failures=APIKEY_MAX_FAILURES)
+            raise HTTPException(
+                status.HTTP_401_UNAUTHORIZED, "Недействительный или отозванный API-ключ"
+            )
+    mark_authenticated()
     return row
 
 

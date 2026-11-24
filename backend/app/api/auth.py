@@ -113,8 +113,33 @@ def _count_failure(key: str, username: str) -> tuple[bool, bool]:
     )
 
 
+# Алерты о блокировках: не чаще одного каждого вида за ALERT_EVERY. Перебор с
+# множества адресов (IPv6 /48 - это 65536 ключей /64) иначе засыпал бы канал
+# алертов. Пропущенные считаются и попадают в следующий алерт, в журнал
+# аудита каждая блокировка пишется как раньше.
+ALERT_EVERY = 600
+_alert_last: dict[str, float] = {}
+_alert_skipped: dict[str, int] = {}
+
+
+def _alert_due(kind: str, now: float | None = None) -> tuple[bool, int]:
+    t = time.time() if now is None else now
+    if t - _alert_last.get(kind, float("-inf")) < ALERT_EVERY:
+        _alert_skipped[kind] = _alert_skipped.get(kind, 0) + 1
+        return False, 0
+    _alert_last[kind] = t
+    return True, _alert_skipped.pop(kind, 0)
+
+
+def _with_skipped(text, skipped: int):
+    if not skipped:
+        return text
+    return alerts.t("{what}. Еще блокировок после прошлого алерта: {n}", what=text, n=skipped)
+
+
 async def _report_failure(
-    session, settings, key: str, username: str, action: str, trips: tuple[bool, bool]
+    session, settings, key: str, username: str, action: str, trips: tuple[bool, bool],
+    known_user: bool = True,
 ) -> None:
     """Пишет неудачный вход в журнал; на переходе в блокировку — алерт (брутфорс).
     Вызывается после очереди попыток: отправка алерта не должна ее держать."""
@@ -127,27 +152,35 @@ async def _report_failure(
             session, shown, "login_lockout", key,
             f"{ratelimit.MAX_FAILURES} неудачных попыток",
         )
-        await alerts.security_alert(
-            session, settings,
-            alerts.Card(
-                "crit", "🔑", alerts.t("Подбор пароля к панели"),
-                alerts.t("{n} неудачных входов подряд с {ip}, адрес временно заблокирован",
-                         n=ratelimit.MAX_FAILURES, ip=key),
-            ),
-        )
+        due, skipped = _alert_due("ip")
+        if due:
+            await alerts.security_alert(
+                session, settings,
+                alerts.Card(
+                    "crit", "🔑", alerts.t("Подбор пароля к панели"),
+                    _with_skipped(alerts.t(
+                        "{n} неудачных входов подряд с {ip}, адрес временно заблокирован",
+                        n=ratelimit.MAX_FAILURES, ip=key), skipped),
+                ),
+            )
     if user_locked:
         await audit.record(
             session, shown, "login_lockout", shown,
             f"{USER_MAX_FAILURES} неудачных попыток на логин",
         )
-        await alerts.security_alert(
-            session, settings,
-            alerts.Card(
-                "crit", "🔑", alerts.t("Подбор пароля к «{user}»", user=shown),
-                alerts.t("{n} неудачных входов с разных адресов, логин временно заблокирован",
-                         n=USER_MAX_FAILURES),
-            ),
-        )
+        # логина нет в панели - запирать нечего, а текст в алерте был бы
+        # чужой (вплоть до ссылки, которую мессенджер сделает кликабельной)
+        due, skipped = _alert_due("user") if known_user else (False, 0)
+        if due:
+            await alerts.security_alert(
+                session, settings,
+                alerts.Card(
+                    "crit", "🔑", alerts.t("Подбор пароля к «{user}»", user=shown),
+                    _with_skipped(alerts.t(
+                        "{n} неудачных входов с разных адресов, логин временно заблокирован",
+                        n=USER_MAX_FAILURES), skipped),
+                ),
+            )
 
 
 @router.post("/login", response_model=TokenResponse)
@@ -188,6 +221,7 @@ async def login(
                 failure, detail = "login_2fa_fail", "2fa_invalid"
         if failure:
             trips = _count_failure(key, body.username)
+            known_user = user is not None
         else:
             ratelimit.clear(ipk)
             # счетчик логина не сбрасываем, если он заперт чужим перебором: вход с
@@ -196,7 +230,7 @@ async def login(
                 ratelimit.clear(ukey)
             _remember_ip(user.username, ipk)
     if failure:
-        await _report_failure(session, settings, key, body.username, failure, trips)
+        await _report_failure(session, settings, key, body.username, failure, trips, known_user)
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail)
     token = create_access_token(
         user.username, settings.jwt_secret, settings.jwt_ttl_minutes,

@@ -251,3 +251,42 @@ async def test_bad_response_shape_is_share_error(engine, data):
         await share.create_link(engine, BASE, "config", _client(
             lambda req: httpx.Response(200, json=data)
         ))
+
+
+async def test_plain_http_service_needs_explicit_consent(client, auth_headers, monkeypatch):
+    async def fake_detect(base, client=None):
+        return "pwpush"
+
+    monkeypatch.setattr(share, "detect_engine", fake_detect)
+    body = {"name": "Lan", "url": "http://secret.example.com", "password": "testpass"}
+    r = await client.post("/api/share/services", headers=auth_headers, json=body)
+    assert r.status_code == 400 and "HTTPS" in r.json()["detail"]
+    r = await client.post("/api/share/services", headers=auth_headers, json={**body, "allow_http": True})
+    assert r.status_code == 200
+    assert r.json()[0]["insecure"] is True
+    log = json.dumps((await client.get("/api/audit", headers=auth_headers)).json(), ensure_ascii=False)
+    assert "без HTTPS" in log
+    r = await client.post("/api/share/services", headers=auth_headers,
+                          json={"name": "Tls", "url": BASE, "password": "testpass"})
+    assert [s["insecure"] for s in r.json()] == [True, False]
+
+
+@pytest.mark.parametrize("engine", share.ENGINES)
+async def test_oversized_service_reply_is_refused(engine: str) -> None:
+    def handler(req: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=b"{" + b" " * (share.MAX_RESPONSE + 10) + b"}")
+
+    with pytest.raises(share.ShareError, match="слишком большим"):
+        await share.create_link(engine, BASE, "vpn://fixture", _client(handler))
+
+
+async def test_service_reply_has_an_overall_deadline(monkeypatch) -> None:
+    import asyncio
+
+    async def handler(req: httpx.Request) -> httpx.Response:
+        await asyncio.sleep(5)
+        return httpx.Response(200, json={"token": "t"})
+
+    monkeypatch.setattr(share, "TOTAL_TIMEOUT", 0.2)
+    with pytest.raises(share.ShareError, match="не отвечает"):
+        await share.create_link("sup3rs3cret", BASE, "vpn://fixture", _client(handler))

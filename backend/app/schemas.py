@@ -843,7 +843,10 @@ class ShareServiceIn(BaseModel):
     name: str = Field(min_length=1, max_length=64)
     url: str = Field(min_length=1, max_length=255)
     password: str = Field(default="", max_length=1024)
-    otp: str | None = None
+    otp: str | None = Field(default=None, max_length=16)
+    # http без TLS - только явным согласием: конфиг с приватным ключом пойдет
+    # к сервису, а потом к получателю ссылки открытым текстом
+    allow_http: bool = False
 
 
 class ShareServiceOut(BaseModel):
@@ -851,6 +854,7 @@ class ShareServiceOut(BaseModel):
     name: str
     url: str
     engine: str
+    insecure: bool = False
 
 
 class ShareRequest(BaseModel):

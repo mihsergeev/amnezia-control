@@ -267,7 +267,7 @@ docker network inspect caddy -f '{{(index .IPAM.Config 0).Gateway}}'
 
 The bundled Caddy (`compose.tls.yml`) publishes its ports from the panel's own network, which has no IPv6: with an allow-list set, IPv6 clients get 403. Reach the panel over IPv4, or enable IPv6 on that network in a compose override (`networks: internal: enable_ipv6: true`, Docker 27+).
 
-**Any other proxy** (plain Caddy with a Caddyfile, nginx, Traefik) doesn't read these labels — use standalone mode instead: publish the port (`ACONTROL_BIND`) and point your proxy at it, or attach your proxy to the `acontrol_internal` network and proxy to `acontrol-frontend-1:80`.
+**Any other proxy** (plain Caddy with a Caddyfile, nginx, Traefik) doesn't read these labels — use standalone mode instead: publish the port (`ACONTROL_BIND`) and point your proxy at it, or attach your proxy to the `acontrol_internal` network and proxy to `acontrol-frontend-1:80`. The proxy must replace `X-Forwarded-For` with the client address rather than append to it (nginx: `proxy_set_header X-Forwarded-For $remote_addr;`; Caddy does this by default): the panel trusts Docker networks by default, so an appended header lets a client choose the address the sign-in limit and the audit log see. Keep containers you don't control off the networks that reach the panel frontend.
 
 ---
 

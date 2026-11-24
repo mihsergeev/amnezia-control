@@ -19,6 +19,10 @@ class DiagnosticContext:
     correlation_id: str = field(default_factory=lambda: secrets.token_hex(16))
     failed: bool = False
     fields: dict = field(default_factory=dict)
+    # Request-level events are kept only for requests that passed a login or an
+    # API key: otherwise anyone could flood the bounded store with 4xx noise
+    # (broken JSON is rejected before the auth check) and push real events out.
+    authed: bool = False
 
 
 _current: ContextVar[DiagnosticContext | None] = ContextVar("support_diagnostics", default=None)
@@ -57,6 +61,12 @@ def _metadata(scope: dict) -> dict | None:
             "server_id": sid if type(sid) is int and 0 < sid <= 2**31 - 1 else None}
 
 
+def mark_authenticated() -> None:
+    ctx = _current.get()
+    if ctx is not None:
+        ctx.authed = True
+
+
 def record(*, store=None, **fields):
     """Classify transient errors at the call site; only allowlisted fields survive."""
     ctx = _current.get()
@@ -93,7 +103,8 @@ def bind(*, store=None, **fields):
 
 async def diagnostic_http_exception(request, exc: HTTPException):
     ctx = _current.get()
-    if ctx is not None and _metadata(ctx.scope) is not None and exc.status_code not in (401, 403, 404):
+    if (ctx is not None and ctx.authed and _metadata(ctx.scope) is not None
+            and exc.status_code not in (401, 403, 404)):
         code = {400: "validation", 409: "conflict", 422: "validation", 429: "conflict",
                 499: "timeout", 503: "connect", 504: "timeout"}.get(exc.status_code)
         # A generic HTTP code must not mask a more specific SSH/deployment cause.
@@ -124,7 +135,7 @@ class DiagnosticMiddleware:
 
         try:
             await self.app(scope, receive, observed_send)
-            meta = _metadata(scope)
+            meta = _metadata(scope) if ctx.authed else None
             if meta is not None and not ctx.failed:
                 if response_status >= 500 or response_status in (400, 409, 422, 429):
                     await arecord(level="error" if response_status >= 500 else "warning",
@@ -134,7 +145,7 @@ class DiagnosticMiddleware:
                 elif 200 <= response_status < 300 and scope.get("method") in ("POST", "PUT", "PATCH", "DELETE"):
                     await arecord(level="info", code="accepted" if response_status == 202 else "request_completed", stage="request")
         except Exception as exc:
-            if _metadata(scope) is not None and not ctx.failed:
+            if ctx.authed and _metadata(scope) is not None and not ctx.failed:
                 await arecord(exc=exc, stage="request")
             raise
         finally:

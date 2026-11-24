@@ -448,7 +448,11 @@ class ApiKey(Base):
 
     def allows(self, server_id: int) -> bool:
         ids = self.server_ids
-        return not ids or int(server_id) in ids
+        if not ids:
+            # пусто = все серверы, но только если строка действительно пустая:
+            # мусор (битая запись, подготовленный архив) не должен открывать все
+            return not (self.servers or "").strip()
+        return int(server_id) in ids
 
 
 class Cascade(Base):

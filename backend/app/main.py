@@ -126,6 +126,7 @@ def create_app() -> FastAPI:
         # панели (script-src 'self', без 'unsafe-inline') блокирует и то, и то —
         # страница открывалась пустой.
         docs_url=None,
+        redoc_url=None,  # ReDoc тоже со внешнего CDN; снаружи /redoc и так не проксируется
         openapi_url="/api/openapi.json" if show_docs else None,
         lifespan=lifespan,
         description=(
