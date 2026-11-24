@@ -136,10 +136,13 @@ export function CascadeCheckModal({ cascade, entry, exit, onClose, onChecked, on
   const localRoute = result ? cascadeLocalRoute(result) : 'unknown'
   const localExpected = cascadeLocalExpected(cascade.routes)
   const checksLocalRoute = entryCountry === 'RU' || Boolean(result?.ru)
-  const localRouteWarning = checksLocalRoute && localRoute !== localExpected
+  // a blocked check site must stay unreachable; any other rule must match the observed route
+  const localRouteWarning = checksLocalRoute && (localExpected === 'block' ? Boolean(result?.ru) : localRoute !== localExpected)
   if (checksLocalRoute) {
     steps.push({
-      label: localExpected === 'exit' && (!result || localRoute === 'exit')
+      label: localExpected === 'block'
+        ? t('Проверочный сайт страны входа заблокирован ручным правилом')
+        : localExpected === 'exit' && (!result || localRoute === 'exit')
         ? t('Проверочный сайт страны входа идет через выход по ручному правилу')
         : !result || localRoute === 'entry'
         ? t('Проверочный сайт страны входа открыт напрямую')

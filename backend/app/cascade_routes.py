@@ -18,7 +18,8 @@ HEALTH_FALLBACK_HOST = "ipv4.icanhazip.com"
 
 class Route(BaseModel):
     destination: str = Field(min_length=1, max_length=253)
-    via: Literal["entry", "exit"]
+    # block: drop the traffic in the gateway (e.g. known probing networks)
+    via: Literal["entry", "exit", "block"]
 
     @field_validator("destination", mode="before")
     @classmethod
@@ -95,6 +96,9 @@ def preview_destinations(destinations: list[str]) -> RoutePreviewOut:
     return RoutePreviewOut(results=results)
 
 
+_OUTBOUND = {"entry": "direct", "exit": "exit", "block": "block"}
+
+
 def xray_rules(routes: list[dict]) -> list[dict]:
     # The gateway must verify its exit even when the entry country's rules
     # would send the IP service directly. Preserve user routes on the fallback.
@@ -120,7 +124,7 @@ def xray_rules(routes: list[dict]) -> list[dict]:
             **match,
             "ruleTag": f"{RULE_TAG}{index}",
             "inboundTag": ["tproxy"],
-            "outboundTag": "direct" if route["via"] == "entry" else "exit",
+            "outboundTag": _OUTBOUND[route["via"]],
         })
     return result
 

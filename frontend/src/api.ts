@@ -1135,7 +1135,9 @@ export type CascadeProbeProgress = {
   sides: { entry: CascadeSideProgress; exit: CascadeSideProgress }
 }
 
-export type CascadeRoute = { destination: string; via: 'entry' | 'exit' }
+export type CascadeRoute = { destination: string; via: 'entry' | 'exit' | 'block' }
+// HTTP checks run from a server, so a blocked route has nothing to check from
+export type RouteCheckVia = 'entry' | 'exit'
 export type CascadeHealth = { ok: boolean; reason?: string; since?: string; checked_at?: string }
 
 export type Cascade = {
@@ -1328,13 +1330,13 @@ export type CascadeRouteHttpResult = {
 }
 export type SiteCheckScheme = 'https' | 'http'
 export type SiteHttpCheck = {
-  source: { via?: CascadeRoute['via'] | null; server_id: number }
+  source: { via?: RouteCheckVia | null; server_id: number }
   results: CascadeRouteHttpResult[]
   timeout_seconds: number
   budget_seconds: number
 }
-export type CascadeRouteHttpCheck = SiteHttpCheck & { source: { via: CascadeRoute['via']; server_id: number }; draft_applied: false }
-export function checkCascadeRoutesHttp(id: number, via: CascadeRoute['via'], destinations: string[], scheme: SiteCheckScheme = 'https', signal?: AbortSignal): Promise<CascadeRouteHttpCheck> {
+export type CascadeRouteHttpCheck = SiteHttpCheck & { source: { via: RouteCheckVia; server_id: number }; draft_applied: false }
+export function checkCascadeRoutesHttp(id: number, via: RouteCheckVia, destinations: string[], scheme: SiteCheckScheme = 'https', signal?: AbortSignal): Promise<CascadeRouteHttpCheck> {
   return api(`/api/cascades/${id}/routes/http-check`, {
     method: 'POST',
     body: JSON.stringify({ via, destinations, scheme }),

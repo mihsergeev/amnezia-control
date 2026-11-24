@@ -129,7 +129,7 @@ keep a manual choice across checks; clear it to restore automatic detection.
 
 Changing server geography does not silently reload an active cascade. Open
 **Configure routes** to select its entry country (empty means automatic), inspect
-the actual gateway rules, and explicitly **Apply routes**. This briefly restarts
+the actual gateway rules, and explicitly **Apply routes**. Each manual rule sends a domain or an IP network through the entry or through the exit, or **blocks** it in the gateway, for example networks known to probe for VPN servers. This briefly restarts
 the gateway after validating its candidate configuration. The VPN transport,
 tunnel keys, client profiles, and unrelated gateway settings are preserved.
 The previous configuration is restored if the reload fails. Legacy saved entry

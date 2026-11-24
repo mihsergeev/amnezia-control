@@ -178,3 +178,18 @@ def test_failed_route_update_retains_last_working_configuration(tmp_path, monkey
         assert len(restarts) == 2 and restarts[-1] == original
     assert path.read_bytes() == original
     assert (tmp_path / ".routes-pending").exists() == (failure == "recovery")
+
+
+def test_blocked_route_goes_to_the_blackhole_and_health_rules_stay_first():
+    from app.cascade_routes import RouteUpdate, xray_rules
+
+    update = RouteUpdate.model_validate({"routes": [
+        {"destination": "probe.example", "via": "block"},
+        {"destination": "198.51.100.0/24", "via": "block"},
+        {"destination": "site.example", "via": "entry"},
+    ]})
+    rules = xray_rules([route.model_dump() for route in update.routes])
+    assert [r["outboundTag"] for r in rules[:2]] == ["exit", "exit"]  # gateway health checks are never blocked
+    assert rules[2]["domain"] == ["domain:probe.example"] and rules[2]["outboundTag"] == "block"
+    assert rules[3]["ip"] == ["198.51.100.0/24"] and rules[3]["outboundTag"] == "block"
+    assert rules[4]["outboundTag"] == "direct"

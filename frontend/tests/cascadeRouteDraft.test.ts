@@ -64,3 +64,10 @@ test('dirty comparison includes route order and direction, excludes UI identitie
   assert.notEqual(routeSignature(original), routeSignature([...original].reverse()))
   assert.notEqual(routeSignature(original), routeSignature([route('one.example', 'exit'), original[1]]))
 })
+
+test('a batch can be added as blocked routes', () => {
+  const lines = previewRouteBatch('probe.example\n198.51.100.0/24', [], [ok('probe.example'), ok('198.51.100.0/24')])
+  assert.deepEqual(appendRouteBatch([], lines, 'block'), [
+    { destination: 'probe.example', via: 'block' }, { destination: '198.51.100.0/24', via: 'block' },
+  ])
+})

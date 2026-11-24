@@ -1160,6 +1160,8 @@ const EN: Record<string, string> = {
   '⚠️ Ссылка содержит приватный SSH-ключ управления сервером — не публикуйте её и не пересылайте. Ключ работает с любого адреса, без срока, пока его не отзовут: «Отозвать полный доступ» в меню сервера. При повторной генерации прежний ключ перестаёт работать.':
     '⚠️ The link contains a private SSH key that manages the server — do not publish or forward it. The key works from any address and does not expire until it is revoked: "Revoke full access" in the server menu. Regenerating invalidates the previous key.',
   'Отозвать полный доступ': 'Revoke full access',
+  'Блокировать': 'Block',
+  'Проверочный сайт страны входа заблокирован ручным правилом': 'The entry country check site is blocked by a manual rule',
   'Закрыть настройку SSH без сервера…': 'Close the SSH change without the server…',
   'Закрыть настройку SSH · {name}': 'Close the SSH change · {name}',
   'Панель сначала попробует обычное восстановление. Если сервер недоступен, незавершенная настройка будет закрыта без проверки сервера: состояние ключа панели и firewall на нем останется неизвестным. Используйте это, только если сервер удален или недоступен навсегда. После этого снова работают бэкапы, удаление сервера и настройка SSH.':

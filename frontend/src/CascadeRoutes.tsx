@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react'
-import { ApiError, checkCascadeRoutesHttp, getCascadeRoutingState, previewCascadeRoutes, type CascadeRoutingState, type CascadeRouteHttpResult, type SiteCheckScheme, updateCascadeRoutes, type CascadeRouteDestinationResult, type Cascade, type CascadeRoute, type Server } from './api'
+import { ApiError, checkCascadeRoutesHttp, getCascadeRoutingState, previewCascadeRoutes, type CascadeRoutingState, type CascadeRouteHttpResult, type SiteCheckScheme, updateCascadeRoutes, type CascadeRouteDestinationResult, type Cascade, type CascadeRoute, type RouteCheckVia, type Server } from './api'
 import { cascadeEntryCountry } from './cascadeUi'
 import { countryFlag } from './format'
 import { useI18n } from './i18n'
@@ -17,7 +17,7 @@ type Props = {
   onUnauthorized: () => void
 }
 type Row = CascadeRoute & { id: number }
-type HttpBatch = { via: CascadeRoute['via']; scheme: SiteCheckScheme; requested: number; results: Record<string, CascadeRouteHttpResult>; pending: boolean; error?: string; timeoutSeconds?: number; budgetSeconds?: number }
+type HttpBatch = { via: RouteCheckVia; scheme: SiteCheckScheme; requested: number; results: Record<string, CascadeRouteHttpResult>; pending: boolean; error?: string; timeoutSeconds?: number; budgetSeconds?: number }
 type Editor = { id: number | null; destination: string; via: CascadeRoute['via']; priority: string }
 
 // Remount drafts when the actual cascade or its gateway identity changes.
@@ -92,7 +92,7 @@ function CascadeRoutesEditor({ cascade, entry, exit, onClose, onSaved, onUnautho
     httpAbort.current = null
     setHttpBatch(null)
   }
-  async function checkHttp(lines: BatchRouteLine[], via: CascadeRoute['via'], scheme: SiteCheckScheme, previous?: HttpBatch) {
+  async function checkHttp(lines: BatchRouteLine[], via: RouteCheckVia, scheme: SiteCheckScheme, previous?: HttpBatch) {
     if (previous && httpAbort.current) return
     const destinations = previous ? siteCheckRetryDestinations(previous.results) : routeHttpDestinations(lines)
     const retained = previous ? { ...previous.results } : {}
@@ -174,7 +174,8 @@ function CascadeRoutesEditor({ cascade, entry, exit, onClose, onSaved, onUnautho
       const result = await previewCascadeRoutes(input.map((line) => line.raw))
       if (alive.current && revision === validationRevision.current) {
         setCheckedBatch({ text: batch, results: result.results })
-        void checkHttp(previewRouteBatch(batch, rows, result.results), batchVia, batchScheme)
+        // blocked destinations are not reachable on purpose: nothing to check
+        if (batchVia !== 'block') void checkHttp(previewRouteBatch(batch, rows, result.results), batchVia, batchScheme)
       }
     } catch (err) {
       if (alive.current && revision === validationRevision.current) {
@@ -277,7 +278,7 @@ function CascadeRoutesEditor({ cascade, entry, exit, onClose, onSaved, onUnautho
               <label>{t('По одному адресу на строку')}<textarea rows={4} value={batch} placeholder={'service.example.com\n192.0.2.0/24'}
                 onChange={(event) => { clearHttpCheck(); validationRevision.current++; setBatch(event.target.value); setCheckedBatch(null); setLastReport(null); setMessage('') }} /></label>
               <label>{t('Направление новых правил')}<select value={batchVia} onChange={(event) => { clearHttpCheck(); validationRevision.current++; setBatchVia(event.target.value as CascadeRoute['via']); setCheckedBatch(null) }}>
-                <option value="entry">{t('Вход')}</option><option value="exit">{t('Выход')}</option>
+                <option value="entry">{t('Вход')}</option><option value="exit">{t('Выход')}</option><option value="block">{t('Блокировать')}</option>
               </select></label>
               <label>{t('Протокол HTTP-проверки')}<select value={batchScheme} onChange={(event) => { clearHttpCheck(); validationRevision.current++; setBatchScheme(event.target.value as SiteCheckScheme); setCheckedBatch(null) }}><option value="https">HTTPS</option><option value="http">HTTP</option></select></label>
             </div>
@@ -324,7 +325,7 @@ function CascadeRoutesEditor({ cascade, entry, exit, onClose, onSaved, onUnautho
           </div>
           {editor && <section className="cascade-route-editor" aria-label={editor.id === null ? t('Новое правило') : t('Редактирование правила')}>
             <label className="cascade-route-editor-address">{t('Домен, IPv4 или подсеть')}<input autoFocus maxLength={1024} value={editor.destination} onChange={(event) => { validationRevision.current++; setEditor({ ...editor, destination: event.target.value }) }} onKeyDown={(event) => { if (event.key === 'Enter') { event.preventDefault(); applyEditor() } }} /></label>
-            <label>{t('Направление')}<select value={editor.via} onChange={(event) => { validationRevision.current++; setEditor({ ...editor, via: event.target.value as CascadeRoute['via'] }) }}><option value="entry">{t('Вход')}</option><option value="exit">{t('Выход')}</option></select></label>
+            <label>{t('Направление')}<select value={editor.via} onChange={(event) => { validationRevision.current++; setEditor({ ...editor, via: event.target.value as CascadeRoute['via'] }) }}><option value="entry">{t('Вход')}</option><option value="exit">{t('Выход')}</option><option value="block">{t('Блокировать')}</option></select></label>
             <label>{t('Приоритет')}<input type="number" min="1" max={Math.min(rows.length + (editor.id === null ? 1 : 0), MAX_CASCADE_ROUTES)} value={editor.priority} onChange={(event) => { validationRevision.current++; setEditor({ ...editor, priority: event.target.value }) }} /></label>
             <div className="cascade-route-toolbar"><button type="button" disabled={!!validating} onClick={applyEditor}>{t('Применить правило')}</button><button type="button" className="ghost" onClick={() => { validationRevision.current++; setEditor(null) }}>{t('Отмена')}</button></div>
             {editorError && <p className="err-text small" role="alert">{editorError}</p>}
@@ -336,7 +337,7 @@ function CascadeRoutesEditor({ cascade, entry, exit, onClose, onSaved, onUnautho
           </div>
           {selected.size > 0 && <div className="cascade-route-selection">
             <span className="small">{t('Выбрано: {n}, скрыто поиском: {hidden}', { n: selected.size, hidden: hiddenSelected })}</span>
-            <label>{t('Направление выбранных')}<select disabled={!!editor} value={bulkVia} onChange={(event) => setBulkVia(event.target.value as CascadeRoute['via'])}><option value="entry">{t('Вход')}</option><option value="exit">{t('Выход')}</option></select></label>
+            <label>{t('Направление выбранных')}<select disabled={!!editor} value={bulkVia} onChange={(event) => setBulkVia(event.target.value as CascadeRoute['via'])}><option value="entry">{t('Вход')}</option><option value="exit">{t('Выход')}</option><option value="block">{t('Блокировать')}</option></select></label>
             <button type="button" disabled={!!editor} onClick={() => changed(rows.map((row) => selected.has(row.id) ? { ...row, via: bulkVia } : row))}>{t('Применить к {n}', { n: selected.size })}</button>
             <button type="button" className="ghost" onClick={() => setSelected(new Set())}>{t('Снять выбор')}</button>
           </div>}
@@ -349,7 +350,7 @@ function CascadeRoutesEditor({ cascade, entry, exit, onClose, onSaved, onUnautho
                 <input className="cascade-route-row-check" type="checkbox" aria-label={t('Выбрать правило {n}', { n: index + 1 })} disabled={!!editor} checked={selected.has(row.id)} onChange={(event) => setSelected((prev) => { const copy = new Set(prev); if (event.target.checked) copy.add(row.id); else copy.delete(row.id); return copy })} />
                 <span className="cascade-route-priority muted" title={t('Приоритет')}>{index + 1}</span>
                 <div className="cascade-route-destination"><span className="mono">{row.destination}</span>{overlap && <span className="cascade-route-warning small">{overlapText(overlap)}</span>}</div>
-                <select disabled={!!editor} aria-label={t('Направление правила {n}', { n: index + 1 })} value={row.via} onChange={(event) => edit(row.id, { via: event.target.value as CascadeRoute['via'] })}><option value="entry">{t('Вход')}</option><option value="exit">{t('Выход')}</option></select>
+                <select disabled={!!editor} aria-label={t('Направление правила {n}', { n: index + 1 })} value={row.via} onChange={(event) => edit(row.id, { via: event.target.value as CascadeRoute['via'] })}><option value="entry">{t('Вход')}</option><option value="exit">{t('Выход')}</option><option value="block">{t('Блокировать')}</option></select>
                 <div className="cascade-route-row-actions"><button type="button" className="ghost" disabled={!!editor} aria-label={t('Редактировать правило {n}', { n: index + 1 })} onClick={() => { setEditor({ ...row, priority: String(index + 1) }); setEditorError('') }}>{t('Изменить')}</button>
                   <button type="button" className="ghost" disabled={!!editor} aria-label={t('Удалить правило {n}', { n: index + 1 })} onClick={() => { changed(rows.filter((item) => item.id !== row.id)); setSelected((prev) => { const copy = new Set(prev); copy.delete(row.id); return copy }) }}>{t('Удалить')}</button></div>
               </div>
