@@ -94,3 +94,30 @@ async def authenticate(session: AsyncSession, key: str) -> ApiKey | None:
     row.last_used_at = datetime.now(timezone.utc)
     await session.commit()
     return row
+
+
+async def forget_servers(session: AsyncSession, existing: set[int] | None = None,
+                         removed: int | None = None) -> int:
+    """Убирает из ограничений ключей серверы, которых больше нет. SQLite
+    выдает id удаленного сервера заново, и ключ с устаревшим id получал бы
+    доступ к новому серверу. Ключ, у которого не осталось серверов,
+    отзывается: пустой список означает «все серверы», а не «ни одного».
+    Возвращает число отозванных ключей. Коммит за вызывающим."""
+    revoked = 0
+    rows = (await session.scalars(
+        select(ApiKey).where(ApiKey.revoked.is_(False), ApiKey.servers != "")
+    )).all()
+    for row in rows:
+        ids = row.server_ids
+        if removed is not None:
+            keep = [i for i in ids if i != removed]
+        else:
+            keep = [i for i in ids if existing is not None and i in existing]
+        if keep == ids:
+            continue
+        if keep:
+            row.servers = ",".join(str(i) for i in keep)
+        else:
+            row.revoked = True
+            revoked += 1
+    return revoked

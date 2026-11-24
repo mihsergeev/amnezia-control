@@ -1,3 +1,4 @@
+import secrets
 from collections.abc import AsyncIterator
 
 import httpx
@@ -14,7 +15,7 @@ async def client(tmp_path, monkeypatch) -> AsyncIterator[httpx.AsyncClient]:
     monkeypatch.setenv("VPNPANEL_PANEL_IP", "203.0.113.7")
     monkeypatch.setenv("VPNPANEL_ADMIN_USER", "admin")
     monkeypatch.setenv("VPNPANEL_ADMIN_PASSWORD", "testpass")
-    monkeypatch.setenv("VPNPANEL_JWT_SECRET", "test-secret-0123456789abcdef0123456789abcdef")
+    monkeypatch.setenv("VPNPANEL_JWT_SECRET", secrets.token_hex(32))
     config.get_settings.cache_clear()
 
     from app.bootstrap import ensure_admin
@@ -46,6 +47,8 @@ def _reset_ratelimit():
         ratelimit._failures.clear()
         ratelimit._locked_until.clear()
         auth._known_ips.clear()
+        auth._known_loaded = False
+        ratelimit._queues.clear()
         apikeys._ok_cache.clear()
 
     reset()

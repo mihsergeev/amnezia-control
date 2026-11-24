@@ -60,6 +60,14 @@ async def verify(
     (слишком много попыток), 403 при неверном пароле или коде. При успехе -
     тихо возвращает и сбрасывает счётчики."""
     keys = (_key(request), _user_key(user))
+    # проверка блокировки и запись неудачи в одной очереди: иначе пачка
+    # параллельных запросов проходила проверку раньше первой записанной неудачи
+    async with ratelimit.serialized(*keys):
+        await _verify(user, password, request, otp, keys)
+
+
+async def _verify(user: User, password: str, request: Request, otp: str | None,
+                  keys: tuple[str, str]) -> None:
     if any(ratelimit.is_locked(k) for k in keys):
         raise HTTPException(
             status.HTTP_429_TOO_MANY_REQUESTS,

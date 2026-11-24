@@ -1,4 +1,5 @@
 import time
+from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, HTTPException, Request, status
 from sqlalchemy import select, update
@@ -7,12 +8,13 @@ from app import alerts, apikeys, audit, ratelimit, stepup, totp
 from app.clientip import client_ip
 from app.config import get_settings
 from app.deps import CurrentUser, SessionDep
-from app.models import ApiKey, User
+from app.models import ApiKey, AuditLog, User
 from app.schemas import (
     LoginRequest,
     PasswordChangeRequest,
     StepUpRequest,
     TokenResponse,
+    TwoFAEnableOut,
     TwoFASetupOut,
     TwoFAStatusOut,
     TwoFAVerifyRequest,
@@ -32,12 +34,14 @@ _DUMMY_HASH = hash_password("no-such-user-timing-guard")
 USER_MAX_FAILURES = 30
 
 # Адреса недавних успешных входов: блокировка логина на них не действует, иначе
-# любой без пароля держал бы админа запертым со всех адресов. Только в памяти:
-# после рестарта адрес снова попадет сюда с первым успешным входом.
+# любой без пароля держал бы админа запертым со всех адресов. Держим в памяти,
+# а после рестарта один раз поднимаем из журнала (login_ok): иначе перебор
+# сразу после перезапуска запирал админа и на его обычном адресе.
 KNOWN_IP_TTL = 30 * 24 * 3600
 KNOWN_IP_PER_USER = 20
 KNOWN_USERS_MAX = 100
 _known_ips: dict[str, dict[str, float]] = {}
+_known_loaded = False
 
 
 def _remember_ip(username: str, ip_key: str, now: float | None = None) -> None:
@@ -56,6 +60,29 @@ def _known_ip(username: str, ip_key: str, now: float | None = None) -> bool:
     t = time.time() if now is None else now
     ts = _known_ips.get(username, {}).get(ip_key)
     return ts is not None and t - ts <= KNOWN_IP_TTL
+
+
+async def _load_known_ips(session) -> None:
+    """Поднимает адреса успешных входов за KNOWN_IP_TTL из журнала."""
+    global _known_loaded
+    if _known_loaded:
+        return
+    since = datetime.now(timezone.utc) - timedelta(seconds=KNOWN_IP_TTL)
+    rows = (await session.execute(
+        select(AuditLog.username, AuditLog.target, AuditLog.ts)
+        .where(AuditLog.action == "login_ok", AuditLog.ts >= since)
+        .order_by(AuditLog.ts)
+    )).all()
+    _known_loaded = True
+    for username, target, ts in rows:
+        if ts is None:
+            continue
+        if ts.tzinfo is None:  # SQLite отдает время без зоны, пишется оно в UTC
+            ts = ts.replace(tzinfo=timezone.utc)
+        ipk = ratelimit.ip_key(target or "")
+        known = _known_ips.get(username, {}).get(ipk)
+        if known is None or known < ts.timestamp():
+            _remember_ip(username, ipk, ts.timestamp())
 
 
 def _client_key(request: Request) -> str:
@@ -77,16 +104,27 @@ async def _bump_token_version(session, user: User) -> int:
     )
 
 
-async def _record_failure(session, settings, key: str, username: str, action: str) -> None:
-    """Пишет неудачный вход в журнал; на переходе в блокировку — алерт (брутфорс)."""
-    locked_now = ratelimit.record_failure(ratelimit.ip_key(key))
-    user_locked = ratelimit.record_failure(
-        _user_key(username), max_failures=USER_MAX_FAILURES
+def _count_failure(key: str, username: str) -> tuple[bool, bool]:
+    """Считает неудачу в лимитере (внутри очереди попыток). Возвращает, какой
+    из ключей эта попытка перевела в блокировку."""
+    return (
+        ratelimit.record_failure(ratelimit.ip_key(key)),
+        ratelimit.record_failure(_user_key(username), max_failures=USER_MAX_FAILURES),
     )
-    await audit.record(session, username, action, key)
+
+
+async def _report_failure(
+    session, settings, key: str, username: str, action: str, trips: tuple[bool, bool]
+) -> None:
+    """Пишет неудачный вход в журнал; на переходе в блокировку — алерт (брутфорс).
+    Вызывается после очереди попыток: отправка алерта не должна ее держать."""
+    locked_now, user_locked = trips
+    # логин из запроса чужой: длиннее колонки журнала он ронял бы запись
+    shown = username[:64]
+    await audit.record(session, shown, action, key)
     if locked_now:
         await audit.record(
-            session, username, "login_lockout", key,
+            session, shown, "login_lockout", key,
             f"{ratelimit.MAX_FAILURES} неудачных попыток",
         )
         await alerts.security_alert(
@@ -99,13 +137,13 @@ async def _record_failure(session, settings, key: str, username: str, action: st
         )
     if user_locked:
         await audit.record(
-            session, username, "login_lockout", username,
+            session, shown, "login_lockout", shown,
             f"{USER_MAX_FAILURES} неудачных попыток на логин",
         )
         await alerts.security_alert(
             session, settings,
             alerts.Card(
-                "crit", "🔑", alerts.t("Подбор пароля к «{user}»", user=username),
+                "crit", "🔑", alerts.t("Подбор пароля к «{user}»", user=shown),
                 alerts.t("{n} неудачных входов с разных адресов, логин временно заблокирован",
                          n=USER_MAX_FAILURES),
             ),
@@ -119,38 +157,47 @@ async def login(
     settings = get_settings()
     key = _client_key(request)
     ipk = ratelimit.ip_key(key)
-    user_locked = ratelimit.is_locked(_user_key(body.username))
-    if ratelimit.is_locked(ipk) or (
-        user_locked and not _known_ip(body.username, ipk)
-    ):
-        # в журнал не пишем: блокировку уже записали и прислали алертом, а
-        # строка на каждый запрос давала раздувать журнал без входа
-        raise HTTPException(
-            status.HTTP_429_TOO_MANY_REQUESTS,
-            "Слишком много попыток входа — подождите несколько минут",
+    ukey = _user_key(body.username)
+    failure = ""
+    async with ratelimit.serialized(ipk, ukey):
+        user_locked = ratelimit.is_locked(ukey)
+        if user_locked and not _known_ip(body.username, ipk):
+            await _load_known_ips(session)
+        if ratelimit.is_locked(ipk) or (
+            user_locked and not _known_ip(body.username, ipk)
+        ):
+            # в журнал не пишем: блокировку уже записали и прислали алертом, а
+            # строка на каждый запрос давала раздувать журнал без входа
+            raise HTTPException(
+                status.HTTP_429_TOO_MANY_REQUESTS,
+                "Слишком много попыток входа — подождите несколько минут",
+            )
+        user = await session.scalar(select(User).where(User.username == body.username))
+        # verify_password вызываем всегда (в т.ч. по фиктивному хэшу), чтобы время
+        # ответа не зависело от существования логина
+        password_ok = await averify_password(
+            body.password, user.password_hash if user else _DUMMY_HASH
         )
-    user = await session.scalar(select(User).where(User.username == body.username))
-    # verify_password вызываем всегда (в т.ч. по фиктивному хэшу), чтобы время
-    # ответа не зависело от существования логина
-    password_ok = await averify_password(
-        body.password, user.password_hash if user else _DUMMY_HASH
-    )
-    if user is None or not password_ok:
-        await _record_failure(session, settings, key, body.username, "login_fail")
-        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Неверный логин или пароль")
-    if user.totp_enabled:
-        # detail — машиночитаемый маркер для фронта (показать поле кода)
-        if not body.otp:
-            raise HTTPException(status.HTTP_401_UNAUTHORIZED, "2fa_required")
-        if not await stepup.consume_otp(session, user, body.otp):
-            await _record_failure(session, settings, key, body.username, "login_2fa_fail")
-            raise HTTPException(status.HTTP_401_UNAUTHORIZED, "2fa_invalid")
-    ratelimit.clear(ipk)
-    # счетчик логина не сбрасываем, если он заперт чужим перебором: вход с
-    # известного адреса не должен открывать логин для всех остальных
-    if not user_locked:
-        ratelimit.clear(_user_key(body.username))
-    _remember_ip(user.username, ipk)
+        if user is None or not password_ok:
+            failure, detail = "login_fail", "Неверный логин или пароль"
+        elif user.totp_enabled:
+            # detail — машиночитаемый маркер для фронта (показать поле кода)
+            if not body.otp:
+                raise HTTPException(status.HTTP_401_UNAUTHORIZED, "2fa_required")
+            if not await stepup.consume_otp(session, user, body.otp):
+                failure, detail = "login_2fa_fail", "2fa_invalid"
+        if failure:
+            trips = _count_failure(key, body.username)
+        else:
+            ratelimit.clear(ipk)
+            # счетчик логина не сбрасываем, если он заперт чужим перебором: вход с
+            # известного адреса не должен открывать логин для всех остальных
+            if not user_locked:
+                ratelimit.clear(ukey)
+            _remember_ip(user.username, ipk)
+    if failure:
+        await _report_failure(session, settings, key, body.username, failure, trips)
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail)
     token = create_access_token(
         user.username, settings.jwt_secret, settings.jwt_ttl_minutes,
         user.token_version,
@@ -250,10 +297,10 @@ async def twofa_setup(
     )
 
 
-@router.post("/2fa/enable", response_model=TwoFAStatusOut)
+@router.post("/2fa/enable", response_model=TwoFAEnableOut)
 async def twofa_enable(
     body: TwoFAVerifyRequest, request: Request, user: CurrentUser, session: SessionDep
-) -> TwoFAStatusOut:
+) -> TwoFAEnableOut:
     if user.totp_enabled:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "2FA уже включена")
     if not user.totp_secret:
@@ -264,14 +311,21 @@ async def twofa_enable(
     if not totp.verify(user.totp_secret, body.otp):
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Неверный код")
     user.totp_enabled = True
+    # 2FA включают, когда опасаются за пароль: сессии, открытые без кода,
+    # отзываем, иначе украденный до включения токен жил бы до конца срока
+    token_version = await _bump_token_version(session, user)
     await session.commit()
+    settings = get_settings()
+    token = create_access_token(
+        user.username, settings.jwt_secret, settings.jwt_ttl_minutes, token_version,
+    )
     await audit.record(session, user.username, "2fa_enable", user.username)
     await alerts.security_alert(
         session, get_settings(),
         alerts.Card("ok", "🔐", alerts.t("Включена 2FA у «{user}»", user=user.username),
                     alerts.t("с {ip}", ip=_client_key(request))),
     )
-    return TwoFAStatusOut(enabled=True)
+    return TwoFAEnableOut(enabled=True, access_token=token)
 
 
 @router.post("/2fa/disable", response_model=TwoFAStatusOut)

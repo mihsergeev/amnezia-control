@@ -1,11 +1,11 @@
 import logging
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app import alerts, audit
+from app import alerts, apikeys, audit
 from app.config import Settings
-from app.models import User
+from app.models import ApiKey, Server, User
 from app.security import hash_password
 
 log = logging.getLogger("acontrol.bootstrap")
@@ -57,6 +57,11 @@ async def ensure_admin(
             user.totp_enabled = False
             user.totp_secret = ""
             user.token_version += 1  # инвалидируем все старые токены
+            # сброс делают при утере доступа или подозрении на чужой вход:
+            # ключи интеграций могли выпустить из чужой сессии, закрываем и их
+            await session.execute(
+                update(ApiKey).where(ApiKey.revoked.is_(False)).values(revoked=True)
+            )
             await session.commit()
             log.warning(
                 "АВАРИЙНЫЙ СБРОС пароля админа выполнен - уберите "
@@ -69,8 +74,22 @@ async def ensure_admin(
                 alerts.Card(
                     "warn", "🔑", alerts.t("Пароль «{user}» сброшен из .env", user=user.username),
                     alerts.t(
-                        "2FA отключена. Уберите флаг сброса из .env, иначе это повторится "
-                        "при каждом перезапуске"
+                        "2FA отключена, API-ключи отозваны. Уберите флаг сброса из .env, "
+                        "иначе это повторится при каждом перезапуске"
                     ),
                 ),
             )
+
+
+async def prune_api_key_scopes(session_factory: async_sessionmaker[AsyncSession]) -> None:
+    """Убирает из ограничений API-ключей id удаленных серверов. Раньше
+    удаление сервера их не чистило, и новый сервер с тем же id попадал бы в
+    доступ старого ключа. Ключ без оставшихся серверов отзывается."""
+    async with session_factory() as session:
+        existing = set((await session.scalars(select(Server.id))).all())
+        revoked = await apikeys.forget_servers(session, existing=existing)
+        await session.commit()
+        if revoked:
+            log.warning("отозвано API-ключей без существующих серверов: %d", revoked)
+            await audit.record(session, "system", "apikey_revoke", "",
+                               f"ключей без серверов: {revoked}")

@@ -53,6 +53,10 @@ async def test_2fa_full_flow(client: httpx.AsyncClient, auth_headers):
         "/api/auth/2fa/enable", headers=auth_headers, json={"otp": _code(secret), "password": "testpass"}
     )
     assert r.status_code == 200 and r.json()["enabled"] is True
+    # сессия, открытая до включения 2FA, закрыта, текущая получила новый токен
+    assert (await client.get("/api/auth/me", headers=auth_headers)).status_code == 401
+    auth_headers = {"Authorization": "Bearer " + r.json()["access_token"]}
+    assert (await client.get("/api/auth/me", headers=auth_headers)).status_code == 200
 
     # логин без кода → 401 «2fa_required»
     r = await client.post(

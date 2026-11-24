@@ -6,7 +6,7 @@ from fastapi import APIRouter, HTTPException, Request, Response, status
 from sqlalchemy import delete as sa_delete
 from sqlalchemy import func, select, update as sa_update
 
-from app import audit, bulk_issue_state, cascade_alias, cascade_http, cascadejob, client_endpoint, egresscheck, fullaccess, geo, limits, native_snapshots, nodelock, server_ops, ssh_access, ssh_policy, sshops, stepup, torrent
+from app import apikeys, audit, bulk_issue_state, cascade_alias, cascade_http, cascadejob, client_endpoint, egresscheck, fullaccess, geo, limits, native_snapshots, nodelock, server_ops, ssh_access, ssh_policy, sshops, stepup, torrent
 from app.config import get_settings
 from app.db import Base
 from app.deps import CurrentUser, SessionDep
@@ -377,6 +377,7 @@ async def _delete_server(
         )
     )
     await native_snapshots.delete_server(session, server_id)
+    keys_revoked = await apikeys.forget_servers(session, removed=server_id)
     await session.delete(server)
     await session.commit()
     # SQLite IDs can be reused: a new node must never inherit a deleted node's
@@ -386,6 +387,11 @@ async def _delete_server(
         session, user.username, "server_delete", server_name,
         ("ключ снят. " if remove_key else "") + retired_warning,
     )
+    if keys_revoked:
+        await audit.record(
+            session, user.username, "apikey_revoke", server_name,
+            f"ключей без серверов: {keys_revoked}",
+        )
     return result
 
 

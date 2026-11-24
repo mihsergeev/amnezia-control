@@ -4,8 +4,15 @@
 Ключ - обычно IP клиента (IPv6 - сеть /64, см. ip_key). Окно и лимит подобраны
 консервативно; при превышении - блокировка на LOCKOUT. Сбрасывается при
 рестарте (приемлемо).
+
+Проверка блокировки и запись неудачи разделены проверкой пароля (bcrypt в
+потоке). Без очереди параллельные попытки все проходили проверку до того, как
+первая успевала записать неудачу, и лимит не держал пачку запросов. Поэтому
+попытки по одному ключу идут через serialized() по очереди.
 """
 
+import asyncio
+import contextlib
 import ipaddress
 import time
 
@@ -23,6 +30,8 @@ _failures: dict[str, list[float]] = {}
 # снова получал 10 попыток - LOCKOUT ни на что не влиял
 _locked_until: dict[str, float] = {}
 _last_prune = 0.0
+# очереди попыток по ключу: [замок, сколько запросов его держат или ждут]
+_queues: dict[str, list] = {}
 
 
 def _now(now: float | None) -> float:
@@ -103,3 +112,30 @@ def record_failure(
 def clear(key: str) -> None:
     _failures.pop(key, None)
     _locked_until.pop(key, None)
+
+
+@contextlib.asynccontextmanager
+async def serialized(*keys: str):
+    """Выполняет попытки с общим ключом по одной: проверка is_locked внутри
+    видит неудачи всех предыдущих. Замки берутся в одном порядке, чтобы два
+    запроса с пересекающимися ключами не ждали друг друга по кругу. Запись
+    убирается, когда очередь пуста, так что ключи из запроса не копятся."""
+    ordered = sorted(set(keys))
+    entries = []
+    for key in ordered:
+        entry = _queues.setdefault(key, [asyncio.Lock(), 0])
+        entry[1] += 1
+        entries.append((key, entry))
+    held = []
+    try:
+        for _key, entry in entries:
+            await entry[0].acquire()
+            held.append(entry[0])
+        yield
+    finally:
+        for lock in reversed(held):
+            lock.release()
+        for key, entry in entries:
+            entry[1] -= 1
+            if entry[1] == 0 and _queues.get(key) is entry:
+                _queues.pop(key, None)

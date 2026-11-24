@@ -16,7 +16,7 @@ async def record(
     try:
         session.add(
             AuditLog(
-                username=username or "",
+                username=(username or "")[:64],
                 action=action,
                 target=str(target)[:255],
                 detail=str(detail)[:2000],

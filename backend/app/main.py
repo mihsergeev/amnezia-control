@@ -38,7 +38,7 @@ from app.api import (
 )
 from app.autobackup import backup_loop
 from app.cascadewatch import cascade_watch_loop
-from app.bootstrap import ensure_admin
+from app.bootstrap import ensure_admin, prune_api_key_scopes
 from app.collector import collector_loop
 from app.expiry import expiry_loop
 from app.heartbeat import heartbeat_loop
@@ -95,6 +95,7 @@ def create_app() -> FastAPI:
         _enforce_secrets(settings)
         ensure_panel_key(settings.data_dir)
         await ensure_admin(session_factory, settings)
+        await prune_api_key_scopes(session_factory)
         from app import ssh_access
         async with session_factory() as session:
             await ssh_access.recover(session, settings)

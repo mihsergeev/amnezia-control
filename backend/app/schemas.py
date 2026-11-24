@@ -49,6 +49,12 @@ class TwoFAStatusOut(BaseModel):
     enabled: bool
 
 
+class TwoFAEnableOut(TwoFAStatusOut):
+    # включение 2FA отзывает прежние сессии (их могли украсть до включения),
+    # текущей вкладке выдается новый токен
+    access_token: str
+
+
 class TwoFASetupOut(BaseModel):
     secret: str
     otpauth_uri: str

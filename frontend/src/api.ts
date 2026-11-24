@@ -775,11 +775,14 @@ export function setup2FA(password: string): Promise<TwoFASetup> {
   })
 }
 
-export function enable2FA(otp: string, password: string): Promise<TwoFAStatus> {
-  return api<TwoFAStatus>('/api/auth/2fa/enable', {
+// включение 2FA отзывает прежние сессии: сохраняем выданный новый токен
+export async function enable2FA(otp: string, password: string): Promise<TwoFAStatus> {
+  const r = await api<TwoFAStatus & { access_token: string }>('/api/auth/2fa/enable', {
     method: 'POST',
     body: JSON.stringify({ otp, password }),
   })
+  setToken(r.access_token)
+  return { enabled: r.enabled }
 }
 
 export function disable2FA(otp: string, password: string): Promise<TwoFAStatus> {
