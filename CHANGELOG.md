@@ -4,6 +4,11 @@ All notable changes to Amnezia Control are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.84.75] - 2026-11-25
+
+- Fix: cascade entries where the panel logs in as a regular user and the cascade directory is closed never received newer entry scripts, because the check could not see their revision. Those entries missed the client ICMP block of 0.84.59 and the geo databases pin of 0.84.74. The check now reads the revision with sudo, and the periodic check brings such entries up to date without a reinstall.
+- Security: the scripts upgrade removes group and world write permission from the cascade directories, whose scripts run as root.
+
 ## [0.84.74] - 2026-11-25
 
 - Security: cascade geo databases are vetted by the panel. Entry gateways used to take the latest release of the third-party geo database repository every day on their own, although its "direct" lists decide which traffic leaves through the entry's provider instead of the exit. The panel now checks each new release (digests, the categories the gateway uses, no country-wide catch-all networks, no foreign addresses in the Russian list, no generic zones or well-known blocked sites in the direct lists, blocked lists that did not shrink sharply) and gives gateways the exact release and hashes it accepted. A release that fails the checks raises an alert and is not used. Installed cascades switch through the periodic cascade check, without a reinstall.
