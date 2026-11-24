@@ -4,6 +4,10 @@ All notable changes to Amnezia Control are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.84.73] - 2026-11-24
+
+- Security: the cascade entry gateway lists private networks itself instead of taking them from its geo databases. The databases are a third-party download refreshed daily, and an altered "private" list would have let VPN clients reach the entry's own networks, loopback, link-local and cloud metadata addresses. Installed gateways are moved by the periodic cascade check, without a reinstall.
+
 ## [0.84.72] - 2026-11-24
 
 - Security: what nodes download is pinned to content. The Cloak server binary is checked against its sha256, the cascade xray image is pulled by digest, the AmneziaWG 3.x sources are checked against their commits before the build, and an xray release without a pinned hash is refused instead of being installed unchecked. Images already built on nodes are not touched; the checks apply to the next build.
