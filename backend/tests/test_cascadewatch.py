@@ -370,6 +370,34 @@ async def test_gateway_on_geoip_private_is_moved(factory, sent) -> None:
     assert moved == [1]
 
 
+async def test_watch_hands_the_accepted_geo_pin_to_gateways(factory, sent) -> None:
+    settings = config.get_settings()
+    pushed = []
+
+    async def push(c, entry, pin, settings):
+        pushed.append((c.id, pin.split()[0]))
+
+    current = OK + "CASCADE_REV=8\n"
+    # nothing accepted yet: gateways keep their own databases
+    await cascadewatch.watch_once(factory, settings, now=NOW, check=_check(current), push_pin=push)
+    assert pushed == []
+    pin = {"tag": "202611241408", "sha256": {"geoip.dat": "a" * 64, "geosite.dat": "b" * 64}}
+    async with factory() as s:
+        await settings_store.set_cascade_geo(s, {"accepted": pin})
+    await cascadewatch.watch_once(factory, settings, now=NOW, check=_check(current + "CASCADE_GEOPIN=\n"), push_pin=push)
+    assert pushed == [(1, "202611241408")]
+    await cascadewatch.watch_once(factory, settings, now=NOW,
+                                  check=_check(current + "CASCADE_GEOPIN=202611230154\n"), push_pin=push)
+    assert pushed[-1] == (1, "202611241408") and len(pushed) == 2
+    await cascadewatch.watch_once(factory, settings, now=NOW,
+                                  check=_check(current + "CASCADE_GEOPIN=202611241408\n"), push_pin=push)
+    assert len(pushed) == 2
+    # a gateway that is not running gets the pin with its next install or heal, not now
+    await cascadewatch.watch_once(factory, settings, now=NOW,
+                                  check=_check(current.replace("CASCADE_GW=yes", "CASCADE_GW=no")), push_pin=push)
+    assert len(pushed) == 2
+
+
 def test_new_gateways_never_resolve_names_themselves() -> None:
     from app import cascade_routes
 

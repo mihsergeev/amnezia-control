@@ -110,3 +110,20 @@ async def get_share_services(session: AsyncSession) -> list[dict]:
 
 async def set_share_services(session: AsyncSession, services: list[dict]) -> None:
     await _set_raw(session, SHARE_KEY, json.dumps(services, ensure_ascii=False))
+
+
+CASCADE_GEO_KEY = "cascade_geo"
+
+
+async def get_cascade_geo(session: AsyncSession) -> dict:
+    """Geo databases accepted for cascade gateways (see app/geo_vet.py)."""
+    raw = await _get_raw(session, CASCADE_GEO_KEY)
+    try:
+        data = json.loads(raw) if raw else {}
+    except ValueError:
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+async def set_cascade_geo(session: AsyncSession, state: dict) -> None:
+    await _set_raw(session, CASCADE_GEO_KEY, json.dumps(state, ensure_ascii=False))

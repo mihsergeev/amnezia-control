@@ -19,7 +19,7 @@ from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import select
 
-from app import (alerts, cascade, cascade_lock, cascade_observations, cascade_routes, cascadejob, geo,
+from app import (alerts, cascade, cascade_lock, cascade_observations, cascade_routes, cascadejob, geo, geo_vet,
                  nodelock, settings_store)
 from app.config import Settings
 from app.models import Cascade, Server
@@ -64,6 +64,18 @@ def _since(health: dict, now: datetime) -> datetime:
     return at if at.tzinfo else at.replace(tzinfo=timezone.utc)
 
 
+async def _push_geo_pin(c: Cascade, entry: Server, pin: str, settings: Settings) -> None:
+    """Give the gateway the geo databases release the panel accepted, and fetch it
+    now instead of waiting for the daily timer. The updater checks the hashes."""
+    command = cascade.geo_pin_command(pin) + " && sudo systemctl start --no-block acontrol-cascade-geo.service"
+    async with nodelock.connect("cascade", entry.id, cascadejob.connect(entry, settings)) as conn:
+        result = await conn.run(command, check=False, timeout=60)
+    if result.exit_status == 0:
+        log.info("каскад %s: геобазы %s переданы шлюзу", c.id, pin.split()[0])
+    else:
+        log.warning("каскад %s: не удалось передать шлюзу геобазы (код %s)", c.id, result.exit_status)
+
+
 def next_health(health: dict, ok: bool, reason: str, now: datetime, grace: timedelta):
     """Новое состояние и событие для алерта: "down", "up" или None."""
     if ok:
@@ -96,7 +108,7 @@ async def _send(session, settings: Settings, entry: str, exit_: str, event: str,
 
 
 async def watch_once(session_factory, settings: Settings, *, now: datetime | None = None,
-                     check=None, move_strategy=None) -> None:
+                     check=None, move_strategy=None, push_pin=None) -> None:
     """Одна проверка всех готовых каскадов. check(entry) -> вывод проверки (для тестов)."""
     grace = timedelta(minutes=max(0, settings.cascade_down_minutes))
     async with session_factory() as session:
@@ -106,6 +118,7 @@ async def watch_once(session_factory, settings: Settings, *, now: datetime | Non
         entries = {
             s.id: s for s in await session.scalars(select(Server).where(Server.id.in_(ids)))
         } if ids else {}
+        geo_pin = await geo_vet.accepted_pin(session)
     # SSH-проверка идет до 90 с: сессию БД на это время не держим (на Postgres
     # висела idle in transaction), а результат пишем в перечитанную строку -
     # каскад могли удалить или проверить вручную, пока шла наша проверка
@@ -126,6 +139,11 @@ async def watch_once(session_factory, settings: Settings, *, now: datetime | Non
                 await (move_strategy or _move_domain_strategy)(c, entry, settings)
             except Exception as exc:  # noqa: BLE001 - the next round tries again
                 log.warning("каскад %s: правила шлюза не обновлены: %s", c.id, exc)
+        if geo_pin and kv.get("rev") and kv.get("gw") == "yes" and kv.get("geopin", "") != geo_pin.split()[0]:
+            try:
+                await (push_pin or _push_geo_pin)(c, entry, geo_pin, settings)
+            except Exception as exc:  # noqa: BLE001 - the next round tries again
+                log.warning("каскад %s: геобазы шлюзу не переданы: %s", c.id, exc)
         res = cascade.check_result(kv)
         ok, reason = cascade.health(c.transport, kv, res)
         stamp = now or datetime.now(timezone.utc)

@@ -37,6 +37,7 @@ from app.api import (
     xray,
 )
 from app.autobackup import backup_loop
+from app import geo_vet
 from app.cascadewatch import cascade_watch_loop
 from app.bootstrap import ensure_admin, prune_api_key_scopes
 from app.collector import collector_loop
@@ -104,12 +105,14 @@ def create_app() -> FastAPI:
         expiry_task = asyncio.create_task(background(expiry_loop(session_factory, settings), "clients", "remove"))
         hb_task = asyncio.create_task(background(heartbeat_loop(session_factory, settings), "system", "verify"))
         cas_task = asyncio.create_task(background(cascade_watch_loop(session_factory, settings), "cascade", "verify"))
+        geo_task = asyncio.create_task(background(geo_vet.geo_vet_loop(session_factory, settings), "cascade", "verify"))
         yield
         task.cancel()
         backup_task.cancel()
         expiry_task.cancel()
         hb_task.cancel()
         cas_task.cancel()
+        geo_task.cancel()
         await engine.dispose()
 
     # Доки/схему отдаём в debug ИЛИ когда явно включены (api_docs) — интегратору

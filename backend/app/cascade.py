@@ -81,7 +81,7 @@ TAG = "cascade"  # каталог деплоя на нодах ($HOME/.acontrol/
 TRANSPORTS = ("vless", "gre", "awg")
 # ревизия скриптов входа: проверка видит старую и обновляет их на месте
 # (upgrade_entry), без переустановки каскада
-SCRIPTS_REV = "7"
+SCRIPTS_REV = "8"
 
 # проверка канала: сколько отправляем со входа на выход и сколько ждем
 PROBE_BYTES = 20 * 1024 * 1024
@@ -477,14 +477,29 @@ _GEO_SH = r"""#!/bin/sh
 # Amnezia Control: обновляет геобазы runetfreedom (geoip.dat, geosite.dat) для
 # шлюза каскада и перезапускает его, если базы изменились. Качает через выход
 # каскада (со входа github бывает медленным), без шлюза или при ошибке напрямую.
-# Сначала сверяет контрольные суммы и не качает базы, которые не менялись.
+# Версию выбирает панель: она проверяет выпуск и кладет сюда файл pin с тегом и
+# sha256 обоих файлов; скрипт качает ровно этот выпуск и сверяет хэши с pin.
+# Без pin (панель еще не прислала) - прежний путь: последний выпуск и суммы из него.
 # Новые базы проверяются через xray -test до подмены, при ошибке остаются старые.
 set -eu
 DIR=@DIR@/geo
 CONF=${1:-@DIR@/config}
 # The installer holds a backup of the active config during gateway replacement.
 [ "$#" -gt 0 ] || [ ! -d @DIR@/gateway-transaction ] || exit 0
-BASE=https://github.com/runetfreedom/russia-v2ray-rules-dat/releases/latest/download
+REPO=https://github.com/runetfreedom/russia-v2ray-rules-dat/releases
+BASE=$REPO/latest/download
+PIN=""
+if [ -s "$DIR/pin" ]; then
+  read -r TAG SUM_IP SUM_SITE < "$DIR/pin" || true
+  if ! printf '%s' "${TAG:-}" | grep -Eqx '[0-9]{12}' \
+     || ! printf '%s' "${SUM_IP:-}" | grep -Eqx '[0-9a-f]{64}' \
+     || ! printf '%s' "${SUM_SITE:-}" | grep -Eqx '[0-9a-f]{64}'; then
+    echo "bad pin" >&2
+    exit 1
+  fi
+  PIN=1
+  BASE=$REPO/download/$TAG
+fi
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
 cd "$TMP"
@@ -503,7 +518,12 @@ fetch() {
 }
 changed=0
 for f in geoip.dat geosite.dat; do
-  fetch 60 "$f.sha256sum"
+  if [ -n "$PIN" ]; then
+    if [ "$f" = geoip.dat ]; then SUM=$SUM_IP; else SUM=$SUM_SITE; fi
+    echo "$SUM  $f" > "$f.sha256sum"
+  else
+    fetch 60 "$f.sha256sum"
+  fi
   if [ -s "$DIR/$f" ] && (cd "$DIR" && sha256sum -c "$TMP/$f.sha256sum" >/dev/null 2>&1); then
     cp "$DIR/$f" "$f"
     continue
@@ -870,8 +890,17 @@ def gateway_run(confdir: str, owner: str = "", *, prepare: bool = False, transac
     )
 
 
+def geo_pin_command(pin: str) -> str:
+    """Write the geo databases pin the panel accepted (see app/geo_vet.py)."""
+    if not re.fullmatch(r"[0-9]{12} [0-9a-f]{64} [0-9a-f]{64}", pin):
+        raise ValueError("bad geo pin")
+    return (f"sudo install -d -m 755 {DIR}/geo && "
+            f"printf '%s\\n' '{pin}' | sudo tee {DIR}/geo/pin.new >/dev/null && "
+            f"sudo mv -f {DIR}/geo/pin.new {DIR}/geo/pin")
+
+
 def build_entry_script(transport: str, exit_ip: str, cascade_id: int, params: dict,
-                       country: str = "") -> str:
+                       country: str = "", geo_pin: str | None = None) -> str:
     net, ein, _xin = cascade_exit.network(cascade_id, params)
     lines = [_HEAD]
     if cascade_exit.scoped(params):
@@ -920,6 +949,7 @@ def build_entry_script(transport: str, exit_ip: str, cascade_id: int, params: di
         f"sudo docker pull -q {XRAY_IMAGE} >/dev/null || fail 'docker pull'",
         # Wait out an updater started before the transaction marker existed.
         "sudo systemctl stop acontrol-cascade-geo.service || fail 'stop geo update'",
+        *([geo_pin_command(geo_pin) + " || fail 'geo pin'"] if geo_pin else []),
         f"if ! sudo test -s {DIR}/geo/geoip.dat || ! sudo test -s {DIR}/geo/geosite.dat; then",
         '  if [ -z "$GW_OLD" ]; then',
         "    " + _put(f"{DIR}/boot/config.json",
@@ -1005,6 +1035,7 @@ def build_check_command(country: str = "") -> str:
         "} &",
         f'echo "CASCADE_DNSSTRATEGY=$(sudo -n python3 -c {shlex.quote(_STRATEGY_PY)} {DIR}/config/config.json 2>/dev/null)"',
         f'echo "CASCADE_PRIVATERULE=$(sudo -n python3 -c {shlex.quote(_PRIVATE_PY)} {DIR}/config/config.json 2>/dev/null)"',
+        f"echo \"CASCADE_GEOPIN=$(sudo -n cat {DIR}/geo/pin 2>/dev/null | cut -d' ' -f1)\"",
         cascade_awg.check_command(),
         CASCADE_PROBE_COMMAND,
         _reality_encryption_command(),

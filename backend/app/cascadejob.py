@@ -15,7 +15,7 @@ from datetime import datetime, timezone
 
 from fastapi import HTTPException
 
-from app import alerts, cascade, cascade_exit, cascade_lock, cascade_progress, deploy, geo, nodelock, server_ops, sshops
+from app import alerts, cascade, cascade_exit, cascade_lock, cascade_progress, deploy, geo, geo_vet, nodelock, server_ops, sshops
 from app.config import get_settings
 from app import debug_context
 from app.models import Cascade, Server
@@ -183,10 +183,12 @@ async def _run_locked(cid: int, factory, settings) -> None:
                 return
             c.params = json.dumps(params)
             await session.commit()
+    async with factory() as session:
+        geo_pin = await geo_vet.accepted_pin(session)
     steps = [
         ("exit", exit_, cascade.build_exit_script(transport, params["entry_ip"], cid, params)),
         ("entry", entry, cascade.build_entry_script(transport, params["exit_ip"], cid, params,
-                                                     country)),
+                                                     country, geo_pin=geo_pin)),
     ]
     logs: dict[str, tuple[str, str]] = {}
     entry_log = ""
