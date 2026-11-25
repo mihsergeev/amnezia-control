@@ -4,6 +4,10 @@ All notable changes to Amnezia Control are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.84.76] - 2026-11-25
+
+- Fix: updating the geo databases on a cascade entry no longer loads them into a second xray next to the running gateway, and downloads them to disk instead of /tmp. On an entry with 1 GB of memory, no swap and /tmp in memory, the update pushed the host into hours of page-cache thrashing. With the gateway running, the new files are swapped in and the gateway restarted; if it does not come back, the previous files are restored. Installed entries get the new script through the periodic cascade check.
+
 ## [0.84.75] - 2026-11-25
 
 - Fix: cascade entries where the panel logs in as a regular user and the cascade directory is closed never received newer entry scripts, because the check could not see their revision. Those entries missed the client ICMP block of 0.84.59 and the geo databases pin of 0.84.74. The check now reads the revision with sudo, and the periodic check brings such entries up to date without a reinstall.
