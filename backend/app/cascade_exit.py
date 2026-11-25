@@ -70,24 +70,42 @@ print('CASCADE_AVAILABLE')
     return cascade_awg.foreign_guard() + "sudo -n python3 -c " + shlex.quote(code) + " " + shlex.quote(json.dumps(expected)) + " " + str(int(params.get("gre_key", 0))) + " " + kind + " || exit 73\n"
 
 
+# On a conflict, name the network and the interface, and when the interface is a
+# cascade exit of this panel (acax<id>/acgx<id>) left behind by a removal without
+# teardown, print the commands that remove it.
+_OVERLAP_PY = r'''
+import ipaddress,json,re,subprocess,sys
+network=ipaddress.ip_network(sys.argv[1]); own=sys.argv[2]
+def overlaps(destination):
+ return network.overlaps(ipaddress.ip_network(destination,strict=False))
+def conflict(what,dev):
+ print('CASCADE_CONFLICT: %s overlaps %s on %s'%(network,what,dev or '-'))
+ m=re.fullmatch(r'ac[ag]x([0-9a-f]{1,8})',dev or '')
+ if m:
+  cid=int(m.group(1),16); stem='acontrol-cascade-exit-%d'%cid
+  print('CASCADE_CONFLICT: %s looks like a leftover of cascade %d removed without teardown. To remove it:'%(dev,cid))
+  print('  sudo systemctl disable --now %s-heal.timer %s-heal.service %s.service'%(stem,stem,stem))
+  print('  sudo docker rm -f %s-awg %s-xray'%(stem,stem))
+  print('  sudo ip link delete %s'%dev)
+  print('  sudo rm -rf /lib65/scripts/acontrol-cascade-exits/%d'%cid)
+  print('  sudo rm -f /etc/systemd/system/%s.service /etc/systemd/system/%s-heal.timer /etc/systemd/system/%s-heal.service'%(stem,stem,stem))
+  print('  sudo systemctl daemon-reload')
+ sys.exit(73)
+for row in json.loads(subprocess.check_output(['ip','-j','-4','address','show'],timeout=5)):
+ if row['ifname']==own:continue
+ for item in row.get('addr_info',[]):
+  if overlaps(item['local']+'/'+str(item['prefixlen'])):conflict('address %s/%s'%(item['local'],item['prefixlen']),row['ifname'])
+for row in json.loads(subprocess.check_output(['ip','-j','-4','route','show','table','all'],timeout=5)):
+ if row.get('dev')==own or row.get('dst','default')=='default':continue
+ if overlaps(row['dst']):conflict('route %s (table %s)'%(row['dst'],row.get('table','main')),row.get('dev'))
+'''
+
+
 def network_preflight(cid: int, transport: str, params: dict, role: str) -> str:
     if transport == "vless":
         return ""
     iface = ("acawg" if transport == "awg" else "acgre") if role == "entry" else paths(cid)["interface" if transport == "awg" else "interface_gre"]
-    code = r'''
-import ipaddress,json,subprocess,sys
-network=ipaddress.ip_network(sys.argv[1]); own=sys.argv[2]
-def overlaps(destination):
- return network.overlaps(ipaddress.ip_network(destination,strict=False))
-for row in json.loads(subprocess.check_output(['ip','-j','-4','address','show'],timeout=5)):
- if row['ifname']==own:continue
- for item in row.get('addr_info',[]):
-  if overlaps(item['local']+'/'+str(item['prefixlen'])):sys.exit(73)
-for row in json.loads(subprocess.check_output(['ip','-j','-4','route','show','table','all'],timeout=5)):
- if row.get('dev')==own or row.get('dst','default')=='default':continue
- if overlaps(row['dst']):sys.exit(73)
-'''
-    return "sudo -n python3 -c " + shlex.quote(code) + " " + shlex.quote(params["inner_net"]) + " " + iface + " || exit 73\n"
+    return "sudo -n python3 -c " + shlex.quote(_OVERLAP_PY) + " " + shlex.quote(params["inner_net"]) + " " + iface + " || exit 73\n"
 
 
 def preflight(cid: int, transport: str, params: dict) -> str:

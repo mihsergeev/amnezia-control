@@ -12,7 +12,7 @@ from types import SimpleNamespace
 import httpx
 import pytest
 
-from app import cascade, cascadejob
+from app import cascade, cascade_exit, cascadejob
 from app.models import Cascade, Server
 
 VLESS = {
@@ -1057,3 +1057,43 @@ def test_upgrade_closes_writable_cascade_dirs() -> None:
     script = cascade.build_entry_upgrade()
     assert f"sudo chmod go-w {cascade.DIR} " in script
     assert script.index("chmod go-w") < script.index("cascade-tproxy.sh")
+
+
+def _overlap_run(tmp_path, addresses, routes):
+    import sys as _sys
+    bin_ = tmp_path / "bin"
+    bin_.mkdir()
+    (bin_ / "ip").write_text(
+        "#!/bin/sh\n"
+        f"case \"$*\" in *address*) cat {tmp_path / 'a.json'};; *) cat {tmp_path / 'r.json'};; esac\n", newline="\n")
+    (bin_ / "ip").chmod(0o755)
+    (tmp_path / "a.json").write_text(json.dumps(addresses))
+    (tmp_path / "r.json").write_text(json.dumps(routes))
+    env = {**os.environ, "PATH": str(bin_) + os.pathsep + os.environ["PATH"]}
+    return subprocess.run([_sys.executable, "-c", cascade_exit._OVERLAP_PY, "10.99.3.0/30", "acax5"],
+                          env=env, capture_output=True, text=True)
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="needs a POSIX shell for the fake ip")
+def test_subnet_conflict_names_the_network_and_a_leftover_cascade(tmp_path) -> None:
+    left = _overlap_run(tmp_path, [{"ifname": "acax1f", "addr_info": [{"local": "10.99.3.1", "prefixlen": 30}]}], [])
+    assert left.returncode == 73
+    assert "10.99.3.0/30 overlaps address 10.99.3.1/30 on acax1f" in left.stdout
+    assert "leftover of cascade 31" in left.stdout
+    assert "acontrol-cascade-exit-31-heal.timer" in left.stdout and "ip link delete acax1f" in left.stdout
+    assert "acontrol-cascade-exit-31*" not in left.stdout  # no glob that would also match cascade 310
+    (tmp_path / "bin").rename(tmp_path / "bin1")
+    other = _overlap_run(tmp_path, [], [{"dst": "10.99.0.0/16", "dev": "eth1", "table": "main"}])
+    assert other.returncode == 73
+    assert "overlaps route 10.99.0.0/16 (table main) on eth1" in other.stdout and "leftover" not in other.stdout
+    (tmp_path / "bin").rename(tmp_path / "bin2")
+    clean = _overlap_run(tmp_path, [{"ifname": "acax5", "addr_info": [{"local": "10.99.3.1", "prefixlen": 30}]}],
+                         [{"dst": "default", "dev": "eth0"}])
+    assert clean.returncode == 0 and clean.stdout == ""
+
+
+def test_geo_download_tries_ipv4_before_plain_direct() -> None:
+    script = cascade._fill(cascade._GEO_SH)
+    assert 'VIA="direct4 direct"' in script
+    assert f'VIA="127.0.0.1:{cascade.SOCKS_PORT} direct4 direct"' in script
+    assert 'direct4) opt="-4"' in script

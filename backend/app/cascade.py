@@ -81,7 +81,7 @@ TAG = "cascade"  # каталог деплоя на нодах ($HOME/.acontrol/
 TRANSPORTS = ("vless", "gre", "awg")
 # ревизия скриптов входа: проверка видит старую и обновляет их на месте
 # (upgrade_entry), без переустановки каскада
-SCRIPTS_REV = "9"
+SCRIPTS_REV = "10"
 
 # проверка канала: сколько отправляем со входа на выход и сколько ждем
 PROBE_BYTES = 20 * 1024 * 1024
@@ -505,14 +505,20 @@ mkdir -p "$DIR"
 TMP=$(mktemp -d "$DIR/.update.XXXXXX")
 trap 'rm -rf "$TMP"' EXIT
 cd "$TMP"
-VIA=direct
+# direct downloads try IPv4 first: with a broken IPv6 route the release host
+# (which has AAAA records) could hang until the timeout; plain direct stays as
+# the last resort for IPv6-only entries
+VIA="direct4 direct"
 if docker ps --format "{{.Names}}" | grep -qx @GATEWAY@; then
-  VIA="127.0.0.1:@SOCKS@ direct"
+  VIA="127.0.0.1:@SOCKS@ direct4 direct"
 fi
 fetch() {
   for via in $VIA; do
-    opt=""
-    [ "$via" = direct ] || opt="--socks5-hostname $via"
+    case "$via" in
+      direct) opt="" ;;
+      direct4) opt="-4" ;;
+      *) opt="--socks5-hostname $via" ;;
+    esac
     # shellcheck disable=SC2086
     curl -fsSL --retry 1 -m "$1" $opt -o "$2" "$BASE/$2" && return 0
   done
