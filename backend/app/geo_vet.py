@@ -403,10 +403,10 @@ async def vet_once(session_factory, settings, client: httpx.AsyncClient | None =
     else:
         if result is not accepted:
             state["accepted"] = result
-            state.pop("last_error", None)
             log.info("геобазы %s приняты", result["tag"])
-        else:
-            state.pop("last_error", None)
+        # The latest release is the accepted one now: an earlier refusal is history.
+        state.pop("last_error", None)
+        state.pop("rejected_tag", None)
     state["checked_at"] = datetime.now(timezone.utc).isoformat()
     async with session_factory() as session:
         await settings_store.set_cascade_geo(session, state)

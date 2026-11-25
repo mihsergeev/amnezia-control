@@ -194,6 +194,17 @@ async def test_round_accepts_then_skips_then_refuses_with_one_alert(client, sess
     state = await geo_vet.vet_once(session_factory, settings, _client(wrong, []))
     assert state["accepted"]["tag"] == "202611241408" and "digest" in state["last_error"]
 
+    good = _release("202611250303", _ips(), _sites())
+    state = await geo_vet.vet_once(session_factory, settings, _client(good, []))
+    assert state["accepted"]["tag"] == "202611250303"
+    assert "rejected_tag" not in state and "last_error" not in state
+
+    # A refusal left over from before the release was accepted goes away on the next round.
+    async with session_factory() as s:
+        await settings_store.set_cascade_geo(s, {**state, "rejected_tag": "202611250303"})
+    state = await geo_vet.vet_once(session_factory, settings, _client(good, []))
+    assert "rejected_tag" not in state and len(sent) == 1
+
 
 @pytest.mark.parametrize("pin", [None, "202611241408 " + "a" * 64 + " " + "b" * 64])
 def test_entry_install_writes_the_pin_before_the_geo_download(pin):
