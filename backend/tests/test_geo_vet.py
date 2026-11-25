@@ -118,6 +118,24 @@ def test_changes_against_the_accepted_release():
     assert any("geoip:ru grew" in p for p in _vet(grown, _sites(), accepted)[1])
 
 
+def test_direct_list_growth_counts_only_entries_outside_national_zones():
+    # a real release added ~260 municipal .ru/.рф sites to the "inside only" list:
+    # domain:ru is direct anyway, so it changes no route and must pass
+    base = [(2, "gosuslugi.ru"), (2, "nalog.gov.ru"), (2, "barnaul.org")]
+    accepted, _ = _vet(_ips(), _sites(**{INSIDE: base}))
+    assert accepted["geosite_outside"][INSIDE] == 1
+    municipal = base + [(2, f"adm{i}.ru") for i in range(300)] + [(2, f"gorod{i}.xn--p1ai") for i in range(20)]
+    assert _vet(_ips(), _sites(**{INSIDE: municipal}), accepted)[1] == []
+    foreign = base + [(2, f"site{i}.org") for i in range(60)]
+    problems = _vet(_ips(), _sites(**{INSIDE: foreign}), accepted)[1]
+    assert any("grew from 1 to 61 entries outside national zones" in p for p in problems), problems
+    # accepted before the count existed: no growth comparison, absolute checks still run
+    legacy = {k: v for k, v in accepted.items() if k != "geosite_outside"}
+    assert _vet(_ips(), _sites(**{INSIDE: foreign}), legacy)[1] == []
+    assert any("whole zones direct: com" in p
+               for p in _vet(_ips(), _sites(**{INSIDE: base + [(2, "com")]}), legacy)[1])
+
+
 def test_damaged_files_are_refused():
     with pytest.raises(geo_vet.GeoVetError):
         geo_vet.parse_geoip(_geoip(_ips())[:-3])

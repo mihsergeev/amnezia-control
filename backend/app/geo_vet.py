@@ -249,7 +249,17 @@ def stats_and_problems(geoip: tuple[dict, dict], geosite: dict) -> tuple[dict, l
         if not _site_matches(geosite.get(BLOCKED_SITE, []), site):
             problems.append(f"geosite:{BLOCKED_SITE} lacks {site}")
     site_stats = {code: len(geosite.get(code, [])) for code in (BLOCKED_SITE, *direct)}
-    return {"geoip": ip_stats, "geosite": site_stats}, problems
+    zones = _national_zones()
+    outside = {code: sum(1 for _kind, value in geosite.get(code, []) if value.rsplit(".", 1)[-1] not in zones)
+               for code in direct}
+    return {"geoip": ip_stats, "geosite": site_stats, "geosite_outside": outside}, problems
+
+
+def _national_zones() -> set[str]:
+    """Zones the gateway already sends direct by its own domain rules (domain:ru,
+    domain:xn--p1ai, ...): entries inside them do not change any route."""
+    from app import cascade
+    return {tld for tlds in cascade._TLDS.values() for tld in tlds} | set(cascade._GEOSITE)
 
 
 def compare(previous: dict, current: dict) -> list[str]:
@@ -263,9 +273,16 @@ def compare(previous: dict, current: dict) -> list[str]:
         problems.append(f"geosite:{BLOCKED_SITE} shrank from {old_site[BLOCKED_SITE]} to {new_site.get(BLOCKED_SITE, 0)}")
     if old_ip.get(BLOCKED_IP) and new_ip.get(BLOCKED_IP, [0])[0] < old_ip[BLOCKED_IP][0] * BLOCKED_KEEP:
         problems.append(f"geoip:{BLOCKED_IP} shrank from {old_ip[BLOCKED_IP][0]} to {new_ip.get(BLOCKED_IP, [0])[0]} networks")
-    for code in sorted({name for names in _direct_sites().values() for name in names}):
-        if old_site.get(code) and new_site.get(code, 0) > old_site[code] * DIRECT_GROWTH + DIRECT_GROWTH_SLACK:
-            problems.append(f"geosite:{code} grew from {old_site[code]} to {new_site[code]}")
+    # Growth of a direct list counts only entries outside the national zones: a
+    # list gaining hundreds of .ru municipal sites changes no route (domain:ru is
+    # direct anyway), a list gaining foreign domains does.
+    # A release accepted before this count existed has nothing to compare with;
+    # the absolute checks (generic zones, canaries) still apply to it.
+    old_out, new_out = previous.get("geosite_outside"), current.get("geosite_outside", {})
+    for code in sorted({name for names in _direct_sites().values() for name in names}) if old_out is not None else ():
+        before, after = old_out.get(code, 0), new_out.get(code, 0)
+        if before and after > before * DIRECT_GROWTH + DIRECT_GROWTH_SLACK:
+            problems.append(f"geosite:{code} grew from {before} to {after} entries outside national zones")
     for code, (_count, addresses) in new_ip.items():
         if code == BLOCKED_IP or code not in old_ip:
             continue
