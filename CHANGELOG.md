@@ -4,6 +4,10 @@ All notable changes to Amnezia Control are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.84.78] - 2026-11-25
+
+- Fix: the geo database check refused a normal release in which the Russian "available only inside" list gained about 260 municipal sites in the .ru and .рф zones. Growth of the direct lists is now counted only outside the zones the gateway already sends direct; generic zones and well-known blocked sites in a direct list are still refused.
+
 ## [0.84.77] - 2026-11-25
 
 - When a new cascade cannot be installed because its subnet overlaps an address or route on a server, the install log now names the conflicting network and interface. If it is left over from a cascade removed without teardown, the log lists the commands that remove it (#47).
