@@ -660,6 +660,9 @@ def _geo_run(tmp_path, gateway_up: bool) -> str:
         "exit 0\n",
         newline="\n",
     )
+    # the restarted gateway listens again
+    (bin_ / "ss").write_text("#!/bin/sh\necho 'LISTEN 0 4096 127.0.0.1:12350'\n", newline="\n")
+    (bin_ / "sleep").write_text("#!/bin/sh\nexit 0\n", newline="\n")
     for f in bin_.iterdir():
         f.chmod(0o755)
     script = cascade._fill(cascade._GEO_SH.replace("@DIR@", base))

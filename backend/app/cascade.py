@@ -81,7 +81,7 @@ TAG = "cascade"  # каталог деплоя на нодах ($HOME/.acontrol/
 TRANSPORTS = ("vless", "gre", "awg")
 # ревизия скриптов входа: проверка видит старую и обновляет их на месте
 # (upgrade_entry), без переустановки каскада
-SCRIPTS_REV = "8"
+SCRIPTS_REV = "9"
 
 # проверка канала: сколько отправляем со входа на выход и сколько ждем
 PROBE_BYTES = 20 * 1024 * 1024
@@ -500,7 +500,9 @@ if [ -s "$DIR/pin" ]; then
   PIN=1
   BASE=$REPO/download/$TAG
 fi
-TMP=$(mktemp -d)
+# on disk next to the databases: /tmp is often in memory, and the files are ~100 MiB
+mkdir -p "$DIR"
+TMP=$(mktemp -d "$DIR/.update.XXXXXX")
 trap 'rm -rf "$TMP"' EXIT
 cd "$TMP"
 VIA=direct
@@ -533,13 +535,34 @@ for f in geoip.dat geosite.dat; do
   changed=1
 done
 [ "$changed" = 1 ] || exit 0
-mkdir -p "$TMP/geo" "$DIR"
-cp geoip.dat geosite.dat "$TMP/geo/"
-docker run --rm --user 0:0 -e GODEBUG=multipathtcp=0 -e XRAY_LOCATION_ASSET=/geo -v "$TMP/geo:/geo:ro" -v "$CONF:/cfg:ro" \
-  @IMAGE@ run -test -confdir /cfg >/dev/null
-install -m 644 geoip.dat geosite.dat "$DIR/"
+mkdir -p "$TMP/geo" "$TMP/old" "$DIR"
+listening() {
+  for _ in $(seq 30); do
+    ss -ltnH "sport = :@PORT@" 2>/dev/null | grep -q . && return 0
+    sleep 1
+  done
+  return 1
+}
 if [ "$#" -eq 0 ] && docker ps --format "{{.Names}}" | grep -qx @GATEWAY@; then
+  # The running gateway already holds the databases in memory; a second xray
+  # loading them for a test would double that on small entries (1 GiB hosts ran
+  # out of memory). Swap the files, restart and go back if it does not come up.
+  for f in geoip.dat geosite.dat; do [ ! -s "$DIR/$f" ] || cp -p "$DIR/$f" "$TMP/old/$f"; done
+  install -m 644 geoip.dat geosite.dat "$DIR/"
   docker restart @GATEWAY@ >/dev/null
+  if ! listening; then
+    for f in geoip.dat geosite.dat; do [ ! -s "$TMP/old/$f" ] || install -m 644 "$TMP/old/$f" "$DIR/$f"; done
+    docker restart @GATEWAY@ >/dev/null
+    echo "gateway did not start with the new geo databases, previous ones restored" >&2
+    exit 1
+  fi
+else
+  # installation (config passed as an argument) or no gateway running: nothing
+  # else holds the databases, test them with the config before use
+  cp geoip.dat geosite.dat "$TMP/geo/"
+  docker run --rm --user 0:0 -e GODEBUG=multipathtcp=0 -e XRAY_LOCATION_ASSET=/geo -v "$TMP/geo:/geo:ro" -v "$CONF:/cfg:ro" \
+    @IMAGE@ run -test -confdir /cfg >/dev/null
+  install -m 644 geoip.dat geosite.dat "$DIR/"
 fi
 echo "geo updated: $(date -Is)"
 """

@@ -246,3 +246,55 @@ def test_geo_update_script_downloads_exactly_the_pinned_release(tmp_path, mode):
     else:
         assert result.returncode == 0, result.stderr
         assert any("/releases/latest/download/geoip.dat.sha256sum" in u for u in urls)
+    # temporary files live next to the databases, never in /tmp (often in memory)
+    assert not list(geo.glob(".update.*"))
+
+
+@pytest.mark.skipif(sys.platform == "win32" or shutil.which("sh") is None, reason="needs a POSIX shell")
+@pytest.mark.parametrize("starts", [True, False])
+def test_running_gateway_is_restarted_on_new_databases_without_a_second_xray(tmp_path, starts):
+    """A test container next to the running gateway doubled the memory for the
+    databases and took a 1 GiB entry down. With a gateway running, the files are
+    swapped, the gateway restarted, and the old files come back if it does not listen."""
+    base = tmp_path / "cascade"
+    geo = base / "geo"
+    geo.mkdir(parents=True)
+    (base / "config").mkdir()
+    (geo / "geoip.dat").write_bytes(b"old-ip")
+    (geo / "geosite.dat").write_bytes(b"old-site")
+    new = {"geoip.dat": b"new-ip", "geosite.dat": b"new-site"}
+    sums = {n: hashlib.sha256(b).hexdigest() for n, b in new.items()}
+    (geo / "pin").write_text(f"202611241408 {sums['geoip.dat']} {sums['geosite.dat']}\n")
+    served = tmp_path / "served"
+    served.mkdir()
+    for n, b in new.items():
+        (served / n).write_bytes(b)
+    calls = tmp_path / "calls"
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    (bin_dir / "curl").write_text(
+        "#!/bin/sh\nout=''; url=''\nwhile [ $# -gt 0 ]; do case \"$1\" in -o) out=$2; shift 2;; -m|--retry|--socks5-hostname) shift 2;; -*) shift;; *) url=$1; shift;; esac; done\n"
+        f"cp \"{served}/$(basename \"$url\")\" \"$out\"\n")
+    (bin_dir / "docker").write_text(
+        f"#!/bin/sh\necho \"docker $1\" >> {calls}\n"
+        f"[ \"$1\" != ps ] || echo {cascade.GATEWAY}\nexit 0\n")
+    (bin_dir / "ss").write_text("#!/bin/sh\n" + ("echo 'LISTEN 0 4096 127.0.0.1:12350'\n" if starts else "") + "exit 0\n")
+    (bin_dir / "sleep").write_text("#!/bin/sh\nexit 0\n")
+    for f in bin_dir.iterdir():
+        f.chmod(f.stat().st_mode | stat.S_IEXEC)
+    script = tmp_path / "geo-update.sh"
+    script.write_text(cascade._fill(cascade._GEO_SH).replace(cascade.DIR, str(base)))
+    env = {**os.environ, "PATH": f"{bin_dir}:{os.environ['PATH']}"}
+    result = subprocess.run(["sh", str(script)], env=env, capture_output=True, text=True)
+    docker = calls.read_text().split("\n")
+    assert "docker run" not in docker  # no second xray next to the running gateway
+    if starts:
+        assert result.returncode == 0, result.stderr
+        assert docker.count("docker restart") == 1
+        assert (geo / "geosite.dat").read_bytes() == b"new-site"
+    else:
+        assert result.returncode != 0 and "previous ones restored" in result.stderr
+        assert docker.count("docker restart") == 2
+        assert (geo / "geosite.dat").read_bytes() == b"old-site"
+        assert (geo / "geoip.dat").read_bytes() == b"old-ip"
+    assert not list(geo.glob(".update.*"))
