@@ -14,9 +14,10 @@ RUN pip wheel --no-cache-dir --no-deps --no-build-isolation -w /wheels .
 
 FROM python:3.14-slim@sha256:22eafb370920ad8b429e0aec3fff433e0669968519f5d60469d83729c138b28b
 
-# Apply Debian's zlib security update when the upstream image still has the older package.
+# Apply Debian security updates the pinned base image does not have yet (zlib,
+# zstd: CVE-2026-124851). Drop a package here once a newer base digest has it.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends --only-upgrade zlib1g \
+    && apt-get install -y --no-install-recommends --only-upgrade zlib1g libzstd1 \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /srv

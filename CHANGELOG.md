@@ -7,6 +7,7 @@ All notable changes to Amnezia Control are documented here. The format is based 
 ## [0.84.76] - 2026-11-25
 
 - Fix: updating the geo databases on a cascade entry no longer loads them into a second xray next to the running gateway, and downloads them to disk instead of /tmp. On an entry with 1 GB of memory, no swap and /tmp in memory, the update pushed the host into hours of page-cache thrashing. With the gateway running, the new files are swapped in and the gateway restarted; if it does not come back, the previous files are restored. Installed entries get the new script through the periodic cascade check.
+- Backend image: Debian's zstd security update (CVE-2026-124851) is applied on top of the pinned base image.
 
 ## [0.84.75] - 2026-11-25
 
