@@ -4,6 +4,12 @@ All notable changes to Amnezia Control are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.84.79] - 2026-11-25
+
+- The frontend image is built on the current `nginx:1.31.9-alpine3.24` base image.
+- The release workflow uses `docker/login-action` 4.8.0, pinned by commit.
+- Once the latest geo database release is accepted, the panel clears the record of an earlier refusal, so the stored state no longer shows an old refused tag.
+
 ## [0.84.78] - 2026-11-25
 
 - Fix: the geo database check refused a normal release in which the Russian "available only inside" list gained about 260 municipal sites in the .ru and .рф zones. Growth of the direct lists is now counted only outside the zones the gateway already sends direct; generic zones and well-known blocked sites in a direct list are still refused.
