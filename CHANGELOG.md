@@ -4,6 +4,11 @@ All notable changes to Amnezia Control are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.84.77] - 2026-11-25
+
+- When a new cascade cannot be installed because its subnet overlaps an address or route on a server, the install log now names the conflicting network and interface. If it is left over from a cascade removed without teardown, the log lists the commands that remove it (#47).
+- Geo databases for cascade gateways are downloaded over IPv4 first when the gateway is not used, so a broken IPv6 route on the entry no longer makes cascade creation time out (#52).
+
 ## [0.84.76] - 2026-11-25
 
 - Fix: updating the geo databases on a cascade entry no longer loads them into a second xray next to the running gateway, and downloads them to disk instead of /tmp. On an entry with 1 GB of memory, no swap and /tmp in memory, the update pushed the host into hours of page-cache thrashing. With the gateway running, the new files are swapped in and the gateway restarted; if it does not come back, the previous files are restored. Installed entries get the new script through the periodic cascade check.
