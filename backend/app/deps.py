@@ -52,17 +52,7 @@ async def get_current_user(
 CurrentUser = Annotated[User, Depends(get_current_user)]
 
 
-async def get_api_client(
-    key: Annotated[str | None, Security(api_key_scheme)],
-    session: SessionDep,
-    request: Request,
-) -> ApiKey:
-    """Аутентификация интеграции по ключу из X-API-Key.
-
-    Права ключа узкие и фиксированные: клиентские операции AmneziaWG + чтение
-    списка серверов. Управление серверами (деплой/удаление/full-access/настройки)
-    ключом НЕДОСТУПНО — такие ручки остаются под пользовательским JWT.
-    """
+async def _get_api_key(key: str | None, session: SessionDep, request: Request) -> ApiKey:
     if not key:
         raise HTTPException(
             status.HTTP_401_UNAUTHORIZED, "Требуется заголовок X-API-Key"
@@ -87,4 +77,31 @@ async def get_api_client(
     return row
 
 
+async def get_api_client(
+    key: Annotated[str | None, Security(api_key_scheme)],
+    session: SessionDep,
+    request: Request,
+) -> ApiKey:
+    row = await _get_api_key(key, session, request)
+    if row.scope != "clients":
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Ключ не разрешает клиентские операции")
+    return row
+
+
+async def get_stats_reader(
+    credentials: Annotated[HTTPAuthorizationCredentials | None, Security(bearer_scheme)],
+    key: Annotated[str | None, Security(api_key_scheme)],
+    session: SessionDep,
+    request: Request,
+) -> ApiKey | None:
+    if credentials is not None or key is None:
+        await get_current_user(credentials, session)
+        return None
+    row = await _get_api_key(key, session, request)
+    if row.scope != "stats":
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Ключ не разрешает читать статистику")
+    return row
+
+
 ApiClient = Annotated[ApiKey, Depends(get_api_client)]
+StatsReader = Annotated[ApiKey | None, Depends(get_stats_reader)]

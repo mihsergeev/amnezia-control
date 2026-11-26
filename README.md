@@ -352,6 +352,19 @@ fetch, revoke, pause and resume clients — it **cannot** deploy or delete serve
 change settings, export full access, or create further keys. Revoke a key at any
 time from the same page; everything it did is in the audit log as `apikey:<name>`.
 
+### Monitoring
+
+Create a **Statistics only** key for a dashboard or scheduled report. Send it in
+`X-API-Key` to `/api/stats/overview`, `/api/stats/history`, `/api/stats/nodes`,
+`/api/stats/node-history` or `/api/stats/top-clients`. The key respects the
+server and expiry restrictions in the key editor. Use repeated `server_id`
+parameters to request specific servers. Monitoring keys cannot use `/api/v1`,
+and top clients use pseudonymous identifiers for monitoring requests.
+
+The Overview shows CPU, memory usage and 1-minute load average for the selected
+node. The existing collector records samples, with the same retention as
+traffic history. Resource history starts after upgrading.
+
 ### Rolling back AmneziaWG 3.1
 
 Installing 3.1 is **additive**: it brings up a separate container

@@ -1,5 +1,6 @@
-"""Интеграционные тесты /api/stats/history: окно from/to и адаптивный шаг."""
+"""Интеграционные тесты истории трафика и нагрузки."""
 
+import secrets
 from datetime import datetime, timedelta, timezone
 
 import httpx
@@ -29,9 +30,7 @@ async def app_with_samples(tmp_path, monkeypatch):
     monkeypatch.setenv("VPNPANEL_DATA_DIR", (tmp_path / "data").as_posix())
     monkeypatch.setenv("VPNPANEL_ADMIN_USER", "admin")
     monkeypatch.setenv("VPNPANEL_ADMIN_PASSWORD", "testpass")
-    monkeypatch.setenv(
-        "VPNPANEL_JWT_SECRET", "test-secret-0123456789abcdef0123456789abcdef"
-    )
+    monkeypatch.setenv("VPNPANEL_JWT_SECRET", secrets.token_hex(32))
     config.get_settings.cache_clear()
 
     from app.bootstrap import ensure_admin
@@ -88,6 +87,34 @@ async def test_history_long_range_coarsens_bucket(app_with_samples) -> None:
     assert r.status_code == 200
     # 90 дней укрупняются до 12-часовых бакетов
     assert r.json()["interval_seconds"] == 43200
+
+
+async def test_node_history_averages_per_server_and_bucket(app_with_samples) -> None:
+    from app.models import NodeResourceSample, Server
+
+    app = app_with_samples
+    base = datetime(2026, 7, 6, 12, 0, tzinfo=timezone.utc)
+    async with app.state.session_factory() as session:
+        session.add(Server(id=1, name="fixture-node", host="198.51.100.20"))
+        for sid, offset, cpu, mem, load in (
+            (1, 10, None, 20, 0.2), (1, 90, 40, 40, 0.6),
+            (1, 610, 16, None, 0.3), (2, 15, 50, 50, 0.8),
+        ):
+            session.add(NodeResourceSample(
+                server_id=sid, ts=base + timedelta(seconds=offset),
+                cpu_pct=cpu, mem_pct=mem, load1=load,
+            ))
+        await session.commit()
+    start = int(base.timestamp() * 1000)
+    end = start + 720_000
+    result = await _get(app, f"/api/stats/node-history?from_ms={start}&to_ms={end}")
+    assert result["interval_seconds"] == 300
+    (series,) = result["servers"]
+    assert series["server_id"] == 1
+    assert [p["ts"] for p in series["points"]] == ["2026-07-06T12:00:00Z", "2026-07-06T12:10:00Z"]
+    assert [p["cpu_pct"] for p in series["points"]] == [40.0, 16.0]
+    assert [p["mem_pct"] for p in series["points"]] == [30.0, None]
+    assert [p["load1"] for p in series["points"]] == pytest.approx([0.4, 0.3])
 
 
 # --- фильтр "Обзора" по серверам (issue #17) ---

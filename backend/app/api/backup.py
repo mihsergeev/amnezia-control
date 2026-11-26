@@ -34,6 +34,7 @@ from app.models import (
     ClientName,
     ClientTrafficSample,
     NodeMetric,
+    NodeResourceSample,
     NativeVpnConfig,
     OvpnConfig,
     PausedClient,
@@ -83,6 +84,7 @@ _MODELS = [
     ServerStatus,
     TorrentHit,
     NodeMetric,
+    NodeResourceSample,
     TrafficSample,
     ClientTrafficSample,
 ]
@@ -93,7 +95,7 @@ _NOT_BACKED_UP: dict[str, str] = {
 }
 
 # история трафика — объёмная и некритичная; в «лёгком» бэкапе её пропускаем
-_TRAFFIC_MODELS = (TrafficSample, ClientTrafficSample)
+_TRAFFIC_MODELS = (TrafficSample, ClientTrafficSample, NodeResourceSample)
 
 _RESTORE = """# Восстановление Amnezia Control
 
@@ -682,6 +684,9 @@ async def restore_backup(
     if Server in present and ClientMetadata not in present:
         present.append(ClientMetadata)
         prepared[ClientMetadata.__tablename__] = []
+    if Server in present and NodeResourceSample not in present:
+        present.append(NodeResourceSample)
+        prepared[NodeResourceSample.__tablename__] = []
     # Panel backups do not roll back VPN nodes. Replaying an archived plan can
     # re-enable a revoked credential; IDs can also map to different users and
     # nodes after restore. Keep only retired request IDs, including IDs newer

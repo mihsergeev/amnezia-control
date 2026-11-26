@@ -8,6 +8,7 @@ import io
 import json
 import tarfile
 import asyncio
+from datetime import datetime, timezone
 from types import SimpleNamespace
 
 import httpx
@@ -16,7 +17,7 @@ import pytest
 from app import apikeys
 from app.api.backup import _skip_data_dir, verify_archive
 from sqlalchemy import delete, select
-from app.models import AwgConfig, AwgSettingsChange, PausedClient, Server
+from app.models import AwgConfig, AwgSettingsChange, NodeResourceSample, PausedClient, Server
 
 
 def _mk_archive(manifest_tables, dump, with_key=True):
@@ -58,6 +59,7 @@ async def test_light_backup_omits_traffic_history(client, auth_headers):
     dump = _read_db_json((await client.post("/api/backup/download", headers=auth_headers, json={"password": "testpass"})).content)
     assert "client_traffic_samples" not in dump
     assert "traffic_samples" not in dump
+    assert "node_resource_samples" not in dump
     assert dump["servers"] and "app_settings" in dump  # конфиг на месте
 
 
@@ -128,6 +130,9 @@ async def test_backup_restore_roundtrip_preserves_expiry_and_alerts(
     # сносим срок клиента и настройки алертов
     r = await client.get("/api/servers", headers=auth_headers)
     sid = r.json()[0]["id"]
+    async with client.session_factory() as s:
+        s.add(NodeResourceSample(server_id=sid, ts=datetime.now(timezone.utc), load1=0.5))
+        await s.commit()
     await client.post(
         f"/api/servers/{sid}/limit",
         headers=auth_headers,
@@ -152,6 +157,9 @@ async def test_backup_restore_roundtrip_preserves_expiry_and_alerts(
     auth_headers = {"Authorization": f"Bearer {r.json()['access_token']}"}
     assert restored["client_limits"] >= 1
     assert restored["app_settings"] >= 1
+    assert restored["node_resource_samples"] == 0
+    async with client.session_factory() as s:
+        assert (await s.scalars(select(NodeResourceSample))).all() == []
 
     # срок клиента вернулся (иначе истёкшие клиенты никогда не отзовутся)
     dump = _read_db_json(

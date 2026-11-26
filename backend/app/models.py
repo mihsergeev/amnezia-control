@@ -411,14 +411,25 @@ class NodeMetric(Base):
     )
 
 
+class NodeResourceSample(Base):
+    """Historical CPU, memory and load sample from the node collector."""
+
+    __tablename__ = "node_resource_samples"
+
+    server_id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    ts: Mapped[datetime] = mapped_column(DateTime(timezone=True), primary_key=True, index=True)
+    cpu_pct: Mapped[float | None] = mapped_column(Float, nullable=True)
+    mem_pct: Mapped[float | None] = mapped_column(Float, nullable=True)
+    load1: Mapped[float] = mapped_column(Float)
+
+
 class ApiKey(Base):
     """Ключ интеграционного API (/api/v1) — для машин, не для людей.
 
     Хранится ТОЛЬКО хэш секрета (bcrypt), как пароль: утечка БД не даёт рабочих
     ключей. Полный ключ показывается один раз при создании. `prefix` — открытая
     часть для быстрого поиска строки без перебора хэшей всей таблицы и для
-    опознания ключа в UI/логах. Права ключа фиксированы и узки: клиентские
-    операции AmneziaWG + чтение списка серверов (ни деплоя, ни full-access).
+    опознания ключа в UI/логах. Назначение задаётся при выдаче ключа.
     """
 
     __tablename__ = "api_keys"
@@ -427,6 +438,7 @@ class ApiKey(Base):
     name: Mapped[str] = mapped_column(String(120))
     prefix: Mapped[str] = mapped_column(String(16), unique=True, index=True)
     key_hash: Mapped[str] = mapped_column(String(255))
+    scope: Mapped[str] = mapped_column(String(16), default="clients", server_default="clients")
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )

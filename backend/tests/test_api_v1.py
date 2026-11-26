@@ -4,10 +4,14 @@
 прав сверх клиентских) — ручки, ходящие по SSH, покрыты тестами api/awg.
 """
 
+from datetime import datetime, timedelta, timezone
+
 import httpx
 import pytest
+from sqlalchemy import update
 
 from app import apikeys
+from app.models import ApiKey, ClientTrafficSample, NodeMetric, NodeResourceSample, TrafficSample
 
 
 async def _make_key(client: httpx.AsyncClient, headers: dict, name="integration") -> str:
@@ -60,6 +64,73 @@ async def test_v1_works_with_api_key(client, auth_headers):
     r = await client.get("/api/v1/servers", headers={"X-API-Key": key})
     assert r.status_code == 200
     assert r.json() == []  # серверов ещё нет
+
+
+async def test_stats_key_is_read_only_and_server_scoped(client, auth_headers):
+    first = await _server(client, auth_headers, "192.0.2.41")
+    second = await _server(client, auth_headers, "192.0.2.42")
+    now = datetime.now(timezone.utc) - timedelta(seconds=1)
+    raw_id = "fixture-client-id"
+    async with client.session_factory() as session:
+        for sid in (first, second):
+            session.add_all([
+                TrafficSample(server_id=sid, ts=now, rx_total=sid, clients_online=1),
+                ClientTrafficSample(server_id=sid, protocol="xray", client_id=raw_id, rx=500, ts=now),
+                NodeMetric(server_id=sid, ts=now),
+                NodeResourceSample(server_id=sid, ts=now, cpu_pct=15, mem_pct=50, load1=0.2),
+            ])
+        await session.commit()
+
+    created = await client.post(
+        "/api/apikeys",
+        json={"name": "monitoring", "password": "testpass", "scope": "stats"},
+        headers=auth_headers,
+    )
+    assert created.status_code == 201 and created.json()["scope"] == "stats"
+    data = created.json()
+    updated = await client.put(
+        f"/api/apikeys/{data['id']}",
+        json={"server_ids": [first], "all_servers": False, "password": "testpass"},
+        headers=auth_headers,
+    )
+    assert updated.status_code == 200 and updated.json()["scope"] == "stats"
+    headers = {"X-API-Key": data["key"]}
+    overview = (await client.get("/api/stats/overview", headers=headers)).json()
+    assert [row["id"] for row in overview["per_server"]] == [first]
+    history = (await client.get("/api/stats/history?by_server=true", headers=headers)).json()
+    assert [row["server_id"] for row in history["servers"]] == [first]
+    for path in ("nodes", "node-history", "top-clients"):
+        response = await client.get(f"/api/stats/{path}", headers=headers)
+        assert response.status_code == 200, response.text
+        items = response.json()
+        if path == "node-history":
+            items = items["servers"]
+        assert [row["server_id"] for row in items] == [first]
+        if path == "top-clients":
+            assert raw_id not in response.text and raw_id[:12] not in response.text
+    for path in ("nodes", "node-history", "top-clients", "overview", "history"):
+        response = await client.get(
+            f"/api/stats/{path}?server_id={first}&server_id={second}", headers=headers
+        )
+        assert response.status_code == 403
+    for path in ("/api/v1/servers", f"/api/v1/servers/{first}/clients/config?public_key=fixture"):
+        assert (await client.get(path, headers=headers)).status_code == 403
+    assert (await client.post(
+        f"/api/v1/servers/{first}/clients", json={"name": "fixture"}, headers=headers
+    )).status_code == 403
+    assert (await client.get(
+        f"/api/stats/client?server_id={first}&protocol=xray&client_id=fixture", headers=headers
+    )).status_code == 401
+    assert (await client.get("/api/stats/nodes")).status_code == 401
+    legacy = await _make_key(client, auth_headers)
+    assert (await client.get("/api/stats/nodes", headers={"X-API-Key": legacy})).status_code == 403
+    assert (await client.get("/api/stats/nodes", headers=auth_headers)).status_code == 200
+
+    # Restoring an old backup without the scope must not promote a cached key.
+    async with client.session_factory() as session:
+        await session.execute(update(ApiKey).where(ApiKey.id == data["id"]).values(scope="clients"))
+        await session.commit()
+    assert (await client.get("/api/v1/servers", headers=headers)).status_code == 401
 
 
 async def test_revoked_key_stops_working(client, auth_headers):

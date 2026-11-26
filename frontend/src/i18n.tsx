@@ -666,14 +666,24 @@ const EN: Record<string, string> = {
   'Ключ': 'Key',
   'Ключ создан': 'Key created',
   'Ключей пока нет.': 'No keys yet.',
-  'Ключи нужны для интеграции внешних систем с панелью через /api/v1: выдавать и отзывать клиентов AmneziaWG, забирать конфиги, читать список серверов. Управлять серверами (разворачивать, удалять, брать полный доступ) ключ НЕ может.':
-    'Keys let external systems integrate with the panel over /api/v1: issue and revoke AmneziaWG clients, fetch configs, list servers. A key canNOT manage servers (deploy, delete, or take full access).',
+  'Ключи для клиентских операций работают через /api/v1: выдают и отзывают клиентов AmneziaWG, читают конфиги и список серверов.':
+    'Client operations keys use /api/v1 to issue and revoke AmneziaWG clients, read configs and list servers.',
   'Кому выдан (напр. billing-panel)': 'Issued to (e.g. billing-panel)',
   'Копировать': 'Copy',
   'Название': 'Name',
   'Автоматически по имени сервера': 'Use the server hostname automatically',
   'Если оставить пустым, панель возьмет имя из SSH-проверки, а если оно недоступно - адрес сервера.': 'Leave blank to use the hostname from the SSH check, or the server address if unavailable.',
   'Новый ключ': 'New key',
+  'Назначение ключа': 'Key purpose',
+  'Клиентские операции': 'Client operations',
+  'Только статистика': 'Statistics only',
+  'Ключ для клиентских операций видит приватные конфиги. Ключ «Только статистика» читает метрики и трафик. Срок и серверы задаются кнопкой «Изменить».':
+    'A client operations key can read private configs. A statistics-only key can read metrics and traffic. Use Edit to set expiry and allowed servers.',
+  'История нагрузки': 'Resource history',
+  'Сервер для графика нагрузки': 'Server for the resource chart',
+  'Не удалось загрузить историю нагрузки': 'Could not load resource history',
+  'Load average за 1 мин': '1-minute load average',
+  'За этот период нет замеров нагрузки': 'No resource samples in this period',
   'Отозван API-ключ': 'API key revoked',
   'Изменен API-ключ': 'API key changed',
   'Отозвать ключ «{name}»? Интеграция сразу перестанет работать.':

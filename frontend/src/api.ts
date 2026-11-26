@@ -581,6 +581,15 @@ export type History = {
   servers: HistoryServer[]
 }
 
+export type NodeHistory = {
+  interval_seconds: number
+  servers: {
+    server_id: number
+    name: string
+    points: { ts: string; cpu_pct: number | null; mem_pct: number | null; load1: number }[]
+  }[]
+}
+
 export type OvpnClient = {
   group_name?: string
   device_name?: string
@@ -859,6 +868,7 @@ export type ApiKey = {
   id: number
   name: string
   prefix: string
+  scope?: 'clients' | 'stats'
   created_at: string
   last_used_at: string | null
   revoked: boolean
@@ -875,10 +885,12 @@ export async function listApiKeys(): Promise<ApiKey[]> {
 }
 
 // выпуск и изменение ключа - с паролем (степ-ап)
-export async function createApiKey(name: string, password: string): Promise<ApiKeyCreated> {
+export async function createApiKey(
+  name: string, password: string, scope: NonNullable<ApiKey['scope']> = 'clients',
+): Promise<ApiKeyCreated> {
   return api<ApiKeyCreated>('/api/apikeys', {
     method: 'POST',
-    body: JSON.stringify({ name, password }),
+    body: JSON.stringify({ name, password, scope }),
   })
 }
 

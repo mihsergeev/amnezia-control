@@ -1,21 +1,24 @@
+import hmac
 import json
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from typing import Annotated
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, HTTPException, Query
 from sqlalchemy import Integer, and_, cast, extract, func, literal_column, select
 
 from app import protolabel, stats_calc
 from app.config import get_settings
-from app.deps import CurrentUser, SessionDep
+from app.deps import CurrentUser, SessionDep, StatsReader
 from app.models import (
+    ApiKey,
     AwgConfig,
     AwgNote,
     Cascade,
     ClientName,
     ClientTrafficSample,
     NodeMetric,
+    NodeResourceSample,
     OvpnConfig,
     NativeVpnConfig,
     Server,
@@ -24,7 +27,10 @@ from app.models import (
 from app.schemas import (
     ClientHistoryOut,
     HistoryOut,
+    NodeHistoryOut,
     NodeMetricOut,
+    NodeResourceHistory,
+    NodeResourcePoint,
     OverviewOut,
     TopClientOut,
 )
@@ -38,14 +44,24 @@ router = APIRouter(prefix="/stats", tags=["stats"])
 ServerFilter = Annotated[list[int] | None, Query()]
 
 
+def _server_filter(reader: ApiKey | None, requested: list[int] | None) -> list[int] | None:
+    if reader is None or not (reader.servers or "").strip():
+        return requested
+    allowed = reader.server_ids
+    if not allowed or any(sid not in allowed for sid in requested or []):
+        raise HTTPException(403, "Сервер недоступен для этого ключа")
+    return requested or allowed
+
+
 @router.get("/top-clients", response_model=list[TopClientOut])
 async def top_clients(
-    _: CurrentUser,
+    reader: StatsReader,
     session: SessionDep,
     limit: int = Query(default=10, ge=1, le=50),
     server_id: ServerFilter = None,
 ) -> list[TopClientOut]:
     settings = get_settings()
+    server_id = _server_filter(reader, server_id)
     # свежие снимки (последний цикл) → последний по каждому клиенту
     cutoff = datetime.now(timezone.utc) - timedelta(
         seconds=max(settings.stats_interval, 60) * 3
@@ -122,27 +138,38 @@ async def top_clients(
             return native_names.get((s.server_id, s.protocol, s.client_id)) or s.client_id[:12]
         return s.client_id[:12]
 
-    return [
-        TopClientOut(
+    def to_result(s: ClientTrafficSample) -> TopClientOut:
+        client_id, name = s.client_id, resolve_name(s)
+        if reader is not None:
+            # Some protocol IDs double as authentication credentials.
+            message = json.dumps([s.server_id, s.protocol, client_id]).encode()
+            anon = hmac.digest(settings.jwt_secret.encode(), b"stats-client\0" + message, "sha256").hex()
+            if client_id and (client_id in name or name == client_id[:12]):
+                name = anon[:12]
+            client_id = anon
+        return TopClientOut(
             server_id=s.server_id,
             server_name=servers[s.server_id].name if s.server_id in servers else "",
             protocol=s.protocol,
             protocol_label=protolabel.protocol_label(servers.get(s.server_id), s.protocol),
-            client_id=s.client_id,
-            name=resolve_name(s),
+            client_id=client_id,
+            name=name,
             rx=s.rx,
             tx=s.tx,
             total=s.rx + s.tx,
         )
-        for s in ranked
-    ]
+    return [to_result(s) for s in ranked]
 
 
 @router.get("/nodes", response_model=list[NodeMetricOut])
-async def node_metrics(_: CurrentUser, session: SessionDep) -> list[NodeMetric]:
-    return list(
-        await session.scalars(select(NodeMetric).order_by(NodeMetric.server_id))
-    )
+async def node_metrics(
+    reader: StatsReader, session: SessionDep, server_id: ServerFilter = None
+) -> list[NodeMetric]:
+    ids = _server_filter(reader, server_id)
+    query = select(NodeMetric).order_by(NodeMetric.server_id)
+    if ids:
+        query = query.where(NodeMetric.server_id.in_(ids))
+    return list(await session.scalars(query))
 
 
 @router.get("/client", response_model=ClientHistoryOut)
@@ -198,9 +225,10 @@ async def _cascade_exits(session) -> set[int]:
 
 @router.get("/overview", response_model=OverviewOut)
 async def overview(
-    _: CurrentUser, session: SessionDep, server_id: ServerFilter = None
+    reader: StatsReader, session: SessionDep, server_id: ServerFilter = None
 ) -> OverviewOut:
     settings = get_settings()
+    server_id = _server_filter(reader, server_id)
     srv_query = select(Server).order_by(Server.id)
     if server_id:
         # карточки сверху считаются по выбранным серверам: "серверов онлайн 2 / 3"
@@ -226,14 +254,14 @@ async def overview(
     return OverviewOut(**stats_calc.build_overview(servers, latest_by_id))
 
 
-def _bucket_expr(dialect: str, step: int):
+def _bucket_expr(dialect: str, step: int, stamp=TrafficSample.ts):
     """Номер бакета floor(epoch / step) на стороне БД. SQLite хранит ts строкой
     в UTC (strftime('%s') - секунды эпохи), Postgres - timestamptz."""
     n = literal_column(str(int(step)))
     if dialect == "sqlite":
         # целые делятся нацело (FLOOR в SQLite есть не везде)
-        return cast(func.strftime("%s", TrafficSample.ts), Integer).op("/")(n)
-    return func.floor(extract("epoch", TrafficSample.ts) / n)
+        return cast(func.strftime("%s", stamp), Integer).op("/")(n)
+    return func.floor(extract("epoch", stamp) / n)
 
 
 async def _history_rows(session, start, end, server_id, step: int) -> list:
@@ -292,27 +320,34 @@ async def _history_rows(session, start, end, server_id, step: int) -> list:
     ]
 
 
+def _history_window(hours: int, from_ms: int | None, to_ms: int | None):
+    settings = get_settings()
+    end = datetime.now(timezone.utc)
+    start = end - timedelta(hours=hours)
+    if from_ms is not None and to_ms is not None and to_ms > from_ms:
+        try:
+            start = datetime.fromtimestamp(from_ms / 1000, timezone.utc)
+            end = datetime.fromtimestamp(to_ms / 1000, timezone.utc)
+            if end - start > timedelta(days=90):
+                raise ValueError("range exceeds retention window")
+        except (OverflowError, OSError, ValueError) as exc:
+            raise HTTPException(422, "Неверный диапазон истории") from exc
+    range_seconds = max((end - start).total_seconds(), 1)
+    return start, end, stats_calc.pick_bucket_seconds(range_seconds, settings.stats_interval)
+
+
 @router.get("/history", response_model=HistoryOut)
 async def history(
-    _: CurrentUser,
+    reader: StatsReader,
     session: SessionDep,
     server_id: ServerFilter = None,
-    hours: int = Query(default=24, ge=1, le=2160),  # до 90 дней
-    from_ms: int | None = Query(default=None),  # произвольное окно (drag-zoom)
+    hours: int = Query(default=24, ge=1, le=2160),
+    from_ms: int | None = Query(default=None),
     to_ms: int | None = Query(default=None),
     by_server: bool = False,
 ) -> HistoryOut:
-    settings = get_settings()
-    now = datetime.now(timezone.utc)
-    if from_ms is not None and to_ms is not None and to_ms > from_ms:
-        start = datetime.fromtimestamp(from_ms / 1000, timezone.utc)
-        end = datetime.fromtimestamp(to_ms / 1000, timezone.utc)
-    else:
-        end = now
-        start = now - timedelta(hours=hours)
-    range_seconds = max((end - start).total_seconds(), 1)
-    # шаг бакета подбираем под ширину окна, чтобы точек было ~несколько сотен
-    step = stats_calc.pick_bucket_seconds(range_seconds, settings.stats_interval)
+    server_id = _server_filter(reader, server_id)
+    start, end, step = _history_window(hours, from_ms, to_ms)
     samples = await _history_rows(session, start, end, server_id, step)
     points = stats_calc.aggregate_history(samples, step)
     servers = []
@@ -327,3 +362,40 @@ async def history(
             if sid in names and sid not in exits
         ]
     return HistoryOut(interval_seconds=step, points=points, servers=servers)
+
+
+@router.get("/node-history", response_model=NodeHistoryOut)
+async def node_history(
+    reader: StatsReader,
+    session: SessionDep,
+    server_id: ServerFilter = None,
+    hours: int = Query(default=24, ge=1, le=2160),
+    from_ms: int | None = Query(default=None),
+    to_ms: int | None = Query(default=None),
+) -> NodeHistoryOut:
+    ids = _server_filter(reader, server_id)
+    start, end, step = _history_window(hours, from_ms, to_ms)
+    sample = NodeResourceSample
+    bucket = _bucket_expr(session.bind.dialect.name, step, sample.ts)
+    query = (
+        select(Server.id, Server.name, bucket.label("bucket"),
+               func.avg(sample.cpu_pct).label("cpu_pct"),
+               func.avg(sample.mem_pct).label("mem_pct"),
+               func.avg(sample.load1).label("load1"))
+        .select_from(sample)
+        .join(Server, Server.id == sample.server_id)
+        .where(sample.ts >= start, sample.ts <= end)
+        .group_by(Server.id, Server.name, bucket)
+        .order_by(Server.id, bucket)
+    )
+    if ids:
+        query = query.where(sample.server_id.in_(ids))
+    series: dict[int, NodeResourceHistory] = {}
+    for row in await session.execute(query):
+        if row.id not in series:
+            series[row.id] = NodeResourceHistory(server_id=row.id, name=row.name, points=[])
+        series[row.id].points.append(NodeResourcePoint(
+            ts=datetime.fromtimestamp(int(row.bucket) * step, timezone.utc),
+            cpu_pct=row.cpu_pct, mem_pct=row.mem_pct, load1=row.load1,
+        ))
+    return NodeHistoryOut(interval_seconds=step, servers=list(series.values()))

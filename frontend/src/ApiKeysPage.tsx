@@ -20,6 +20,7 @@ export function ApiKeysPage({ onUnauthorized }: Props) {
   const [items, setItems] = useState<ApiKey[] | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [name, setName] = useState('')
+  const [keyScope, setKeyScope] = useState<NonNullable<ApiKey['scope']>>('clients')
   const [creating, setCreating] = useState(false)
   // Полный ключ существует только здесь и только до перезагрузки страницы —
   // на бэкенде лежит лишь хэш, повторно показать его невозможно.
@@ -99,7 +100,7 @@ export function ApiKeysPage({ onUnauthorized }: Props) {
   async function doCreate(password: string) {
     setCreating(true)
     try {
-      const created = await createApiKey(name.trim(), password)
+      const created = await createApiKey(name.trim(), password, keyScope)
       setStepUp(null)
       setFresh({ name: created.name, key: created.key })
       setCopied(false)
@@ -151,11 +152,11 @@ export function ApiKeysPage({ onUnauthorized }: Props) {
       <div className="card">
         <p className="muted">
           {t(
-            'Ключи нужны для интеграции внешних систем с панелью через /api/v1: выдавать и отзывать клиентов AmneziaWG, забирать конфиги, читать список серверов. Управлять серверами (разворачивать, удалять, брать полный доступ) ключ НЕ может.',
+            'Ключи для клиентских операций работают через /api/v1: выдают и отзывают клиентов AmneziaWG, читают конфиги и список серверов.',
           )}
         </p>
         <p className="muted small">
-          {t('Ключ видит приватные конфиги клиентов. Кнопкой "Изменить" в списке ограничьте его нужными серверами и задайте срок.')}
+          {t('Ключ для клиентских операций видит приватные конфиги. Ключ «Только статистика» читает метрики и трафик. Срок и серверы задаются кнопкой «Изменить».')}
         </p>
         <p className="muted small">
           {t('Передавайте ключ в заголовке X-API-Key.')}
@@ -200,6 +201,14 @@ export function ApiKeysPage({ onUnauthorized }: Props) {
             onChange={(e) => setName(e.target.value)}
             onKeyDown={(e) => e.key === 'Enter' && void create()}
           />
+          <select
+            aria-label={t('Назначение ключа')}
+            value={keyScope}
+            onChange={(e) => setKeyScope(e.target.value === 'stats' ? 'stats' : 'clients')}
+          >
+            <option value="clients">{t('Клиентские операции')}</option>
+            <option value="stats">{t('Только статистика')}</option>
+          </select>
           <button onClick={create} disabled={!name.trim() || creating}>
             {creating ? t('Создаю…') : t('Создать ключ')}
           </button>
@@ -229,7 +238,12 @@ export function ApiKeysPage({ onUnauthorized }: Props) {
             <tbody>
               {items.map((k) => (
                 <tr key={k.id} className={k.revoked ? 'row-muted' : undefined}>
-                  <td>{k.name}</td>
+                  <td>
+                    {k.name}
+                    <div className="muted small">
+                      {k.scope === 'stats' ? t('Только статистика') : t('Клиентские операции')}
+                    </div>
+                  </td>
                   <td className="mono muted">ack_{k.prefix}_…</td>
                   <td className="muted small">{fmt(k.created_at)}</td>
                   <td className="muted small">

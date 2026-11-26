@@ -35,12 +35,12 @@ async def create_key(
 ) -> ApiKeyCreated:
     """Выпускает ключ. Полный ключ возвращается ЕДИНСТВЕННЫЙ раз — в БД хэш."""
     await stepup.verify(user, body.password, request, otp=body.otp)
-    key, prefix, key_hash = apikeys.generate()
-    row = ApiKey(name=body.name.strip(), prefix=prefix, key_hash=key_hash)
+    key, prefix, key_hash = apikeys.generate(body.scope)
+    row = ApiKey(name=body.name.strip(), prefix=prefix, key_hash=key_hash, scope=body.scope)
     session.add(row)
     await session.commit()
     await session.refresh(row)
-    await audit.record(session, user.username, "apikey_create", row.name)
+    await audit.record(session, user.username, "apikey_create", row.name, row.scope)
     await alerts.security_alert(
         session, get_settings(),
         alerts.Card("warn", "🔑", alerts.t("Выпущен API-ключ «{name}»", name=row.name),

@@ -22,6 +22,7 @@ import {
 } from './charts/series'
 import { useI18n } from './i18n'
 import { ServerFilter } from './ServerFilter'
+import { NodeHistoryCharts } from './NodeHistoryCharts'
 
 // Выбор серверов в фильтре - удобство конкретного браузера: открыл "Обзор"
 // завтра, и он показывает те же серверы. Хранилище может быть недоступно
@@ -146,6 +147,9 @@ export function Dashboard({ onUnauthorized }: Props) {
   const rangeLabel = custom
     ? `${fmtDT(custom.from)} – ${fmtDT(custom.to)}`
     : presetLabel(hours)
+  const rangeQuery = custom
+    ? `from_ms=${custom.from}&to_ms=${custom.to}`
+    : `hours=${hours}`
 
   const handleError = useCallback(
     (err: unknown) => {
@@ -163,9 +167,6 @@ export function Dashboard({ onUnauthorized }: Props) {
   const loadSeq = useRef(0)
   const load = useCallback(async () => {
     const seq = ++loadSeq.current
-    const q = custom
-      ? `from_ms=${custom.from}&to_ms=${custom.to}`
-      : `hours=${hours}`
     if (filterKey === null) {
       // есть сохраненный выбор, но еще неизвестно, какие серверы живы: сначала
       // список, статистика подтянется следующим проходом с уже чистым фильтром
@@ -183,7 +184,7 @@ export function Dashboard({ onUnauthorized }: Props) {
         : ''
       const [ov, hist, tc, srv] = await Promise.all([
         api<Overview>(`/api/stats/overview?${f.slice(1)}`),
-        api<History>(`/api/stats/history?${q}${f}&by_server=true`),
+        api<History>(`/api/stats/history?${rangeQuery}${f}&by_server=true`),
         api<TopClient[]>(`/api/stats/top-clients?limit=10${f}`),
         // список для фильтра обновляем вместе со статистикой: сервер, добавленный
         // при открытом "Обзоре", появится в нем без перезагрузки страницы
@@ -200,7 +201,7 @@ export function Dashboard({ onUnauthorized }: Props) {
     } finally {
       if (seq === loadSeq.current) setLoading(false)
     }
-  }, [handleError, hours, custom, filterKey])
+  }, [handleError, rangeQuery, filterKey])
 
   useEffect(() => {
     void load()
@@ -460,6 +461,14 @@ export function Dashboard({ onUnauthorized }: Props) {
               onZoom={zoomTo}
             />
           </div>
+
+          <NodeHistoryCharts
+            servers={(servers ?? []).filter((server) => !filterIds.length || filterIds.includes(server.id))}
+            query={rangeQuery}
+            fmtTime={fmtDT}
+            onZoom={zoomTo}
+            onUnauthorized={onUnauthorized}
+          />
 
           <div className="card table-card">
             <table>

@@ -441,6 +441,24 @@ class HistoryOut(BaseModel):
     servers: list[HistoryServerOut] = []
 
 
+class NodeResourcePoint(BaseModel):
+    ts: datetime
+    cpu_pct: float | None
+    mem_pct: float | None
+    load1: float
+
+
+class NodeResourceHistory(BaseModel):
+    server_id: int
+    name: str
+    points: list[NodeResourcePoint]
+
+
+class NodeHistoryOut(BaseModel):
+    interval_seconds: int
+    servers: list[NodeResourceHistory]
+
+
 class ClientHistoryPoint(BaseModel):
     ts: str
     rx_total: int
@@ -725,6 +743,7 @@ class ApiKeyOut(BaseModel):
     id: int
     name: str
     prefix: str
+    scope: str = "clients"
     created_at: datetime
     last_used_at: datetime | None = None
     revoked: bool = False
@@ -741,6 +760,7 @@ class ApiKeyOut(BaseModel):
 
 class ApiKeyCreateRequest(BaseModel):
     name: str = Field(min_length=1, max_length=120, description="Кому выдан ключ")
+    scope: Literal["clients", "stats"] = "clients"
     # ключ бессрочный и переживает выход и смену пароля - выпуск со степ-апом
     password: str = Field(min_length=1, max_length=128)
     otp: str | None = Field(default=None, max_length=16)

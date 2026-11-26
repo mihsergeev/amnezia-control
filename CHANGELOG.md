@@ -4,6 +4,11 @@ All notable changes to Amnezia Control are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.84.80] - 2026-11-27
+
+- Show CPU, memory usage and 1-minute load history on Overview for the selected node, using the existing collector (#61).
+- Add statistics-only API keys with server and expiry restrictions for external monitoring. Client management stays in its own key scope, and monitoring responses use pseudonymous client identifiers (#62).
+
 ## [0.84.79] - 2026-11-25
 
 - The frontend image is built on the current `nginx:1.31.9-alpine3.24` base image.

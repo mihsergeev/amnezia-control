@@ -147,3 +147,10 @@ async def test_store_keeps_cpu_counters(factory, monkeypatch):
     await collector._store_node_metrics(factory, settings, [s2], {1: "n1"})
     async with factory() as s:
         assert (await s.get(NodeMetric, 1)).cpu_pct == 25.0
+        from sqlalchemy import select
+        from app.models import NodeResourceSample
+
+        history = list(await s.scalars(select(NodeResourceSample).order_by(NodeResourceSample.ts)))
+        assert [(p.cpu_pct, p.mem_pct, p.load1) for p in history] == [
+            (None, 100.0, 1.7), (25.0, 100.0, 1.7),
+        ]

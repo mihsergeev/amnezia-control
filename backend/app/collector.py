@@ -18,6 +18,7 @@ from app.models import (
     ClientName,
     ClientTrafficSample,
     NodeMetric,
+    NodeResourceSample,
     Server,
     TrafficSample,
 )
@@ -693,6 +694,13 @@ async def _store_node_metrics(
             row.uptime_seconds = res.uptime_seconds
             row.disk_alerted = new_alerted
             row.ts = now
+            session.add(NodeResourceSample(
+                server_id=sid,
+                ts=now,
+                cpu_pct=row.cpu_pct,
+                mem_pct=round(res.mem_used / res.mem_total * 100, 1) if res.mem_total else None,
+                load1=res.load1,
+            ))
         await session.commit()
 
     if not disk_alerts:
@@ -721,6 +729,9 @@ async def _prune(session_factory, settings: Settings) -> None:
     async with session_factory() as session:
         await session.execute(
             delete(TrafficSample).where(TrafficSample.ts < cutoff)
+        )
+        await session.execute(
+            delete(NodeResourceSample).where(NodeResourceSample.ts < cutoff)
         )
         await session.execute(
             delete(ClientTrafficSample).where(ClientTrafficSample.ts < client_cutoff)
