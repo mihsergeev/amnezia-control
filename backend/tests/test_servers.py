@@ -78,7 +78,7 @@ def test_delete_covers_all_server_scoped_tables() -> None:
         for m in [
             models.AwgConfig, models.AwgNote, models.OvpnConfig, models.NativeVpnConfig, models.TrafficSample,
             models.ClientLimit, models.ClientName, models.ServerStatus,
-            models.ClientTrafficSample, models.NodeMetric, models.PausedClient,
+            models.ClientTrafficSample, models.NodeMetric, models.NodeResourceSample, models.PausedClient,
             models.TorrentHit, models.BulkClientIssue, models.ClientMetadata, models.AwgSettingsChange, models.SshAccessChange,
         ]
     }

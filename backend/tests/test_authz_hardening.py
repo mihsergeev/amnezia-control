@@ -221,10 +221,15 @@ async def test_apikey_bcrypt_cached_and_bad_keys_limited(client, auth_headers, m
     key = r.json()["key"]
     calls = []
     real = apikeys._check
-    monkeypatch.setattr(apikeys, "_check", lambda s, h: calls.append(1) or real(s, h))
+
+    def check(secret, key_hash, scope):
+        calls.append(scope)
+        return real(secret, key_hash, scope)
+
+    monkeypatch.setattr(apikeys, "_check", check)
     for _ in range(3):
         assert (await client.get("/api/v1/servers", headers={"X-API-Key": key})).status_code == 200
-    assert len(calls) == 1
+    assert calls == ["clients"]
 
     prefix = apikeys.split(key)[0]
     bad = {"X-API-Key": f"ack_{prefix}_{'x' * 32}"}
