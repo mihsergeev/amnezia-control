@@ -268,6 +268,18 @@ class ConfigOut(BaseModel):
     version: str = ""
 
 
+ReleaseCheckStatus = Literal["up_to_date", "available", "ahead", "unavailable", "disabled", "unknown"]
+
+
+class ReleaseCheckOut(BaseModel):
+    current_version: str
+    latest_version: str | None = None
+    release_url: str | None = None
+    status: ReleaseCheckStatus
+    checked_at: datetime | None = None
+    stale: bool = False
+
+
 class AwgClientOut(ClientLabels):
     name: str
     public_key: str

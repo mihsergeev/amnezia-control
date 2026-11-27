@@ -33,6 +33,7 @@ from app.api import (
     share,
     stats,
     transfer,
+    updates,
     v1,
     xray,
 )
@@ -47,6 +48,7 @@ from app.config import get_settings
 from app.db import create_engine_and_factory
 from app.debug_context import DiagnosticMiddleware, diagnostic_http_exception, bind, arecord
 from app.debuglog import DebugLogStore
+from app.release_check import ReleaseCheck
 from app.sshkeys import ensure_panel_key
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
@@ -146,6 +148,7 @@ def create_app() -> FastAPI:
     app.state.engine = engine
     app.state.session_factory = session_factory
     app.state.debug_logs = DebugLogStore(Path(settings.data_dir) / "debug-logs")
+    app.state.release_check = ReleaseCheck(settings.version, enabled=settings.release_check_enabled)
     app.add_middleware(DiagnosticMiddleware, store=app.state.debug_logs)
     app.add_exception_handler(StarletteHTTPException, diagnostic_http_exception)
 
@@ -168,6 +171,7 @@ def create_app() -> FastAPI:
     app.include_router(importer.router, prefix="/api")
     app.include_router(transfer.router, prefix="/api")
     app.include_router(stats.router, prefix="/api")
+    app.include_router(updates.router, prefix="/api")
     app.include_router(backup.router, prefix="/api")
     app.include_router(fullaccess.router, prefix="/api")
     app.include_router(audit.router, prefix="/api")

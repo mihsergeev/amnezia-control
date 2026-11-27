@@ -184,6 +184,23 @@ async function responseData<T>(res: Response): Promise<T> {
   return body as T
 }
 
+export type PanelUpdateInfo = {
+  current_version: string
+  latest_version: string | null
+  release_url: string | null
+  status: 'up_to_date' | 'available' | 'ahead' | 'unavailable' | 'disabled' | 'unknown'
+  checked_at: string | null
+  stale: boolean
+}
+
+export function getPanelUpdateInfo(signal: AbortSignal): Promise<PanelUpdateInfo> {
+  return api<PanelUpdateInfo>('/api/updates', { signal, cache: 'no-store' })
+}
+
+export function checkPanelUpdate(signal: AbortSignal): Promise<PanelUpdateInfo> {
+  return api<PanelUpdateInfo>('/api/updates/check', { method: 'POST', signal })
+}
+
 export function getDebugLogs(filters: DebugLogFilters, signal?: AbortSignal): Promise<DebugLogsResponse> {
   return api<DebugLogsResponse>(debugLogsPath(filters), { signal })
 }

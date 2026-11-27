@@ -4,6 +4,10 @@ All notable changes to Amnezia Control are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.84.85] - 2026-11-27
+
+- Show the installed version and the latest stable release in the panel's Updates settings. The panel checks automatically after sign-in and offers a manual check and a link to the release notes (#67).
+
 ## [0.84.84] - 2026-11-27
 
 - Add optional 30-day browser trust after sign-in with a password and 2FA. Subsequent sign-ins from that browser still require the password. Trusted devices can be revoked in settings, and sensitive actions still require the configured 2FA (#65).

@@ -418,6 +418,8 @@ All backup actions are in the ⚙ menu in the header.
 
 ## Updating
 
+Open **Settings > Updates** to see the installed version and the latest stable GitHub release. The backend checks automatically when the signed-in panel opens, caches the result and supports a manual check. The release link opens its notes on GitHub. To disable these requests to `api.github.com`, set `VPNPANEL_RELEASE_CHECK_ENABLED=false` in the backend service's environment.
+
 Grab a DB backup first (**⚙ > Download backup**) as a restore point, and read the [CHANGELOG](CHANGELOG.md) for the versions you skip.
 
 **Prebuilt images (default).** Update the checkout so the compose files match the release, then pull the new images. With `ACONTROL_VERSION=latest` in `.env` this takes the newest release; if you pinned a version, change `ACONTROL_VERSION` to the one you want first:

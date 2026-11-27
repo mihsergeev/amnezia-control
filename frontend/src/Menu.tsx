@@ -15,6 +15,7 @@ type Props = {
   align?: 'left' | 'right'
   caret?: boolean
   title?: string
+  description?: string
   /** позиционировать всплывашку через position:fixed по координатам кнопки —
    * нужно внутри скролл-контейнеров (таблица клиентов), иначе overflow её режет */
   fixed?: boolean
@@ -29,6 +30,7 @@ export function Menu({
   align = 'right',
   caret = true,
   title,
+  description,
   fixed = false,
   placement = 'below',
 }: Props) {
@@ -102,6 +104,7 @@ export function Menu({
         className={className}
         title={title}
         aria-label={title}
+        aria-description={description}
         aria-expanded={open}
         onClick={toggle}
       >

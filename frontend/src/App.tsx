@@ -15,6 +15,7 @@ import { hasRememberedLogin, refreshSession, setToken, watchSessionEnd } from '.
 import { LoginPage } from './LoginPage'
 import { AboutModal, PROJECT_URL } from './AboutModal'
 import { DebugLogsModal } from './DebugLogsModal'
+import { PanelUpdatesModal } from './PanelUpdatesModal'
 import { PanelLogo } from './PanelLogo'
 import { ServersPage } from './ServersPage'
 import { Dashboard } from './Dashboard'
@@ -30,6 +31,7 @@ import { BrowserAccessModal, type BrowserAccessList } from './BrowserAccessModal
 import { PasswordModal } from './PasswordModal'
 import { StepUpModal } from './StepUpModal'
 import { useI18n } from './i18n'
+import { usePanelUpdates } from './usePanelUpdates'
 import './App.css'
 
 type View = 'servers' | 'overview' | 'search' | 'audit' | 'apikeys'
@@ -53,6 +55,7 @@ function App() {
   const [browserAccessList, setBrowserAccessList] = useState<BrowserAccessList | null>(null)
   const [pwOpen, setPwOpen] = useState(false)
   const [aboutOpen, setAboutOpen] = useState(false)
+  const [updatesOpen, setUpdatesOpen] = useState(false)
   const [debugLogsOpen, setDebugLogsOpen] = useState(false)
   // Undefined while loading. A null version uses the standard logo.
   const [branding, setBranding] = useState<Branding>()
@@ -208,6 +211,7 @@ function App() {
     setPwOpen(false)
     setShareOpen(false)
     setAboutOpen(false)
+    setUpdatesOpen(false)
     setDebugLogsOpen(false)
   }, [])
 
@@ -227,6 +231,8 @@ function App() {
   }, [restoration])
 
   const logout = useCallback(() => setToken(null), [])
+  const updates = usePanelUpdates(authed, logout)
+  const updateAvailable = updates.info?.status === 'available' && !updates.info.stale && !updates.failed
 
   return (
     <main className="page">
@@ -311,9 +317,11 @@ function App() {
                 className="ghost icon-btn"
                 caret={false}
                 title={t('Меню')}
-                label={<span className="menu-gear">⚙</span>}
+                description={updateAvailable ? t('Доступно обновление панели.') : undefined}
+                label={<span className={updateAvailable ? 'menu-gear menu-gear-update' : 'menu-gear'}>⚙</span>}
                 items={[
                   { label: t('О панели'), onClick: () => setAboutOpen(true) },
+                  { label: t('Обновления'), onClick: () => setUpdatesOpen(true) },
                   { label: t('Дебаг-логи'), onClick: () => setDebugLogsOpen(true) },
                   { label: t('Алерты'), onClick: () => setAlertsOpen(true) },
                   { label: t('Ссылки на конфиги'), onClick: () => setShareOpen(true) },
@@ -382,6 +390,16 @@ function App() {
           onChanged={setBranding}
           onClose={() => setAboutOpen(false)}
           onUnauthorized={logout}
+        />
+      )}
+      {updatesOpen && (
+        <PanelUpdatesModal
+          info={updates.info}
+          version={version}
+          checking={updates.checking}
+          failed={updates.failed}
+          onCheck={() => { void updates.check(true) }}
+          onClose={() => setUpdatesOpen(false)}
         />
       )}
       {backupsOpen && (

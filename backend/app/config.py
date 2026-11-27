@@ -10,13 +10,17 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="VPNPANEL_", env_file=".env")
 
     app_name: str = "Amnezia Control"
-    version: str = "0.84.84"
+    version: str = "0.84.85"
     debug: bool = False
 
     # Swagger/OpenAPI на /api/docs. Включено: интеграции нужен читаемый контракт
     # /api/v1. Ручки всё равно закрыты (JWT или X-API-Key) — доки раскрывают лишь
     # форму запросов. Выключить: VPNPANEL_API_DOCS=0.
     api_docs: bool = True
+
+    # Проверка стабильных релизов GitHub с экрана «Обзор».
+    # Выключить: VPNPANEL_RELEASE_CHECK_ENABLED=false.
+    release_check_enabled: bool = True
 
     db_url: str = "sqlite+aiosqlite:///./data/panel.db"
     data_dir: str = "./data"
