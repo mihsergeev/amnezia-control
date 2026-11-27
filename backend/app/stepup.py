@@ -31,20 +31,33 @@ def _user_key(user: User) -> str:
     return f"stepup-user:{getattr(user, 'username', '')}"
 
 
+def credential_conditions(user: User):
+    """Match the account and the credentials that the caller just checked."""
+    return (
+        User.id == user.id,
+        User.username == user.username,
+        User.token_version == user.token_version,
+        User.password_hash == user.password_hash,
+        User.totp_enabled.is_(user.totp_enabled),
+        User.totp_secret == user.totp_secret,
+    )
+
+
 async def consume_otp(session, user: User, otp: str) -> bool:
     """Проверяет код и атомарно помечает его использованным (защита от повтора).
 
     Счетчик двигается одним UPDATE с условием: два параллельных запроса с одним
-    кодом раньше оба проходили между проверкой и записью."""
+    кодом раньше оба проходили между проверкой и записью. Транзакцию
+    завершает вызывающий код."""
     counter = totp.matched_counter(user.totp_secret, otp)
     if counter is None:
         return False
     res = await session.execute(
         update(User)
-        .where(User.id == user.id, User.totp_last_counter < counter)
+        .where(*credential_conditions(user), User.totp_last_counter < counter)
         .values(totp_last_counter=counter)
+        .execution_options(synchronize_session=False)
     )
-    await session.commit()  # фиксируем счётчик ДО audit (у audit свой rollback)
     return res.rowcount == 1
 
 
@@ -92,5 +105,6 @@ async def _verify(user: User, password: str, request: Request, otp: str | None,
             raise HTTPException(
                 status.HTTP_403_FORBIDDEN, "Неверный код 2FA", headers=OTP_HEADER
             )
+        await session.commit()  # фиксируем счётчик ДО audit (у audit свой rollback)
     for k in keys:
         ratelimit.clear(k)

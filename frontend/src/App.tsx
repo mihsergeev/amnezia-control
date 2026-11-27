@@ -26,7 +26,7 @@ import { BackupsModal } from './BackupsModal'
 import { AlertsModal } from './AlertsModal'
 import { ShareServicesModal } from './ShareServicesModal'
 import { TwoFAModal } from './TwoFAModal'
-import { RememberedSessionsModal } from './RememberedSessionsModal'
+import { BrowserAccessModal, type BrowserAccessList } from './BrowserAccessModal'
 import { PasswordModal } from './PasswordModal'
 import { StepUpModal } from './StepUpModal'
 import { useI18n } from './i18n'
@@ -50,7 +50,7 @@ function App() {
   const [alertsOpen, setAlertsOpen] = useState(false)
   const [shareOpen, setShareOpen] = useState(false)
   const [twoFaOpen, setTwoFaOpen] = useState(false)
-  const [sessionsOpen, setSessionsOpen] = useState(false)
+  const [browserAccessList, setBrowserAccessList] = useState<BrowserAccessList | null>(null)
   const [pwOpen, setPwOpen] = useState(false)
   const [aboutOpen, setAboutOpen] = useState(false)
   const [debugLogsOpen, setDebugLogsOpen] = useState(false)
@@ -204,7 +204,7 @@ function App() {
     setBackupsOpen(false)
     setAlertsOpen(false)
     setTwoFaOpen(false)
-    setSessionsOpen(false)
+    setBrowserAccessList(null)
     setPwOpen(false)
     setShareOpen(false)
     setAboutOpen(false)
@@ -321,7 +321,8 @@ function App() {
                     label: t('Двухфакторная аутентификация'),
                     onClick: () => setTwoFaOpen(true),
                   },
-                  { label: t('Сохранённые сеансы'), onClick: () => setSessionsOpen(true) },
+                  { label: t('Сохранённые сеансы'), onClick: () => setBrowserAccessList('sessions') },
+                  { label: t('Доверенные устройства'), onClick: () => setBrowserAccessList('trusted-devices') },
                   { label: t('Сменить пароль'), onClick: () => setPwOpen(true) },
                   { divider: true },
                   {
@@ -410,9 +411,11 @@ function App() {
           onUnauthorized={logout}
         />
       )}
-      {sessionsOpen && (
-        <RememberedSessionsModal
-          onClose={() => setSessionsOpen(false)}
+      {browserAccessList && (
+        <BrowserAccessModal
+          key={browserAccessList}
+          list={browserAccessList}
+          onClose={() => setBrowserAccessList(null)}
           onUnauthorized={logout}
         />
       )}

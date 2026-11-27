@@ -1,6 +1,6 @@
 import { useState, type FormEvent } from 'react'
 import { ApiError, loginPanel } from './api'
-import { canRememberLogin } from './authSession'
+import { canUseSessionCookies } from './authSession'
 import { useI18n } from './i18n'
 import { PanelLogo } from './PanelLogo'
 
@@ -20,14 +20,15 @@ export function LoginPage({ onLogin, logoSrc, logoSize, onRetryRestore }: Props)
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [remember, setRemember] = useState(false)
-  const rememberAvailable = canRememberLogin()
+  const [trustDevice, setTrustDevice] = useState(false)
+  const secure = canUseSessionCookies()
 
   async function submit(e: FormEvent) {
     e.preventDefault()
     setBusy(true)
     setError(null)
     try {
-      await loginPanel(username, password, otp.trim() || null, rememberAvailable && remember)
+      await loginPanel(username, password, otp.trim() || null, secure && remember, secure && needOtp && trustDevice)
       onLogin()
     } catch (err) {
       if (err instanceof ApiError && err.status === 401) {
@@ -88,8 +89,25 @@ export function LoginPage({ onLogin, logoSrc, logoSize, onRetryRestore }: Props)
             />
           </label>
         )}
-        {rememberAvailable && (
-          <div className="login-remember">
+        {secure && needOtp && (
+          <div className="login-option">
+            <label>
+              <input
+                type="checkbox"
+                checked={trustDevice}
+                onChange={(e) => setTrustDevice(e.target.checked)}
+                aria-describedby="login-trust-hint"
+                disabled={busy}
+              />
+              {t('Доверять этому устройству')}
+            </label>
+            <small id="login-trust-hint" className="muted">
+              {t('В течение 30 дней для нового входа в этом браузере достаточно пароля. Используйте на личном устройстве.')}
+            </small>
+          </div>
+        )}
+        {secure && (
+          <div className="login-option">
             <label>
               <input
                 type="checkbox"

@@ -44,6 +44,7 @@ class LoginRequest(BaseModel):
     password: str = Field(max_length=128)
     otp: str | None = Field(default=None, max_length=16)
     remember: StrictBool = False
+    trust_device: StrictBool = False
 
 
 class TwoFAStatusOut(BaseModel):
@@ -85,6 +86,15 @@ class TokenResponse(BaseModel):
 
 
 class RememberedSessionOut(BaseModel):
+    id: str
+    user_agent: str
+    created_at: datetime
+    last_used_at: datetime
+    expires_at: datetime
+    current: bool
+
+
+class TrustedDeviceOut(BaseModel):
     id: str
     user_agent: str
     created_at: datetime

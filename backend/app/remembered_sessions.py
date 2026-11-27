@@ -108,6 +108,7 @@ def _matches(proof: CookieProof):
 async def start_login(
     session: AsyncSession, user: User, request: Request, secret: str, remember: bool,
 ) -> tuple[RememberedSession, str] | None:
+    """Prepare the remembered session in the caller's login transaction."""
     proof = read_cookie(request, secret)
     if not remember and proof is None:
         return None
@@ -136,7 +137,6 @@ async def start_login(
         )
         session.add(row)
         issued = row, token
-    await session.commit()
     return issued
 
 

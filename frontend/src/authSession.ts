@@ -24,12 +24,12 @@ function claims(token: string): Claims {
   }
 }
 
-export function canRememberLogin(): boolean {
+export function canUseSessionCookies(): boolean {
   return location.protocol === 'https:'
 }
 
 function rememberedId(): string | null {
-  return canRememberLogin() ? localStorage.getItem(REMEMBERED_KEY) : null
+  return canUseSessionCookies() ? localStorage.getItem(REMEMBERED_KEY) : null
 }
 
 export function hasRememberedLogin(): boolean {
@@ -78,7 +78,7 @@ function resetRememberedToken() {
 export function setToken(token: string | null) {
   resetRememberedToken()
   const payload = token ? claims(token) : {}
-  if (token && typeof payload.sid === 'string' && payload.sid && canRememberLogin()) {
+  if (token && typeof payload.sid === 'string' && payload.sid && canUseSessionCookies()) {
     storeRememberedToken(token, payload.sid, payload)
     localStorage.setItem(REMEMBERED_KEY, payload.sid)
     localStorage.removeItem(TOKEN_KEY)

@@ -7,17 +7,18 @@ from fastapi.responses import JSONResponse
 from fastapi.routing import APIRoute
 from sqlalchemy import delete, select, update
 
-from app import alerts, apikeys, audit, ratelimit, remembered_sessions, stepup, totp
+from app import alerts, apikeys, audit, ratelimit, remembered_sessions, stepup, totp, trusted_devices
 from app.clientip import client_ip
 from app.config import get_settings
 from app.deps import BearerCredentials, CurrentUser, SessionDep, get_current_user
-from app.models import ApiKey, AuditLog, RememberedSession, User
+from app.models import ApiKey, AuditLog, RememberedSession, TrustedDevice, User
 from app.schemas import (
     LoginRequest,
     PasswordChangeRequest,
     RememberedSessionOut,
     StepUpRequest,
     TokenResponse,
+    TrustedDeviceOut,
     TwoFAChangeOut,
     TwoFASetupOut,
     TwoFAStatusOut,
@@ -217,6 +218,8 @@ async def login(
     ipk = ratelimit.ip_key(key)
     ukey = _user_key(body.username)
     failure = ""
+    enrolled = None
+    used_trust = False
     async with ratelimit.serialized(ipk, ukey):
         user_locked = ratelimit.is_locked(ukey)
         if user_locked and not _known_ip(body.username, ipk):
@@ -239,15 +242,27 @@ async def login(
         if user is None or not password_ok:
             failure, detail = "login_fail", "Неверный логин или пароль"
         elif user.totp_enabled:
-            # detail — машиночитаемый маркер для фронта (показать поле кода)
-            if not body.otp:
+            if body.otp:
+                if not await stepup.consume_otp(session, user, body.otp):
+                    failure, detail = "login_2fa_fail", "2fa_invalid"
+                elif body.trust_device and remembered_sessions.valid_browser_request(request):
+                    enrolled = await trusted_devices.issue(session, user, request)
+            elif (
+                body.otp is not None or body.trust_device
+                or not await trusted_devices.use(session, user, request)
+            ):
+                # detail — машиночитаемый маркер для фронта (показать поле кода)
                 raise HTTPException(status.HTTP_401_UNAUTHORIZED, "2fa_required")
-            if not await stepup.consume_otp(session, user, body.otp):
-                failure, detail = "login_2fa_fail", "2fa_invalid"
+            else:
+                used_trust = True
         if failure:
             trips = _count_failure(key, body.username)
             known_user = user is not None
         else:
+            remembered = await remembered_sessions.start_login(
+                session, user, request, settings.jwt_secret, body.remember,
+            )
+            await session.commit()
             ratelimit.clear(ipk)
             # счетчик логина не сбрасываем, если он заперт чужим перебором: вход с
             # известного адреса не должен открывать логин для всех остальных
@@ -257,9 +272,9 @@ async def login(
     if failure:
         await _report_failure(session, settings, key, body.username, failure, trips, known_user)
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail)
-    remembered = await remembered_sessions.start_login(
-        session, user, request, settings.jwt_secret, body.remember,
-    )
+    if enrolled is not None:
+        device, cookie = enrolled
+        trusted_devices.set_cookie(response, cookie, device.expires_at)
     sid = None
     if remembered is not None:
         row, cookie = remembered
@@ -271,7 +286,12 @@ async def login(
         user.username, settings.jwt_secret, settings.jwt_ttl_minutes,
         user.token_version, session_id=sid,
     )
-    await audit.record(session, user.username, "login_ok", key, "Запомнен вход" if sid else "")
+    details = ["Запомнен вход"] if sid else []
+    if enrolled is not None:
+        details.append("Браузер добавлен в доверенные")
+    elif used_trust:
+        details.append("Вход из доверенного браузера")
+    await audit.record(session, user.username, "login_ok", key, ", ".join(details))
     return TokenResponse(access_token=token)
 
 
@@ -345,6 +365,41 @@ async def revoke_session(
     await audit.record(session, user.username, "session_revoke", _client_key(request))
 
 
+@router.get("/trusted-devices", response_model=list[TrustedDeviceOut])
+async def list_trusted_devices(
+    request: Request, user: CurrentUser, session: SessionDep,
+) -> list[TrustedDeviceOut]:
+    proof = trusted_devices.read_cookie(request)
+    rows = await session.scalars(select(TrustedDevice).where(
+        TrustedDevice.user_id == user.id,
+        TrustedDevice.expires_at > trusted_devices.utcnow(),
+    ).order_by(TrustedDevice.last_used_at.desc(), TrustedDevice.id))
+    return [TrustedDeviceOut(
+        id=row.id, user_agent=row.user_agent, current=trusted_devices.is_current(row, proof),
+        created_at=remembered_sessions.as_utc(row.created_at),
+        last_used_at=remembered_sessions.as_utc(row.last_used_at),
+        expires_at=remembered_sessions.as_utc(row.expires_at),
+    ) for row in rows]
+
+
+@router.delete("/trusted-devices/{device_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def revoke_trusted_device(
+    device_id: str, request: Request, response: Response, user: CurrentUser, session: SessionDep,
+) -> None:
+    not_found = HTTPException(status.HTTP_404_NOT_FOUND, "Доверенное устройство не найдено")
+    if not trusted_devices.DEVICE_ID.fullmatch(device_id):
+        raise not_found
+    revoked = await session.scalar(delete(TrustedDevice).where(
+        TrustedDevice.id == device_id, TrustedDevice.user_id == user.id,
+    ).returning(TrustedDevice))
+    if revoked is None:
+        raise not_found
+    await session.commit()
+    if trusted_devices.is_current(revoked, trusted_devices.read_cookie(request)):
+        trusted_devices.clear_cookie(response)
+    await audit.record(session, user.username, "trusted_device_revoke", _client_key(request))
+
+
 async def logout(request: Request, user: User, session: SessionDep) -> None:
     """Выход с отзывом токена. Пользователь в панели один, поэтому отзываются
     все его сессии: иначе украденный токен жил бы до конца срока."""
@@ -406,8 +461,10 @@ async def change_password(
     # Смена пароля закрывает и постоянный доступ интеграций: ключ мог быть
     # выпущен до обнаружения чужой сессии. Отзываем в той же транзакции.
     await session.execute(update(ApiKey).where(ApiKey.revoked.is_(False)).values(revoked=True))
+    await trusted_devices.revoke_all(session, user.id)
     await session.commit()
     remembered_sessions.clear_cookie(response)
+    trusted_devices.clear_cookie(response)
     apikeys._ok_cache.clear()
     await audit.record(session, user.username, "password_change", user.username)
     settings = get_settings()
@@ -470,8 +527,10 @@ async def twofa_enable(
     # 2FA включают, когда опасаются за пароль: сессии, открытые без кода,
     # отзываем, иначе украденный до включения токен жил бы до конца срока
     token_version = await _bump_token_version(session, user)
+    await trusted_devices.revoke_all(session, user.id)
     await session.commit()
     remembered_sessions.clear_cookie(response)
+    trusted_devices.clear_cookie(response)
     settings = get_settings()
     token = create_access_token(
         user.username, settings.jwt_secret, settings.jwt_ttl_minutes, token_version,
@@ -502,8 +561,10 @@ async def twofa_disable(
     user.totp_enabled = False
     user.totp_secret = ""
     token_version = await _bump_token_version(session, user)
+    await trusted_devices.revoke_all(session, user.id)
     await session.commit()
     remembered_sessions.clear_cookie(response)
+    trusted_devices.clear_cookie(response)
     settings = get_settings()
     token = create_access_token(
         user.username, settings.jwt_secret, settings.jwt_ttl_minutes, token_version,

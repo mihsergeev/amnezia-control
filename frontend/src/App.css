@@ -837,19 +837,19 @@ input:focus {
   font-size: 1.1rem;
 }
 
-.login-remember label {
+.login-option label {
   display: flex;
   flex-direction: row;
   align-items: center;
   gap: .5rem;
 }
 
-.login-remember input {
+.login-option input {
   width: auto;
   margin: 0;
 }
 
-.login-remember small {
+.login-option small {
   display: block;
   margin-top: .35rem;
 }

@@ -3,7 +3,7 @@ import logging
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from app import alerts, apikeys, audit
+from app import alerts, apikeys, audit, trusted_devices
 from app.config import Settings
 from app.models import ApiKey, Server, User
 from app.security import hash_password
@@ -37,6 +37,7 @@ async def ensure_admin(
                 await session.execute(update(User).where(User.id == user.id).values(
                     username=settings.admin_user, token_version=User.token_version + 1,
                 ))
+                await trusted_devices.revoke_all(session, user.id)
                 await session.commit()
                 log.warning("админ %s переименован в %s по .env", old, settings.admin_user)
             elif users:
@@ -66,6 +67,7 @@ async def ensure_admin(
             await session.execute(
                 update(ApiKey).where(ApiKey.revoked.is_(False)).values(revoked=True)
             )
+            await trusted_devices.revoke_all(session, user.id)
             await session.commit()
             log.warning(
                 "АВАРИЙНЫЙ СБРОС пароля админа выполнен - уберите "

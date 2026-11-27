@@ -240,14 +240,16 @@ async function changeSession<T>(request: () => Promise<T>, apply: (value: T) => 
   })
 }
 
-export async function loginPanel(username: string, password: string, otp: string | null, remember: boolean) {
+export async function loginPanel(
+  username: string, password: string, otp: string | null, remember: boolean, trustDevice = false,
+) {
   await logoutInFlight
   await withSessionLock(async () => {
     const res = await fetch('/api/auth/login', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...SESSION_HEADER },
       credentials: 'same-origin',
-      body: JSON.stringify({ username, password, otp, remember }),
+      body: JSON.stringify({ username, password, otp, remember, ...(otp && trustDevice ? { trust_device: true } : {}) }),
       signal: AbortSignal.timeout(15_000),
     })
     const { access_token } = await responseData<{ access_token: string }>(res)
@@ -279,7 +281,7 @@ export function logoutServer(): Promise<void> {
   return logoutInFlight
 }
 
-export type RememberedSession = {
+export type BrowserAccessEntry = {
   id: string
   user_agent: string
   created_at: string
@@ -288,11 +290,11 @@ export type RememberedSession = {
   current: boolean
 }
 
-export function listRememberedSessions(signal?: AbortSignal): Promise<RememberedSession[]> {
-  return api<RememberedSession[]>('/api/auth/sessions', { signal })
+export function listRememberedSessions(signal?: AbortSignal): Promise<BrowserAccessEntry[]> {
+  return api<BrowserAccessEntry[]>('/api/auth/sessions', { signal })
 }
 
-export async function revokeRememberedSession({ id, current }: RememberedSession): Promise<void> {
+export async function revokeRememberedSession({ id, current }: BrowserAccessEntry): Promise<void> {
   const path = `/api/auth/sessions/${encodeURIComponent(id)}`
   const options = { method: 'DELETE' }
   if (current) {
@@ -300,6 +302,17 @@ export async function revokeRememberedSession({ id, current }: RememberedSession
   } else {
     await api<void>(path, options)
   }
+}
+
+export function listTrustedDevices(signal?: AbortSignal): Promise<BrowserAccessEntry[]> {
+  return api<BrowserAccessEntry[]>('/api/auth/trusted-devices', { headers: SESSION_HEADER, signal })
+}
+
+export function revokeTrustedDevice({ id }: BrowserAccessEntry): Promise<void> {
+  return api<void>(`/api/auth/trusted-devices/${encodeURIComponent(id)}`, {
+    method: 'DELETE',
+    headers: SESSION_HEADER,
+  })
 }
 
 // Скачивание файла с POST-запроса: fetch с токеном -> blob -> загрузка.

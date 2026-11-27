@@ -18,7 +18,7 @@ from sqlalchemy.exc import DBAPIError, IntegrityError
 
 from app import (
     alerts, audit, backup_files, bulk_issue_state, remembered_sessions,
-    ssh_access, ssh_archives, sshops, stepup,
+    ssh_access, ssh_archives, sshops, stepup, trusted_devices,
 )
 from app.clientip import client_ip
 from app.config import get_settings
@@ -47,6 +47,7 @@ from app.models import (
     SshAccessChange,
     TorrentHit,
     TrafficSample,
+    TrustedDevice,
     User,
 )
 from app.schemas import StepUpRequest
@@ -97,6 +98,7 @@ _MODELS = [
 _NOT_BACKED_UP: dict[str, str] = {
     SshAccessChange.__tablename__: "Panel-local SSH preparation plans cannot be replayed after restore",
     RememberedSession.__tablename__: "Remembered sign-ins cannot survive backup restore",
+    TrustedDevice.__tablename__: "Browser trust cannot survive backup restore",
 }
 
 # история трафика — объёмная и некритичная; в «лёгком» бэкапе её пропускаем
@@ -724,9 +726,6 @@ async def restore_backup(
         if BulkClientIssue not in present:
             present.append(BulkClientIssue)
     # Старый архив не должен оживлять JWT или отозванные API-ключи.
-    old_versions = dict(
-        (await session.execute(select(User.username, User.token_version))).all()
-    )
     retired_keys = []
     if ApiKey in present:
         archived_keys = {}
@@ -746,8 +745,16 @@ async def restore_backup(
                 } | {"revoked": True})
             elif key.revoked:
                 archived["revoked"] = True
-    # Сессии привязаны к состоянию панели до восстановления, а не к архиву.
+    # Сначала блокируем учетные записи, как при выдаче доверия.
+    # Иначе параллельный вход может создать доверие после очистки устройств.
+    old_versions = dict((await session.execute(
+        update(User).values(token_version=User.token_version)
+        .returning(User.username, User.token_version)
+        .execution_options(synchronize_session=False)
+    )).all())
+    # Сессии и доверие привязаны к состоянию панели до восстановления.
     await session.execute(delete(RememberedSession))
+    await session.execute(delete(TrustedDevice))
     restored: dict[str, int] = {}
     for model in reversed(present):
         await session.execute(delete(model))
@@ -775,6 +782,7 @@ async def restore_backup(
         await session.execute(insert(ApiKey), retired_keys)
     await _commit_restore(session, settings.data_dir, files, stale_ssh_keys, tar)
     remembered_sessions.clear_cookie(response)
+    trusted_devices.clear_cookie(response)
     response.headers["Cache-Control"] = "no-store"
 
     await audit.record(

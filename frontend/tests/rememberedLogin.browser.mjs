@@ -13,6 +13,7 @@ const executablePath = process.env.CHROME_PATH || [
 const browser = await chromium.launch({ headless: true, ...(executablePath ? { executablePath } : {}) })
 
 const cookieName = 'accontrol_refresh'
+const trustCookieName = 'acontrol_trusted_device'
 const cookieOptions = '; Path=/api/auth; Secure; HttpOnly; SameSite=Strict'
 const markerKey = 'acontrol_remembered_session'
 const tokenKey = 'acontrol_token'
@@ -39,6 +40,11 @@ async function fixture(run, { origin = 'https://remembered-login.test', language
     { id: 'current-session', user_agent: 'Chrome/100 Safari/537', current: true },
     { id: 'other', user_agent: 'Firefox/130', current: false },
   ].map((entry) => ({ ...entry, created_at: timestamp, last_used_at: timestamp, expires_at: timestamp }))
+  const trustedDevice = {
+    id: 'current-device', user_agent: 'Chrome/100 Safari/537',
+    created_at: timestamp, last_used_at: timestamp, expires_at: timestamp,
+  }
+  let deviceRegistered = false
 
   await context.addInitScript((language) => {
     if (location.protocol === 'http:' || location.protocol === 'https:') {
@@ -60,16 +66,24 @@ async function fixture(run, { origin = 'https://remembered-login.test', language
     const reply = (json, status = 200, extra = {}) => route.fulfill({ status, json, headers: extra })
     const cookie = (value) => ({ 'Set-Cookie': `${cookieName}=${value}${cookieOptions}` })
     const clearCookie = { 'Set-Cookie': `${cookieName}=${cookieOptions}; Max-Age=0` }
+    const trusted = deviceRegistered && headers.cookie?.includes(`${trustCookieName}=trusted`)
     if (pathname === '/api/auth/login') {
-      const { username, password, otp, remember } = request.postDataJSON()
+      const { username, password, otp, remember, trust_device } = request.postDataJSON()
       assert.equal(username, 'admin')
       assert.equal(password, 'password')
       assert.equal(typeof remember, 'boolean')
-      if (state.requireOtp && !otp) return reply({ detail: '2fa_required' }, 401)
-      if (state.requireOtp && otp !== '123456') return reply({ detail: '2fa_invalid' }, 401)
+      assert.equal(headers['x-acontrol-session'], '1')
+      if (state.requireOtp && !otp && !trusted) return reply({ detail: '2fa_required' }, 401)
+      if (state.requireOtp && otp && otp !== '123456') return reply({ detail: '2fa_invalid' }, 401)
       state.active = remember
       state.expired = false
-      return reply({ access_token: makeToken(remember) }, 200, remember ? cookie('initial') : clearCookie)
+      let setCookie = remember ? cookie('initial') : clearCookie
+      if (trust_device) {
+        assert.equal(otp, '123456')
+        deviceRegistered = true
+        setCookie = { 'Set-Cookie': `${trustCookieName}=trusted${cookieOptions}` }
+      }
+      return reply({ access_token: makeToken(remember) }, 200, setCookie)
     }
     if (pathname === '/api/auth/refresh') {
       assert.equal(headers['x-acontrol-session'], '1')
@@ -98,6 +112,24 @@ async function fixture(run, { origin = 'https://remembered-login.test', language
       const [removed] = entries.splice(index, 1)
       if (removed.current) state.active = false
       return route.fulfill({ status: 204, headers: removed.current ? clearCookie : {} })
+    }
+    if (pathname.startsWith('/api/auth/trusted-devices')) {
+      assert.equal(headers['x-acontrol-session'], '1')
+      assert.match(headers.authorization, /^Bearer /)
+      if (method === 'GET') return reply(deviceRegistered ? [{ ...trustedDevice, current: !!trusted }] : [])
+      assert.equal(method, 'DELETE')
+      assert.equal(pathname, `/api/auth/trusted-devices/${trustedDevice.id}`)
+      deviceRegistered = false
+      return route.fulfill({
+        status: 204,
+        headers: trusted ? { 'Set-Cookie': `${trustCookieName}=${cookieOptions}; Max-Age=0` } : {},
+      })
+    }
+    if (pathname === '/api/auth/2fa') return reply({ enabled: state.requireOtp })
+    if (pathname === '/api/backup/download') {
+      assert.equal(request.postDataJSON().password, 'password')
+      assert.equal(headers['x-confirm-otp'], '654321')
+      return route.fulfill({ status: 200, contentType: 'application/gzip', body: 'test' })
     }
     if (['/api/auth/password', '/api/auth/2fa/enable', '/api/auth/2fa/disable', '/api/backup/restore'].includes(pathname)) {
       assert.equal(method, 'POST')
@@ -141,15 +173,24 @@ const count = (calls, name) => calls.filter(({ path }) => path === `/api/auth/${
 const signedIn = (page) => page.getByRole('button', { name: /^(Серверы|Servers)$/ }).waitFor()
 const signedOut = (page) => page.getByRole('heading', { name: /^(Вход в панель|Sign in)$/ }).waitFor()
 
-async function signIn(page, { remember = false, otp = true } = {}) {
+const rememberOption = (page) => page.getByRole('checkbox', { name: /Запомнить вход|Remember sign-in/ })
+const trustOption = (page) => page.getByRole('checkbox', { name: /Доверять этому устройству|Trust this device/ })
+const otpInput = (page) => page.locator('input[autocomplete="one-time-code"]')
+const submitLogin = (page) => page.getByRole('button', { name: /^(Войти|Log in)$/ }).click()
+
+async function enterCredentials(page) {
   await page.getByLabel(/^(Логин|Login)$/).fill('admin')
   await page.getByLabel(/^(Пароль|Password)$/).fill('password')
-  if (remember) await page.getByRole('checkbox', { name: /Запомнить вход|Remember sign-in/ }).check()
-  await page.getByRole('button', { name: /^(Войти|Log in)$/ }).click()
+}
+
+async function signIn(page, { remember = false, otp = true } = {}) {
+  await enterCredentials(page)
+  if (remember) await rememberOption(page).check()
+  await submitLogin(page)
   if (otp) {
-    if (remember) assert.equal(await page.getByRole('checkbox').isChecked(), true)
-    await page.getByLabel(/(?:2FA)/).fill('123456')
-    await page.getByRole('button', { name: /^(Войти|Log in)$/ }).click()
+    await otpInput(page).fill('123456')
+    if (remember) assert.equal(await rememberOption(page).isChecked(), true)
+    await submitLogin(page)
   }
   await signedIn(page)
 }
@@ -230,6 +271,87 @@ try {
     await signedIn(page)
     assert.equal(count(calls, 'refresh'), 0)
   }, { origin: 'http://ordinary-login.test', language: 'en' })
+
+  await fixture(async ({ page, calls }) => {
+    await enterCredentials(page)
+    await submitLogin(page)
+    await otpInput(page).fill('123456')
+    assert.equal(await trustOption(page).count(), 0)
+    assert.equal(await rememberOption(page).count(), 0)
+    await submitLogin(page)
+    await signedIn(page)
+    assert.ok(calls.filter(({ path }) => path.endsWith('/login')).every(({ body }) => !('trust_device' in JSON.parse(body))))
+  }, { origin: 'http://ordinary-login.test', language: 'en' })
+
+  await fixture(async ({ context, page, calls }) => {
+    const loginBodies = () => calls.filter(({ path }) => path.endsWith('/login')).map(({ body }) => JSON.parse(body))
+    const menu = async (label) => {
+      await page.getByRole('button', { name: 'Меню' }).click()
+      await page.getByText(label, { exact: true }).click()
+    }
+    const logout = async () => {
+      const response = page.waitForResponse((res) => res.url().endsWith('/logout'))
+      await menu('Выйти')
+      await signedOut(page)
+      await response
+    }
+
+    assert.equal(await trustOption(page).count(), 0)
+    await enterCredentials(page)
+    await submitLogin(page)
+    await trustOption(page).waitFor()
+    assert.equal(await trustOption(page).isChecked(), false)
+    assert.equal(await rememberOption(page).isChecked(), false)
+    await trustOption(page).check()
+    await otpInput(page).fill('123456')
+    await submitLogin(page)
+    await signedIn(page)
+    assert.deepEqual(loginBodies().map(({ remember, otp, trust_device }) => [remember, otp, trust_device]), [
+      [false, null, undefined], [false, '123456', true],
+    ])
+    assert.equal(await stored(page, markerKey), null)
+
+    await logout()
+    assert.equal((await context.cookies()).find(({ name }) => name === trustCookieName)?.httpOnly, true)
+    assert.equal(count(calls, 'refresh'), 0)
+    await signIn(page, { otp: false })
+    assert.equal(loginBodies().at(-1).otp, null)
+    assert.equal(loginBodies().at(-1).trust_device, undefined)
+
+    await menu('Скачать бэкап')
+    const stepUp = page.locator('form.modal')
+    await stepUp.getByPlaceholder('Пароль', { exact: true }).fill('password')
+    await otpInput(page).waitFor()
+    const proceed = stepUp.getByRole('button', { name: 'Продолжить' })
+    assert.equal(await proceed.isDisabled(), true)
+    await otpInput(page).fill('654321')
+    const backup = page.waitForResponse((res) => res.url().endsWith('/api/backup/download'))
+    await proceed.click()
+    assert.equal((await backup).status(), 200)
+    await stepUp.waitFor({ state: 'detached' })
+
+    await menu('Доверенные устройства')
+    const dialog = page.getByRole('dialog', { name: 'Доверенные устройства' })
+    const current = dialog.getByRole('listitem').filter({ hasText: 'Текущий браузер' })
+    await current.getByText('Chrome').waitFor()
+    for (const width of [320, 1280]) {
+      await page.setViewportSize({ width, height: 820 })
+      const bounds = await dialog.boundingBox()
+      assert.ok(bounds.x >= 0 && bounds.x + bounds.width <= width)
+    }
+    const revoke = current.getByRole('button', { name: 'Отозвать' })
+    page.once('dialog', (confirm) => confirm.dismiss())
+    await revoke.click()
+    assert.equal(await current.isVisible(), true)
+    page.once('dialog', (confirm) => confirm.accept())
+    await revoke.click()
+    await dialog.getByText('Доверенных устройств нет.').waitFor()
+    await dialog.getByRole('button', { name: 'Закрыть' }).click()
+    await signedIn(page)
+    assert.equal((await context.cookies()).some(({ name }) => name === trustCookieName), false)
+    await logout()
+    await signIn(page)
+  })
 
   for (const conflicts of [0, 1]) {
     await fixture(async ({ page, state, calls }) => {
@@ -337,4 +459,4 @@ try {
   await vite.close()
 }
 
-console.log('Remembered sign-in, rotation, revocation and security transitions passed')
+console.log('Remembered sign-in, trusted devices, rotation, revocation and security transitions passed')

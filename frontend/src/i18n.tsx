@@ -724,6 +724,9 @@ const EN: Record<string, string> = {
   'Запомнить вход на этом устройстве': 'Remember sign-in on this device',
   'Вход сохранится до 30 дней и завершится через 7 дней без продления. Используйте на личном устройстве.':
     'Sign-in lasts up to 30 days and expires after 7 days without renewal. Use on a personal device.',
+  'Доверять этому устройству': 'Trust this device',
+  'В течение 30 дней для нового входа в этом браузере достаточно пароля. Используйте на личном устройстве.':
+    'For 30 days, signing in again in this browser only requires your password. Use on a personal device.',
   'Восстанавливаем сохранённый вход…': 'Restoring saved sign-in…',
   'Не удалось восстановить сохранённый вход.': 'Could not restore saved sign-in.',
   'Повторить восстановление входа': 'Retry sign-in restoration',
@@ -740,9 +743,20 @@ const EN: Record<string, string> = {
   'Неизвестный браузер': 'Unknown browser',
   'Текущий сеанс': 'Current session',
   'Последняя активность': 'Last active',
+  'Доверенные устройства': 'Trusted devices',
+  'Доверенных устройств нет.': 'No trusted devices.',
+  'При новом входе с доверенного устройства достаточно пароля. Для важных действий требуется и код 2FA.':
+    'Signing in again on a trusted device only requires your password. Sensitive actions still require a 2FA code.',
+  'Не удалось загрузить доверенные устройства.': 'Could not load trusted devices.',
+  'Не удалось отозвать доверие к устройству.': 'Could not revoke trust for the device.',
+  'Отозвать доверие к этому устройству? Для нового входа потребуется код 2FA.':
+    'Revoke trust for this device? Signing in again will require a 2FA code.',
+  'Текущий браузер': 'Current browser',
+  'Последний вход': 'Last sign-in',
   'Сохранённый вход продлён': 'Remembered sign-in renewed',
   'Сохранённый сеанс отозван': 'Remembered session revoked',
   'Сеанс отозван после повторного использования токена': 'Session revoked after token reuse',
+  'Доверие к устройству отозвано': 'Device trust revoked',
 
   // --- серверы ---
   'Импорт': 'Import',
