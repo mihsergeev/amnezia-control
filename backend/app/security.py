@@ -30,7 +30,8 @@ async def averify_password(password: str, password_hash: str) -> bool:
 
 
 def create_access_token(
-    username: str, secret: str, ttl_minutes: int, token_version: int = 0
+    username: str, secret: str, ttl_minutes: int, token_version: int = 0, *,
+    session_id: str | None = None,
 ) -> str:
     now = datetime.now(timezone.utc)
     payload = {
@@ -39,6 +40,8 @@ def create_access_token(
         "iat": now,
         "exp": now + timedelta(minutes=ttl_minutes),
     }
+    if session_id is not None:
+        payload["sid"] = session_id
     return jwt.encode(payload, secret, algorithm="HS256")
 
 

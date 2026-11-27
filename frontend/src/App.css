@@ -837,6 +837,81 @@ input:focus {
   font-size: 1.1rem;
 }
 
+.login-remember label {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: .5rem;
+}
+
+.login-remember input {
+  width: auto;
+  margin: 0;
+}
+
+.login-remember small {
+  display: block;
+  margin-top: .35rem;
+}
+
+.login-restore-error .form-error {
+  margin: 0 0 .4rem;
+}
+
+.remembered-sessions {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.remembered-session {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: .4rem .75rem;
+  padding: .75rem 0;
+  border-top: 1px solid var(--border);
+}
+
+.remembered-session-label, .remembered-session-dates {
+  grid-column: 1;
+}
+
+.remembered-session-label {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: .35rem .6rem;
+}
+
+.remembered-session-dates {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: .2rem .55rem;
+  margin: 0;
+}
+
+.remembered-session-dates dd {
+  margin: 0;
+}
+
+.remembered-session > button {
+  grid-column: 2;
+  grid-row: 1;
+  align-self: start;
+}
+
+@media (max-width: 400px) {
+  .remembered-session {
+    grid-template-columns: 1fr;
+  }
+
+  .remembered-session > button {
+    grid-column: 1;
+    grid-row: auto;
+    justify-self: start;
+  }
+}
+
 /* ---------- список серверов ---------- */
 
 .page-head {

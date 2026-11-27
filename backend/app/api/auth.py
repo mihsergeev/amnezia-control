@@ -1,20 +1,24 @@
 import time
 from datetime import datetime, timedelta, timezone
 
-from fastapi import APIRouter, HTTPException, Request, status
-from sqlalchemy import select, update
+from fastapi import APIRouter, HTTPException, Request, Response, status
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
+from fastapi.routing import APIRoute
+from sqlalchemy import delete, select, update
 
-from app import alerts, apikeys, audit, ratelimit, stepup, totp
+from app import alerts, apikeys, audit, ratelimit, remembered_sessions, stepup, totp
 from app.clientip import client_ip
 from app.config import get_settings
-from app.deps import CurrentUser, SessionDep
-from app.models import ApiKey, AuditLog, User
+from app.deps import BearerCredentials, CurrentUser, SessionDep, get_current_user
+from app.models import ApiKey, AuditLog, RememberedSession, User
 from app.schemas import (
     LoginRequest,
     PasswordChangeRequest,
+    RememberedSessionOut,
     StepUpRequest,
     TokenResponse,
-    TwoFAEnableOut,
+    TwoFAChangeOut,
     TwoFASetupOut,
     TwoFAStatusOut,
     TwoFAVerifyRequest,
@@ -22,7 +26,28 @@ from app.schemas import (
 )
 from app.security import averify_password, create_access_token, hash_password
 
-router = APIRouter(prefix="/auth", tags=["auth"])
+
+class AuthRoute(APIRoute):
+    def get_route_handler(self):
+        handle = super().get_route_handler()
+
+        async def no_store(request: Request) -> Response:
+            try:
+                response = await handle(request)
+            except RequestValidationError as exc:
+                # Pydantic also includes the submitted value in each error.
+                errors = [{key: error[key] for key in ("loc", "msg", "type")} for error in exc.errors()]
+                response = JSONResponse({"detail": errors}, status_code=status.HTTP_422_UNPROCESSABLE_CONTENT)
+            except HTTPException as exc:
+                exc.headers = {**(exc.headers or {}), "Cache-Control": "no-store"}
+                raise
+            response.headers["Cache-Control"] = "no-store"
+            return response
+
+        return no_store
+
+
+router = APIRouter(prefix="/auth", tags=["auth"], route_class=AuthRoute)
 
 # фиктивный хэш для сравнения при несуществующем юзере — выравнивает время
 # ответа, чтобы по задержке нельзя было перечислять логины
@@ -185,7 +210,7 @@ async def _report_failure(
 
 @router.post("/login", response_model=TokenResponse)
 async def login(
-    body: LoginRequest, request: Request, session: SessionDep
+    body: LoginRequest, request: Request, response: Response, session: SessionDep,
 ) -> TokenResponse:
     settings = get_settings()
     key = _client_key(request)
@@ -232,16 +257,95 @@ async def login(
     if failure:
         await _report_failure(session, settings, key, body.username, failure, trips, known_user)
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, detail)
+    remembered = await remembered_sessions.start_login(
+        session, user, request, settings.jwt_secret, body.remember,
+    )
+    sid = None
+    if remembered is not None:
+        row, cookie = remembered
+        sid = row.id
+        remembered_sessions.set_cookie(response, cookie, remembered_sessions.expires_at(row))
+    elif remembered_sessions.COOKIE_NAME in request.cookies:
+        remembered_sessions.clear_cookie(response)
     token = create_access_token(
         user.username, settings.jwt_secret, settings.jwt_ttl_minutes,
-        user.token_version,
+        user.token_version, session_id=sid,
     )
-    await audit.record(session, user.username, "login_ok", key)
+    await audit.record(session, user.username, "login_ok", key, "Запомнен вход" if sid else "")
     return TokenResponse(access_token=token)
 
 
-@router.post("/logout", status_code=status.HTTP_204_NO_CONTENT)
-async def logout(request: Request, user: CurrentUser, session: SessionDep) -> None:
+@router.post("/refresh", response_model=TokenResponse)
+async def refresh(request: Request, response: Response, session: SessionDep) -> TokenResponse:
+    if not remembered_sessions.valid_browser_request(request):
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Запрос обновления сессии отклонен")
+    unauthorized = HTTPException(status.HTTP_401_UNAUTHORIZED, "Недействительная или завершенная сессия")
+    settings = get_settings()
+    proof = remembered_sessions.read_cookie(request, settings.jwt_secret)
+    if proof is None:
+        raise unauthorized
+    try:
+        rotated, replay_user_id = await remembered_sessions.rotate(session, proof, settings.jwt_secret)
+    except remembered_sessions.ConcurrentRotation as exc:
+        raise HTTPException(status.HTTP_409_CONFLICT, "Сессия уже обновляется") from exc
+    if rotated is None:
+        if replay_user_id is not None:
+            username = await session.scalar(select(User.username).where(User.id == replay_user_id))
+            await audit.record(session, username or "", "session_replay", _client_key(request))
+        # A late response must not overwrite a cookie from a newer refresh or
+        # a fresh login. The browser replaces or removes it on explicit login.
+        raise unauthorized
+    row, cookie = rotated
+    username = await session.scalar(select(User.username).where(
+        User.id == row.user_id, User.token_version == row.token_version,
+    ))
+    if username is None:
+        raise unauthorized
+    token = create_access_token(
+        username, settings.jwt_secret, settings.jwt_ttl_minutes, row.token_version, session_id=row.id,
+    )
+    remembered_sessions.set_cookie(response, cookie, remembered_sessions.expires_at(row))
+    await audit.record(session, username, "session_refresh", _client_key(request))
+    return TokenResponse(access_token=token)
+
+
+@router.get("/sessions", response_model=list[RememberedSessionOut])
+async def list_sessions(request: Request, user: CurrentUser, session: SessionDep) -> list[RememberedSessionOut]:
+    rows = await session.scalars(select(RememberedSession).where(
+        RememberedSession.user_id == user.id,
+        RememberedSession.token_version == user.token_version,
+        *remembered_sessions.active_at(remembered_sessions.utcnow()),
+    ).order_by(RememberedSession.last_used_at.desc(), RememberedSession.id))
+    current = request.state.remembered_session_id
+    return [RememberedSessionOut(
+        id=row.id, user_agent=row.user_agent, current=row.id == current,
+        created_at=remembered_sessions.as_utc(row.created_at),
+        last_used_at=remembered_sessions.as_utc(row.last_used_at),
+        expires_at=remembered_sessions.expires_at(row),
+    ) for row in rows]
+
+
+@router.delete("/sessions/{session_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def revoke_session(
+    session_id: str, request: Request, response: Response, user: CurrentUser, session: SessionDep,
+) -> None:
+    if not remembered_sessions.SESSION_ID.fullmatch(session_id):
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Сессия не найдена")
+    revoked = await session.scalar(delete(RememberedSession).where(
+        RememberedSession.id == session_id,
+        RememberedSession.user_id == user.id,
+        RememberedSession.token_version == user.token_version,
+    ).returning(RememberedSession.id))
+    if revoked is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Сессия не найдена")
+    await session.commit()
+    proof = remembered_sessions.read_cookie(request, get_settings().jwt_secret)
+    if proof is not None and proof.session_id == revoked:
+        remembered_sessions.clear_cookie(response)
+    await audit.record(session, user.username, "session_revoke", _client_key(request))
+
+
+async def logout(request: Request, user: User, session: SessionDep) -> None:
     """Выход с отзывом токена. Пользователь в панели один, поэтому отзываются
     все его сессии: иначе украденный токен жил бы до конца срока."""
     await _bump_token_version(session, user)
@@ -249,9 +353,26 @@ async def logout(request: Request, user: CurrentUser, session: SessionDep) -> No
     await audit.record(session, user.username, "logout", _client_key(request))
 
 
+@router.post("/logout", name="logout", status_code=status.HTTP_204_NO_CONTENT)
+async def logout_request(
+    request: Request, response: Response, credentials: BearerCredentials, session: SessionDep,
+) -> None:
+    try:
+        user = await get_current_user(credentials, session, request)
+    except HTTPException:
+        proof = remembered_sessions.read_cookie(request, get_settings().jwt_secret)
+        if proof is None or not remembered_sessions.valid_browser_request(request):
+            raise
+        user = await remembered_sessions.authenticate_cookie(session, proof)
+        if user is None:
+            raise
+    await logout(request, user, session)
+    remembered_sessions.clear_cookie(response)
+
+
 @router.post("/password", response_model=TokenResponse)
 async def change_password(
-    body: PasswordChangeRequest, request: Request, user: CurrentUser, session: SessionDep
+    body: PasswordChangeRequest, request: Request, response: Response, user: CurrentUser, session: SessionDep,
 ) -> TokenResponse:
     """Смена пароля из UI: проверяет текущий, инвалидирует все старые токены."""
     old_version = user.token_version
@@ -286,6 +407,7 @@ async def change_password(
     # выпущен до обнаружения чужой сессии. Отзываем в той же транзакции.
     await session.execute(update(ApiKey).where(ApiKey.revoked.is_(False)).values(revoked=True))
     await session.commit()
+    remembered_sessions.clear_cookie(response)
     apikeys._ok_cache.clear()
     await audit.record(session, user.username, "password_change", user.username)
     settings = get_settings()
@@ -331,10 +453,10 @@ async def twofa_setup(
     )
 
 
-@router.post("/2fa/enable", response_model=TwoFAEnableOut)
+@router.post("/2fa/enable", response_model=TwoFAChangeOut)
 async def twofa_enable(
-    body: TwoFAVerifyRequest, request: Request, user: CurrentUser, session: SessionDep
-) -> TwoFAEnableOut:
+    body: TwoFAVerifyRequest, request: Request, response: Response, user: CurrentUser, session: SessionDep,
+) -> TwoFAChangeOut:
     if user.totp_enabled:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "2FA уже включена")
     if not user.totp_secret:
@@ -349,6 +471,7 @@ async def twofa_enable(
     # отзываем, иначе украденный до включения токен жил бы до конца срока
     token_version = await _bump_token_version(session, user)
     await session.commit()
+    remembered_sessions.clear_cookie(response)
     settings = get_settings()
     token = create_access_token(
         user.username, settings.jwt_secret, settings.jwt_ttl_minutes, token_version,
@@ -359,13 +482,13 @@ async def twofa_enable(
         alerts.Card("ok", "🔐", alerts.t("Включена 2FA у «{user}»", user=user.username),
                     alerts.t("с {ip}", ip=_client_key(request))),
     )
-    return TwoFAEnableOut(enabled=True, access_token=token)
+    return TwoFAChangeOut(enabled=True, access_token=token)
 
 
-@router.post("/2fa/disable", response_model=TwoFAStatusOut)
+@router.post("/2fa/disable", response_model=TwoFAChangeOut)
 async def twofa_disable(
-    body: TwoFAVerifyRequest, request: Request, user: CurrentUser, session: SessionDep
-) -> TwoFAStatusOut:
+    body: TwoFAVerifyRequest, request: Request, response: Response, user: CurrentUser, session: SessionDep,
+) -> TwoFAChangeOut:
     if not user.totp_enabled:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "2FA не включена")
     # пароль и код под одним лимитером степ-апа, и счетчик сбрасывается только
@@ -378,11 +501,17 @@ async def twofa_disable(
         raise
     user.totp_enabled = False
     user.totp_secret = ""
+    token_version = await _bump_token_version(session, user)
     await session.commit()
+    remembered_sessions.clear_cookie(response)
+    settings = get_settings()
+    token = create_access_token(
+        user.username, settings.jwt_secret, settings.jwt_ttl_minutes, token_version,
+    )
     await audit.record(session, user.username, "2fa_disable", user.username)
     await alerts.security_alert(
-        session, get_settings(),
+        session, settings,
         alerts.Card("warn", "🔐", alerts.t("Отключена 2FA у «{user}»", user=user.username),
                     alerts.t("с {ip}", ip=_client_key(request))),
     )
-    return TwoFAStatusOut(enabled=False)
+    return TwoFAChangeOut(enabled=False, access_token=token)

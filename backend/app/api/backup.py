@@ -16,7 +16,10 @@ from fastapi.responses import Response
 from sqlalchemy import DateTime, Integer, delete, insert, select, text, update
 from sqlalchemy.exc import DBAPIError, IntegrityError
 
-from app import alerts, audit, backup_files, bulk_issue_state, ssh_access, ssh_archives, sshops, stepup
+from app import (
+    alerts, audit, backup_files, bulk_issue_state, remembered_sessions,
+    ssh_access, ssh_archives, sshops, stepup,
+)
 from app.clientip import client_ip
 from app.config import get_settings
 from app.deps import CurrentUser, SessionDep
@@ -38,6 +41,7 @@ from app.models import (
     NativeVpnConfig,
     OvpnConfig,
     PausedClient,
+    RememberedSession,
     Server,
     ServerStatus,
     SshAccessChange,
@@ -92,6 +96,7 @@ _MODELS = [
 # таблицы, которые в бэкап сознательно не берем: {имя: причина}
 _NOT_BACKED_UP: dict[str, str] = {
     SshAccessChange.__tablename__: "Panel-local SSH preparation plans cannot be replayed after restore",
+    RememberedSession.__tablename__: "Remembered sign-ins cannot survive backup restore",
 }
 
 # история трафика — объёмная и некритичная; в «лёгком» бэкапе её пропускаем
@@ -576,7 +581,7 @@ async def download_saved_backup(
 @router.post("/restore")
 @bulk_issue_state.guard(restore=True)
 async def restore_backup(
-    request: Request, user: CurrentUser, session: SessionDep
+    request: Request, response: Response, user: CurrentUser, session: SessionDep,
 ) -> dict:
     """Восстановление из архива (тело запроса = tar.gz от POST /backup/download).
 
@@ -741,8 +746,10 @@ async def restore_backup(
                 } | {"revoked": True})
             elif key.revoked:
                 archived["revoked"] = True
+    # Сессии привязаны к состоянию панели до восстановления, а не к архиву.
+    await session.execute(delete(RememberedSession))
     restored: dict[str, int] = {}
-    for model in reversed(present):  # чистим в обратном порядке (FK нет)
+    for model in reversed(present):
         await session.execute(delete(model))
     for model in present:
         rows = prepared[model.__tablename__]
@@ -767,6 +774,8 @@ async def restore_backup(
     if retired_keys:
         await session.execute(insert(ApiKey), retired_keys)
     await _commit_restore(session, settings.data_dir, files, stale_ssh_keys, tar)
+    remembered_sessions.clear_cookie(response)
+    response.headers["Cache-Control"] = "no-store"
 
     await audit.record(
         session, user.username, "restore", "", f"строк: {sum(restored.values())}"

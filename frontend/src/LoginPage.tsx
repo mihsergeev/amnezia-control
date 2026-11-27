@@ -1,5 +1,6 @@
 import { useState, type FormEvent } from 'react'
-import { api, ApiError, setToken } from './api'
+import { ApiError, loginPanel } from './api'
+import { canRememberLogin } from './authSession'
 import { useI18n } from './i18n'
 import { PanelLogo } from './PanelLogo'
 
@@ -7,9 +8,10 @@ type Props = {
   onLogin: () => void
   logoSrc: string | null | undefined
   logoSize?: number
+  onRetryRestore?: () => void
 }
 
-export function LoginPage({ onLogin, logoSrc, logoSize }: Props) {
+export function LoginPage({ onLogin, logoSrc, logoSize, onRetryRestore }: Props) {
   const { t } = useI18n()
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
@@ -17,24 +19,15 @@ export function LoginPage({ onLogin, logoSrc, logoSize }: Props) {
   const [needOtp, setNeedOtp] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+  const [remember, setRemember] = useState(false)
+  const rememberAvailable = canRememberLogin()
 
   async function submit(e: FormEvent) {
     e.preventDefault()
     setBusy(true)
     setError(null)
     try {
-      const { access_token } = await api<{ access_token: string }>(
-        '/api/auth/login',
-        {
-          method: 'POST',
-          body: JSON.stringify({
-            username,
-            password,
-            otp: otp.trim() || null,
-          }),
-        },
-      )
-      setToken(access_token)
+      await loginPanel(username, password, otp.trim() || null, rememberAvailable && remember)
       onLogin()
     } catch (err) {
       if (err instanceof ApiError && err.status === 401) {
@@ -94,6 +87,31 @@ export function LoginPage({ onLogin, logoSrc, logoSize }: Props) {
               required
             />
           </label>
+        )}
+        {rememberAvailable && (
+          <div className="login-remember">
+            <label>
+              <input
+                type="checkbox"
+                checked={remember}
+                onChange={(e) => setRemember(e.target.checked)}
+                aria-describedby="login-remember-hint"
+                disabled={busy}
+              />
+              {t('Запомнить вход на этом устройстве')}
+            </label>
+            <small id="login-remember-hint" className="muted">
+              {t('Вход сохранится до 30 дней и завершится через 7 дней без продления. Используйте на личном устройстве.')}
+            </small>
+          </div>
+        )}
+        {onRetryRestore && (
+          <div className="login-restore-error">
+            <p className="form-error" role="status">{t('Не удалось восстановить сохранённый вход.')}</p>
+            <button type="button" className="ghost" onClick={onRetryRestore} disabled={busy}>
+              {t('Повторить восстановление входа')}
+            </button>
+          </div>
         )}
         {error && <p className="form-error">{error}</p>}
         <button type="submit" disabled={busy}>

@@ -5,7 +5,7 @@ from typing import Annotated, Literal
 from uuid import UUID
 
 import idna
-from pydantic import AfterValidator, BaseModel, ConfigDict, Field, StrictInt, computed_field, field_validator, model_validator
+from pydantic import AfterValidator, BaseModel, ConfigDict, Field, StrictBool, StrictInt, computed_field, field_validator, model_validator
 
 
 from app.cascade_routes import Route, RouteUpdate
@@ -43,15 +43,15 @@ class LoginRequest(BaseModel):
     username: str = Field(max_length=128)
     password: str = Field(max_length=128)
     otp: str | None = Field(default=None, max_length=16)
+    remember: StrictBool = False
 
 
 class TwoFAStatusOut(BaseModel):
     enabled: bool
 
 
-class TwoFAEnableOut(TwoFAStatusOut):
-    # включение 2FA отзывает прежние сессии (их могли украсть до включения),
-    # текущей вкладке выдается новый токен
+class TwoFAChangeOut(TwoFAStatusOut):
+    # Изменение 2FA отзывает прежние сессии. Вкладка получает новый токен.
     access_token: str
 
 
@@ -82,6 +82,15 @@ class StepUpRequest(BaseModel):
 class TokenResponse(BaseModel):
     access_token: str
     token_type: str = "bearer"
+
+
+class RememberedSessionOut(BaseModel):
+    id: str
+    user_agent: str
+    created_at: datetime
+    last_used_at: datetime
+    expires_at: datetime
+    current: bool
 
 
 class UserOut(BaseModel):

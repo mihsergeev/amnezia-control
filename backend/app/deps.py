@@ -2,15 +2,15 @@ from typing import Annotated
 
 from fastapi import Depends, HTTPException, Request, Security, status
 from fastapi.security import APIKeyHeader, HTTPAuthorizationCredentials, HTTPBearer
-from sqlalchemy import select
+from sqlalchemy import exists, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app import apikeys, ratelimit
+from app import apikeys, ratelimit, remembered_sessions
 from app.debug_context import mark_authenticated
 from app.clientip import client_ip
 from app.config import get_settings
 from app.db import get_session
-from app.models import ApiKey, User
+from app.models import ApiKey, RememberedSession, User
 from app.security import decode_access_token
 
 bearer_scheme = HTTPBearer(auto_error=False)
@@ -19,6 +19,7 @@ bearer_scheme = HTTPBearer(auto_error=False)
 api_key_scheme = APIKeyHeader(name="X-API-Key", auto_error=False)
 
 SessionDep = Annotated[AsyncSession, Depends(get_session)]
+BearerCredentials = Annotated[HTTPAuthorizationCredentials | None, Depends(bearer_scheme)]
 
 # неудачных X-API-Key с адреса до блокировки: выше, чем у входа, чтобы
 # интеграция со старым ключом не запирала соседнюю с того же адреса так быстро
@@ -26,10 +27,7 @@ APIKEY_MAX_FAILURES = 30
 
 
 async def get_current_user(
-    credentials: Annotated[
-        HTTPAuthorizationCredentials | None, Depends(bearer_scheme)
-    ],
-    session: SessionDep,
+    credentials: BearerCredentials, session: SessionDep, request: Request,
 ) -> User:
     unauthorized = HTTPException(
         status.HTTP_401_UNAUTHORIZED, "Недействительный или отсутствующий токен"
@@ -39,12 +37,24 @@ async def get_current_user(
     payload = decode_access_token(credentials.credentials, get_settings().jwt_secret)
     if payload is None:
         raise unauthorized
-    user = await session.scalar(select(User).where(User.username == payload["sub"]))
+    query = select(User).where(User.username == payload["sub"])
+    sid = payload.get("sid")
+    if "sid" in payload:
+        if not isinstance(sid, str) or not remembered_sessions.SESSION_ID.fullmatch(sid):
+            raise unauthorized
+        query = query.where(exists().where(
+            RememberedSession.id == sid,
+            RememberedSession.user_id == User.id,
+            RememberedSession.token_version == User.token_version,
+            *remembered_sessions.active_at(remembered_sessions.utcnow()),
+        ))
+    user = await session.scalar(query)
     if user is None:
         raise unauthorized
     # токен, выпущенный до смены пароля (иная version), больше не действителен
     if payload.get("ver", 0) != user.token_version:
         raise unauthorized
+    request.state.remembered_session_id = sid
     mark_authenticated()
     return user
 
@@ -95,7 +105,7 @@ async def get_stats_reader(
     request: Request,
 ) -> ApiKey | None:
     if credentials is not None or key is None:
-        await get_current_user(credentials, session)
+        await get_current_user(credentials, session, request)
         return None
     row = await _get_api_key(key, session, request)
     if row.scope != "stats":

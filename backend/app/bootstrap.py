@@ -32,11 +32,13 @@ async def ensure_admin(
             # единственного пользователя, а не заводим второго админа с паролем из .env
             users = list((await session.scalars(select(User))).all())
             if len(users) == 1:
-                old = users[0].username
-                users[0].username = settings.admin_user
+                user = users[0]
+                old = user.username
+                await session.execute(update(User).where(User.id == user.id).values(
+                    username=settings.admin_user, token_version=User.token_version + 1,
+                ))
                 await session.commit()
                 log.warning("админ %s переименован в %s по .env", old, settings.admin_user)
-                user = users[0]
             elif users:
                 log.warning(
                     "пользователя %s нет, в базе их %d, новый админ не создан",
@@ -53,10 +55,12 @@ async def ensure_admin(
             )
             await session.commit()
         elif settings.admin_password_reset:
-            user.password_hash = hash_password(settings.admin_password)
-            user.totp_enabled = False
-            user.totp_secret = ""
-            user.token_version += 1  # инвалидируем все старые токены
+            await session.execute(update(User).where(User.id == user.id).values(
+                password_hash=hash_password(settings.admin_password),
+                totp_enabled=False,
+                totp_secret="",
+                token_version=User.token_version + 1,
+            ))
             # сброс делают при утере доступа или подозрении на чужой вход:
             # ключи интеграций могли выпустить из чужой сессии, закрываем и их
             await session.execute(

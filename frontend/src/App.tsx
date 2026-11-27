@@ -9,9 +9,9 @@ import {
   logoutServer,
   panelTabTitle,
   restoreBackup,
-  setToken,
   type Branding,
 } from './api'
+import { hasRememberedLogin, refreshSession, setToken, watchSessionEnd } from './authSession'
 import { LoginPage } from './LoginPage'
 import { AboutModal, PROJECT_URL } from './AboutModal'
 import { DebugLogsModal } from './DebugLogsModal'
@@ -26,6 +26,7 @@ import { BackupsModal } from './BackupsModal'
 import { AlertsModal } from './AlertsModal'
 import { ShareServicesModal } from './ShareServicesModal'
 import { TwoFAModal } from './TwoFAModal'
+import { RememberedSessionsModal } from './RememberedSessionsModal'
 import { PasswordModal } from './PasswordModal'
 import { StepUpModal } from './StepUpModal'
 import { useI18n } from './i18n'
@@ -36,6 +37,9 @@ type View = 'servers' | 'overview' | 'search' | 'audit' | 'apikeys'
 function App() {
   const { t, lang, setLang } = useI18n()
   const [authed, setAuthed] = useState(() => getToken() !== null)
+  const [restoration, setRestoration] = useState<'idle' | 'pending' | 'retry'>(() =>
+    !getToken() && hasRememberedLogin() ? 'pending' : 'idle',
+  )
   const [view, setView] = useState<View>('servers')
   const [version, setVersion] = useState<string | null>(null)
   // подтверждение паролем перед скачиванием бэкапа или восстановлением
@@ -46,6 +50,7 @@ function App() {
   const [alertsOpen, setAlertsOpen] = useState(false)
   const [shareOpen, setShareOpen] = useState(false)
   const [twoFaOpen, setTwoFaOpen] = useState(false)
+  const [sessionsOpen, setSessionsOpen] = useState(false)
   const [pwOpen, setPwOpen] = useState(false)
   const [aboutOpen, setAboutOpen] = useState(false)
   const [debugLogsOpen, setDebugLogsOpen] = useState(false)
@@ -192,24 +197,36 @@ function App() {
   // useCallback: logout уходит детям как onUnauthorized и сидит в зависимостях
   // их загрузок - новая функция на каждую перерисовку (тема, язык) заново
   // запрашивала все открытые списки и обрывала опрос установки
-  const logout = useCallback(() => {
-    setToken(null)
+  const closeSession = useCallback(() => {
     setAuthed(false)
+    setRestoration('idle')
     setStepUp(null)
     setBackupsOpen(false)
     setAlertsOpen(false)
     setTwoFaOpen(false)
+    setSessionsOpen(false)
     setPwOpen(false)
     setShareOpen(false)
     setAboutOpen(false)
     setDebugLogsOpen(false)
   }, [])
 
-  // Выход по кнопке: токен отзывается и на сервере
-  async function logoutClick() {
-    await logoutServer()
-    logout()
-  }
+  useEffect(() => watchSessionEnd(closeSession), [closeSession])
+
+  useEffect(() => {
+    if (restoration !== 'pending') return
+    let active = true
+    refreshSession().then((token) => {
+      if (!active) return
+      setAuthed(Boolean(token && getToken() === token))
+      setRestoration('idle')
+    }).catch(() => {
+      if (active) setRestoration(hasRememberedLogin() ? 'retry' : 'idle')
+    })
+    return () => { active = false }
+  }, [restoration])
+
+  const logout = useCallback(() => setToken(null), [])
 
   return (
     <main className="page">
@@ -304,6 +321,7 @@ function App() {
                     label: t('Двухфакторная аутентификация'),
                     onClick: () => setTwoFaOpen(true),
                   },
+                  { label: t('Сохранённые сеансы'), onClick: () => setSessionsOpen(true) },
                   { label: t('Сменить пароль'), onClick: () => setPwOpen(true) },
                   { divider: true },
                   {
@@ -316,7 +334,7 @@ function App() {
                     onClick: () => fileRef.current?.click(),
                   },
                   { divider: true },
-                  { label: t('Выйти'), danger: true, onClick: logoutClick },
+                  { label: t('Выйти'), danger: true, onClick: () => void logoutServer() },
                 ]}
               />
             </>
@@ -337,7 +355,21 @@ function App() {
           <ServersPage onUnauthorized={logout} />
         )
       ) : (
-        <LoginPage logoSrc={logoSrc} logoSize={branding?.login_size} onLogin={() => setAuthed(true)} />
+        restoration === 'pending' ? (
+          <div className="login-wrap">
+            <p className="muted" role="status">{t('Восстанавливаем сохранённый вход…')}</p>
+          </div>
+        ) : (
+          <LoginPage
+            logoSrc={logoSrc}
+            logoSize={branding?.login_size}
+            onLogin={() => {
+              setAuthed(true)
+              setRestoration('idle')
+            }}
+            onRetryRestore={restoration === 'retry' ? () => setRestoration('pending') : undefined}
+          />
+        )
       )}
 
       {debugLogsOpen && <DebugLogsModal onClose={() => setDebugLogsOpen(false)} onUnauthorized={logout} />}
@@ -375,6 +407,12 @@ function App() {
       {twoFaOpen && (
         <TwoFAModal
           onClose={() => setTwoFaOpen(false)}
+          onUnauthorized={logout}
+        />
+      )}
+      {sessionsOpen && (
+        <RememberedSessionsModal
+          onClose={() => setSessionsOpen(false)}
           onUnauthorized={logout}
         />
       )}

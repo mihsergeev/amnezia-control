@@ -2,6 +2,18 @@ import { translate } from './i18n'
 import { downloadResponse } from './download'
 import type { LogoTheme } from './logoAdapt'
 import { debugLogsPath, type DebugLogFilters, type DebugLogsResponse } from './debugLogs'
+import {
+  getSessionGeneration,
+  getToken,
+  hasRememberedLogin,
+  refreshSession,
+  SESSION_HEADER,
+  setToken,
+  waitForSessionRefresh,
+  withSessionLock,
+} from './authSession'
+
+export { getToken } from './authSession'
 
 export type LogoSize = { desktop: number; mobile: number }
 export const DEFAULT_PANEL_TITLE = 'Amnezia Control'
@@ -26,20 +38,6 @@ export function panelTabTitle({ tab_title, append_tab_brand }: Pick<Branding, "t
 
 export function logoUrl(version: string, theme: LogoTheme) {
   return `/api/branding/logo/${theme}?v=${encodeURIComponent(version)}`
-}
-
-const TOKEN_KEY = 'acontrol_token'
-
-export function getToken(): string | null {
-  return localStorage.getItem(TOKEN_KEY)
-}
-
-export function setToken(token: string | null) {
-  if (token) {
-    localStorage.setItem(TOKEN_KEY, token)
-  } else {
-    localStorage.removeItem(TOKEN_KEY)
-  }
 }
 
 export class ApiError extends Error {
@@ -78,16 +76,83 @@ export async function withStepUpOtp<T>(
 
 function withOtp(init: RequestInit, otp: string): RequestInit {
   if (!otp) return init
-  return {
-    ...init,
-    headers: { ...(init.headers as Record<string, string> | undefined), 'X-Confirm-OTP': otp },
+  const headers = new Headers(init.headers)
+  headers.set('X-Confirm-OTP', otp)
+  return { ...init, headers }
+}
+
+function refreshUnavailable() {
+  return new ApiError(translate('Не удалось обновить вход. Попробуйте ещё раз.'), 503)
+}
+
+function signInChanged() {
+  return new ApiError(translate('Вход изменился. Повторите действие.'), 409)
+}
+
+async function authorizedFetch(path: string, init: RequestInit = {}, allowRefresh = true): Promise<Response> {
+  if (path === '/api/branding' && (!init.method || init.method === 'GET')) {
+    return fetch(path, init)
   }
+  const generation = getSessionGeneration()
+  const remembered = hasRememberedLogin()
+  const headers = new Headers(init.headers)
+  const method = init.method?.toUpperCase() ?? 'GET'
+  const safeToReplay = (method === 'GET' || method === 'HEAD') && !headers.has('X-Confirm-OTP')
+  const send = (token: string | null) => {
+    if (token) headers.set('Authorization', `Bearer ${token}`)
+    return fetch(path, { ...init, headers })
+  }
+  const checkGeneration = () => {
+    if (generation !== getSessionGeneration() && getToken()) throw signInChanged()
+  }
+
+  init.signal?.throwIfAborted()
+  let token = getToken()
+  if (!remembered || !allowRefresh) return send(token)
+  // Запросы фоновых виджетов не продлевают срок сохранённого входа.
+  if (document.hidden && safeToReplay) {
+    if (!token) throw refreshUnavailable()
+    const res = await send(token)
+    checkGeneration()
+    if (res.status === 401 && hasRememberedLogin()) throw refreshUnavailable()
+    return res
+  }
+  let refreshFailed = false
+  try {
+    token = await refreshSession()
+  } catch {
+    refreshFailed = true
+    if (!token) throw refreshUnavailable()
+  }
+  checkGeneration()
+  if (!token) throw new ApiError(translate('Войдите в панель снова'), 401)
+  const response = await send(token)
+  checkGeneration()
+  if (response.status !== 401 || !hasRememberedLogin()) return response
+  if (refreshFailed) throw refreshUnavailable()
+
+  let fresh = getToken()
+  if (!fresh || fresh === token) {
+    try {
+      fresh = await refreshSession(true)
+    } catch {
+      throw refreshUnavailable()
+    }
+  }
+  checkGeneration()
+  if (!fresh) return response
+  if (!safeToReplay) {
+    throw new ApiError(translate('Вход обновлён. Повторите действие.'), 409)
+  }
+  const retried = await send(fresh)
+  checkGeneration()
+  return retried
 }
 
 // fetch с поддержкой кода 2FA: вне окна подтверждения (свои формы с паролем)
 // код спрашиваем prompt-ом и повторяем запрос один раз
-async function stepUpFetch(path: string, init: RequestInit = {}): Promise<Response> {
-  const res = await fetch(path, withOtp(init, stepUpOtp))
+async function stepUpFetch(path: string, init: RequestInit = {}, allowRefresh = true): Promise<Response> {
+  const res = await authorizedFetch(path, withOtp(init, stepUpOtp), allowRefresh)
   if (res.status !== 403 || res.headers.get('X-Need-OTP') !== '1') return res
   if (stepUpNeedOtp) {
     stepUpNeedOtp()
@@ -95,18 +160,20 @@ async function stepUpFetch(path: string, init: RequestInit = {}): Promise<Respon
   }
   const code = window.prompt(translate('Введите код 2FA из приложения'))?.trim()
   if (!code) return res
-  return fetch(path, withOtp(init, code))
+  return authorizedFetch(path, withOtp(init, code), allowRefresh)
 }
 
 export async function api<T>(path: string, options: RequestInit = {}): Promise<T> {
-  const headers: Record<string, string> = {
-    'Content-Type': 'application/json',
-    ...(options.headers as Record<string, string> | undefined),
-  }
-  const token = getToken()
-  if (token) headers['Authorization'] = `Bearer ${token}`
+  return jsonRequest<T>(path, options)
+}
 
-  const res = await stepUpFetch(path, { ...options, headers })
+async function jsonRequest<T>(path: string, options: RequestInit, allowRefresh = true): Promise<T> {
+  const headers = new Headers(options.headers)
+  if (!headers.has('Content-Type')) headers.set('Content-Type', 'application/json')
+  return responseData<T>(await stepUpFetch(path, { ...options, headers }, allowRefresh))
+}
+
+async function responseData<T>(res: Response): Promise<T> {
   if (res.status === 204) return undefined as T
 
   const body = await res.json().catch(() => null)
@@ -122,11 +189,7 @@ export function getDebugLogs(filters: DebugLogFilters, signal?: AbortSignal): Pr
 }
 
 export async function downloadDebugLogs(filters: DebugLogFilters, signal?: AbortSignal): Promise<void> {
-  const token = getToken()
-  const res = await stepUpFetch(debugLogsPath(filters, true), {
-    signal,
-    headers: token ? { Authorization: `Bearer ${token}` } : {},
-  })
+  const res = await stepUpFetch(debugLogsPath(filters, true), { signal })
   if (!res.ok) {
     const body = await res.json().catch(() => null)
     throw new ApiError(errorDetail(body, res.status), res.status)
@@ -153,24 +216,97 @@ export function errorDetail(body: unknown, status: number): string {
   return translate('Ошибка HTTP {status}', { status })
 }
 
-// Выход: токен отзывается и на сервере, иначе украденный жил бы до конца срока.
-export async function logoutServer(): Promise<void> {
-  try {
-    await api<void>('/api/auth/logout', { method: 'POST' })
-  } catch {
-    // сеть или истекший токен: локальный выход все равно состоится
+let logoutInFlight: Promise<void> | null = null
+
+// Тем же замком защищаем запросы, которые отзывают старые токены и cookie.
+// JWT при необходимости обновляется до взятия замка.
+async function changeSession<T>(request: () => Promise<T>, apply: (value: T) => void): Promise<T> {
+  const version = getSessionGeneration()
+  if (hasRememberedLogin()) {
+    let token: string | null
+    try {
+      token = await refreshSession()
+    } catch {
+      throw refreshUnavailable()
+    }
+    if (!token) throw new ApiError(translate('Войдите в панель снова'), 401)
+  }
+  return withSessionLock(async () => {
+    if (version !== getSessionGeneration()) throw signInChanged()
+    const result = await request()
+    if (version !== getSessionGeneration()) throw signInChanged()
+    apply(result)
+    return result
+  })
+}
+
+export async function loginPanel(username: string, password: string, otp: string | null, remember: boolean) {
+  await logoutInFlight
+  await withSessionLock(async () => {
+    const res = await fetch('/api/auth/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'same-origin',
+      body: JSON.stringify({ username, password, otp, remember }),
+      signal: AbortSignal.timeout(15_000),
+    })
+    const { access_token } = await responseData<{ access_token: string }>(res)
+    setToken(access_token)
+  })
+}
+
+export function logoutServer(): Promise<void> {
+  if (logoutInFlight) return logoutInFlight
+  const token = getToken()
+  const refreshing = waitForSessionRefresh()
+  setToken(null)
+  logoutInFlight = (async () => {
+    await refreshing?.catch(() => null)
+    await withSessionLock(async () => {
+      // A newer login in another tab may already own the browser cookie.
+      if (getToken() || hasRememberedLogin()) return
+      await fetch('/api/auth/logout', {
+        method: 'POST',
+        headers: { ...SESSION_HEADER, ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+        credentials: 'same-origin',
+        keepalive: true,
+        signal: AbortSignal.timeout(10_000),
+      })
+    })
+  })().catch(() => {
+    // The local session is already closed.
+  }).finally(() => { logoutInFlight = null })
+  return logoutInFlight
+}
+
+export type RememberedSession = {
+  id: string
+  user_agent: string
+  created_at: string
+  last_used_at: string
+  expires_at: string
+  current: boolean
+}
+
+export function listRememberedSessions(signal?: AbortSignal): Promise<RememberedSession[]> {
+  return api<RememberedSession[]>('/api/auth/sessions', { signal })
+}
+
+export async function revokeRememberedSession({ id, current }: RememberedSession): Promise<void> {
+  const path = `/api/auth/sessions/${encodeURIComponent(id)}`
+  const options = { method: 'DELETE' }
+  if (current) {
+    await changeSession(() => jsonRequest<void>(path, options, false), () => setToken(null))
+  } else {
+    await api<void>(path, options)
   }
 }
 
 // Скачивание файла с POST-запроса: fetch с токеном -> blob -> загрузка.
 async function downloadPost(path: string, body: unknown, fallback: string): Promise<Headers> {
-  const token = getToken()
   const res = await stepUpFetch(path, {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-    },
+    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
   })
   if (!res.ok) {
@@ -186,11 +322,13 @@ export async function changePassword(
   current_password: string,
   new_password: string,
 ): Promise<void> {
-  const r = await api<{ access_token: string }>('/api/auth/password', {
-    method: 'POST',
-    body: JSON.stringify({ current_password, new_password }),
-  })
-  setToken(r.access_token)
+  await changeSession(
+    () => jsonRequest<{ access_token: string }>('/api/auth/password', {
+      method: 'POST',
+      body: JSON.stringify({ current_password, new_password }),
+    }, false),
+    (r) => setToken(r.access_token),
+  )
 }
 
 // Скачивание бэкапа. В нем SSH-ключ ко всем нодам, поэтому нужен пароль.
@@ -203,20 +341,18 @@ export async function restoreBackup(
   file: File | Blob,
   password: string,
 ): Promise<{ restored: Record<string, number>; ssh_requires_check?: number[] }> {
-  const token = getToken()
-  const res = await stepUpFetch('/api/backup/restore', {
-    method: 'POST',
-    headers: {
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      'X-Confirm-Password': password,
-    },
-    body: file,
-  })
-  const body = await res.json().catch(() => null)
-  if (!res.ok) throw new ApiError(errorDetail(body, res.status), res.status)
-  // старые токены restore отзывает, новый приходит в ответе
-  if (body?.access_token) setToken(body.access_token)
-  return body
+  return changeSession(
+    async () => responseData<{
+      restored: Record<string, number>
+      ssh_requires_check?: number[]
+      access_token?: string
+    }>(await stepUpFetch('/api/backup/restore', {
+      method: 'POST',
+      headers: { 'X-Confirm-Password': password },
+      body: file,
+    }, false)),
+    (r) => { if (r?.access_token) setToken(r.access_token) },
+  )
 }
 
 export type BackupItem = { filename: string; size: number; created: string }
@@ -244,12 +380,8 @@ export async function exportServer(
   history: boolean,
   password: string,
 ): Promise<void> {
-  const token = getToken()
   const res = await stepUpFetch(`/api/servers/${id}/export?history=${history}`, {
-    headers: {
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      'X-Confirm-Password': password,
-    },
+    headers: { 'X-Confirm-Password': password },
   })
   if (!res.ok) {
     const err = await res.json().catch(() => null)
@@ -259,10 +391,8 @@ export async function exportServer(
 }
 
 export async function importServerFile(file: File | Blob): Promise<ServerImportResult> {
-  const token = getToken()
-  const res = await fetch('/api/servers/import-file', {
+  const res = await authorizedFetch('/api/servers/import-file', {
     method: 'POST',
-    headers: token ? { Authorization: `Bearer ${token}` } : {},
     body: file,
   })
   const body = await res.json().catch(() => null)
@@ -786,19 +916,22 @@ export function setup2FA(password: string): Promise<TwoFASetup> {
 
 // включение 2FA отзывает прежние сессии: сохраняем выданный новый токен
 export async function enable2FA(otp: string, password: string): Promise<TwoFAStatus> {
-  const r = await api<TwoFAStatus & { access_token: string }>('/api/auth/2fa/enable', {
-    method: 'POST',
-    body: JSON.stringify({ otp, password }),
-  })
-  setToken(r.access_token)
-  return { enabled: r.enabled }
+  return change2FA('/api/auth/2fa/enable', otp, password)
 }
 
-export function disable2FA(otp: string, password: string): Promise<TwoFAStatus> {
-  return api<TwoFAStatus>('/api/auth/2fa/disable', {
-    method: 'POST',
-    body: JSON.stringify({ otp, password }),
-  })
+export async function disable2FA(otp: string, password: string): Promise<TwoFAStatus> {
+  return change2FA('/api/auth/2fa/disable', otp, password)
+}
+
+async function change2FA(path: string, otp: string, password: string): Promise<TwoFAStatus> {
+  const r = await changeSession(
+    () => jsonRequest<TwoFAStatus & { access_token?: string }>(path, {
+      method: 'POST',
+      body: JSON.stringify({ otp, password }),
+    }, false),
+    ({ access_token }) => { if (access_token) setToken(access_token) },
+  )
+  return { enabled: r.enabled }
 }
 
 export type Protocol = {
