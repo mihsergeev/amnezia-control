@@ -19,6 +19,7 @@ LABEL = "org.amnezia.control.cascade"
 UNIT = "acontrol-cascade-awg.service"
 TIMER = "acontrol-cascade-awg-heal.timer"
 PORTS = (51830, 51831, 51832, 51833, 51834)
+RUNTIME_REV = "2"
 
 
 def new_params() -> dict:
@@ -65,6 +66,7 @@ def _put(path: str, text: str, mode: str = "600") -> str:
 # No keys are printed, even on tool failure. Configuration is mounted as a
 # directory, so atomic updates are visible after an own-container restart.
 RUNTIME = r'''#!/bin/bash
+# AWG runtime rev @REV@
 set -eu
 BASE=@BASE@
 CONT=@CONT@
@@ -128,6 +130,29 @@ add rule inet ac_cascade_awg output meta mark 0x200 oifname != "acawg" counter d
 NFT
   fi
 }
+profile_digest() (
+  set -o pipefail
+  # A live endpoint may roam. Compare everything else, including peer keys,
+  # using a digest so the profile itself never leaves the pipeline.
+  awk '
+    /^\[/ {section=$0; next}
+    /=/ {
+      key=$0; sub(/=.*/, "", key); gsub(/[[:space:]]/, "", key)
+      if (key=="Endpoint") next
+      value=$0; sub(/^[^=]*=[[:space:]]*/, "", value); sub(/[[:space:]]+$/, "", value)
+      if (key=="FwMark" && value=="1024") value="0x400"
+      print section ":" key "=" value
+    }' | LC_ALL=C sort | sha256sum
+)
+configure() {
+  local saved current
+  if [ "$1" = heal ]; then
+    saved=$(profile_digest < "$BASE/link.conf") || die
+    current=$(set -o pipefail; docker exec "$CONT" awg showconf "$IF" 2>/dev/null | profile_digest) || die
+    [ "$saved" != "$current" ] || return 0
+  fi
+  docker exec "$CONT" awg syncconf "$IF" /etc/acontrol-awg/link.conf >/dev/null 2>&1 || die
+}
 up() {
   owner || die
   guard
@@ -149,8 +174,9 @@ up() {
     docker exec "$CONT" awg show "$IF" >/dev/null 2>&1 && break
     sleep 1
   done
-  # setconf also repairs a restarted userspace device with zero peers.
-  docker exec "$CONT" awg setconf "$IF" /etc/acontrol-awg/link.conf >/dev/null 2>&1 || die
+  # Reapplying the profile on every heal disrupts live peers (and rebinds UDP).
+  # An explicit up and a restarted device still need their saved configuration.
+  configure "$1"
   ip address replace "$INNER/30" dev "$IF"
   ip link set "$IF" mtu 1280 up
   sysctl -qw "net.ipv4.conf.$IF.rp_filter=2"
@@ -176,6 +202,7 @@ up() {
 }
 status() {
   echo CASCADE_ENCRYPTION=awg
+  echo CASCADE_AWGREV=@REV@
   if ! owner || ! docker exec "$CONT" awg show "$IF" peers 2>/dev/null | grep -Fxq "$PEER_PUBLIC"; then
     echo CASCADE_ENCRYPTED=no; echo CASCADE_AWG=no; return
   fi
@@ -230,7 +257,7 @@ down() {
 }
 case "${1:-}" in
   guard) owner || die; guard ;;
-  up|heal) up ;;
+  up|heal) up "$1" ;;
   status) status ;;
   down) down ;;
   *) die ;;
@@ -259,12 +286,45 @@ def runtime_script(cascade_id: int | None = None, owner: str = "") -> str:
     paths = resources(cascade_id)
     text = RUNTIME
     for key, value in {"BASE": paths["base"], "CONT": paths["container"], "LABEL": LABEL,
-                       "IMAGE": IMAGE, "IF": paths["interface"], "LOCK": paths["lock"],
+                       "IMAGE": IMAGE, "IF": paths["interface"], "LOCK": paths["lock"], "REV": RUNTIME_REV,
                        "SCOPED_EXIT": "yes" if cascade_id is not None else "no",
                        "OWNER": shlex.quote(owner), "OWNER_LABEL":
                        f"--label org.amnezia.control.owner={owner}" if owner else ""}.items():
         text = text.replace(f"@{key}@", value)
     return text
+
+
+def upgrade_runtime(cascade_id: int, owner: str, role: str, *, scoped_exit: bool = False) -> str:
+    """Replace only the healer script, while the link and its configuration stay live."""
+    if role not in ("entry", "exit") or (scoped_exit and role != "exit"):
+        raise ValueError("Invalid AWG runtime role")
+    paths = resources(cascade_id if scoped_exit else None)
+    base, cont, script, lock = (paths[key] for key in ("base", "container", "script", "lock"))
+    data = base64.b64encode(runtime_script(cascade_id if scoped_exit else None, owner).encode()).decode()
+    label = f'{{{{with index .Config.Labels "{LABEL}"}}}}{{{{.}}}}{{{{end}}}}'
+    owner_label = '{{with index .Config.Labels "org.amnezia.control.owner"}}{{.}}{{end}}'
+    return f'''sudo -n flock -x -w 5 {lock} bash -s <<'AC_AWG_UPGRADE'
+set -eu
+{foreign_guard() if not scoped_exit else ""}
+for path in {base} {base}/node.env {script.rsplit('/', 1)[0]} {script}; do
+    test ! -L "$path" && test "$(stat -c '%u' "$path")" = 0 || exit 73
+    mode=$(stat -c '%a' "$path")
+    (( (8#$mode & 8#022) == 0 )) || exit 73
+done
+test -f {base}/node.env && test -f {script} && test -x {script} || exit 73
+grep -qxF 'CID={int(cascade_id)}' {base}/node.env || exit 73
+grep -qxF 'ROLE={role}' {base}/node.env || exit 73
+test "$(docker container inspect -f '{label}' {cont})" = {int(cascade_id)} || exit 73
+test "$(docker container inspect -f '{owner_label}' {cont})" = {shlex.quote(owner)} || exit 73
+grep -qxF '# AWG runtime rev {RUNTIME_REV}' {script} && exit 0
+tmp=$(mktemp {script}.XXXXXXXX)
+trap 'rm -f -- "$tmp"' EXIT
+printf %s '{data}' | base64 -d > "$tmp"
+bash -n "$tmp"
+chmod 700 "$tmp"
+mv -fT -- "$tmp" {script}
+AC_AWG_UPGRADE
+'''
 
 
 def foreign_guard() -> str:

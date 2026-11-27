@@ -71,9 +71,10 @@ def test_failclosed_guards_and_cleanup_are_scoped():
     assert 'ip route replace default dev "$IF" src "$INNER" table 242' in script
     assert "ip route replace default table main" not in script
     assert "iptables -F" not in script and "docker restart" not in script
-    assert "awg showconf" not in script and '"$IF" dump' not in script
+    status_script = script.split("\nstatus() {", 1)[1].split("\ndown() {", 1)[0]
+    assert "awg showconf" not in status_script and '"$IF" dump' not in status_script
     assert "--cap-drop ALL --cap-add NET_ADMIN" in script
-    assert 'setconf "$IF" /etc/acontrol-awg/link.conf >/dev/null 2>&1' in script
+    assert 'syncconf "$IF" /etc/acontrol-awg/link.conf >/dev/null 2>&1' in script
     assert "acontrol-awg-link.service" in cascade_awg.preflight_command()
     assert "docker container inspect xray-cascade" in cascade_awg.preflight_command()
     assert "org.amnezia.control.cascade" in cascade_awg.preflight_command(3)
@@ -85,23 +86,29 @@ def test_failclosed_guards_and_cleanup_are_scoped():
 
 
 def _status(tmp_path, monkeypatch, *, age=20, guard=True, allowed="0.0.0.0/0", fail_config=False,
-            down_routes: str | None = None):
+            down_routes: str | None = None, heal_profile: str | None = None):
     bin_ = tmp_path / "bin"
     bin_.mkdir(exist_ok=True)
     (tmp_path / "node.env").write_text(
         "CID=3\nROLE=entry\nPORT=51830\nPUBLIC=own-public\nPEER_PUBLIC=peer-public\n"
         "PEER=198.51.100.20\nINNER=10.99.4.1\nPEER_INNER=10.99.4.2\nEGRESS=eth0\n",
         encoding="utf-8", newline="\n")
+    (tmp_path / "link.conf").write_text(
+        "[Interface]\nFwMark = 1024\n[Peer]\nPublicKey = peer-public\nAllowedIPs = 0.0.0.0/0\n"
+        "Endpoint = 198.51.100.20:51830\nPersistentKeepalive = 25\n", encoding="utf-8", newline="\n",
+    )
     (bin_ / "docker").write_text(
         "#!/bin/sh\n"
         f'echo "docker $*" >> "{(tmp_path / "calls").as_posix()}"\n'
         "case \"$*\" in\n"
-        + ("*setconf*) exit 1;;\n" if fail_config else "") +
+        + ("*syncconf*) exit 1;;\n" if fail_config else "") +
         "'container ls '*) echo acontrol-cascade-awg;;\n"
         "*'index .Config.Labels'*) echo 3;;\n"
         "*'.State.Running'*) echo true;;\n"
         "*public-key*) echo own-public;;\n"
         "*' peers') echo peer-public;;\n"
+        + ("*showconf*) exit 1;;\n" if heal_profile == "unreadable" else
+           f"*showconf*) printf '%s' '{heal_profile or ''}';;\n") +
         f"*allowed-ips*) printf 'peer-public\\t{allowed}\\n';;\n"
         "*fwmark*) echo 0x400;;\n"
         "*listen-port*) echo 51830;;\n"
@@ -120,6 +127,7 @@ def _status(tmp_path, monkeypatch, *, age=20, guard=True, allowed="0.0.0.0/0", f
         f'#!/bin/sh\necho "iptables $*" >> "{(tmp_path / "calls").as_posix()}"\nexit {0 if guard else 1}\n',
         encoding="utf-8", newline="\n")
     (bin_ / "flock").write_text("#!/bin/sh\nexit 0\n", encoding="utf-8", newline="\n")
+    (bin_ / "sysctl").write_text("#!/bin/sh\nexit 0\n", encoding="utf-8", newline="\n")
     (bin_ / "nft").write_text(
         f'#!/bin/sh\necho "nft $*" >> "{(tmp_path / "calls").as_posix()}"\n'
         'echo \'meta mark 0x00000200 oifname != "acawg" counter packets 0 bytes 0 drop\'\n',
@@ -132,14 +140,14 @@ def _status(tmp_path, monkeypatch, *, age=20, guard=True, allowed="0.0.0.0/0", f
     if os.name == "nt":
         prefix = f'export PATH="$(cygpath -u "{bin_.as_posix()}"):$PATH"\n'
     monkeypatch.setenv("PATH", str(bin_) + os.pathsep + os.environ["PATH"])
-    action = "down" if down_routes is not None else "up" if fail_config else "status"
+    action = "heal" if heal_profile is not None else "down" if down_routes is not None else "up" if fail_config else "status"
     r = subprocess.run([shutil.which("bash"), "-s", "--", action],
                        input=prefix + script, capture_output=True, text=True, timeout=10)
-    if fail_config:
+    if fail_config or heal_profile == "unreadable":
         assert r.returncode != 0
         return (tmp_path / "calls").read_text()
     assert r.returncode == 0, r.stderr
-    if down_routes is not None:
+    if action in ("down", "heal"):
         return (tmp_path / "calls").read_text()
     return cascade.parse_kv(r.stdout)
 
@@ -166,11 +174,23 @@ def test_runtime_proof_distinguishes_encryption_from_health(tmp_path, monkeypatc
 @pytest.mark.skipif(shutil.which("bash") is None, reason="нужен bash")
 def test_failed_device_configuration_leaves_kill_switch_installed(tmp_path, monkeypatch):
     calls = _status(tmp_path, monkeypatch, fail_config=True)
-    assert calls.index("iptables -w -t filter -C OUTPUT") < calls.index("awg setconf")
+    assert calls.index("iptables -w -t filter -C OUTPUT") < calls.index("awg syncconf")
     assert "docker start" not in calls and "docker rm" not in calls
-    assert calls.index("nft -f -") < calls.index("awg setconf")
-    assert "docker exec acontrol-cascade-awg awg setconf" in calls
+    assert calls.index("nft -f -") < calls.index("awg syncconf")
+    assert "docker exec acontrol-cascade-awg awg syncconf" in calls
     assert "delete table" not in calls and "-D OUTPUT" not in calls
+
+
+@pytest.mark.skipif(shutil.which("bash") is None, reason="нужен bash")
+@pytest.mark.parametrize("state", ["healthy", "empty", "drifted", "unreadable"])
+def test_heal_applies_profile_only_when_runtime_needs_it(tmp_path, monkeypatch, state):
+    profile = ("[Interface]\nFwMark = 0x400\n[Peer]\nEndpoint = 203.0.113.56:51831\n"
+               "AllowedIPs = 0.0.0.0/0\nPublicKey = peer-public\nPersistentKeepalive = 25\n")
+    actual = {"healthy": profile, "empty": "[Interface]\n",
+              "drifted": profile.replace("Keepalive = 25", "Keepalive = 10"), "unreadable": "unreadable"}
+    calls = _status(tmp_path, monkeypatch, heal_profile=actual[state])
+    assert ("awg syncconf" in calls) == (state in ("empty", "drifted"))
+    assert ("ip route replace default" in calls) == (state != "unreadable")
 
 
 def test_health_rejects_missing_awg_proof_and_stale_encrypted_gre():

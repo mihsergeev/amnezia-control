@@ -21,7 +21,7 @@ from sqlalchemy import select
 
 from app import (
     audit, cascade, cascade_awg, cascade_endpoints, cascade_exit, cascade_http, cascade_lock, cascade_observations,
-    cascade_probe, cascade_progress, cascade_recovery, cascadejob, deploy, geo, nodelock, server_ops,
+    cascade_probe, cascade_progress, cascade_recovery, cascadejob, cascadewatch, deploy, geo, nodelock, server_ops,
 )
 from app.cascade_routes import (
     Route, RoutePreview, RoutePreviewOut, RouteUpdate, preview_destinations, read_script, routing_state, update_script,
@@ -730,6 +730,7 @@ async def check(cascade_id: int, _: CurrentUser, session: SessionDep) -> Cascade
     generation = cascade_observations.Generation.of(c)
     entry_host = entry.host
     country = json.loads(c.params or "{}").get("entry_country") or entry.country
+    exit_ = await session.get(Server, c.exit_server_id) if c.transport == "awg" and c.status == "ready" else None
     # All reads above are complete; don't hold a DB transaction during SSH.
     await session.commit()
     try:
@@ -739,6 +740,8 @@ async def check(cascade_id: int, _: CurrentUser, session: SessionDep) -> Cascade
     except Exception as exc:  # noqa: BLE001
         raise _ssh_error(exc) from exc
     kv = cascade.parse_kv(out)
+    if exit_ is not None:
+        await cascadewatch.ensure_awg_runtime(c, entry, exit_, get_settings(), kv, manual=True)
     res = cascade.check_result(kv)
     confirmed = cascade.egress_confirmed(res)
     transport = generation.transport

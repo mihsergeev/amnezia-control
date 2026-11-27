@@ -1023,6 +1023,17 @@ def test_check_preserves_fallback_gateway_and_client_after_direct_timeout():
     assert not cascade.leaks(result) and not cascade.egress_confirmed(result)
 
 
+@pytest.mark.parametrize("primary_ip", ["", "203.0.113.10"])
+@pytest.mark.parametrize("fallback_client", ["203.0.113.11", "198.51.100.21", ""])
+def test_fallback_client_route_cannot_prove_a_leak_or_confirm_the_exit(primary_ip, fallback_client):
+    primary = dict.fromkeys(("direct", "egress", "client"), primary_ip)
+    result = cascade.check_result(primary | {
+        "altegress": "198.51.100.20", "altclient": fallback_client, "altdirect": "203.0.113.11",
+    })
+    assert {key: result[key] for key in primary} == primary
+    assert not cascade.leaks(result) and not cascade.egress_confirmed(result)
+
+
 def test_check_fallback_preserves_confirmed_client_bypass():
     kv = {"gw": "yes", "tproxy": "active", "awg": "yes", "direct": "203.0.113.10",
           "egress": "198.51.100.20", "client": "203.0.113.10",

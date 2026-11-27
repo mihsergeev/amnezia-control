@@ -4,7 +4,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from app import alerts, cascade, cascade_observations, cascadewatch, config, settings_store
+from app import alerts, cascade, cascade_awg, cascade_observations, cascadewatch, config, settings_store
 from app.api import cascades
 from app.db import Base, create_engine_and_factory
 from app.models import Cascade, Server
@@ -70,6 +70,35 @@ def test_health_reasons() -> None:
     assert cascade.health("vless", kv, cascade.check_result(kv)) == (True, "")
     kv = cascade.parse_kv(OK.replace("CASCADE_TUN=UNKNOWN", "CASCADE_TUN=DOWN"))
     assert cascade.health("gre", kv, cascade.check_result(kv)) == (False, "GRE-туннель выключен")
+
+
+async def test_awg_watcher_upgrades_exit_before_entry_and_skips_current_revision(factory, monkeypatch):
+    async with factory() as session:
+        row = await session.get(Cascade, 1)
+        row.transport = "awg"
+        row.params = json.dumps({"runtime_layout": 2, "runtime_owner": "a" * 32})
+        await session.commit()
+    sides = []
+
+    @asynccontextmanager
+    async def connect(_family, server_id, _manager):
+        class Conn:
+            async def run(self, command, *, check, timeout):
+                assert check and timeout == 25
+                sides.append((server_id, command))
+
+        yield Conn()
+
+    monkeypatch.setattr(cascadewatch.cascadejob, "connect", lambda *_: None)
+    monkeypatch.setattr(cascadewatch.nodelock, "connect", connect)
+    settings = config.get_settings()
+    check = OK + "CASCADE_ENCRYPTION=awg\nCASCADE_AWG=yes\n"
+    await cascadewatch.watch_once(factory, settings, check=_check(check))
+    assert [server_id for server_id, _ in sides] == [2, 1]
+    assert cascade_awg.resources(1)["script"] in sides[0][1]
+    assert cascade_awg.SCRIPT in sides[1][1]
+    await cascadewatch.watch_once(factory, settings, check=_check(check + f"CASCADE_AWGREV={cascade_awg.RUNTIME_REV}\n"))
+    assert len(sides) == 2
 
 
 async def test_alert_only_after_grace_and_once(factory, sent) -> None:

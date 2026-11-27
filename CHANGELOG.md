@@ -4,6 +4,11 @@ All notable changes to Amnezia Control are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.84.89] - 2026-11-28
+
+- Preserve active sessions during AmneziaWG cascade recovery. Existing links get the updated recovery scripts in place, with no client or tunnel reconfiguration (#54).
+- Check the AWG handshake after the traffic probes. Treat ambiguous responses from the fallback IP service as inconclusive instead of reporting a confirmed bypass (#54).
+
 ## [0.84.88] - 2026-11-28
 
 - Use cached pinned images, time-limited downloads, and retries for temporary errors when preparing images for cascades. Distinguish DNS, network, TLS, timeout, and digest failures and log separate IPv4 and IPv6 HTTPS checks.

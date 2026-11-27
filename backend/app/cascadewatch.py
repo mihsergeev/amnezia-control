@@ -19,8 +19,8 @@ from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import select
 
-from app import (alerts, cascade, cascade_lock, cascade_observations, cascade_routes, cascadejob, geo, geo_vet,
-                 nodelock, settings_store)
+from app import (alerts, cascade, cascade_awg, cascade_exit, cascade_lock, cascade_observations, cascade_routes,
+                 cascadejob, geo, geo_vet, nodelock, settings_store)
 from app.config import Settings
 from app.models import Cascade, Server
 
@@ -34,6 +34,27 @@ START_DELAY = 60
 async def _ssh_check(entry: Server, country: str, settings: Settings) -> str:
     async with nodelock.connect("cascade", entry.id, cascadejob.connect(entry, settings)) as conn:
         return await cascade.run_check(conn, country, timeout=90)
+
+
+async def ensure_awg_runtime(c: Cascade, entry: Server, exit_: Server | None, settings: Settings,
+                             kv: dict[str, str], *, manual: bool = False) -> None:
+    if (c.transport != "awg" or c.status != "ready" or exit_ is None or kv.get("encryption") != "awg"
+            or (not manual and kv.get("awgrev") == cascade_awg.RUNTIME_REV)):
+        return
+    params = json.loads(c.params or "{}")
+    owner = params.get("runtime_owner", "")
+    # Upgrade the exit first. A new entry revision means both sides succeeded.
+    try:
+        for role, server in (("exit", exit_), ("entry", entry)):
+            if role == "entry" and kv.get("awgrev") == cascade_awg.RUNTIME_REV:
+                continue
+            script = cascade_awg.upgrade_runtime(
+                c.id, owner, role, scoped_exit=role == "exit" and cascade_exit.scoped(params),
+            )
+            async with nodelock.connect("cascade", server.id, cascadejob.connect(server, settings)) as conn:
+                await conn.run(cascade_lock.wrap(c.id, script, owner, edit=True), check=True, timeout=25)
+    except Exception as exc:  # noqa: BLE001 - retry on the next check
+        log.warning("каскад %s: не удалось обновить восстановление AWG (%s)", c.id, type(exc).__name__)
 
 
 async def _move_domain_strategy(c: Cascade, entry: Server, settings: Settings) -> None:
@@ -114,8 +135,8 @@ async def watch_once(session_factory, settings: Settings, *, now: datetime | Non
     async with session_factory() as session:
         rows = list(await session.scalars(select(Cascade).where(Cascade.status == "ready")))
         names = dict((await session.execute(select(Server.id, Server.name))).all())
-        ids = {c.entry_server_id for c in rows}
-        entries = {
+        ids = {server_id for c in rows for server_id in (c.entry_server_id, c.exit_server_id)}
+        nodes = {
             s.id: s for s in await session.scalars(select(Server).where(Server.id.in_(ids)))
         } if ids else {}
         geo_pin = await geo_vet.accepted_pin(session)
@@ -123,7 +144,7 @@ async def watch_once(session_factory, settings: Settings, *, now: datetime | Non
     # висела idle in transaction), а результат пишем в перечитанную строку -
     # каскад могли удалить или проверить вручную, пока шла наша проверка
     for c in rows:
-        entry = entries.get(c.entry_server_id)
+        entry = nodes.get(c.entry_server_id)
         if entry is None or cascadejob.running(c.id):
             continue
         generation = cascade_observations.Generation.of(c)
@@ -134,6 +155,7 @@ async def watch_once(session_factory, settings: Settings, *, now: datetime | Non
             log.info("каскад %s: вход не проверить: %s", c.id, exc)
             continue
         kv = cascade.parse_kv(out)
+        await ensure_awg_runtime(c, entry, nodes.get(c.exit_server_id), settings, kv)
         if kv.get("dnsstrategy") == "IPIfNonMatch" or kv.get("privaterule") == "geoip":
             try:
                 await (move_strategy or _move_domain_strategy)(c, entry, settings)

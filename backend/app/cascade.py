@@ -1102,7 +1102,6 @@ def build_check_command(country: str = "") -> str:
         f'echo "CASCADE_DNSSTRATEGY=$(sudo -n python3 -c {shlex.quote(_STRATEGY_PY)} {DIR}/config/config.json 2>/dev/null)"',
         f'echo "CASCADE_PRIVATERULE=$(sudo -n python3 -c {shlex.quote(_PRIVATE_PY)} {DIR}/config/config.json 2>/dev/null)"',
         f"echo \"CASCADE_GEOPIN=$(sudo -n cat {DIR}/geo/pin 2>/dev/null | cut -d' ' -f1)\"",
-        cascade_awg.check_command(),
         CASCADE_PROBE_COMMAND,
         _reality_encryption_command(),
         f"GW=$(sudo docker ps --format '{{{{.Names}}}}' | grep -qx {GATEWAY} && echo yes || echo no)",
@@ -1121,6 +1120,7 @@ def build_check_command(country: str = "") -> str:
         f"if sudo -n test -f {DIR}/cascade-tproxy.sh; then REV=$(sudo -n sed -n 's/^# rev //p' {DIR}/cascade-tproxy.sh); "
         'echo "CASCADE_REV=${REV:-0}"; fi',
         'wait',
+        cascade_awg.check_command(),
     ]) + "\n"
 
 
@@ -1235,17 +1235,19 @@ def check_result(kv: dict[str, str]) -> dict:
     keys = ("egress", "client", "direct")
     paths = {key: _ip_or_empty(kv.get(key, "")) for key in keys}
     fallback = {key: _ip_or_empty(kv.get(f"alt{key}", "")) for key in keys}
-    # Compare observations from the same service. An alternate service can
-    # recover from a provider outage or an entry-country routing rule.
-    fallback_confirms = egress_confirmed(fallback) and (
-        not egress_confirmed(paths)
-        or (not leaks(paths) and paths["client"] != paths["egress"]
-            and fallback["client"] == fallback["egress"])
+    # The fallback's gateway request is forced to the exit, while its client
+    # request follows the saved routing rules. Only agreement proves the exit.
+    fallback_distinct = egress_confirmed(fallback)
+    fallback_confirms = (
+        fallback_distinct and fallback["client"] == fallback["egress"]
+        and not leaks(paths)
+        and (not egress_confirmed(paths) or paths["client"] != paths["egress"])
     )
-    # Keep a single service's observations even if the direct sample timed out.
-    # Showing a successful proxy sample does not confirm a distinct exit.
-    fallback_has_egress = not paths["egress"] and fallback["egress"] and (
-        fallback["client"] or not paths["client"]
+    # Keep partial observations from one service when the direct sample timed
+    # out or shares the same public address as the gateway sample.
+    fallback_has_egress = (
+        not fallback_distinct and not paths["egress"] and fallback["egress"]
+        and (fallback["client"] or not paths["client"])
     )
     if fallback_confirms or fallback_has_egress:
         paths = fallback
