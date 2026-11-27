@@ -1,6 +1,7 @@
 import asyncio
 import base64
 import importlib.util
+import ipaddress
 import json
 import os
 import pathlib
@@ -249,16 +250,52 @@ def remote_mocks(monkeypatch):
     async def locked(server):
         async with nodelock.hold("cascade", server.id):
             await asyncio.sleep(0.005)
-            yield object()
+            yield SimpleNamespace(host=server.host)
     async def addresses(conn, entry, exit_):return entry.host, exit_.host
     async def available(*args):return None
     async def no_owner(*args, **kwargs):return None
+    async def occupied(conn):return []
     monkeypatch.setattr(api, "_locked", locked)
     monkeypatch.setattr(api, "_addresses", addresses)
     monkeypatch.setattr(api, "_entry_creation_available", available)
     monkeypatch.setattr(api, "_awg_preflight", available)
+    monkeypatch.setattr(cascade_exit, "occupied_networks", occupied)
     monkeypatch.setattr(deploy, "port_owner", no_owner)
     monkeypatch.setattr(cascadejob, "spawn", lambda *args: None)
+
+
+async def test_create_skips_subnets_still_present_on_either_node(
+    client, auth_headers, session_factory, monkeypatch,
+):
+    entry, exit_, *_ = await setup_nodes(session_factory)
+    remote_mocks(monkeypatch)
+    occupied_by_host = {
+        "192.0.2.10": [ipaddress.IPv4Network("10.99.1.2/32")],
+        "192.0.2.11": [ipaddress.IPv4Network("10.99.2.0/24")],
+    }
+
+    async def occupied(conn):
+        return occupied_by_host[conn.host]
+
+    monkeypatch.setattr(cascade_exit, "occupied_networks", occupied)
+    response = await client.post("/api/cascades", headers=auth_headers, json={
+        "entry_id": entry, "exit_id": exit_, "transport": "gre",
+    })
+    assert response.status_code == 202, response.text
+    async with session_factory() as session:
+        stored = await session.get(Cascade, response.json()["id"])
+        assert json.loads(stored.params)["inner_net"] == "10.99.3.0/30"
+
+
+@pytest.mark.parametrize("response", [SimpleNamespace(exit_status=1, stdout=""),
+                                      SimpleNamespace(exit_status=0, stdout='["invalid"]')])
+async def test_unreadable_occupied_subnets_are_not_treated_as_empty(response):
+    class Connection:
+        async def run(self, command, **kwargs):
+            return response
+
+    with pytest.raises(OSError, match="IPv4"):
+        await cascade_exit.occupied_networks(Connection())
 
 
 @pytest.mark.parametrize("transport", ["awg", "vless", "gre"])

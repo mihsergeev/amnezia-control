@@ -6,6 +6,8 @@ import shlex
 
 from app import cascade_awg, cascade_endpoints
 
+INNER_POOL = ipaddress.IPv4Network("10.99.0.0/16")
+
 
 def scoped(params: dict) -> bool:
     return params.get("runtime_layout") == 2
@@ -24,7 +26,7 @@ def network(cid: int, params: dict) -> tuple[str, str, str]:
         net = ipaddress.IPv4Network(f"10.99.{n}.0/30")
     else:
         net = ipaddress.IPv4Network(params["inner_net"])
-        if net.prefixlen != 30 or not net.subnet_of(ipaddress.IPv4Network("10.99.0.0/16")):
+        if net.prefixlen != 30 or not net.subnet_of(INNER_POOL):
             raise ValueError("Invalid cascade subnet")
     return str(net), str(net[1]) + "/30", str(net[2]) + "/30"
 
@@ -70,35 +72,66 @@ print('CASCADE_AVAILABLE')
     return cascade_awg.foreign_guard() + "sudo -n python3 -c " + shlex.quote(code) + " " + shlex.quote(json.dumps(expected)) + " " + str(int(params.get("gre_key", 0))) + " " + kind + " || exit 73\n"
 
 
-# On a conflict, name the network and the interface, and when the interface is a
-# cascade exit of this panel (acax<id>/acgx<id>) left behind by a removal without
-# teardown, print the commands that remove it.
-_OVERLAP_PY = r'''
-import ipaddress,json,re,subprocess,sys
-network=ipaddress.ip_network(sys.argv[1]); own=sys.argv[2]
-def overlaps(destination):
- return network.overlaps(ipaddress.ip_network(destination,strict=False))
-def conflict(what,dev):
- print('CASCADE_CONFLICT: %s overlaps %s on %s'%(network,what,dev or '-'))
- m=re.fullmatch(r'ac[ag]x([0-9a-f]{1,8})',dev or '')
- if m:
-  cid=int(m.group(1),16); stem='acontrol-cascade-exit-%d'%cid
-  print('CASCADE_CONFLICT: %s looks like a leftover of cascade %d removed without teardown. To remove it:'%(dev,cid))
-  print('  sudo systemctl disable --now %s-heal.timer %s-heal.service %s.service'%(stem,stem,stem))
-  print('  sudo docker rm -f %s-awg %s-xray'%(stem,stem))
-  print('  sudo ip link delete %s'%dev)
-  print('  sudo rm -rf /lib65/scripts/acontrol-cascade-exits/%d'%cid)
-  print('  sudo rm -f /etc/systemd/system/%s.service /etc/systemd/system/%s-heal.timer /etc/systemd/system/%s-heal.service'%(stem,stem,stem))
-  print('  sudo systemctl daemon-reload')
- sys.exit(73)
-for row in json.loads(subprocess.check_output(['ip','-j','-4','address','show'],timeout=5)):
- if row['ifname']==own:continue
- for item in row.get('addr_info',[]):
-  if overlaps(item['local']+'/'+str(item['prefixlen'])):conflict('address %s/%s'%(item['local'],item['prefixlen']),row['ifname'])
-for row in json.loads(subprocess.check_output(['ip','-j','-4','route','show','table','all'],timeout=5)):
- if row.get('dev')==own or row.get('dst','default')=='default':continue
- if overlaps(row['dst']):conflict('route %s (table %s)'%(row['dst'],row.get('table','main')),row.get('dev'))
+# Use the same address and route inventory for selection and the install guard.
+_NETWORKS_PY = r'''
+import ipaddress
+import json
+import subprocess
+import sys
+
+def networks():
+    addresses = subprocess.check_output(['ip', '-j', '-4', 'address', 'show'], timeout=5)
+    for row in json.loads(addresses):
+        for item in row.get('addr_info', []):
+            address = f"{item['local']}/{item['prefixlen']}"
+            yield address, row['ifname'], f'address {address}'
+    routes = subprocess.check_output(['ip', '-j', '-4', 'route', 'show', 'table', 'all'], timeout=5)
+    for row in json.loads(routes):
+        dst = row.get('dst', 'default')
+        if dst != 'default':
+            yield dst, row.get('dev'), f"route {dst} (table {row.get('table', 'main')})"
 '''
+
+_OVERLAP_PY = _NETWORKS_PY + r'''
+import re
+
+network = ipaddress.ip_network(sys.argv[1])
+own = sys.argv[2]
+for dst, dev, what in networks():
+    if dev == own or not network.overlaps(ipaddress.ip_network(dst, strict=False)):
+        continue
+    print(f"CASCADE_CONFLICT: {network} overlaps {what} on {dev or '-'}")
+    match = re.fullmatch(r'ac[ag]x([0-9a-f]{1,8})', dev or '')
+    if match:
+        cid = int(match.group(1), 16)
+        print(f'CASCADE_CONFLICT: {dev} matches the exit interface name for cascade {cid}. '
+              'Check its owner and whether it is active.')
+    sys.exit(73)
+'''
+
+_OCCUPIED_PY = _NETWORKS_PY + r'''
+pool = ipaddress.ip_network(sys.argv[1])
+occupied = set()
+for dst, _, _ in networks():
+    network = ipaddress.ip_network(dst, strict=False)
+    if pool.overlaps(network):
+        occupied.add(network)
+print(json.dumps([str(net) for net in ipaddress.collapse_addresses(occupied)]))
+'''
+
+
+async def occupied_networks(conn) -> list[ipaddress.IPv4Network]:
+    command = "python3 -c " + shlex.quote(_OCCUPIED_PY) + " " + str(INNER_POOL)
+    result = await conn.run(command, check=False, timeout=15)
+    if result.exit_status != 0:
+        raise OSError("Не удалось прочитать IPv4-адреса и маршруты узла каскада")
+    try:
+        raw = json.loads(result.stdout)
+        if not isinstance(raw, list) or any(not isinstance(value, str) for value in raw):
+            raise ValueError("Expected a list of prefixes")
+        return [ipaddress.IPv4Network(value) for value in raw]
+    except (ValueError, TypeError) as exc:
+        raise OSError("Узел каскада вернул неверный список IPv4-подсетей") from exc
 
 
 def network_preflight(cid: int, transport: str, params: dict, role: str) -> str:

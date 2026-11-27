@@ -4,6 +4,11 @@ All notable changes to Amnezia Control are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.84.81] - 2026-11-27
+
+- When creating an AWG or GRE cascade, skip internal subnets already in use on either node. The conflict message identifies the interface and subnet and asks the operator to verify ownership (#47).
+- Keep partial results from the fallback IP service when checking a cascade. Distinguish a missing direct measurement from a missing gateway response and still require a distinct exit address for confirmation (#54).
+
 ## [0.84.80] - 2026-11-27
 
 - Show CPU, memory usage and 1-minute load history on Overview for the selected node, using the existing collector (#61).

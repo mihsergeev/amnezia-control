@@ -226,12 +226,16 @@ async def test_create_awg_preserves_secrets_in_storage_only(client, auth_headers
     async def port(conn, requested, reserved=None):
         return requested or 51830
 
+    async def occupied(_conn):
+        return []
+
     monkeypatch.setattr(api, "_locked", locked)
     monkeypatch.setattr(api, "_addresses", addresses)
     monkeypatch.setattr(api, "_entry_creation_available", available)
     monkeypatch.setattr(api, "_awg_preflight", available)
     monkeypatch.setattr(api, "_operation_available", available)
     monkeypatch.setattr(api, "_awg_port", port)
+    monkeypatch.setattr(api.cascade_exit, "occupied_networks", occupied)
     monkeypatch.setattr(cascadejob, "spawn", lambda *args: None)
     r = await client.post("/api/cascades", headers=auth_headers, json={
         "entry_id": entry, "exit_id": exit_, "transport": "awg", "exit_port": 51831})

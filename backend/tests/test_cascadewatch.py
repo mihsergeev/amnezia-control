@@ -64,7 +64,7 @@ def test_health_reasons() -> None:
     kv = cascade.parse_kv(OK)
     assert cascade.health("gre", kv, cascade.check_result(kv)) == (True, "")
     kv = cascade.parse_kv(NO_EXIT)
-    assert cascade.health("gre", kv, cascade.check_result(kv))[1] == "через выход интернет не открывается"
+    assert cascade.health("gre", kv, cascade.check_result(kv))[1] == "шлюз не получил внешний адрес от сервисов проверки"
     kv = cascade.parse_kv(OK.replace("CASCADE_TUN=UNKNOWN", "CASCADE_TUN="))
     assert cascade.health("gre", kv, cascade.check_result(kv)) == (False, "нет GRE-туннеля")
     assert cascade.health("vless", kv, cascade.check_result(kv)) == (True, "")
@@ -87,7 +87,7 @@ async def test_alert_only_after_grace_and_once(factory, sent) -> None:
     assert len(sent) == 1
     assert sent[0].splitlines()[:3] == [
         "🔴 vpn-b", "Каскад не работает больше 10 мин",
-        "через выход интернет не открывается, выход fi-exit",
+        "шлюз не получил внешний адрес от сервисов проверки, выход fi-exit",
     ]
     await cascadewatch.watch_once(factory, settings, now=NOW + timedelta(minutes=50),
                                   check=_check(OK.replace("CASCADE_CLIENT=198.51.100.3", "CASCADE_CLIENT=")))

@@ -6,9 +6,11 @@ import hashlib
 import inspect
 import json
 import secrets
+from collections.abc import Sequence
 from contextlib import asynccontextmanager, nullcontext
 from datetime import datetime, timedelta, timezone
 from functools import wraps
+from ipaddress import IPv4Network
 from typing import Annotated
 from uuid import UUID
 
@@ -253,13 +255,13 @@ def _reserved_ports(rows: list[Cascade], transport: str) -> set[int]:
             for p in [json.loads(c.params or "{}")] if p.get(key)}
 
 
-def _inner_reservation(rows: list[Cascade]) -> str:
+def _inner_reservation(rows: list[Cascade], occupied: Sequence[IPv4Network] = ()) -> str:
     used = {cascade_exit.network(c.id, json.loads(c.params or "{}"))[0] for c in rows}
     for n in range(1, 255):
-        candidate = f"10.99.{n}.0/30"
-        if candidate not in used:
-            return candidate
-    raise conflict("cascade_no_inner_subnet", "На выходе нет свободной внутренней подсети")
+        candidate = IPv4Network(f"10.99.{n}.0/30")
+        if str(candidate) not in used and not any(net.overlaps(candidate) for net in occupied):
+            return str(candidate)
+    raise conflict("cascade_no_inner_subnet", "Для каскада нет свободной внутренней подсети на входе и выходе")
 
 
 async def _addresses(entry_conn, entry: Server, exit_: Server) -> tuple[str, str]:
@@ -539,7 +541,13 @@ async def _create_cascade(body: CascadeCreate, request: Request, user: CurrentUs
             await _entry_creation_available(ec, body.transport, params, entry.id)
             entry_ip, exit_ip = await _pair_addresses(ec, xc, entry, exit_, body)
             siblings = await _siblings(session, exit_.id)
-            params.update(entry_ip=entry_ip, exit_ip=exit_ip, inner_net=_inner_reservation(siblings))
+            occupied = []
+            if body.transport != "vless":
+                entry_nets, exit_nets = await asyncio.gather(
+                    cascade_exit.occupied_networks(ec), cascade_exit.occupied_networks(xc),
+                )
+                occupied = entry_nets + exit_nets
+            params.update(entry_ip=entry_ip, exit_ip=exit_ip, inner_net=_inner_reservation(siblings, occupied))
             if body.address_family == "ipv6":
                 params["address_family"] = "ipv6"
             params["entry_country_override"] = body.entry_country or ""

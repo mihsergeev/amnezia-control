@@ -835,8 +835,10 @@ async def test_create_binds_new_awg_measurement_to_effective_endpoints_and_ports
     mock_pair(monkeypatch)
     async def preflight(*args): pass
     async def port(conn, requested, reserved=None): return requested
+    async def occupied(conn): return []
     monkeypatch.setattr(api, "_awg_preflight", preflight)
     monkeypatch.setattr(api, "_awg_port", port)
+    monkeypatch.setattr(api.cascade_exit, "occupied_networks", occupied)
     monkeypatch.setattr(api.cascade_awg, "new_params", lambda: {})
     monkeypatch.setattr(api.cascadejob, "spawn", lambda *args: None)
     result = measured("awg") | {"entry_ip": "203.0.113.10", "exit_ip": "203.0.113.20"}

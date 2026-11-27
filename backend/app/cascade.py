@@ -1200,11 +1200,17 @@ def check_result(kv: dict[str, str]) -> dict:
     fallback = {key: _ip_or_empty(kv.get(f"alt{key}", "")) for key in keys}
     # Compare observations from the same service. An alternate service can
     # recover from a provider outage or an entry-country routing rule.
-    if egress_confirmed(fallback) and (
+    fallback_confirms = egress_confirmed(fallback) and (
         not egress_confirmed(paths)
         or (not leaks(paths) and paths["client"] != paths["egress"]
             and fallback["client"] == fallback["egress"])
-    ):
+    )
+    # Keep a single service's observations even if the direct sample timed out.
+    # Showing a successful proxy sample does not confirm a distinct exit.
+    fallback_has_egress = not paths["egress"] and fallback["egress"] and (
+        fallback["client"] or not paths["client"]
+    )
+    if fallback_confirms or fallback_has_egress:
         paths = fallback
     return paths | {"ru": _ip_or_empty(kv.get("ru", ""))} | encryption_result(kv)
 
@@ -1234,9 +1240,11 @@ def health(transport: str, kv: dict[str, str], res: dict[str, str]) -> tuple[boo
     if kv.get("rule") == "no" or (transport == "gre" and kv.get("grerule") == "no"):
         return False, "пропало правило маршрутизации в шлюз"
     if not res.get("egress"):
-        return False, "через выход интернет не открывается"
+        return False, "шлюз не получил внешний адрес от сервисов проверки"
     if not res.get("client"):
         return False, "из сети клиентов не удалось получить внешний адрес"
+    if not res.get("direct"):
+        return False, "не удалось получить внешний адрес при прямом подключении"
     if not egress_confirmed(res):
         return False, "адрес выхода не удалось отличить от прямого подключения"
     if leaks(res):

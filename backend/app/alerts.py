@@ -41,6 +41,8 @@ EN = {
     "GRE-туннель выключен": "GRE tunnel is down",
     "клиенты идут мимо шлюза (tproxy выключен)": "clients bypass the gateway (tproxy is off)",
     "через выход интернет не открывается": "no internet through the exit",
+    "шлюз не получил внешний адрес от сервисов проверки": "the gateway did not get a public IP from the check services",
+    "не удалось получить внешний адрес при прямом подключении": "could not get a public IP from the direct connection",
     "адрес выхода не удалось отличить от прямого подключения": "could not distinguish the exit address from a direct connection",
     "из сети клиентов не удалось получить внешний адрес": "could not obtain a public address from the client network",
     "внешние адреса клиентов и шлюза различаются": "the clients and gateway have different public addresses",

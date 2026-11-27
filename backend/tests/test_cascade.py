@@ -498,11 +498,15 @@ async def test_cascade_entry_country_api_preserves_override_for_retry_and_check(
         checks.append(country)
         return ""
 
+    async def occupied(_conn):
+        return []
+
     monkeypatch.setattr(api, "_locked", locked)
     monkeypatch.setattr(api, "_addresses", addresses)
     monkeypatch.setattr(api, "_entry_creation_available", available)
     monkeypatch.setattr(api, "_external_preflight", available)
     monkeypatch.setattr(api, "_operation_available", available)
+    monkeypatch.setattr(cascade_exit, "occupied_networks", occupied)
     monkeypatch.setattr(cascadejob, "spawn", lambda _app, cid: spawned.append(cid))
     monkeypatch.setattr(cascade, "run_check", run_check)
     create = {"entry_id": entry_id, "exit_id": exit_id, "transport": "gre"}
@@ -985,6 +989,27 @@ def test_fallback_compares_only_addresses_from_the_same_service():
     assert not cascade.egress_confirmed(cascade.check_result(primary | fallback | {"altdirect": ""}))
 
 
+def test_check_preserves_fallback_gateway_and_client_after_direct_timeout():
+    kv = {"gw": "yes", "tproxy": "active", "awg": "yes", "direct": "203.0.113.10",
+          "altegress": "198.51.100.20", "altclient": "198.51.100.20"}
+    result = cascade.check_result(kv)
+    assert result["client"] == result["egress"] == "198.51.100.20"
+    assert result["direct"] == ""
+    assert cascade.health("awg", kv, result) == (
+        False, "не удалось получить внешний адрес при прямом подключении",
+    )
+    assert not cascade.leaks(result) and not cascade.egress_confirmed(result)
+
+
+def test_check_fallback_preserves_confirmed_client_bypass():
+    kv = {"gw": "yes", "tproxy": "active", "awg": "yes", "direct": "203.0.113.10",
+          "egress": "198.51.100.20", "client": "203.0.113.10",
+          "altegress": "198.51.100.21", "altclient": "198.51.100.21", "altdirect": "203.0.113.11"}
+    result = cascade.check_result(kv)
+    assert cascade.leaks(result)
+    assert cascade.health("awg", kv, result) == (False, "клиенты выходят в интернет мимо выхода")
+
+
 class _Conn:
     def __init__(self, outputs):
         self.outputs = list(outputs)
@@ -1075,17 +1100,18 @@ def _overlap_run(tmp_path, addresses, routes):
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="needs a POSIX shell for the fake ip")
-def test_subnet_conflict_names_the_network_and_a_leftover_cascade(tmp_path) -> None:
+def test_subnet_conflict_names_the_network_without_assuming_ownership(tmp_path) -> None:
     left = _overlap_run(tmp_path, [{"ifname": "acax1f", "addr_info": [{"local": "10.99.3.1", "prefixlen": 30}]}], [])
     assert left.returncode == 73
     assert "10.99.3.0/30 overlaps address 10.99.3.1/30 on acax1f" in left.stdout
-    assert "leftover of cascade 31" in left.stdout
-    assert "acontrol-cascade-exit-31-heal.timer" in left.stdout and "ip link delete acax1f" in left.stdout
-    assert "acontrol-cascade-exit-31*" not in left.stdout  # no glob that would also match cascade 310
+    assert "exit interface name for cascade 31" in left.stdout
+    assert "Check its owner and whether it is active." in left.stdout
+    assert "sudo" not in left.stdout
     (tmp_path / "bin").rename(tmp_path / "bin1")
     other = _overlap_run(tmp_path, [], [{"dst": "10.99.0.0/16", "dev": "eth1", "table": "main"}])
     assert other.returncode == 73
-    assert "overlaps route 10.99.0.0/16 (table main) on eth1" in other.stdout and "leftover" not in other.stdout
+    assert "overlaps route 10.99.0.0/16 (table main) on eth1" in other.stdout
+    assert "Check its owner" not in other.stdout
     (tmp_path / "bin").rename(tmp_path / "bin2")
     clean = _overlap_run(tmp_path, [{"ifname": "acax5", "addr_info": [{"local": "10.99.3.1", "prefixlen": 30}]}],
                          [{"dst": "default", "dev": "eth0"}])
