@@ -132,9 +132,16 @@ def _dockerfile(base_ref: str) -> str:
         'ENTRYPOINT ["/opt/amnezia/start.sh"]\n'
     )
 
-# идемпотентный подъём интерфейса + NAT внутри контейнера
-_V3_GO_IMAGE = "golang:1.25-alpine"
-_V3_TOOLS_IMAGE = "alpine:3.22"
+# Официальные multi-arch образы Docker. Индексы в Hub, ECR Public и зеркале Google совпадают.
+# public.ecr.aws — IPv4 endpoint. mirror.gcr.io — кэш Docker Hub.
+_V3_GO_DIGEST = "sha256:1ae0735f00daffa3aaf1363a5184c0d2dc55c78e3db4ec70241cdac97bf84b59"  # golang:1.25-alpine
+_V3_ALPINE_DIGEST = "sha256:49340b346798875b5592e5d420241f2f9cfba5f47e62ebb1446a1b34734e898f"  # alpine:3.22
+_V3_GO_IMAGE = f"docker.io/library/golang@{_V3_GO_DIGEST}"
+_V3_GO_IMAGE_IPV4 = f"public.ecr.aws/docker/library/golang@{_V3_GO_DIGEST}"
+_V3_GO_IMAGE_MIRROR = f"mirror.gcr.io/library/golang@{_V3_GO_DIGEST}"
+_V3_TOOLS_IMAGE = f"docker.io/library/alpine@{_V3_ALPINE_DIGEST}"
+_V3_TOOLS_IMAGE_IPV4 = f"public.ecr.aws/docker/library/alpine@{_V3_ALPINE_DIGEST}"
+_V3_TOOLS_IMAGE_MIRROR = f"mirror.gcr.io/library/alpine@{_V3_ALPINE_DIGEST}"
 _V3_GO_PKGS = "git make"
 _V3_TOOLS_PKGS = "git make build-base linux-headers bash"
 _V3_GO_MAKE = (
@@ -155,11 +162,13 @@ def _dockerfile_v3() -> str:
     закреплённым тегам (готового образа с бинарями 3.0 в природе пока нет).
     Многостадийная сборка — в финальном образе только бинари, без тулчейнов."""
     return (
-        f"FROM {_V3_GO_IMAGE} AS go-build\n"
+        f"ARG AWG_GO_IMAGE={_V3_GO_IMAGE}\n"
+        f"ARG AWG_ALPINE_IMAGE={_V3_TOOLS_IMAGE}\n"
+        "FROM ${AWG_GO_IMAGE} AS go-build\n"
         f"RUN apk add --no-cache {_V3_GO_PKGS}\n"
         f"RUN {_V3_GO_MAKE}\n"
         "\n"
-        f"FROM {_V3_TOOLS_IMAGE} AS tools-build\n"
+        "FROM ${AWG_ALPINE_IMAGE} AS tools-build\n"
         f"RUN apk add --no-cache {_V3_TOOLS_PKGS}\n"
         f"RUN {_V3_TOOLS_MAKE}\n"
         "\n"
@@ -174,12 +183,14 @@ def _dockerfile_v3() -> str:
 def _dockerfile_v3_prebuilt() -> str:
     """Тот же финальный образ, но над бинарями, уже лежащими в контексте сборки
     (bin/). Нужен для Docker до 20.10, см. _v3_build_lines."""
-    return _dockerfile_v3_final("bin/amneziawg-go", "bin/awg", "bin/awg-quick")
+    return f"ARG AWG_ALPINE_IMAGE={_V3_TOOLS_IMAGE}\n" + _dockerfile_v3_final(
+        "bin/amneziawg-go", "bin/awg", "bin/awg-quick",
+    )
 
 
 def _dockerfile_v3_final(go_src: str, awg_src: str, quick_src: str) -> str:
     return (
-        "FROM alpine:3.22\n"
+        "FROM ${AWG_ALPINE_IMAGE}\n"
         "RUN apk add --no-cache bash iptables iproute2 openresolv\n"
         f"COPY {go_src} /usr/bin/amneziawg-go\n"
         f"COPY {awg_src} /usr/bin/awg\n"
@@ -218,8 +229,11 @@ def _v3_build_lines(tail: int, *, probe: bool = False) -> list[str]:
     """
     check = "[ ${PIPESTATUS[0]} -eq 0 ] || { echo DEPLOY_ERROR; exit 1; }"
     seccomp_test = (
-        "apk add --no-cache make >/dev/null 2>&1; "
-        'printf "all:\\n\\t@true && true\\n" > /tmp/m; make -s -f /tmp/m'
+        "apk add --no-cache make >/dev/null 2>&1 || exit 70; "
+        'printf "all:\\n\\t@true && true\\n" > /tmp/m || exit 72; '
+        'if output=$(LC_ALL=C make -s -f /tmp/m 2>&1); then exit 0; fi; '
+        'case "$output" in *"/bin/sh: Operation not permitted"*) exit 71;; esac; '
+        "exit 72"
     )
     # bin/ хоста монтируется в /res: /out у тулзов занят под DESTDIR их make install
     docker_run = 'sudo docker run --rm'
@@ -227,6 +241,11 @@ def _v3_build_lines(tail: int, *, probe: bool = False) -> list[str]:
         docker_run += ' --name "$BUILDER" --label "$BUILDER_LABEL"'
     run = docker_run + ' --security-opt seccomp=unconfined -v "$BIN":/res'
     build = 'sudo docker build --force-rm' if probe else 'sudo docker build'
+    registries = "Docker Hub, Amazon ECR Public (IPv4) или mirror.gcr.io"
+    resolve_go = (
+        f'GO_IMAGE=$(v3_image {_V3_GO_IMAGE} {_V3_GO_IMAGE_IPV4} {_V3_GO_IMAGE_MIRROR}) '
+        f'|| v3_fail "не удалось загрузить Go для AWG 3.x через {registries}"'
+    )
     want = f"go={AWG3_GO_TAG} tools={AWG3_TOOLS_TAG}"
     go = (
         f"apk add --no-cache {_V3_GO_PKGS} >/dev/null && {_V3_GO_MAKE} "
@@ -245,8 +264,30 @@ def _v3_build_lines(tail: int, *, probe: bool = False) -> list[str]:
         '&& log "прежний образ сохранен как $IMG:prev"; fi',
     ]
     return preserve_previous + [
-        f"if {docker_run} {_V3_TOOLS_IMAGE} sh -c '{seccomp_test}' >/dev/null 2>&1; "
-        "then OLDSC=0; else OLDSC=1; fi",
+        'v3_fail() { printf "DEPLOY_ERROR: %s\\n" "$1" >&2; exit 1; }',
+        'v3_image() {',
+        '  if sudo docker image inspect "$1" >/dev/null 2>&1; then printf "%s\\n" "$1"',
+        '  elif sudo docker image inspect "$2" >/dev/null 2>&1; then printf "%s\\n" "$2"',
+        '  elif sudo docker image inspect "$3" >/dev/null 2>&1; then printf "%s\\n" "$3"',
+        '  elif sudo docker pull "$1" >/dev/null 2>&1; then printf "%s\\n" "$1"',
+        # На ECR слои приходят через CloudFront. При зависании CDN оставляем время для зеркала.
+        # --foreground сохраняет Docker pull в группе процессов подготовки probe.
+        '  elif timeout --foreground --kill-after=5s 45s sudo docker pull "$2" >/dev/null 2>&1; '
+        'then printf "%s\\n" "$2"',
+        '  elif sudo docker pull "$3" >/dev/null 2>&1; then printf "%s\\n" "$3"',
+        '  else return 1; fi',
+        '}',
+        f'ALPINE_IMAGE=$(v3_image {_V3_TOOLS_IMAGE} {_V3_TOOLS_IMAGE_IPV4} {_V3_TOOLS_IMAGE_MIRROR}) '
+        f'|| v3_fail "не удалось загрузить Alpine для AWG 3.x через {registries}"',
+        f'if {docker_run} "$ALPINE_IMAGE" sh -c \'{seccomp_test}\' >/dev/null 2>&1; then OLDSC=0',
+        'else',
+        '  case $? in',
+        '    70) v3_fail "apk не смог установить make для проверки seccomp в Alpine" ;;',
+        '    71) OLDSC=1 ;;',
+        '    72) v3_fail "не прошла проверка make в Alpine" ;;',
+        '    *) v3_fail "Docker не смог запустить проверку seccomp в Alpine" ;;',
+        '  esac',
+        'fi',
         'if [ "$OLDSC" = 1 ]; then',
         "  DV=$(sudo docker version --format '{{.Server.Version}}' 2>/dev/null || true)",
         '  log "Docker $DV: старый seccomp не дает собрать на Alpine, '
@@ -255,18 +296,22 @@ def _v3_build_lines(tail: int, *, probe: bool = False) -> list[str]:
         f'  if [ "$(cat "$BIN/.tags" 2>/dev/null)" != "{want}" ] '
         '|| [ ! -s "$BIN/amneziawg-go" ] || [ ! -s "$BIN/awg" ] '
         '|| [ ! -s "$BIN/awg-quick" ]; then',
+        f'    {resolve_go}',
         '    sudo rm -rf "$BIN"; sudo mkdir -p "$BIN"',
-        f"    {run} {_V3_GO_IMAGE} sh -c '{go}' 2>&1 | tail -{tail}; {check}",
-        f"    {run} {_V3_TOOLS_IMAGE} sh -c '{tools}' 2>&1 | tail -{tail}; {check}",
+        f'    {run} "$GO_IMAGE" sh -c \'{go}\' 2>&1 | tail -{tail}; {check}',
+        f'    {run} "$ALPINE_IMAGE" sh -c \'{tools}\' 2>&1 | tail -{tail}; {check}',
         f'    echo "{want}" | sudo tee "$BIN/.tags" >/dev/null',
         "  fi",
         f'  echo {_b64(_dockerfile_v3_prebuilt())} | base64 -d '
         '| sudo tee "$BUILD/Dockerfile.prebuilt" >/dev/null',
-        '  sudo docker build --force-rm -f "$BUILD/Dockerfile.prebuilt" -t $IMG "$BUILD" '
+        '  sudo docker build --force-rm --build-arg AWG_ALPINE_IMAGE="$ALPINE_IMAGE" '
+        '-f "$BUILD/Dockerfile.prebuilt" -t "$IMG" "$BUILD" '
         f"2>&1 | tail -{tail}; {check}",
         "else",
         # без --pull: тулчейн-образы кешируются, повторная сборка быстрая
-        f'  {build} -t $IMG "$BUILD" 2>&1 | tail -{tail}; {check}',
+        f'  {resolve_go}',
+        f'  {build} --build-arg AWG_GO_IMAGE="$GO_IMAGE" --build-arg AWG_ALPINE_IMAGE="$ALPINE_IMAGE" '
+        f'-t "$IMG" "$BUILD" 2>&1 | tail -{tail}; {check}',
         "fi",
     ]
 

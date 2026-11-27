@@ -75,6 +75,12 @@ def test_awg3_server_config_shape() -> None:
     assert re.search(r"^H1 = \d+-\d+$", conf, re.M)
 
 
+def _embedded_dockerfile(script: str) -> str:
+    match = re.search(r'echo ([A-Za-z0-9+/=]+) \| base64 -d \| sudo tee "\$BUILD/Dockerfile"', script)
+    assert match, "скрипт не записывает Dockerfile"
+    return base64.b64decode(match[1]).decode()
+
+
 def test_awg3_script_builds_from_source_not_stale_image() -> None:
     """Официальный образ amneziavpn/amneziawg-go даже с тегом 3.0.2 содержит
     старые бинари (tools v1.0.20210914, движок без ключей 3.0) — проверено на
@@ -83,9 +89,7 @@ def test_awg3_script_builds_from_source_not_stale_image() -> None:
     script = deploy.build_script_v3("deploy", 47300, cfg)
     assert deploy.AWG3_GO_TAG in script and deploy.AWG3_TOOLS_TAG in script
     # Dockerfile уезжает на ноду base64-блобом — проверяем его содержимое
-    blobs = re.findall(r"echo ([A-Za-z0-9+/=]{40,}) \| base64 -d", script)
-    decoded = [base64.b64decode(b).decode() for b in blobs]
-    dockerfile = next(d for d in decoded if d.startswith("FROM "))
+    dockerfile = _embedded_dockerfile(script)
     assert "amnezia-vpn/amneziawg-go" in dockerfile
     assert "amnezia-vpn/amneziawg-tools" in dockerfile
     assert deploy.AWG3_GO_TAG in dockerfile and deploy.AWG3_TOOLS_TAG in dockerfile
@@ -110,10 +114,7 @@ def test_awg3_image_provides_wg_aliases() -> None:
     3.0 падают с 502 (ловили на живой ноде)."""
     cfg = deploy.generate_server_config_v3(47300)
     script = deploy.build_script_v3("deploy", 47300, cfg)
-    blobs = re.findall(r"echo ([A-Za-z0-9+/=]{40,}) \| base64 -d", script)
-    dockerfile = next(
-        d for d in (base64.b64decode(b).decode() for b in blobs) if d.startswith("FROM ")
-    )
+    dockerfile = _embedded_dockerfile(script)
     assert "ln -sf /usr/bin/awg /usr/bin/wg" in dockerfile
     assert "ln -sf /usr/bin/awg-quick /usr/bin/wg-quick" in dockerfile
 
