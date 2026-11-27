@@ -4,6 +4,10 @@ All notable changes to Amnezia Control are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.84.86] - 2026-11-27
+
+- Install the latest stable panel release from Updates with a password and a current 2FA code after enabling the host updater. The updater verifies both signed images, checks compatibility, backs up the panel, and rolls back automatically if the new stack fails its checks (#67).
+
 ## [0.84.85] - 2026-11-27
 
 - Show the installed version and the latest stable release in the panel's Updates settings. The panel checks automatically after sign-in and offers a manual check and a link to the release notes (#67).

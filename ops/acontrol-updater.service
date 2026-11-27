@@ -1,0 +1,24 @@
+[Unit]
+Description=Amnezia Control panel updater
+After=docker.service network-online.target
+Wants=network-online.target
+Requires=docker.service
+
+[Service]
+Type=simple
+User=root
+UMask=0077
+RuntimeDirectory=acontrol-updater
+RuntimeDirectoryMode=0750
+RuntimeDirectoryPreserve=yes
+EnvironmentFile=/etc/acontrol-updater.conf
+ExecStart=/usr/bin/python3 -Es /lib65/scripts/acontrol-updater/acontrol_updater.py --project-dir ${ACONTROL_PROJECT_DIR} --project-name ${ACONTROL_PROJECT_NAME} --proxy ${ACONTROL_PROXY}
+Restart=on-failure
+RestartSec=5s
+PrivateTmp=yes
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+NoNewPrivileges=yes
+
+[Install]
+WantedBy=multi-user.target

@@ -317,7 +317,28 @@
   margin: 0;
 }
 
-.panel-updates-modal .modal-actions {
+.panel-updates-modal,
+.panel-install-confirm {
+  max-height: calc(100dvh - 2rem);
+  overflow: auto;
+  overflow-wrap: anywhere;
+}
+
+.panel-install-status {
+  display: grid;
+  gap: 0.35rem;
+  padding: 0.7rem 0.85rem;
+  border: 1px solid var(--border);
+  border-radius: 0.6rem;
+}
+
+.panel-update-statuses {
+  display: grid;
+  gap: 0.6rem;
+}
+
+.panel-updates-modal .modal-actions,
+.panel-install-confirm .modal-actions {
   align-items: center;
   flex-wrap: wrap;
 }

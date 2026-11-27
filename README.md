@@ -418,6 +418,8 @@ All backup actions are in the ⚙ menu in the header.
 
 ## Updating
 
+**From the web interface.** For installs using prebuilt images, [enable the host updater](docs/panel-updater.md). Confirm the update in Settings → Updates with your password and a current 2FA code. The updater verifies both images, takes a backup, and rolls back if the new stack fails its checks.
+
 Open **Settings > Updates** to see the installed version and the latest stable GitHub release. The backend checks automatically when the signed-in panel opens, caches the result and supports a manual check. The release link opens its notes on GitHub. To disable these requests to `api.github.com`, set `VPNPANEL_RELEASE_CHECK_ENABLED=false` in the backend service's environment.
 
 Grab a DB backup first (**⚙ > Download backup**) as a restore point, and read the [CHANGELOG](CHANGELOG.md) for the versions you skip.

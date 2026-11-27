@@ -11,6 +11,8 @@ dist/
 # Runtime data & secrets (DB, panel SSH key, backups) — MUST NOT be committed
 data/
 *.db
+.acontrol-update-store/
+compose.updater.images.yml
 
 # Local env; keep the template
 .env

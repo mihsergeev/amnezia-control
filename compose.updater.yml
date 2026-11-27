@@ -1,0 +1,6 @@
+# Optional mount for the host updater. The backend gets only the updater socket,
+# never the Docker socket, project directory, or backups.
+services:
+  backend:
+    volumes:
+      - /run/acontrol-updater:/run/acontrol-updater:ro

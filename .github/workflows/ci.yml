@@ -29,7 +29,7 @@ jobs:
       - name: Install
         run: pip install .[dev]
       - name: Tests
-        run: pytest -q
+        run: pytest -q tests ../ops/tests
       - name: Dependency audit (pip-audit)
         run: |
           pip install pip-audit

@@ -43,7 +43,7 @@ function App() {
     !getToken() && hasRememberedLogin() ? 'pending' : 'idle',
   )
   const [view, setView] = useState<View>('servers')
-  const [version, setVersion] = useState<string | null>(null)
+  const [configVersion, setConfigVersion] = useState<string | null>(null)
   // подтверждение паролем перед скачиванием бэкапа или восстановлением
   const [stepUp, setStepUp] = useState<
     { kind: 'backup' } | { kind: 'restore'; file: File } | null
@@ -187,12 +187,12 @@ function App() {
   // больше не показывает
   useEffect(() => {
     if (!authed) {
-      setVersion(null)
+      setConfigVersion(null)
       return
     }
     api<{ version?: string }>('/api/config')
-      .then((body) => setVersion(body?.version || null))
-      .catch(() => setVersion(null))
+      .then((body) => setConfigVersion(body?.version || null))
+      .catch(() => setConfigVersion(null))
   }, [authed])
 
   // Локальный выход (токен истек или отозван). Окна закрываем, иначе они
@@ -233,6 +233,7 @@ function App() {
   const logout = useCallback(() => setToken(null), [])
   const updates = usePanelUpdates(authed, logout)
   const updateAvailable = updates.info?.status === 'available' && !updates.info.stale && !updates.failed
+  const version = updates.info?.current_version?.replace(/^v/, '') || configVersion
 
   return (
     <main className="page">
@@ -399,6 +400,8 @@ function App() {
           checking={updates.checking}
           failed={updates.failed}
           onCheck={() => { void updates.check(true) }}
+          onRefreshRelease={updates.check}
+          onUnauthorized={logout}
           onClose={() => setUpdatesOpen(false)}
         />
       )}

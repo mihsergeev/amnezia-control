@@ -201,6 +201,45 @@ export function checkPanelUpdate(signal: AbortSignal): Promise<PanelUpdateInfo> 
   return api<PanelUpdateInfo>('/api/updates/check', { method: 'POST', signal })
 }
 
+const panelInstallationPhases = [
+  'idle', 'queued', 'verifying', 'backing_up', 'installing', 'checking',
+  'succeeded', 'rolling_back', 'rolled_back', 'failed', 'recovery_required',
+] as const
+
+export type PanelInstallation = {
+  enabled: boolean
+  phase: typeof panelInstallationPhases[number]
+  version: string | null
+  error: string | null
+}
+
+async function panelInstallationRequest(options: RequestInit): Promise<PanelInstallation> {
+  // The installer takes a fresh OTP in its JSON body. Do not use the shared OTP
+  // header or its interactive challenge, which can replay a rejected request.
+  const response = await authorizedFetch('/api/updates/installation', options)
+  const result = await responseData<PanelInstallation>(response)
+  if (!result || typeof result.enabled !== 'boolean' || !panelInstallationPhases.includes(result.phase)
+    || (result.version !== null && typeof result.version !== 'string')
+    || (result.error !== null && typeof result.error !== 'string')) {
+    throw new ApiError(translate('Некорректный ответ установщика.'), 502)
+  }
+  return result
+}
+
+export function getPanelInstallation(signal: AbortSignal): Promise<PanelInstallation> {
+  return panelInstallationRequest({ signal, cache: 'no-store' })
+}
+
+export function startPanelInstallation(version: string, password: string, otp: string, signal: AbortSignal): Promise<PanelInstallation> {
+  return panelInstallationRequest({
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...SESSION_HEADER },
+    body: JSON.stringify({ version, password, otp }),
+    signal,
+    redirect: 'error',
+  })
+}
+
 export function getDebugLogs(filters: DebugLogFilters, signal?: AbortSignal): Promise<DebugLogsResponse> {
   return api<DebugLogsResponse>(debugLogsPath(filters), { signal })
 }

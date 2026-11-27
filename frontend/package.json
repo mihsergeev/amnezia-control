@@ -15,7 +15,8 @@
     "test:workflow": "node tests/quickIssue.browser.mjs",
     "test:awg-settings": "node tests/awgSettings.browser.mjs",
     "test:ssh-access": "node tests/sshAccess.browser.mjs",
-    "test:remembered-login": "node tests/rememberedLogin.browser.mjs"
+    "test:remembered-login": "node tests/rememberedLogin.browser.mjs",
+    "test:panel-updates": "node tests/panelUpdates.browser.mjs"
   },
   "dependencies": {
     "qrcode": "^1.5.4",

@@ -103,6 +103,7 @@ const LABELS: Record<string, string> = {
   session_revoke: 'Сохранённый сеанс отозван',
   session_replay: 'Сеанс отозван после повторного использования токена',
   trusted_device_revoke: 'Доверие к устройству отозвано',
+  update_install_requested: 'Запрошена установка обновления панели',
   'branding.update': 'Изменено оформление панели',
   'branding.reset': 'Возвращено стандартное оформление',
   admin_password_reset: 'Аварийный сброс пароля из .env',
