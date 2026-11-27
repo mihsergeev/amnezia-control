@@ -48,7 +48,7 @@ export function HostKeyReplacement({ server, onClose, onReplaced }: Props) {
 
   return (
     <div className="modal-backdrop">
-      <form className="card modal" role="dialog" aria-modal="true" aria-labelledby="replace-host-key-title"
+      <form className="card modal host-key-modal" role="dialog" aria-modal="true" aria-labelledby="replace-host-key-title"
         onSubmit={(e) => { e.preventDefault(); if (preview && trusted.trim() === preview.fingerprint) setConfirm(true) }}>
         <h3 id="replace-host-key-title">{t('Заменить ключ SSH')}</h3>
         <p>{server.name} · <span className="mono">{server.host}:{server.ssh_port}</span></p>

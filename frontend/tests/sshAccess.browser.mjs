@@ -630,7 +630,9 @@ async function applyUnauthorized({ page, form, save, edit, calls, routes }) {
 
 async function replaceHostKey({ page, form, nodes, calls, routes }) {
   const path = 'POST /api/servers/1/host-key/replacement'
-  const fingerprints = { previous_fingerprints: ['SHA256:old'], fingerprint: 'SHA256:new' }
+  const old = 'SHA256:' + 'A'.repeat(43)
+  const fingerprintFromServer = 'SHA256:' + 'B'.repeat(43)
+  const fingerprints = { previous_fingerprints: [old], fingerprint: fingerprintFromServer }
   routes.set(`${path}/preview`, (_body, respond) => respond({ host: nodes[0].host, port: 22, ...fingerprints, key_type: 'ssh-ed25519' }))
   routes.set('GET /api/auth/2fa', (_body, respond) => respond({ enabled: true }))
   routes.set(path, (body, respond) => {
@@ -641,12 +643,14 @@ async function replaceHostKey({ page, form, nodes, calls, routes }) {
 
   await openMenu(page, 'Node 1')
   await page.getByRole('button', { name: 'Заменить ключ SSH', exact: true }).click()
-  await form.getByText('SHA256:old', { exact: true }).waitFor()
+  await form.getByText(old, { exact: true }).waitFor()
+  await page.setViewportSize({ width: 320, height: 600 })
+  assert.equal(await form.evaluate(element => element.scrollWidth > element.clientWidth), false)
   const fingerprint = form.getByLabel('Отпечаток из доверенной консоли')
   const next = form.getByRole('button', { name: 'Продолжить' })
-  await fingerprint.fill('SHA256:old')
+  await fingerprint.fill(old)
   assert.equal(await next.isEnabled(), false)
-  await fingerprint.fill('SHA256:new')
+  await fingerprint.fill(fingerprintFromServer)
   await next.click()
   await form.getByPlaceholder('Пароль', { exact: true }).fill('fixture-password')
   const otp = form.getByPlaceholder('Код 2FA из приложения')
