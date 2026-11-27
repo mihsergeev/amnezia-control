@@ -18,7 +18,7 @@ import shlex
 import asyncssh
 import httpx
 
-from app import awg
+from app import awg, registry_pull
 
 BASE_REPO = "amneziavpn/amneziawg-go"
 # Известный рабочий digest базового образа. НОВЫЕ развёртывания (deploy/adopt)
@@ -241,10 +241,12 @@ def _v3_build_lines(tail: int, *, probe: bool = False) -> list[str]:
         docker_run += ' --name "$BUILDER" --label "$BUILDER_LABEL"'
     run = docker_run + ' --security-opt seccomp=unconfined -v "$BIN":/res'
     build = 'sudo docker build --force-rm' if probe else 'sudo docker build'
+    # The probe worker has a separate overall deadline for downloading and building.
+    pull = "ac_image_pull 45 45 0" if probe else "ac_image_pull 120 45 40"
     registries = "Docker Hub, Amazon ECR Public (IPv4) или mirror.gcr.io"
     resolve_go = (
-        f'GO_IMAGE=$(v3_image {_V3_GO_IMAGE} {_V3_GO_IMAGE_IPV4} {_V3_GO_IMAGE_MIRROR}) '
-        f'|| v3_fail "не удалось загрузить Go для AWG 3.x через {registries}"'
+        f'GO_IMAGE=$({pull} {_V3_GO_IMAGE} {_V3_GO_IMAGE_IPV4} {_V3_GO_IMAGE_MIRROR}) '
+        f'|| v3_pull_fail "$?" "не удалось загрузить Go для AWG 3.x через {registries}"'
     )
     want = f"go={AWG3_GO_TAG} tools={AWG3_TOOLS_TAG}"
     go = (
@@ -264,21 +266,11 @@ def _v3_build_lines(tail: int, *, probe: bool = False) -> list[str]:
         '&& log "прежний образ сохранен как $IMG:prev"; fi',
     ]
     return preserve_previous + [
-        'v3_fail() { printf "DEPLOY_ERROR: %s\\n" "$1" >&2; exit 1; }',
-        'v3_image() {',
-        '  if sudo docker image inspect "$1" >/dev/null 2>&1; then printf "%s\\n" "$1"',
-        '  elif sudo docker image inspect "$2" >/dev/null 2>&1; then printf "%s\\n" "$2"',
-        '  elif sudo docker image inspect "$3" >/dev/null 2>&1; then printf "%s\\n" "$3"',
-        '  elif sudo docker pull "$1" >/dev/null 2>&1; then printf "%s\\n" "$1"',
-        # На ECR слои приходят через CloudFront. При зависании CDN оставляем время для зеркала.
-        # --foreground сохраняет Docker pull в группе процессов подготовки probe.
-        '  elif timeout --foreground --kill-after=5s 45s sudo docker pull "$2" >/dev/null 2>&1; '
-        'then printf "%s\\n" "$2"',
-        '  elif sudo docker pull "$3" >/dev/null 2>&1; then printf "%s\\n" "$3"',
-        '  else return 1; fi',
-        '}',
-        f'ALPINE_IMAGE=$(v3_image {_V3_TOOLS_IMAGE} {_V3_TOOLS_IMAGE_IPV4} {_V3_TOOLS_IMAGE_MIRROR}) '
-        f'|| v3_fail "не удалось загрузить Alpine для AWG 3.x через {registries}"',
+        'v3_fail() { printf "DEPLOY_ERROR: %s\\n" "$1" >&2; exit "${2:-1}"; }',
+        *registry_pull.SHELL.strip().splitlines(),
+        'v3_pull_fail() { v3_fail "$2. $(ac_image_pull_error "$1")" "$1"; }',
+        f'ALPINE_IMAGE=$({pull} {_V3_TOOLS_IMAGE} {_V3_TOOLS_IMAGE_IPV4} {_V3_TOOLS_IMAGE_MIRROR}) '
+        f'|| v3_pull_fail "$?" "не удалось загрузить Alpine для AWG 3.x через {registries}"',
         f'if {docker_run} "$ALPINE_IMAGE" sh -c \'{seccomp_test}\' >/dev/null 2>&1; then OLDSC=0',
         'else',
         '  case $? in',

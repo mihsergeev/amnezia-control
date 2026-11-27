@@ -405,6 +405,10 @@ async def test_opt_in_prepares_both_nodes_before_starting_measurement(monkeypatc
                                       "secs": 0.2, "digest_matches": True}, {"event": "cleanup", "ok": True}]),
     ])
     prepared = set()
+    mirror = "registry.example.test/images/xray"
+    mirror_ref = f"{mirror}@{cascade.XRAY_DIGEST}"
+    monkeypatch.setattr(cascade, "get_settings", lambda: SimpleNamespace(xray_registry_mirror=mirror))
+
     async def prepare(node, config):
         prepared.add(node)
         if transport == "awg":
@@ -413,10 +417,15 @@ async def test_opt_in_prepares_both_nodes_before_starting_measurement(monkeypatc
             assert cascade_probe.deploy.AWG3_GO_TAG in script and cascade_probe.deploy.AWG3_TOOLS_TAG in script
             assert "systemctl" not in script and "docker tag" not in script
         else:
-            assert config["images"][0] == cascade.XRAY_IMAGE and config["build_script"] == ""
+            assert config["images"] == [cascade.XRAY_IMAGE, mirror_ref, "amnezia-xray"]
+            assert config["build_script"] == ""
+            pull = config["pull_script"].splitlines()[-1]
+            assert pull.endswith(f"{cascade.XRAY_IMAGE} {mirror_ref}")
         return 0
     async def start(node, config):
         assert prepared == set(nodes)
+        if transport == "vless":
+            assert config["images"][1] == mirror_ref
         return next(processes)
     async def port(*args): return 43123
     monkeypatch.setattr(cascade_probe, "_prepare", prepare)
@@ -427,8 +436,13 @@ async def test_opt_in_prepares_both_nodes_before_starting_measurement(monkeypatc
     assert result["status"] == "ok" and result["bytes"] == size
 
 
-@pytest.mark.parametrize("code,status,reason", [(2, "unavailable", "local_image_missing"),
-                                                (4, "failed", None), (5, "unavailable", None)])
+@pytest.mark.parametrize("code,status,reason", [
+    (2, "unavailable", "local_image_missing"),
+    (4, "failed", None),
+    (5, "unavailable", None),
+    (8, "unavailable", "local_image_missing"),
+    (13, "unavailable", "local_image_missing"),
+])
 async def test_failed_preparation_stops_before_measurement(monkeypatch, code, status, reason):
     async def prepare(node, config): return code if node == "exit" else 0
     async def start(*args): pytest.fail("measurement must not start after failed image preparation")
@@ -439,6 +453,7 @@ async def test_failed_preparation_stops_before_measurement(monkeypatch, code, st
     result = await cascade_probe.run("exit", "entry", "203.0.113.10", "203.0.113.20", "awg",
                                      prepare_missing_image=True)
     assert result["status"] == status and result["reason"] == reason
+    assert result["error"] == cascade_probe.PREPARE_ERRORS[code][0]
     assert result["bytes"] == 0
 
 

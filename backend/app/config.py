@@ -1,16 +1,22 @@
+import re
 from functools import lru_cache
+from ipaddress import IPv6Address
+from urllib.parse import urlsplit
 
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 DEFAULT_TRUSTED_PROXIES = "127.0.0.0/8 ::1/128 172.16.0.0/12 fd00::/8"
+_REGISTRY_HOST = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?")
+_REPOSITORY_COMPONENT = re.compile(r"[a-z0-9]+(?:(?:[._]|__|-+)[a-z0-9]+)*")
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_prefix="VPNPANEL_", env_file=".env")
+    model_config = SettingsConfigDict(env_prefix="VPNPANEL_", env_file=".env", hide_input_in_errors=True)
 
     app_name: str = "Amnezia Control"
-    version: str = "0.84.87"
+    version: str = "0.84.88"
     debug: bool = False
 
     # Swagger/OpenAPI на /api/docs. Включено: интеграции нужен читаемый контракт
@@ -28,6 +34,36 @@ class Settings(BaseSettings):
     # Внешний IP панели — подставляется в скрипт настройки нод (ufw/hosts.allow)
     panel_ip: str = ""
     ssh_connect_timeout: int = 10
+
+    # Optional registry repository with a verbatim copy of the pinned cascade Xray image.
+    xray_registry_mirror: str = ""
+
+    @field_validator("xray_registry_mirror")
+    @classmethod
+    def validate_xray_registry_mirror(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            return ""
+        error = ValueError("expected a registry and repository without a scheme, tag, digest or credentials")
+        authority, _, repository = value.partition("/")
+        if len(value) > 255 or not all(_REPOSITORY_COMPONENT.fullmatch(part) for part in repository.split("/")):
+            raise error
+        if not re.fullmatch(r"(?:[a-z0-9.-]+|\[[a-f0-9:]+\])(?::[0-9]+)?", authority):
+            raise error
+        if authority != "localhost" and "." not in authority and ":" not in authority:
+            raise error
+        try:
+            parsed = urlsplit("https://" + authority)
+            host, port = parsed.hostname, parsed.port
+            if port == 0 or not host:
+                raise error
+            if authority.startswith("["):
+                IPv6Address(host)
+            elif not all(_REGISTRY_HOST.fullmatch(label) for label in host.split(".")):
+                raise error
+        except ValueError:
+            raise error from None
+        return value
 
     # Дефолтный SSH-пользователь для новых серверов (предзаполняет форму)
     default_ssh_user: str = "acontrol"

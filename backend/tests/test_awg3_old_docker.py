@@ -40,12 +40,16 @@ record() { printf '%s\n' "$*" >> "$TEST_DIR/calls"; }
 local_image() { grep -Fxq -- "$1" "$TEST_DIR/images"; }
 
 timeout() {
-    record timeout "$@"
-    [ "$#" -eq 7 ] && [ "$1 $2 $3" = "--foreground --kill-after=5s 45s" ] \
-        && [ "$4 $5 $6" = "sudo docker pull" ] || return 98
+    [ "$1" = --foreground ] || return 98
+    if [ "$6" = pull ]; then record timeout "$@"; fi
     shift 3
-    TEST_ECR_DEADLINE=1 sudo "${@:2}"
+    case "$1" in
+        sudo|curl) TEST_ECR_DEADLINE=1 "$@" ;;
+        *) return 98 ;;
+    esac
 }
+
+curl() { printf 401; }
 
 apk() {
     record apk "$@"
@@ -67,6 +71,7 @@ docker() {
         inspect) record inspect-container "${@: -1}"; echo sha256:old-image ;;
         tag) record "$@" ;;
         pull)
+            [ "$2" != -q ] || set -- pull "$3"
             record "$@"
             if [ "${TEST_ECR_DEADLINE:-0}" = 1 ] && grep -Fxq -- "$2" <<< "$TEST_ECR_TIMED_OUT"; then
                 return 124
@@ -207,11 +212,11 @@ def test_ecr_timeout_uses_google_cache(run_build, context):
     mirror = deploy._V3_GO_IMAGE_MIRROR
     result, calls = run_build(context=context, down=(hub,), timed_out=(ecr,))
     assert result.returncode == 0, result.stderr.decode()
-    pulls = [line for line in calls if line.startswith(("pull ", "timeout "))]
+    pulls = [line for line in calls if line.startswith("pull ")]
     assert pulls == [
-        f"pull {deploy._V3_TOOLS_IMAGE}", f"pull {hub}",
-        f"timeout --foreground --kill-after=5s 45s sudo docker pull {ecr}", f"pull {ecr}", f"pull {mirror}",
+        f"pull {deploy._V3_TOOLS_IMAGE}", f"pull {hub}", f"pull {ecr}", f"pull {mirror}",
     ]
+    assert f"timeout --foreground --kill-after=3s 45s sudo docker pull -q {ecr}" in calls
     builds = [line for line in calls if line.startswith("build ")]
     assert len(builds) == 1 and f"--build-arg AWG_GO_IMAGE={mirror}" in builds[0]
     assert not any("seccomp=unconfined" in line for line in calls)
@@ -242,7 +247,8 @@ def test_all_registries_down_report_missing_image(run_build, context, missing):
     assert f"DEPLOY_ERROR: не удалось загрузить {missing}" in output
     assert "Docker Hub, Amazon ECR Public (IPv4) или mirror.gcr.io" in output
     pulls = [line.removeprefix("pull ") for line in calls if line.startswith("pull ")]
-    assert tuple(pulls[-3:]) == down
+    expected = down if context == "probe" else (*down, down[0])
+    assert tuple(pulls[-len(expected):]) == expected
     assert not any(line.startswith("build ") or "seccomp=unconfined" in line for line in calls)
     if missing == "Alpine":
         assert not any(line.startswith("run ") for line in calls)

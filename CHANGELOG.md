@@ -4,6 +4,11 @@ All notable changes to Amnezia Control are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.84.88] - 2026-11-28
+
+- Use cached pinned images, time-limited downloads, and retries for temporary errors when preparing images for cascades. Distinguish DNS, network, TLS, timeout, and digest failures and log separate IPv4 and IPv6 HTTPS checks.
+- Allow a configured registry mirror for the pinned cascade Xray image. The mirror must serve the exact same digest as GHCR (#77).
+
 ## [0.84.87] - 2026-11-27
 
 - Retry AWG 3.x base image downloads when Docker Hub is unavailable, using Docker's official IPv4 registry on Amazon ECR Public and then the Google Docker Hub cache if needed. Keep Go and Alpine pinned to the same digests and report registry failures separately from legacy Docker seccomp errors (#74).

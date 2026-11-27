@@ -1,6 +1,7 @@
 import shlex
 import shutil
 import subprocess
+from types import SimpleNamespace
 
 import pytest
 
@@ -33,7 +34,13 @@ docker() {
         *) return 99;;
       esac
       ;;
-    'pull -q') [ "$FAULT" != pull ];;
+    'image inspect') return 1;;
+    'pull -q')
+      if [ "$FAULT" = pull ] || { [ "$FAULT" = mirror ] && [[ "$3" == ghcr.io/* ]]; }; then
+        echo 'lookup registry: i/o timeout' >&2
+        return 1
+      fi
+      ;;
     'run --rm') [ "$FAULT" != invalid-config ];;
     'create --name')
       [ "$FAULT" != create ] || return 1
@@ -105,6 +112,12 @@ sudo() {
 }
 iptables() { :; }
 sleep() { :; }
+timeout() {
+  [ "$1" = --foreground ] && shift
+  [[ "$1" == --kill-after=* ]] && shift
+  shift
+  "$@"
+}
 curl() {
   case "$*" in
     *--socks5*) [ "$FAULT" != egress ] && echo 198.51.100.20;;
@@ -117,7 +130,7 @@ curl() {
 @pytest.mark.skipif(shutil.which("bash") is None, reason="Bash is required")
 @pytest.mark.parametrize("fault", ["pull", "invalid-config", "create", "start", "egress", "promote", "tproxy-rules", "heal",
                                     "interrupted", "first-tproxy", "first-tproxy-rules", "first-heal",
-                                    "first-interrupted", "none"])
+                                    "first-interrupted", "none", "mirror"])
 def test_gateway_reinstall_keeps_previous_container_config_and_rules(tmp_path, monkeypatch, fault):
     state = tmp_path / "state"
     state.mkdir()
@@ -162,6 +175,9 @@ def test_gateway_reinstall_keeps_previous_container_config_and_rules(tmp_path, m
 
     monkeypatch.setattr(cascade, "DIR", base.as_posix())
     monkeypatch.setattr(cascade, "_reality_encryption_command", lambda: "true")
+    mirror = "registry.example.test/images/xray"
+    monkeypatch.setattr(cascade, "get_settings",
+                        lambda: SimpleNamespace(xray_registry_mirror=mirror if fault == "mirror" else ""))
     params = cascade.new_vless_params() | {"port": 8443}
     script = cascade.build_entry_script("vless", "198.51.100.20", 7, params, "DE")
     injected = "create" if fault in ("interrupted", "first-interrupted") else fault.removeprefix("first-")
@@ -180,11 +196,17 @@ def test_gateway_reinstall_keeps_previous_container_config_and_rules(tmp_path, m
         assert calls.index("systemctl disable --now acontrol-cascade-tproxy.service") < calls.index("tproxy-down")
     output = result.stdout.decode(errors="replace")
     assert not (base / "gateway-transaction").exists(), (output, result.stderr.decode(errors="replace"), calls)
-    if fault == "none":
+    if fault in ("none", "mirror"):
         assert result.returncode == 0 and "DEPLOY_DONE" in output
         assert (state / "next.name").read_text().strip() == cascade.GATEWAY
         assert not (state / "old.name").exists()
         assert config.read_bytes() != b"original config"
+        if fault == "mirror":
+            expected = f"{mirror}@{cascade.XRAY_DIGEST}"
+            assert calls.index(f"docker pull -q {cascade.XRAY_IMAGE}") < calls.index(f"docker pull -q {expected}")
+            for operation in ("docker run --rm", "docker create"):
+                matching = [line for line in calls.splitlines() if line.startswith(operation)]
+                assert len(matching) == 1 and expected in matching[0]
     elif first:
         assert result.returncode != 0 and "DEPLOY_DONE" not in output
         assert not (state / "next.name").exists()
@@ -200,6 +222,9 @@ def test_gateway_reinstall_keeps_previous_container_config_and_rules(tmp_path, m
         assert config.read_bytes() == b"original config"
         if fault in ("pull", "invalid-config", "create"):
             assert "docker stop" not in calls
+        if fault == "pull":
+            assert "DEPLOY_ERROR: Ошибка DNS при загрузке образа Docker" in output
+            assert "lookup registry" not in output + result.stderr.decode(errors="replace")
         if fault == "interrupted":
             assert calls.index(f"docker start {OLD}") < calls.index("docker create")
 

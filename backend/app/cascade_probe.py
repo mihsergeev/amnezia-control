@@ -8,7 +8,7 @@ import shlex
 import uuid
 from collections.abc import Callable
 
-from app import cascade, cascade_awg, cascade_endpoints, deploy
+from app import cascade, cascade_awg, cascade_endpoints, deploy, registry_pull
 
 PAYLOAD_BYTES = 20 * 1024 * 1024
 LEASE_SECONDS = 100
@@ -404,7 +404,7 @@ if __name__=='__main__': main()
 PREPARE_WORKER = r'''
 import fcntl,json,os,select,shutil,signal,subprocess,sys,tempfile,time,uuid
 from pathlib import Path
-''' + IMAGE_SELECTION + r'''
+''' + IMAGE_SELECTION + f'\nPULL_ERROR_CODES = {tuple(registry_pull.PULL_ERRORS)}\n' + r'''
 
 class Stopped(Exception): pass
 
@@ -479,10 +479,12 @@ def locked_prepare(config):
                 build=tempfile.TemporaryDirectory(prefix='acontrol-probe-build-',dir='/run')
                 builder_used=True
                 env=dict(os.environ,BUILD=build.name,BUILDER=name,BUILDER_LABEL=label)
-                status=2 if command(['bash','-c',config['build_script']],False,env).returncode else 0
+                result=command(['bash','-c',config['build_script']],False,env)
             else:
                 progress('pulling_image')
-                status=2 if command(['docker','pull',config['images'][0]],False).returncode else 0
+                result=command(['bash','-c',config['pull_script']],False)
+            code=result.returncode
+            status=code if code==0 or code in PULL_ERROR_CODES else 2
     except Stopped:
         status=7
     except TimeoutError:
@@ -524,11 +526,13 @@ PREPARE_ERRORS = {
     4: ("Не подтверждена очистка временной подготовки образа", None),
     5: ("На сервере уже идет подготовка образа для проверки", None),
     6: ("Не удалось запустить подготовку образа для проверки", None),
+    **{code: (message, LOCAL_IMAGE_MISSING) for code, message in registry_pull.PULL_ERRORS.items()},
 }
 
 
 def _prepare_config(transport: str, images: list[str], xray_version: str) -> dict:
     script = ""
+    pull = ""
     if transport == "awg":
         script = "\n".join([
             "set -euo pipefail",
@@ -539,7 +543,10 @@ def _prepare_config(transport: str, images: list[str], xray_version: str) -> dic
             "printf '#!/bin/sh\\nexit 1\\n' > start.sh",
             *deploy._v3_build_lines(8, probe=True),
         ])
-    return {"images": images, "xray_version": xray_version, "build_script": script,
+    else:
+        refs = tuple(image for image in images if image != "amnezia-xray")
+        pull = registry_pull.SHELL + "\n" + cascade.xray_pull_command(refs)
+    return {"images": images, "xray_version": xray_version, "build_script": script, "pull_script": pull,
             "seconds": PREPARE_SECONDS}
 
 
@@ -720,7 +727,10 @@ async def run(exit_conn, entry_conn, entry_ip: str, exit_ip: str, transport: str
     run_id = uuid.uuid4().hex
     subnet = ipaddress.ip_network(f"198.18.{secrets.randbelow(256)}.{secrets.randbelow(64) * 4}/30")
     entry_inner, exit_inner = str(subnet[1]), str(subnet[2])
-    images = [cascade_awg.IMAGE, deploy.IMAGE_V3, AWG_PROBE_IMAGE] if transport == "awg" else [cascade.XRAY_IMAGE, "amnezia-xray"]
+    images = (
+        [cascade_awg.IMAGE, deploy.IMAGE_V3, AWG_PROBE_IMAGE]
+        if transport == "awg" else [*cascade.xray_image_refs(), "amnezia-xray"]
+    )
     xray_version = cascade.XRAY_VERSION
     base = {"tag": run_id, "transport": transport, "address_family": version, "token": secrets.token_hex(24),
             "total": PAYLOAD_BYTES, "lease": LEASE_SECONDS, "images": images, "network": str(subnet),

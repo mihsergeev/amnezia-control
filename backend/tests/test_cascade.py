@@ -3,6 +3,7 @@ import base64
 import json
 import os
 import shutil
+import shlex
 import socket
 import subprocess
 import sys
@@ -637,7 +638,7 @@ def test_entry_fetches_geo_through_bootstrap_gateway() -> None:
     assert f"127.0.0.1:{cascade.SOCKS_PORT}" in cascade._fill(cascade._GEO_SH)
 
 
-def _geo_run(tmp_path, gateway_up: bool) -> str:
+def _geo_run(tmp_path, gateway_up: bool, cached_image: str | None = None) -> str:
     import hashlib
 
     base = (tmp_path / "cas").as_posix()
@@ -657,13 +658,19 @@ def _geo_run(tmp_path, gateway_up: bool) -> str:
         f'cp "{src.as_posix()}/$(basename "$a")" "$out"\n',
         newline="\n",
     )
+    inspect_image = (
+        f'if [ "$1 $2" = "image inspect" ]; then test "$3" = {shlex.quote(cached_image)}; exit $?; fi\n'
+        if cached_image else ""
+    )
     (bin_ / "docker").write_text(
         "#!/bin/sh\n"
         f'echo "docker $*" >> {log}\n'
+        f"{inspect_image}"
         f'[ "$1" = ps ] && {"echo " + cascade.GATEWAY if gateway_up else "true"}\n'
         "exit 0\n",
         newline="\n",
     )
+    (bin_ / "sudo").write_text('#!/bin/sh\nexec "$@"\n', newline="\n")
     # the restarted gateway listens again
     (bin_ / "ss").write_text("#!/bin/sh\necho 'LISTEN 0 4096 127.0.0.1:12350'\n", newline="\n")
     (bin_ / "sleep").write_text("#!/bin/sh\nexit 0\n", newline="\n")
@@ -701,6 +708,19 @@ def test_geo_update_goes_through_gateway_and_skips_unchanged(tmp_path) -> None:
     third = _geo_run(tmp_path, gateway_up=False)
     assert "socks5" not in third
     assert any(line.endswith("/geoip.dat") and "socks5" not in line for line in third.splitlines())
+
+
+@pytest.mark.skipif(shutil.which("bash") is None, reason="Bash is required")
+def test_geo_update_tests_config_with_cached_pinned_mirror(tmp_path, monkeypatch):
+    mirror = "registry.example.test/images/xray"
+    ref = f"{mirror}@{cascade.XRAY_DIGEST}"
+    monkeypatch.setattr(cascade, "get_settings", lambda: SimpleNamespace(xray_registry_mirror=mirror))
+
+    calls = _geo_run(tmp_path, gateway_up=False, cached_image=ref).splitlines()
+    assert f"docker image inspect {cascade.XRAY_IMAGE}" in calls
+    assert f"docker image inspect {ref}" in calls
+    assert len([line for line in calls if line.startswith("docker run --rm") and ref in line]) == 1
+    assert not any(line.startswith("docker pull") for line in calls)
 
 
 def test_local_rules_follow_entry_country() -> None:

@@ -33,8 +33,9 @@ import asyncssh
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.x25519 import X25519PrivateKey
 
-from app import cascade_awg, cascade_exit, cascade_gateway, cascade_routes, ssh_host
+from app import cascade_awg, cascade_exit, cascade_gateway, cascade_routes, registry_pull, ssh_host
 from app.cascade_underlay import CASCADE_PROBE_COMMAND
+from app.config import get_settings
 
 # Оба конца каскада обновляются вместе; наш chrome-профиль поддерживает
 # X25519MLKEM768. UUID и ключи каскада при обновлении сохраняются.
@@ -43,6 +44,37 @@ from app.cascade_underlay import CASCADE_PROBE_COMMAND
 XRAY_VERSION = "26.10.31"
 XRAY_DIGEST = "sha256:ceabeac03a89d991d2a247361825c1d1d2e9c91cd5dc010f298c7dc0c2f325c9"
 XRAY_IMAGE = f"ghcr.io/xtls/xray-core:{XRAY_VERSION}@{XRAY_DIGEST}"
+XRAY_PULL_SECONDS = (55, 45, 35)
+
+
+def xray_image_refs() -> tuple[str, ...]:
+    mirror = get_settings().xray_registry_mirror
+    if not mirror or mirror == "ghcr.io/xtls/xray-core":
+        return (XRAY_IMAGE,)
+    return XRAY_IMAGE, f"{mirror}@{XRAY_DIGEST}"
+
+
+def xray_pull_command(refs: tuple[str, ...]) -> str:
+    primary, fallback, retry = XRAY_PULL_SECONDS
+    return f"ac_image_pull {primary} {fallback} {retry} {shlex.join(refs)}"
+
+
+def xray_install_image() -> str:
+    return (
+        f'XRAY_REF=$({xray_pull_command(xray_image_refs())}) '
+        '|| fail "$(ac_image_pull_error "$?")"'
+    )
+
+
+def xray_cached_image() -> str:
+    """Select a previously downloaded immutable image on a node."""
+    return (
+        registry_pull.CACHE_SHELL
+        + f'\nXRAY_REF=$(ac_image_cached {shlex.join(xray_image_refs())})'
+        ' || { echo "Pinned Xray image is not available locally" >&2; exit 1; }'
+    )
+
+
 DIR = "/opt/acontrol/cascade"
 EXIT_DIR = "/opt/acontrol/cascade-exit"
 GATEWAY = "acontrol-cascade"
@@ -565,9 +597,10 @@ if [ "$#" -eq 0 ] && docker ps --format "{{.Names}}" | grep -qx @GATEWAY@; then
 else
   # installation (config passed as an argument) or no gateway running: nothing
   # else holds the databases, test them with the config before use
+  @XRAY_CACHED@
   cp geoip.dat geosite.dat "$TMP/geo/"
   docker run --rm --user 0:0 -e GODEBUG=multipathtcp=0 -e XRAY_LOCATION_ASSET=/geo -v "$TMP/geo:/geo:ro" -v "$CONF:/cfg:ro" \
-    @IMAGE@ run -test -confdir /cfg >/dev/null
+    "$XRAY_REF" run -test -confdir /cfg >/dev/null
   install -m 644 geoip.dat geosite.dat "$DIR/"
 fi
 echo "geo updated: $(date -Is)"
@@ -605,13 +638,14 @@ _UNITS = {
 
 
 def _fill(text: str) -> str:
+    if "@XRAY_CACHED@" in text:
+        text = text.replace("@XRAY_CACHED@", xray_cached_image())
     return (
         text.replace("@DIR@", DIR)
         .replace("@DEFAULTS@", GRE_DEFAULTS)
         .replace("@PORT@", str(TPROXY_PORT))
         .replace("@MARK@", TPROXY_MARK)
         .replace("@TABLE@", str(TPROXY_TABLE))
-        .replace("@IMAGE@", XRAY_IMAGE)
         .replace("@GATEWAY@", GATEWAY)
         .replace("@SOCKS@", str(SOCKS_PORT))
         .replace("@REV@", SCRIPTS_REV)
@@ -710,6 +744,7 @@ def build_exit_script(transport: str, entry_ip: str, cascade_id: int, params: di
         lines += [
             'log "[1/3] docker"',
             _DOCKER,
+            registry_pull.SHELL,
             'log "[2/3] конфиг VLESS Reality"',
             "NAMES=$(sudo docker container ls -a --format '{{.Names}}') || fail 'exit containers'",
             f"if printf '%s\\n' \"$NAMES\" | grep -Fxq {EXIT_CONTAINER}; then",
@@ -719,15 +754,15 @@ def build_exit_script(transport: str, entry_ip: str, cascade_id: int, params: di
             f"  if [ \"$(sudo docker container inspect -f '{{{{.State.Running}}}}' {EXIT_CONTAINER})\" != true ]; then "
             f"sudo docker start {EXIT_CONTAINER} >/dev/null || fail 'exit start'; fi",
             "else",
+            "  " + xray_install_image(),
             f"sudo mkdir -p {EXIT_DIR} || fail mkdir",
             _put(f"{EXIT_DIR}/config.json", exit_vless_config(params), "600"),
-            f"sudo docker pull -q {XRAY_IMAGE} >/dev/null || fail 'docker pull'",
             f'log "[3/3] контейнер, порт {port}/tcp открыт только для {entry_ip}"',
             f"sudo docker run -d --name {EXIT_CONTAINER} --restart always --network host "
             "-e GODEBUG=multipathtcp=0 "
             "--user 0:0 --read-only --cap-drop ALL --cap-add NET_BIND_SERVICE "
             "--security-opt no-new-privileges:true --log-opt max-size=10m --log-opt max-file=3 "
-            f"-v {EXIT_DIR}:/usr/local/etc/xray:ro {XRAY_IMAGE} >/dev/null || fail 'docker run'",
+            f'-v {EXIT_DIR}:/usr/local/etc/xray:ro "$XRAY_REF" >/dev/null || fail \'docker run\'',
             "fi",
             "sleep 3",
             f"sudo docker ps --format '{{{{.Names}}}}' | grep -qx {EXIT_CONTAINER} "
@@ -915,7 +950,7 @@ def gateway_run(confdir: str, owner: str = "", *, prepare: bool = False, transac
         "--security-opt no-new-privileges:true --log-opt max-size=10m --log-opt max-file=3 "
         "-e XRAY_LOCATION_ASSET=/usr/local/share/xray "
         f"-v {confdir}:/usr/local/etc/xray:ro -v {DIR}/geo:/usr/local/share/xray:ro "
-        f"{XRAY_IMAGE}" + ("" if prepare else " >/dev/null || fail 'docker run'")
+        '"$XRAY_REF"' + ("" if prepare else " >/dev/null || fail 'docker run'")
     )
 
 
@@ -932,15 +967,18 @@ def build_entry_script(transport: str, exit_ip: str, cascade_id: int, params: di
                        country: str = "", geo_pin: str | None = None) -> str:
     net, ein, _xin = cascade_exit.network(cascade_id, params)
     lines = [_HEAD]
-    if cascade_exit.scoped(params):
+    scoped = cascade_exit.scoped(params)
+    if scoped:
         lines += [cascade_exit.entry_preflight(cascade_id, transport, params).replace("exit 73", "fail 'entry ownership'"),
-                  cascade_exit.network_preflight(cascade_id, transport, params, "entry").replace("exit 73", "fail 'cascade subnet overlaps an existing route'"),
-                  f"sudo install -d -m 700 {DIR}",
-                  _put(f"{DIR}/owner.json", json.dumps(cascade_exit._owner(cascade_id, transport, params)), "600")]
+                  cascade_exit.network_preflight(cascade_id, transport, params, "entry").replace("exit 73", "fail 'cascade subnet overlaps an existing route'")]
     owner = params.get("runtime_owner", "")
     lines += ['log "[1/5] docker"', _DOCKER,
               cascade_gateway.commands(DIR, GATEWAY, owner, _remove_tproxy(), tproxy_prepare=_prepare_tproxy_removal()),
-              "gateway_recover || fail 'previous gateway transaction'"]
+              "gateway_recover || fail 'previous gateway transaction'",
+              registry_pull.SHELL, xray_install_image()]
+    if scoped:
+        lines += [f"sudo install -d -m 700 {DIR}",
+                  _put(f"{DIR}/owner.json", json.dumps(cascade_exit._owner(cascade_id, transport, params)), "600")]
     if transport == "awg":
         lines += ['log "[2/5] зашифрованный канал AWG 3.1"']
         lines += cascade_awg.install("entry", exit_ip, cascade_id, params,
@@ -975,7 +1013,6 @@ def build_entry_script(transport: str, exit_ip: str, cascade_id: int, params: di
                        "[Unit]\nWants=acontrol-cascade-awg.service\nAfter=acontrol-cascade-awg.service\n")]
     lines += [
         "sudo systemctl daemon-reload || fail 'gateway daemon-reload'",
-        f"sudo docker pull -q {XRAY_IMAGE} >/dev/null || fail 'docker pull'",
         # Wait out an updater started before the transaction marker existed.
         "sudo systemctl stop acontrol-cascade-geo.service || fail 'stop geo update'",
         *([geo_pin_command(geo_pin) + " || fail 'geo pin'"] if geo_pin else []),
@@ -992,7 +1029,7 @@ def build_entry_script(transport: str, exit_ip: str, cascade_id: int, params: di
         'log "[4/5] шлюз каскада"',
         "sudo docker run --rm --network none --user 0:0 -e GODEBUG=multipathtcp=0 "
         "-e XRAY_LOCATION_ASSET=/geo -v \"$GW_TX/config:/cfg:ro\" "
-        f"-v {DIR}/geo:/geo:ro {XRAY_IMAGE} run -test -confdir /cfg >/dev/null || fail 'gateway config check'",
+        f'-v {DIR}/geo:/geo:ro "$XRAY_REF" run -test -confdir /cfg >/dev/null || fail \'gateway config check\'',
         f'GW_NEXT=$({gateway_run(f"{DIR}/config", owner, prepare=True, transaction=True)}) || fail "create new gateway"',
         "gateway_switch",
         "sleep 3",

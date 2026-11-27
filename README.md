@@ -118,6 +118,24 @@ route's source address. Missing or ambiguous addresses, unavailable IPv6 routes,
 and failed probes are reported without silently retrying over IPv4. Existing
 cascades keep their saved address family and endpoints during reinstallations.
 
+## Docker image downloads for cascades
+
+The installer and the wizard's **Prepare and check** action use cached pinned
+images first. Downloads and retries have time limits. If a download fails, the
+panel reports DNS, network, TLS, timeout or digest errors. The installation log
+also shows separate HTTPS checks from the node over IPv4 and IPv6. Docker
+confirms the download of the pinned image. The panel leaves the node's resolver
+and Docker daemon configuration intact.
+
+You can set `VPNPANEL_XRAY_REGISTRY_MIRROR` in the backend process environment.
+For a Compose deployment, set it under `services.backend.environment` in a
+Compose override. Use a repository reference such as
+`registry.example.test/cache/xray-core`. The panel appends its pinned digest.
+The registry must be reachable from the nodes and serve a copy of the same OCI
+index and layers. The upstream GHCR image remains the first download source.
+Keep the mirror available when using it to install cascades, and retain its
+cached image on the nodes for restart and recovery.
+
 ## Server country and cascade routing
 
 Leave **Server country** empty for automatic detection. The panel first looks up

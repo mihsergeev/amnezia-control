@@ -4,7 +4,7 @@ import ipaddress
 import json
 import shlex
 
-from app import cascade_awg, cascade_endpoints
+from app import cascade_awg, cascade_endpoints, registry_pull
 
 INNER_POOL = ipaddress.IPv4Network("10.99.0.0/16")
 
@@ -230,7 +230,8 @@ up() {
       if [ "$(docker container inspect -f '{{.State.Running}}' "$CONT")" != true ]; then docker start "$CONT" >/dev/null; fi
     else
       [ -z "$(ss -lntH "sport = :$PORT")" ] || exit 73
-      docker run -d --name "$CONT" --label "org.amnezia.control.owner=$OWNER" --label "org.amnezia.control.cascade=$CID" --restart always --network host -e GODEBUG=multipathtcp=0 --user 0:0 --read-only --cap-drop ALL --cap-add NET_BIND_SERVICE --security-opt no-new-privileges:true --log-opt max-size=10m --log-opt max-file=3 -v "$BASE/xray:/usr/local/etc/xray:ro" @XRAY@ >/dev/null
+      @XRAY_CACHED@
+      docker run -d --name "$CONT" --label "org.amnezia.control.owner=$OWNER" --label "org.amnezia.control.cascade=$CID" --restart always --network host -e GODEBUG=multipathtcp=0 --user 0:0 --read-only --cap-drop ALL --cap-add NET_BIND_SERVICE --security-opt no-new-privileges:true --log-opt max-size=10m --log-opt max-file=3 -v "$BASE/xray:/usr/local/etc/xray:ro" "$XRAY_REF" >/dev/null
     fi
   fi
   rules rule
@@ -252,9 +253,16 @@ def install(cid: int, transport: str, peer: str, params: dict) -> list[str]:
     owner = _owner(cid, transport, params)
     _net, entry, exit_ = network(cid, params)
     lines = [preflight(cid, transport, params).replace("exit 73", "fail 'exit ownership'"),
-             network_preflight(cid, transport, params, "exit").replace("exit 73", "fail 'cascade subnet overlaps an existing route'"),
-             f"sudo install -d -m 700 {p['base']}",
-             cascade._put(p["base"] + "/owner.json", json.dumps(owner), "600")]
+             network_preflight(cid, transport, params, "exit").replace("exit 73", "fail 'cascade subnet overlaps an existing route'")]
+    if transport == "vless":
+        lines += ['CREATE_XRAY=0', registry_pull.SHELL,
+                  "NAMES=$(sudo docker container ls -a --format '{{.Names}}') || fail 'exit containers'",
+                  f"if ! printf '%s\\n' \"$NAMES\" | grep -Fxq {p['container_xray']}; then",
+                  "  " + cascade.xray_install_image(),
+                  '  CREATE_XRAY=1',
+                  "fi"]
+    lines += [f"sudo install -d -m 700 {p['base']}",
+              cascade._put(p["base"] + "/owner.json", json.dumps(owner), "600")]
     if transport == "awg":
         lines += cascade_awg.install("exit", peer, cid, params, entry.split('/')[0],
                                      exit_.split('/')[0], scoped_exit=True)
@@ -264,7 +272,9 @@ def install(cid: int, transport: str, peer: str, params: dict) -> list[str]:
               "PEER": cascade_endpoints.address(peer), "INNER": exit_.split('/')[0],
               "PEER_INNER": entry.split('/')[0], "KEY": str(int(params.get("gre_key", 0))),
               "PORT": str(int(params.get("port", 0)))}
-    runtime = RUNTIME.replace("@BASE@", p["base"]).replace("@LOCK@", p["lock"]).replace("@XRAY@", cascade.XRAY_IMAGE)
+    runtime = RUNTIME.replace("@BASE@", p["base"]).replace("@LOCK@", p["lock"]).replace(
+        "@XRAY_CACHED@", cascade.xray_cached_image(),
+    )
     script = p["base"] + "/exit.sh"
     lines += ["EGRESS=$(ip -4 route show default | awk '/^default/ {print $5; exit}')",
               '[ -n "$EGRESS" ] || fail "exit egress"',
@@ -275,11 +285,9 @@ def install(cid: int, transport: str, peer: str, params: dict) -> list[str]:
               f"printf 'EGRESS=%q\\nLOCAL=%q\\n' \"$EGRESS\" \"$LOCAL\" | sudo tee -a {p['base']}/exit.env.next >/dev/null || fail 'exit environment'",
               f"sudo mv -f {p['base']}/exit.env.next {p['base']}/exit.env || fail 'exit environment'"]
     if transport == "vless":
-        lines += ["NAMES=$(sudo docker container ls -a --format '{{.Names}}') || fail 'exit containers'",
-                  f"if ! printf '%s\\n' \"$NAMES\" | grep -Fxq {p['container_xray']}; then",
+        lines += ['if [ "$CREATE_XRAY" -eq 1 ]; then',
                   f"  sudo install -d -m 700 {p['base']}/xray || fail 'exit config directory'",
                   "  " + cascade._put(p["base"] + "/xray/config.json", cascade.exit_vless_config(params), "600"),
-                  f"  sudo docker pull -q {cascade.XRAY_IMAGE} >/dev/null || fail 'docker pull'",
                   "fi"]
     unit = ("[Unit]\nDescription=Cascade exit\nAfter=network-online.target docker.service\nWants=network-online.target\n"
             f"[Service]\nType=oneshot\nRemainAfterExit=yes\nExecStart={script} up\n[Install]\nWantedBy=multi-user.target\n")
@@ -303,7 +311,9 @@ def remove(cid: int, transport: str, params: dict) -> str:
 
     p = paths(cid)
     script = p["base"] + "/exit.sh"
-    runtime = RUNTIME.replace("@BASE@", p["base"]).replace("@LOCK@", p["lock"]).replace("@XRAY@", cascade.XRAY_IMAGE)
+    runtime = RUNTIME.replace("@BASE@", p["base"]).replace("@LOCK@", p["lock"]).replace(
+        "@XRAY_CACHED@", cascade.xray_cached_image(),
+    )
     return guard + cascade.stop_units(p["timer"], p["heal"], p["unit"]) + f'''
 if sudo test -L {p['base']}/exit.env || sudo test -L {script}; then exit 73; fi
 if sudo test -f {p['base']}/exit.env; then

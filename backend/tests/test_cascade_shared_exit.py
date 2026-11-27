@@ -61,6 +61,27 @@ def test_shared_exit_resources_and_cleanup_are_per_pair(transport):
             assert result.returncode == 0, result.stderr
 
 
+def test_vless_exits_fetch_pinned_images_before_writing_configuration(monkeypatch):
+    mirror = "registry.example.test/images/xray"
+    ref = f"{mirror}@{cascade.XRAY_DIGEST}"
+    monkeypatch.setattr(cascade, "get_settings", lambda: SimpleNamespace(xray_registry_mirror=mirror))
+    scoped = params("vless")
+    legacy = {k: v for k, v in scoped.items() if k != "runtime_layout"}
+    pull = f"{cascade.XRAY_IMAGE} {ref})"
+    legacy_script = cascade.build_exit_script("vless", legacy["entry_ip"], 7, legacy)
+    assert legacy_script.index(pull) < legacy_script.index(f"sudo mkdir -p {cascade.EXIT_DIR}")
+    assert '"$XRAY_REF" >/dev/null' in legacy_script
+
+    scoped_script = cascade.build_exit_script("vless", scoped["entry_ip"], 7, scoped)
+    assert scoped_script.index(pull) < scoped_script.index(f"sudo install -d -m 700 {cascade_exit.paths(7)['base']}")
+    scripts = [base64.b64decode(blob).decode()
+               for blob in re.findall(r"echo ([A-Za-z0-9+/=]+) \| base64 -d", scoped_script)]
+    runtime, = [data for data in scripts if data.startswith("#!/bin/bash")]
+    assert f"ac_image_cached {cascade.XRAY_IMAGE} {ref})" in runtime
+    assert '"$XRAY_REF" >/dev/null' in runtime
+    assert "docker pull" not in runtime
+
+
 def test_legacy_layout_does_not_migrate_or_remove_scoped_siblings():
     assert cascade_exit.network(255, {}) == cascade.inner_net(255)
     legacy = cascade.build_remove_exit("gre", 7)
