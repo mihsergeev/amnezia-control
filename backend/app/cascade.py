@@ -67,11 +67,11 @@ def xray_install_image() -> str:
 
 
 def xray_cached_image() -> str:
-    """Select a previously downloaded immutable image on a node."""
+    """Prefer a local pinned image while preserving the daemon's cold-start pull."""
     return (
         registry_pull.CACHE_SHELL
         + f'\nXRAY_REF=$(ac_image_cached {shlex.join(xray_image_refs())})'
-        ' || { echo "Pinned Xray image is not available locally" >&2; exit 1; }'
+        + f' || XRAY_REF={shlex.quote(XRAY_IMAGE)}'
     )
 
 

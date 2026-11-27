@@ -660,7 +660,7 @@ def _geo_run(tmp_path, gateway_up: bool, cached_image: str | None = None) -> str
     )
     inspect_image = (
         f'if [ "$1 $2" = "image inspect" ]; then test "$3" = {shlex.quote(cached_image)}; exit $?; fi\n'
-        if cached_image else ""
+        if cached_image is not None else ""
     )
     (bin_ / "docker").write_text(
         "#!/bin/sh\n"
@@ -711,15 +711,17 @@ def test_geo_update_goes_through_gateway_and_skips_unchanged(tmp_path) -> None:
 
 
 @pytest.mark.skipif(shutil.which("bash") is None, reason="Bash is required")
-def test_geo_update_tests_config_with_cached_pinned_mirror(tmp_path, monkeypatch):
+@pytest.mark.parametrize("mirror_cached", [True, False])
+def test_geo_update_tests_config_with_pinned_xray(tmp_path, monkeypatch, mirror_cached):
     mirror = "registry.example.test/images/xray"
     ref = f"{mirror}@{cascade.XRAY_DIGEST}"
     monkeypatch.setattr(cascade, "get_settings", lambda: SimpleNamespace(xray_registry_mirror=mirror))
 
-    calls = _geo_run(tmp_path, gateway_up=False, cached_image=ref).splitlines()
+    calls = _geo_run(tmp_path, gateway_up=False, cached_image=ref if mirror_cached else "").splitlines()
     assert f"docker image inspect {cascade.XRAY_IMAGE}" in calls
     assert f"docker image inspect {ref}" in calls
-    assert len([line for line in calls if line.startswith("docker run --rm") and ref in line]) == 1
+    expected = ref if mirror_cached else cascade.XRAY_IMAGE
+    assert len([line for line in calls if line.startswith("docker run --rm") and expected in line]) == 1
     assert not any(line.startswith("docker pull") for line in calls)
 
 

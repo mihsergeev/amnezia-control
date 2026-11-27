@@ -77,7 +77,7 @@ def test_vless_exits_fetch_pinned_images_before_writing_configuration(monkeypatc
     scripts = [base64.b64decode(blob).decode()
                for blob in re.findall(r"echo ([A-Za-z0-9+/=]+) \| base64 -d", scoped_script)]
     runtime, = [data for data in scripts if data.startswith("#!/bin/bash")]
-    assert f"ac_image_cached {cascade.XRAY_IMAGE} {ref})" in runtime
+    assert f"ac_image_cached {cascade.XRAY_IMAGE} {ref}) || XRAY_REF={cascade.XRAY_IMAGE}" in runtime
     assert '"$XRAY_REF" >/dev/null' in runtime
     assert "docker pull" not in runtime
 
