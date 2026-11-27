@@ -281,6 +281,7 @@ async function bootstrapUnauthorized({ page, form, save, name, nodes, calls, rou
     nodes.push({ ...node(3), ...body })
     return respond(nodes[2], 201)
   })
+  routes.set('POST /api/servers/3/host-key', (_body, respond) => respond({ known: true }))
   routes.set('POST /api/servers/3/bootstrap', (_body, respond) => respond({ detail: 'Synthetic bootstrap session expired' }, 401))
   await page.getByRole('button', { name: '+ Добавить сервер', exact: true }).click()
   await name.fill('New node')
@@ -291,7 +292,8 @@ async function bootstrapUnauthorized({ page, form, save, name, nodes, calls, rou
   await form.waitFor({ state: 'hidden' })
   assert.equal(calls.filter(call => call.key === 'GET /api/servers').length, 1)
   assert.equal(calls.filter(call => call.key === 'POST /api/servers').length, 1)
-  assert.deepEqual(calls.find(call => call.key === 'POST /api/servers/3/bootstrap').body, { password: 'fixture-password', become_password: null })
+  assert.deepEqual(calls.find(call => call.key === 'POST /api/servers/3/bootstrap').body,
+    { password: 'fixture-password', become_password: null, host_key_fingerprint: null })
 }
 
 async function manualOnboarding({ page, form, save, name, nodes, calls, routes }) {
@@ -374,8 +376,9 @@ async function passwordOnboarding({ page, form, save, name, nodes, calls, routes
     nodes.push({ ...node(3), ...body, last_check_ok: null })
     return respond(nodes[2], 201)
   })
+  routes.set('POST /api/servers/3/host-key', (_body, respond) => respond({ known: true }))
   routes.set('POST /api/servers/3/bootstrap', (body, respond) => {
-    assert.deepEqual(body, { password: 'fixture-password', become_password: 'fixture-sudo' })
+    assert.deepEqual(body, { password: 'fixture-password', become_password: 'fixture-sudo', host_key_fingerprint: null })
     if (fail) return respond({ detail: 'Synthetic SSH authentication failure' }, 400)
     nodes[2].last_check_ok = true
     return respond(nodes[2])
@@ -415,7 +418,7 @@ async function passwordOnboarding({ page, form, save, name, nodes, calls, routes
     await page.getByText('Сервер «Added by password» настроен и подключён.', { exact: true }).waitFor()
   }
   assert.deepEqual(calls.filter(call => call.key.startsWith('POST ')).map(call => call.key),
-    ['POST /api/servers', 'POST /api/servers/3/bootstrap'])
+    ['POST /api/servers', 'POST /api/servers/3/host-key', 'POST /api/servers/3/bootstrap'])
   assert.equal(calls.filter(call => call.key === 'GET /api/servers/3/setup-script').length, fail ? 1 : 0)
   await page.getByRole('button', { name: '+ Добавить сервер', exact: true }).click()
   assert.equal(await form.getByLabel(/^SSH-пароль пользователя/).inputValue(), '')
@@ -625,6 +628,39 @@ async function applyUnauthorized({ page, form, save, edit, calls, routes }) {
   assert.equal(calls.filter(call => call.key === 'PATCH /api/servers/1').length, 0)
 }
 
+async function replaceHostKey({ page, form, nodes, calls, routes }) {
+  const path = 'POST /api/servers/1/host-key/replacement'
+  const fingerprints = { previous_fingerprints: ['SHA256:old'], fingerprint: 'SHA256:new' }
+  routes.set(`${path}/preview`, (_body, respond) => respond({ host: nodes[0].host, port: 22, ...fingerprints, key_type: 'ssh-ed25519' }))
+  routes.set('GET /api/auth/2fa', (_body, respond) => respond({ enabled: true }))
+  routes.set(path, (body, respond) => {
+    assert.deepEqual(body, { host: nodes[0].host, port: 22, ...fingerprints, password: 'fixture-password' })
+    return respond(undefined, 204)
+  })
+  routes.set('POST /api/servers/1/check', (_body, respond) => respond(nodes[0]))
+
+  await openMenu(page, 'Node 1')
+  await page.getByRole('button', { name: 'Заменить ключ SSH', exact: true }).click()
+  await form.getByText('SHA256:old', { exact: true }).waitFor()
+  const fingerprint = form.getByLabel('Отпечаток из доверенной консоли')
+  const next = form.getByRole('button', { name: 'Продолжить' })
+  await fingerprint.fill('SHA256:old')
+  assert.equal(await next.isEnabled(), false)
+  await fingerprint.fill('SHA256:new')
+  await next.click()
+  await form.getByPlaceholder('Пароль', { exact: true }).fill('fixture-password')
+  const otp = form.getByPlaceholder('Код 2FA из приложения')
+  await otp.waitFor()
+  assert.equal(await next.isEnabled(), false)
+  await otp.fill('123456')
+  const confirmed = page.waitForRequest(request => `${request.method()} ${new URL(request.url()).pathname}` === path)
+  await next.click()
+  assert.equal((await confirmed).headers()['x-confirm-otp'], '123456')
+  await form.waitFor({ state: 'hidden' })
+  await page.getByText('Ключ SSH заменен', { exact: true }).waitFor()
+  assert.equal(calls.filter(call => call.key === path).length, 1)
+}
+
 try {
   const scenarios = [
     manualOnboarding, passwordOnboarding, passwordOnboardingFailure, bootstrapUnauthorized,
@@ -636,7 +672,7 @@ try {
   }))
   const failures = checks.flatMap((result, index) => result.status === 'rejected' ? [`${scenarios[index].name}: ${result.reason}`] : [])
   assert.deepEqual(failures, [])
-  for (const check of [applyFailureRecovery, applyUnauthorized]) {
+  for (const check of [applyFailureRecovery, applyUnauthorized, replaceHostKey]) {
     await editorWorkflow(check)
     console.log(`PASS ${check.name}`)
   }

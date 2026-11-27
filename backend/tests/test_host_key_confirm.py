@@ -162,6 +162,63 @@ async def test_host_key_endpoint_reports_fingerprint_and_refuses_changed_key(cli
     assert response.status_code == 409 and "подмена" in response.json()["detail"]
 
 
+async def test_replace_host_key_after_reinstall(client, auth_headers):
+    from app.config import get_settings
+
+    _Server.seen = []
+    _Server.connections = []
+    host = "127.0.0.1"
+    key_path = key_paths(get_settings().data_dir)[0]
+    previous_key = asyncssh.generate_private_key("ssh-ed25519")
+    previous, port = await _listen(previous_key)
+    try:
+        conn = await sshops._tofu_connect(host, port, "root", key_path, password="fixture-password")
+        conn.close()
+        await conn.wait_closed()
+    finally:
+        await _stop(previous)
+    _Server.seen = []
+
+    kh = sshops._kh_path(key_path)
+    neighbor, original = "[neighbor.example]:2222", kh.read_text()
+    # A shared line must still trust the neighbor after the target is rotated.
+    kh.write_text(original.replace(" ", f",{neighbor} ", 1), encoding="utf-8")
+    original = kh.read_bytes()
+    response = await client.post("/api/servers", json={"host": host, "name": "fixture-node", "ssh_port": port},
+                                 headers=auth_headers)
+    assert response.status_code == 201, response.text
+    sid = response.json()["id"]
+    path = f"/api/servers/{sid}/host-key/replacement"
+    new_key = asyncssh.generate_private_key("ecdsa-sha2-nistp256")
+    replacement, _ = await _listen(new_key, port)
+    try:
+        response = await client.post(f"{path}/preview", headers=auth_headers)
+        assert response.status_code == 200, response.text
+        preview = response.json()
+        assert preview["previous_fingerprints"] == [sshops.fingerprint(previous_key)]
+        assert preview["fingerprint"] == sshops.fingerprint(new_key)
+        assert _Server.seen == [] and kh.read_bytes() == original
+        body = {k: v for k, v in preview.items() if k != "key_type"} | {"password": "testpass"}
+        for change, status_code in (({"password": "incorrect"}, 403),
+                                    ({"fingerprint": sshops.fingerprint(previous_key)}, 409),
+                                    ({"previous_fingerprints": [sshops.fingerprint(new_key)]}, 409),
+                                    ({"host": "other.example"}, 409)):
+            response = await client.post(path, json=body | change, headers=auth_headers)
+            assert response.status_code == status_code, response.text
+            assert kh.read_bytes() == original
+        response = await client.post(path, json=body, headers=auth_headers)
+        assert response.status_code == 204, response.text
+        assert _Server.seen == []
+        assert neighbor in kh.read_text()
+        assert [sshops.fingerprint(key) for key in sshops._known_keys(kh, "neighbor.example", 2222)] == preview["previous_fingerprints"]
+        pinned_key, known = await sshops.fetch_host_key(host, port, key_path)
+        assert known and sshops.fingerprint(pinned_key) == preview["fingerprint"]
+        response = await client.post(path, json=body, headers=auth_headers)
+        assert response.status_code == 409, response.text
+    finally:
+        await _stop(replacement)
+
+
 async def test_import_keeps_explicit_trust_on_first_use(client, auth_headers, monkeypatch):
     from app import server_ops
 

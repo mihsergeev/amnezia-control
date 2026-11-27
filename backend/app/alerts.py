@@ -49,8 +49,8 @@ EN = {
     "пропало правило маршрутизации в шлюз": "the routing rule into the gateway is gone",
     "клиенты выходят в интернет мимо выхода": "clients reach the internet bypassing the exit",
     "Сменился SSH-ключ сервера": "Server SSH host key changed",
-    "возможна подмена. Если сервер пересоздавали, удалите его строку из data/ssh/known_hosts":
-        "possible spoofing. If the server was rebuilt, remove its line from data/ssh/known_hosts",
+    "возможна подмена. Если сервер пересоздавали, откройте в его карточке «Заменить ключ SSH»":
+        "possible spoofing. If the server was rebuilt, open Replace SSH host key in the server card",
     "Мало места: диск занят на {pct}%": "Low disk space: {pct}% used",
     "Место на диске снова есть": "Disk space is fine again",
     "занято {pct}%": "{pct}% used",

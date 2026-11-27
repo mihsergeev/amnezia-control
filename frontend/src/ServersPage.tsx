@@ -30,10 +30,11 @@ import { ClientsModal } from './ClientsModal'
 import { RemoveProtocolModal } from './BulkActions'
 import { ImportModal } from './ImportModal'
 import { DeployModal } from './DeployModal'
+import { HostKeyReplacement } from './HostKeyReplacement'
 import { Menu, type MenuItem } from './Menu'
 import { ServerExportModal, ServerImportModal } from './ServerTransfer'
 import { SshAccessEditor } from './SshAccessEditor'
-import { accessChanged, accessPolicy, accessPolicyPayload, DEFAULT_ACCESS, type AccessPreview } from './sshAccess'
+import { accessChanged, accessPolicy, accessPolicyPayload, DEFAULT_ACCESS, keyFileType, type AccessPreview } from './sshAccess'
 import { copyText } from './clipboard'
 import { countryFlag, formatBytes, formatUptime } from './format'
 import { CascadeWizard } from './CascadeWizard'
@@ -87,12 +88,6 @@ type Props = {
 // fullaccess._canonical на бэкенде): amnezia-awg3 туда не попадает. Если на
 // ноде кроме него ничего нет, пункт меню бесполезен. Пока проверки нет
 // (список пуст) - показываем, решит бэкенд.
-// имя файла ключа хоста для ssh-keygen -lf: ssh-ed25519 -> ed25519, ecdsa-sha2-* -> ecdsa
-function keyFileType(keyType: string): string {
-  if (keyType.startsWith('ecdsa-')) return 'ecdsa'
-  return keyType.replace(/^ssh-/, '').replace(/^rsa-sha2-\d+$/, 'rsa') || 'ed25519'
-}
-
 function fullAccessSupported(containers: string[]): boolean {
   if (!containers.length) return true
   return containers.some(
@@ -692,6 +687,7 @@ export function ServersPage({ onUnauthorized }: Props) {
   const [casCheck, setCasCheck] = useState<Cascade | null>(null)
   const [egressCheck, setEgressCheck] = useState<Server | null>(null)
   const [siteCheckFor, setSiteCheckFor] = useState<Server | null>(null)
+  const [hostKeyReplacementFor, setHostKeyReplacementFor] = useState<Server | null>(null)
   const editingServer = servers.find(server => server.id === editingId)
 
   useEffect(() => {
@@ -1364,6 +1360,7 @@ export function ServersPage({ onUnauthorized }: Props) {
     }
     items.push({ label: t('Выгрузить в файл'), onClick: () => setExportFor(s) })
     items.push({ label: t('Изменить'), onClick: () => openEdit(s) })
+    items.push({ label: t('Заменить ключ SSH'), onClick: () => setHostKeyReplacementFor(s) })
     if (s.ssh_access_pending) items.push({
       label: t('Восстановить настройку SSH'),
       disabled: busy || formOpen,
@@ -2283,6 +2280,12 @@ export function ServersPage({ onUnauthorized }: Props) {
       )}
 
       {siteCheckFor && <SiteCheckModal server={servers.find((server) => server.id === siteCheckFor.id) || siteCheckFor} onClose={() => setSiteCheckFor(null)} onUnauthorized={onUnauthorized} />}
+      {hostKeyReplacementFor && <HostKeyReplacement server={hostKeyReplacementFor} onClose={() => setHostKeyReplacementFor(null)}
+        onReplaced={() => {
+          setHostKeyReplacementFor(null)
+          setNotice(t('Ключ SSH заменен'))
+          void check(hostKeyReplacementFor)
+        }} />}
       {egressCheck && (
         <EgressCheckModal
           server={egressCheck}

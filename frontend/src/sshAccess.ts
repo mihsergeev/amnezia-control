@@ -13,3 +13,9 @@ export function accessChanged(before: AccessPolicy, after: AccessPolicy) {
   return JSON.stringify(accessPolicyPayload(before)) !== JSON.stringify(accessPolicyPayload(after))
 }
 export type AccessPreview = { token: string; sources: string[]; unrestricted: boolean; firewall: string; actions: string[]; jump_user: string | null }
+
+// Имя файла открытого host key в стандартной конфигурации OpenSSH.
+export function keyFileType(keyType: string): string {
+  if (keyType.startsWith('ecdsa-')) return 'ecdsa'
+  return keyType.replace(/^ssh-/, '').replace(/^rsa-sha2-\d+$/, 'rsa') || 'ed25519'
+}

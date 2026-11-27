@@ -4,6 +4,10 @@ All notable changes to Amnezia Control are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.84.82] - 2026-11-27
+
+- Replace a rebuilt server's pinned SSH host key from its card after verifying the new fingerprint through a trusted console and confirming the action with the panel password and configured 2FA (#66).
+
 ## [0.84.81] - 2026-11-27
 
 - When creating an AWG or GRE cascade, skip internal subnets already in use on either node. The conflict message identifies the interface and subnet and asks the operator to verify ownership (#47).

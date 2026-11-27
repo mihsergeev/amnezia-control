@@ -16,6 +16,8 @@ from app.schemas import (
     DeleteServerResult,
     EgressCheckOut,
     HostKeyOut,
+    HostKeyReplacementOut,
+    HostKeyReplacementRequest,
     ReorderRequest,
     ServerCreate,
     ServerOut,
@@ -500,10 +502,60 @@ async def server_host_key(server_id: int, _: CurrentUser, session: SessionDep) -
                                                  settings.ssh_connect_timeout, **sshops.route_options(server))
     except sshops.HostKeyChangedError as exc:
         raise HTTPException(status.HTTP_409_CONFLICT, "Ключ сервера не совпадает с закрепленным в панели — возможна подмена. "
-                            "Если сервер пересоздан, удалите его строку из data/ssh/known_hosts.") from exc
+                            "Если сервер пересоздан, откройте в его карточке «Заменить ключ SSH».") from exc
     except (OSError, asyncssh.Error, TimeoutError, ValueError, RuntimeError) as exc:
         raise HTTPException(status.HTTP_502_BAD_GATEWAY, f"Не удалось получить ключ сервера: {exc or type(exc).__name__}") from exc
     return HostKeyOut(known=known, fingerprint=sshops.fingerprint(key), key_type=key.get_algorithm())
+
+
+async def _probe_host_key_replacement(server: Server):
+    settings = get_settings()
+    key_path, _ = key_paths(settings.data_dir)
+    try:
+        previous, key = await sshops.probe_host_key_replacement(
+            server.host, server.ssh_port, key_path, settings.ssh_connect_timeout, **sshops.route_options(server),
+        )
+    except sshops.HostKeyReplacementError as exc:
+        raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
+    except sshops.HostKeyChangedError as exc:
+        raise HTTPException(status.HTTP_409_CONFLICT, "Проверьте закрепленный ключ промежуточной ноды SSH") from exc
+    except (OSError, asyncssh.Error, TimeoutError, ValueError, RuntimeError) as exc:
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, f"Не удалось получить ключ сервера: {exc or type(exc).__name__}") from exc
+    return key_path, previous, key
+
+
+@router.post("/{server_id}/host-key/replacement/preview", response_model=HostKeyReplacementOut)
+@bulk_issue_state.guard()
+@ssh_access.serialized
+async def preview_host_key_replacement(server_id: int, _: CurrentUser, session: SessionDep) -> HostKeyReplacementOut:
+    server = await _get_or_404(server_id, session)
+    await ssh_access.require_idle(session, server.id)
+    _, previous, key = await _probe_host_key_replacement(server)
+    return HostKeyReplacementOut(host=server.host, port=server.ssh_port, previous_fingerprints=previous,
+                                 fingerprint=sshops.fingerprint(key), key_type=key.get_algorithm())
+
+
+@router.post("/{server_id}/host-key/replacement", status_code=status.HTTP_204_NO_CONTENT)
+@bulk_issue_state.guard()
+@ssh_access.serialized
+async def apply_host_key_replacement(server_id: int, body: HostKeyReplacementRequest, user: CurrentUser,
+                                     session: SessionDep, request: Request) -> None:
+    server = await _get_or_404(server_id, session)
+    await ssh_access.require_idle(session, server.id)
+    if (server.host, server.ssh_port) != (body.host, body.port):
+        raise HTTPException(status.HTTP_409_CONFLICT, "Адрес SSH изменился. Снова запросите отпечаток")
+    await stepup.verify(user, body.password, request, body.otp)
+    key_path, previous, key = await _probe_host_key_replacement(server)
+    if set(previous) != set(body.previous_fingerprints) or not sshops.same_fingerprint(body.fingerprint, key):
+        raise HTTPException(status.HTTP_409_CONFLICT, "Отпечаток ключа не совпадает. Сверьте его заново")
+    try:
+        sshops.replace_host_key(server.host, server.ssh_port, key_path, previous, key)
+    except sshops.HostKeyReplacementError as exc:
+        raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
+    except (OSError, asyncssh.Error, ValueError) as exc:
+        raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, "Не удалось сохранить ключ SSH") from exc
+    await audit.record(session, user.username, "host_key_replaced", server.name,
+                       f"{server.host}:{server.ssh_port} {', '.join(previous)} → {sshops.fingerprint(key)}")
 
 
 @router.post("/{server_id}/ssh-access/preview")

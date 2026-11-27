@@ -228,6 +228,21 @@ class HostKeyOut(BaseModel):
     key_type: str
 
 
+class HostKeyReplacementOut(BaseModel):
+    host: str
+    port: int
+    previous_fingerprints: list[str]
+    fingerprint: str
+    key_type: str
+
+
+class HostKeyReplacementRequest(StepUpRequest):
+    host: str = Field(min_length=1, max_length=255)
+    port: int = Field(ge=1, le=65535)
+    previous_fingerprints: list[Annotated[str, Field(min_length=1, max_length=128)]] = Field(min_length=1, max_length=32)
+    fingerprint: str = Field(min_length=1, max_length=128)
+
+
 class ConfigOut(BaseModel):
     default_ssh_user: str
     panel_ip: str

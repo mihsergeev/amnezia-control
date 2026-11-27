@@ -108,6 +108,7 @@ const LABELS: Record<string, string> = {
   login_lockout: 'Блокировка входа (брутфорс)',
   password_change: 'Смена пароля',
   host_key_changed: 'Host-ключ ноды изменился',
+  host_key_replaced: 'Ключ SSH заменен',
   '2fa_enable': 'Включена 2FA',
   '2fa_disable': 'Отключена 2FA',
   apikey_create: 'Создан API-ключ',

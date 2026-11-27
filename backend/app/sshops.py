@@ -3,6 +3,7 @@ import ipaddress
 import os
 import re
 import socket
+import tempfile
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -491,7 +492,7 @@ def _known_keys(kh: Path, host: str, port: int) -> list:
     if not _host_known(kh, host, port):
         return []
     try:
-        return list(asyncssh.read_known_hosts(str(kh)).match(host, host, port)[0])
+        return list(asyncssh.read_known_hosts(str(kh)).match(host, "", None if port == 22 else port)[0])
     except (OSError, ValueError, asyncssh.Error):
         return []
 
@@ -542,6 +543,13 @@ async def fetch_host_key(host: str, port: int, key_path: Path, timeout: int = 10
     # в новых OpenSSH выключен. Новому хосту - сначала ed25519: его отпечаток
     # человеку проще всего сверить.
     algs = list(dict.fromkeys(a.decode() for k in known for a in k.sig_algorithms)) if known else PREFERRED_HOST_KEY_ALGS
+    key = await _probe_host_key(host, port, key_path, timeout, algs, jump)
+    if known and not any(k.public_data == key.public_data for k in known):
+        raise HostKeyChangedError(f"{host}:{port}")
+    return key, bool(known)
+
+
+async def _probe_host_key(host, port, key_path, timeout, algs, jump):
     options = {"server_host_key_algs": algs}
     async with asyncio.timeout(timeout * 2):
         async with _jump_tunnel(key_path, jump, timeout) as parent:
@@ -549,9 +557,56 @@ async def fetch_host_key(host: str, port: int, key_path: Path, timeout: int = 10
                                                      config=None, **options)
     if key is None:
         raise OSError("сервер не показал ключ SSH")
-    if known and not any(k.public_data == key.public_data for k in known):
-        raise HostKeyChangedError(f"{host}:{port}")
-    return key, bool(known)
+    return key
+
+
+class HostKeyReplacementError(Exception):
+    pass
+
+
+async def probe_host_key_replacement(host, port, key_path, timeout, *, jump=None):
+    known = _known_keys(_kh_path(key_path), host, port)
+    if not known:
+        raise HostKeyReplacementError("Для этого адреса нет закрепленного ключа SSH")
+    algs = list(dict.fromkeys([a.decode() for key in known for a in key.sig_algorithms] + PREFERRED_HOST_KEY_ALGS))
+    key = await _probe_host_key(host, port, key_path, timeout, algs, jump)
+    if any(old.public_data == key.public_data for old in known):
+        raise HostKeyReplacementError("Ключ SSH сервера совпадает с закрепленным")
+    return sorted({fingerprint(old) for old in known}), key
+
+
+def replace_host_key(host, port, key_path, previous, key):
+    """Replace explicit pins for one endpoint and preserve other known_hosts rules."""
+    kh = _kh_path(key_path)
+    token = _kh_host(host, port)
+    original = kh.read_text(encoding="utf-8")
+    match_port = None if port == 22 else port
+    known = asyncssh.import_known_hosts(original).match(host, "", match_port)[0]
+    if not known or {fingerprint(old) for old in known} != set(previous):
+        raise HostKeyReplacementError("Закрепленный ключ изменился. Снова запросите отпечаток")
+    lines = []
+    for line in original.splitlines():
+        fields = line.split(maxsplit=1)
+        aliases = fields[0].split(",") if len(fields) == 2 else []
+        if token not in aliases:
+            lines.append(line)
+        elif remaining := [alias for alias in aliases if alias != token]:
+            lines.append(f"{','.join(remaining)} {fields[1]}")
+    lines.append(f"{token} {key.export_public_key().decode().strip()}")
+    updated = "\n".join(lines) + "\n"
+    keys, ca_keys, revoked, *_ = asyncssh.import_known_hosts(updated).match(host, "", match_port)
+    if ({candidate.public_data for candidate in keys} != {key.public_data}
+            or ca_keys or any(candidate.public_data == key.public_data for candidate in revoked)):
+        raise HostKeyReplacementError("Правила known_hosts для этого адреса требуют ручной проверки")
+    fd, temporary = tempfile.mkstemp(prefix=".known_hosts-", dir=kh.parent)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as stream:
+            stream.write(updated)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, kh)
+    finally:
+        Path(temporary).unlink(missing_ok=True)
 
 
 @asynccontextmanager
@@ -594,7 +649,7 @@ async def check_server(
         return CheckResult(
             ok=False,
             error="Host-ключ ноды ИЗМЕНИЛСЯ — возможна подмена/MITM. Если вы "
-            "пересоздавали ноду, удалите её строку из data/ssh/known_hosts.",
+            "пересоздавали ноду, откройте в ее карточке «Заменить ключ SSH».",
         )
     except JumpAccessError as exc:
         return CheckResult(ok=False, error=str(exc))
@@ -696,7 +751,7 @@ async def bootstrap_server(
         return BootstrapResult(
             ok=False,
             error="Host-ключ ноды ИЗМЕНИЛСЯ — возможна подмена/MITM. Если вы "
-            "пересоздавали ноду, удалите её строку из data/ssh/known_hosts.",
+            "пересоздавали ноду, откройте в ее карточке «Заменить ключ SSH».",
         )
     except JumpAccessError as exc:
         return BootstrapResult(ok=False, error=str(exc))
