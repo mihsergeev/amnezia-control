@@ -113,7 +113,7 @@ TAG = "cascade"  # каталог деплоя на нодах ($HOME/.acontrol/
 TRANSPORTS = ("vless", "gre", "awg")
 # ревизия скриптов входа: проверка видит старую и обновляет их на месте
 # (upgrade_entry), без переустановки каскада
-SCRIPTS_REV = "10"
+SCRIPTS_REV = "11"
 
 # проверка канала: сколько отправляем со входа на выход и сколько ждем
 PROBE_BYTES = 20 * 1024 * 1024
@@ -537,22 +537,58 @@ mkdir -p "$DIR"
 TMP=$(mktemp -d "$DIR/.update.XXXXXX")
 trap 'rm -rf "$TMP"' EXIT
 cd "$TMP"
-# direct downloads try IPv4 first: with a broken IPv6 route the release host
-# (which has AAAA records) could hang until the timeout; plain direct stays as
-# the last resort for IPv6-only entries
-VIA="direct4 direct"
+# Test the route with the real HTTPS transfer, including redirects to the CDN.
+# Skip a failed proxy for the rest of the update. Use explicit address families
+# so an unavailable IPv4 or IPv6 route cannot consume both direct attempts.
+VIA="IPv4 IPv6"
 if docker ps --format "{{.Names}}" | grep -qx @GATEWAY@; then
-  VIA="127.0.0.1:@SOCKS@ direct4 direct"
+  VIA="SOCKS5 $VIA"
 fi
+monotonic_seconds() {
+  read -r uptime _ < /proc/uptime
+  printf '%s\n' "${uptime%%.*}"
+}
+deadline=$(($(monotonic_seconds) + 360))
 fetch() {
+  asset=$1
   for via in $VIA; do
+    cap=150
+    connect=8
+    speed=65536
+    speed_time=15
+    retries=1
     case "$via" in
-      direct) opt="" ;;
-      direct4) opt="-4" ;;
-      *) opt="--socks5-hostname $via" ;;
+      SOCKS5)
+        set -- --noproxy '' --socks5-hostname 127.0.0.1:@SOCKS@
+        cap=60
+        connect=5
+        speed=524288
+        speed_time=8
+        retries=0
+        ;;
+      IPv4) set -- --noproxy '*' -4 ;;
+      IPv6) set -- --noproxy '*' -6 ;;
     esac
-    # shellcheck disable=SC2086
-    curl -fsSL --retry 1 -m "$1" $opt -o "$2" "$BASE/$2" && return 0
+    case "$asset" in *.sha256sum) cap=12 ;; esac
+    remaining=$((deadline - $(monotonic_seconds)))
+    if [ "$remaining" -le 0 ]; then
+      echo "geo download budget exhausted ($asset)" >&2
+      return 1
+    fi
+    [ "$remaining" -ge "$cap" ] || cap=$remaining
+    echo "geo downloading $asset via $via"
+    # curl resets --max-time on a retry. Bound the whole invocation as well.
+    if timeout -k 2s "${cap}s" curl -q -fsSL --proto '=https' --proto-redir '=https' --max-redirs 5 \
+      --connect-timeout "$connect" --speed-limit "$speed" --speed-time "$speed_time" \
+      --max-time "$cap" --retry "$retries" --retry-max-time 18 --retry-connrefused \
+      "$@" -o "$asset" "$BASE/$asset"; then
+      echo "geo downloaded $asset via $via"
+      return 0
+    else
+      status=$?
+      echo "geo $asset via $via failed (exit $status)" >&2
+    fi
+    [ "$via" != SOCKS5 ] || VIA="IPv4 IPv6"
   done
   return 1
 }
@@ -562,13 +598,13 @@ for f in geoip.dat geosite.dat; do
     if [ "$f" = geoip.dat ]; then SUM=$SUM_IP; else SUM=$SUM_SITE; fi
     echo "$SUM  $f" > "$f.sha256sum"
   else
-    fetch 60 "$f.sha256sum"
+    fetch "$f.sha256sum"
   fi
   if [ -s "$DIR/$f" ] && (cd "$DIR" && sha256sum -c "$TMP/$f.sha256sum" >/dev/null 2>&1); then
     cp "$DIR/$f" "$f"
     continue
   fi
-  fetch 900 "$f"
+  fetch "$f"
   sha256sum -c "$f.sha256sum" >/dev/null
   changed=1
 done

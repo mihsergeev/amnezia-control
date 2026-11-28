@@ -4,6 +4,11 @@ All notable changes to Amnezia Control are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.84.91] - 2026-11-28
+
+- Switch cascade GEO downloads from a stalled or slow SOCKS5 route to direct IPv4 and IPv6. Bound connection, transfer and retry times across GitHub redirects, and log which route was used (#81).
+- Keep both installed GEO databases if either download or SHA256 check fails. Update the downloader on existing managed cascades (#81).
+
 ## [0.84.90] - 2026-11-28
 
 - Keep an active AmneziaWG 3.1 interface during node boot to prevent a second connection drop. Update the legacy panel-managed boot unit in place without restarting the VPN.

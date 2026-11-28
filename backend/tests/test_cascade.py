@@ -634,11 +634,12 @@ def test_entry_fetches_geo_through_bootstrap_gateway() -> None:
     geo = script.index(f"sudo {cascade.DIR}/geo-update.sh")
     full = script.index(f"-v {cascade.DIR}/config:")
     assert boot < geo < full
-    assert "--socks5-hostname $via" in cascade._GEO_SH
+    assert "--socks5-hostname 127.0.0.1:@SOCKS@" in cascade._GEO_SH
     assert f"127.0.0.1:{cascade.SOCKS_PORT}" in cascade._fill(cascade._GEO_SH)
 
 
-def _geo_run(tmp_path, gateway_up: bool, cached_image: str | None = None) -> str:
+def _geo_run(tmp_path, gateway_up: bool, cached_image: str | None = None, *,
+             reject: tuple[str, ...] = (), reject_asset: str = "*", expect_failure: bool = False) -> str:
     import hashlib
 
     base = (tmp_path / "cas").as_posix()
@@ -654,7 +655,12 @@ def _geo_run(tmp_path, gateway_up: bool, cached_image: str | None = None) -> str
     (bin_ / "curl").write_text(
         "#!/bin/sh\n"
         f'echo "curl $*" >> {log}\n'
+        'route=SOCKS5\n'
+        'for a in "$@"; do case "$a" in -4) route=IPv4;; -6) route=IPv6;; esac; done\n'
         'out=""; prev=""; for a in "$@"; do [ "$prev" = -o ] && out=$a; prev=$a; done\n'
+        f'case {shlex.quote(" " + " ".join(reject) + " ")}:"$out" in\n'
+        f'  *" $route "*:{reject_asset}) printf partial > "$out"; exit 28;;\n'
+        'esac\n'
         f'cp "{src.as_posix()}/$(basename "$a")" "$out"\n',
         newline="\n",
     )
@@ -685,7 +691,7 @@ def _geo_run(tmp_path, gateway_up: bool, cached_image: str | None = None) -> str
     r = subprocess.run(
         [shutil.which("bash"), "-c", script], capture_output=True, text=True, timeout=60, env=env,
     )
-    assert r.returncode == 0, r.stderr
+    assert (r.returncode != 0) == expect_failure, r.stderr
     text = open(log).read()
     open(log, "w").close()
     return text
@@ -1159,8 +1165,28 @@ def test_subnet_conflict_names_the_network_without_assuming_ownership(tmp_path) 
     assert clean.returncode == 0 and clean.stdout == ""
 
 
-def test_geo_download_tries_ipv4_before_plain_direct() -> None:
-    script = cascade._fill(cascade._GEO_SH)
-    assert 'VIA="direct4 direct"' in script
-    assert f'VIA="127.0.0.1:{cascade.SOCKS_PORT} direct4 direct"' in script
-    assert 'direct4) opt="-4"' in script
+@pytest.mark.skipif(shutil.which("bash") is None, reason="Bash is required")
+def test_geo_download_skips_failed_socks_and_uses_explicit_ipv6_fallback(tmp_path) -> None:
+    log = _geo_run(tmp_path, gateway_up=True, reject=("SOCKS5", "IPv4"))
+    downloads = [line for line in log.splitlines() if line.startswith("curl ")]
+    assert len(downloads) == 9
+    assert "--socks5-hostname" in downloads[0] and "--speed-time 8" in downloads[0]
+    assert sum("--socks5-hostname" in line for line in downloads) == 1
+    for ipv4, ipv6 in zip(downloads[1::2], downloads[2::2], strict=True):
+        assert " -4 " in ipv4 and " -6 " in ipv6
+        assert ipv4.split()[-1] == ipv6.split()[-1]
+        assert "--retry 1 --retry-max-time 18" in ipv4
+
+
+@pytest.mark.skipif(shutil.which("bash") is None, reason="Bash is required")
+def test_geo_download_timeout_preserves_existing_databases(tmp_path) -> None:
+    geo = tmp_path / "cas" / "geo"
+    geo.mkdir(parents=True)
+    names = ("geoip.dat", "geosite.dat")
+    for name in names:
+        (geo / name).write_bytes(name.encode())
+    log = _geo_run(tmp_path, gateway_up=True, reject=("SOCKS5", "IPv4", "IPv6"),
+                   reject_asset="geosite.dat", expect_failure=True)
+    assert "docker restart" not in log
+    assert all((geo / name).read_bytes() == name.encode() for name in names)
+    assert not list(geo.glob(".update.*"))
