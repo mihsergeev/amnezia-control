@@ -21,6 +21,7 @@ export function LoginPage({ onLogin, logoSrc, logoSize, onRetryRestore }: Props)
   const [busy, setBusy] = useState(false)
   const [remember, setRemember] = useState(false)
   const [trustDevice, setTrustDevice] = useState(false)
+  const [showPassword, setShowPassword] = useState(false)
   const secure = canUseSessionCookies()
 
   async function submit(e: FormEvent) {
@@ -52,75 +53,91 @@ export function LoginPage({ onLogin, logoSrc, logoSize, onRetryRestore }: Props)
   return (
     <div className="login-wrap">
       <form className="card login-card" onSubmit={submit}>
-        <PanelLogo src={logoSrc} className="login-logo" alt="Amnezia Control" loginSize={logoSize} />
-        <h2>{t('Вход в панель')}</h2>
-        <label>
-          {t('Логин')}
+        <header className="login-heading">
+          <PanelLogo src={logoSrc} className="login-logo" alt="Amnezia Control" loginSize={logoSize} />
+          <h2>{t(needOtp ? 'Подтверждение входа' : 'Вход в панель')}</h2>
+        </header>
+        <div className="login-fields" hidden={needOtp}>
+          <label htmlFor="login-username">{t('Логин')}</label>
           <input
+            id="login-username"
+            name="username"
             value={username}
             onChange={(e) => setUsername(e.target.value)}
             autoComplete="username"
+            autoCapitalize="none"
+            spellCheck={false}
             disabled={needOtp}
             required
           />
-        </label>
-        <label>
-          {t('Пароль')}
-          <input
-            type="password"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            autoComplete="current-password"
-            disabled={needOtp}
-            required
-          />
-        </label>
+          <label htmlFor="login-password">{t('Пароль')}</label>
+          <div className="login-password">
+            <input
+              id="login-password"
+              name="password"
+              type={showPassword ? 'text' : 'password'}
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              autoComplete="current-password"
+              disabled={needOtp}
+              required
+            />
+            <button
+              type="button"
+              className="ghost"
+              aria-label={t(showPassword ? 'Скрыть пароль' : 'Показать пароль')}
+              aria-controls="login-password"
+              onClick={() => setShowPassword((shown) => !shown)}
+            >
+              {t(showPassword ? 'Скрыть' : 'Показать')}
+            </button>
+          </div>
+        </div>
         {needOtp && (
-          <label>
+          <label className="login-otp">
             {t('Код из приложения (2FA)')}
             <input
               value={otp}
               onChange={(e) => setOtp(e.target.value)}
               autoComplete="one-time-code"
               inputMode="numeric"
-              placeholder="123456"
               autoFocus
               required
             />
           </label>
         )}
-        {secure && needOtp && (
-          <div className="login-option">
-            <label>
-              <input
-                type="checkbox"
-                checked={trustDevice}
-                onChange={(e) => setTrustDevice(e.target.checked)}
-                aria-describedby="login-trust-hint"
-                disabled={busy}
-              />
-              {t('Доверять этому устройству')}
-            </label>
-            <small id="login-trust-hint" className="muted">
-              {t('В течение 30 дней для нового входа в этом браузере достаточно пароля. Используйте на личном устройстве.')}
-            </small>
-          </div>
-        )}
         {secure && (
-          <div className="login-option">
-            <label>
+          <div className="login-options">
+            <div className="login-option">
               <input
+                id="login-remember"
                 type="checkbox"
                 checked={remember}
                 onChange={(e) => setRemember(e.target.checked)}
                 aria-describedby="login-remember-hint"
                 disabled={busy}
               />
-              {t('Запомнить вход на этом устройстве')}
-            </label>
-            <small id="login-remember-hint" className="muted">
-              {t('Вход сохранится до 30 дней и завершится через 7 дней без продления. Используйте на личном устройстве.')}
-            </small>
+              <div>
+                <label htmlFor="login-remember">{t('Запомнить вход')}</label>
+                <small id="login-remember-hint">{t('До 30 дней, 7 дней без активности')}</small>
+              </div>
+            </div>
+            {needOtp && (
+              <div className="login-option">
+                <input
+                  id="login-trust"
+                  type="checkbox"
+                  checked={trustDevice}
+                  onChange={(e) => setTrustDevice(e.target.checked)}
+                  aria-describedby="login-trust-hint"
+                  disabled={busy}
+                />
+                <div>
+                  <label htmlFor="login-trust">{t('Доверять этому устройству')}</label>
+                  <small id="login-trust-hint">{t('Вход по паролю на 30 дней')}</small>
+                </div>
+              </div>
+            )}
           </div>
         )}
         {onRetryRestore && (
@@ -131,10 +148,21 @@ export function LoginPage({ onLogin, logoSrc, logoSize, onRetryRestore }: Props)
             </button>
           </div>
         )}
-        {error && <p className="form-error">{error}</p>}
-        <button type="submit" disabled={busy}>
+        {error && <p className="form-error" role="alert">{error}</p>}
+        <button type="submit" className="login-submit" disabled={busy}>
           {busy ? t('Проверка…') : t('Войти')}
         </button>
+        {needOtp && (
+          <button type="button" className="ghost login-back" disabled={busy} onClick={() => {
+            setNeedOtp(false)
+            setOtp('')
+            setTrustDevice(false)
+            setShowPassword(false)
+            setError(null)
+          }}>
+            {t('Назад')}
+          </button>
+        )}
       </form>
     </div>
   )

@@ -15,7 +15,7 @@ import { hasRememberedLogin, refreshSession, setToken, watchSessionEnd } from '.
 import { LoginPage } from './LoginPage'
 import { AboutModal, PROJECT_URL } from './AboutModal'
 import { DebugLogsModal } from './DebugLogsModal'
-import { PanelUpdatesModal } from './PanelUpdatesModal'
+import { PanelUpdatesPage } from './PanelUpdatesPage'
 import { PanelLogo } from './PanelLogo'
 import { ServersPage } from './ServersPage'
 import { Dashboard } from './Dashboard'
@@ -65,6 +65,7 @@ function App() {
       : 'dark',
   )
   const fileRef = useRef<HTMLInputElement>(null)
+  const headerActions = useRef<HTMLSpanElement>(null)
   const logoVersion = branding?.version
   const logoSrc = logoVersion ? logoUrl(logoVersion, theme) : logoVersion
   const headerTitle = branding && !branding.hide_header_title
@@ -234,9 +235,20 @@ function App() {
   const updates = usePanelUpdates(authed, logout)
   const updateAvailable = updates.info?.status === 'available' && !updates.info.stale && !updates.failed
   const version = updates.info?.current_version?.replace(/^v/, '') || configVersion
+  const activeView = updatesOpen ? null : view
+
+  function openView(next: View) {
+    setUpdatesOpen(false)
+    setView(next)
+  }
+
+  function closeUpdates() {
+    setUpdatesOpen(false)
+    headerActions.current?.querySelector<HTMLButtonElement>('button[aria-expanded]')?.focus()
+  }
 
   return (
-    <main className="page">
+    <main className={authed ? 'page' : 'page auth-page'}>
       <header className="header">
         {/* на экране входа лого уже есть в карточке — в шапке не дублируем */}
         {authed && (
@@ -248,38 +260,38 @@ function App() {
         {authed && (
           <nav className="topnav">
             <button
-              className={view === 'servers' ? 'navlink navlink-active' : 'navlink'}
-              onClick={() => setView('servers')}
+              className={activeView === 'servers' ? 'navlink navlink-active' : 'navlink'}
+              onClick={() => openView('servers')}
             >
               {t('Серверы')}
             </button>
             <button
-              className={view === 'overview' ? 'navlink navlink-active' : 'navlink'}
-              onClick={() => setView('overview')}
+              className={activeView === 'overview' ? 'navlink navlink-active' : 'navlink'}
+              onClick={() => openView('overview')}
             >
               {t('Обзор')}
             </button>
             <button
-              className={view === 'search' ? 'navlink navlink-active' : 'navlink'}
-              onClick={() => setView('search')}
+              className={activeView === 'search' ? 'navlink navlink-active' : 'navlink'}
+              onClick={() => openView('search')}
             >
               {t('Поиск')}
             </button>
             <button
-              className={view === 'audit' ? 'navlink navlink-active' : 'navlink'}
-              onClick={() => setView('audit')}
+              className={activeView === 'audit' ? 'navlink navlink-active' : 'navlink'}
+              onClick={() => openView('audit')}
             >
               {t('Журнал')}
             </button>
             <button
-              className={view === 'apikeys' ? 'navlink navlink-active' : 'navlink'}
-              onClick={() => setView('apikeys')}
+              className={activeView === 'apikeys' ? 'navlink navlink-active' : 'navlink'}
+              onClick={() => openView('apikeys')}
             >
               {t('API-ключи')}
             </button>
           </nav>
         )}
-        <span className="header-right">
+        <span className="header-right" ref={headerActions}>
           {version && (
             <a
               className="muted source-link"
@@ -353,17 +365,33 @@ function App() {
       </header>
 
       {authed ? (
-        view === 'overview' ? (
-          <Dashboard onUnauthorized={logout} />
-        ) : view === 'search' ? (
-          <ClientSearchPage onUnauthorized={logout} />
-        ) : view === 'audit' ? (
-          <AuditPage onUnauthorized={logout} />
-        ) : view === 'apikeys' ? (
-          <ApiKeysPage onUnauthorized={logout} />
-        ) : (
-          <ServersPage onUnauthorized={logout} />
-        )
+        <>
+          <div hidden={updatesOpen}>
+            {view === 'overview' ? (
+              <Dashboard onUnauthorized={logout} />
+            ) : view === 'search' ? (
+              <ClientSearchPage onUnauthorized={logout} />
+            ) : view === 'audit' ? (
+              <AuditPage onUnauthorized={logout} />
+            ) : view === 'apikeys' ? (
+              <ApiKeysPage onUnauthorized={logout} />
+            ) : (
+              <ServersPage onUnauthorized={logout} />
+            )}
+          </div>
+          {updatesOpen && (
+            <PanelUpdatesPage
+              info={updates.info}
+              version={version}
+              checking={updates.checking}
+              failed={updates.failed}
+              onCheck={() => { void updates.check(true) }}
+              onRefreshRelease={updates.check}
+              onUnauthorized={logout}
+              onBack={closeUpdates}
+            />
+          )}
+        </>
       ) : (
         restoration === 'pending' ? (
           <div className="login-wrap">
@@ -391,18 +419,6 @@ function App() {
           onChanged={setBranding}
           onClose={() => setAboutOpen(false)}
           onUnauthorized={logout}
-        />
-      )}
-      {updatesOpen && (
-        <PanelUpdatesModal
-          info={updates.info}
-          version={version}
-          checking={updates.checking}
-          failed={updates.failed}
-          onCheck={() => { void updates.check(true) }}
-          onRefreshRelease={updates.check}
-          onUnauthorized={logout}
-          onClose={() => setUpdatesOpen(false)}
         />
       )}
       {backupsOpen && (

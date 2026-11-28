@@ -4,6 +4,11 @@ All notable changes to Amnezia Control are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.84.92] - 2026-11-28
+
+- Simplify the sign-in screen, fix the remembered-sign-in checkbox, and present two-factor verification as a separate step.
+- Move updates to a dedicated page with clear version information, installation actions, and progress for signature verification, backup, installation, and health checks.
+
 ## [0.84.91] - 2026-11-28
 
 - Switch cascade GEO downloads from a stalled or slow SOCKS5 route to direct IPv4 and IPv6. Bound connection, transfer and retry times across GitHub redirects, and log which route was used (#81).

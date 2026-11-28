@@ -212,6 +212,13 @@ try {
     await signedOut(page)
     assert.equal(count(calls, 'refresh'), 0)
     assert.equal(await page.getByRole('checkbox').isChecked(), false)
+    const rememberBounds = await rememberOption(page).boundingBox()
+    assert.ok(rememberBounds.width >= 16 && rememberBounds.height >= 16)
+    assert.ok(await page.locator('.login-card').evaluate((el) => el.scrollWidth <= el.clientWidth))
+    await page.getByRole('button', { name: 'Показать пароль' }).click()
+    assert.equal(await page.getByLabel('Пароль', { exact: true }).getAttribute('type'), 'text')
+    await page.getByRole('button', { name: 'Скрыть пароль' }).click()
+    assert.equal(await page.getByLabel('Пароль', { exact: true }).getAttribute('type'), 'password')
     await signIn(page, { remember: true })
     assert.deepEqual(calls.filter(({ path }) => path.endsWith('/login')).map(({ body }) => ({
       remember: JSON.parse(body).remember, otp: JSON.parse(body).otp,

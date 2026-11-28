@@ -1,9 +1,8 @@
-import { useEffect, useId, useState } from 'react'
+import { useEffect, useId, useRef, useState } from 'react'
 import { PROJECT_URL } from './AboutModal'
 import { ApiError, type PanelInstallation, type PanelUpdateInfo } from './api'
 import { useI18n } from './i18n'
 import { StepUpModal } from './StepUpModal'
-import { useModalDismiss } from './useModalDismiss'
 import { isInstallationActive, usePanelInstallation } from './usePanelInstallation'
 
 const LABELS = {
@@ -51,6 +50,13 @@ const LABELS = {
   },
 }
 
+const INSTALL_STEPS = [
+  { phase: 'verifying', label: 'Подпись' },
+  { phase: 'backing_up', label: 'Бэкап' },
+  { phase: 'installing', label: 'Установка' },
+  { phase: 'checking', label: 'Проверка панели' },
+] as const
+
 function installationError(code: string | null) {
   if (code && Object.hasOwn(LABELS.error, code)) return LABELS.error[code as keyof typeof LABELS.error]
 }
@@ -59,7 +65,7 @@ function sameVersion(first: string | null | undefined, second: string | null | u
   return first && second && first.replace(/^v/, '') === second.replace(/^v/, '')
 }
 
-export function PanelUpdatesModal({ info, version, checking, failed, onCheck, onRefreshRelease, onUnauthorized, onClose }: {
+export function PanelUpdatesPage({ info, version, checking, failed, onCheck, onRefreshRelease, onUnauthorized, onBack }: {
   info: PanelUpdateInfo | null
   version: string | null
   checking: boolean
@@ -67,11 +73,11 @@ export function PanelUpdatesModal({ info, version, checking, failed, onCheck, on
   onCheck: () => void
   onRefreshRelease: () => void
   onUnauthorized: () => void
-  onClose: () => void
+  onBack: () => void
 }) {
   const { lang, t } = useI18n()
   const title = useId()
-  const dismiss = useModalDismiss(onClose)
+  const heading = useRef<HTMLHeadingElement>(null)
   const installation = usePanelInstallation(onUnauthorized)
   const [target, setTarget] = useState<string | null>(null)
   const [unconfirmed, setUnconfirmed] = useState<{ target: string; statusBefore: PanelInstallation | null } | null>(null)
@@ -91,6 +97,8 @@ export function PanelUpdatesModal({ info, version, checking, failed, onCheck, on
 
   const installationStatus = installation.status
   const phase = installationStatus?.phase ?? 'idle'
+  const activeStep = INSTALL_STEPS.findIndex((step) => step.phase === phase)
+  const showSteps = activeStep >= 0 || phase === 'queued' || phase === 'succeeded'
   const updateVersion = installationStatus?.version
   const secure = window.location.protocol === 'https:'
   const installerVersion = latest?.match(/^v((?:0|[1-9]\d{0,7})(?:\.(?:0|[1-9]\d{0,7})){2})$/)?.[1]
@@ -102,6 +110,8 @@ export function PanelUpdatesModal({ info, version, checking, failed, onCheck, on
   useEffect(() => {
     if (phase === 'succeeded' || phase === 'rolled_back') onRefreshRelease()
   }, [phase, updateVersion, onRefreshRelease])
+
+  useEffect(() => { heading.current?.focus() }, [])
 
   const statusChanged = unconfirmed && sameVersion(updateVersion, unconfirmed.target)
     && (phase !== unconfirmed.statusBefore?.phase || installationStatus?.error !== unconfirmed.statusBefore?.error)
@@ -142,62 +152,101 @@ export function PanelUpdatesModal({ info, version, checking, failed, onCheck, on
 
   return (
     <>
-      <div className="modal-backdrop" inert={target !== null} onClick={dismiss}>
-        <section className="card modal panel-updates-modal" role="dialog" aria-modal="true" aria-labelledby={title}>
-          <div className="clients-head">
-            <h3 id={title}>{t('Обновления')}</h3>
-            <button className="ghost" onClick={onClose}>{t('Закрыть')}</button>
-          </div>
-          <dl className="panel-update-details">
-            <dt>{t('Установленная версия')}</dt>
-            <dd><code>{info?.current_version || version || '—'}</code></dd>
-            <dt>{t('Последняя стабильная версия')}</dt>
-            <dd><code>{latest || '—'}</code></dd>
-            <dt>{t('Последняя проверка')}</dt>
-            <dd>{Number.isFinite(timestamp)
-              ? <time dateTime={checkedAt ?? undefined}>{new Intl.DateTimeFormat(lang, { dateStyle: 'medium', timeStyle: 'short' }).format(timestamp)}</time>
-              : '—'}</dd>
+      <section className="updates-page" aria-labelledby={title} inert={target !== null}>
+        <header className="updates-heading">
+          <h2 id={title} ref={heading} tabIndex={-1}>{t('Обновления')}</h2>
+          <button type="button" className="ghost updates-back" onClick={onBack}>
+            <span aria-hidden="true">←</span> {t('Назад')}
+          </button>
+        </header>
+        <div className="card updates-card">
+          <p className="updates-status" data-status={status} role="status">
+            <span className="updates-status-dot" aria-hidden="true" />
+            {t(LABELS.release[status] ?? LABELS.release.unavailable)}
+          </p>
+          <dl className="updates-versions">
+            <div>
+              <dt>{t('Установленная версия')}</dt>
+              <dd><code>{info?.current_version || version || '—'}</code></dd>
+            </div>
+            <div data-available={status === 'available' || undefined}>
+              <dt>{t('Последняя стабильная версия')}</dt>
+              <dd><code>{latest?.replace(/^v/, '') || '—'}</code></dd>
+            </div>
           </dl>
-          <div className="panel-update-statuses" role="status" aria-atomic="false">
-            <p className="muted">{t(LABELS.release[status] ?? LABELS.release.unavailable)}</p>
-            {phase !== 'idle' && (
-              <div className="panel-install-status">
-                {updateVersion && <code>{updateVersion}</code>}
-                <p>{t(LABELS.phase[phase])}</p>
-                {installerError && <p className="muted small">{t(installerError)}</p>}
-              </div>
-            )}
-            {installation.reachable === false && (
-              <p className="muted">{t('Не удалось получить статус установки. Повторяем запрос…')}</p>
-            )}
-            {unconfirmed && !statusChanged && (
-              <p className="muted">{installation.reachable === true
-                ? t('Сервер не подтвердил запуск установки.')
-                : t('Ответ на запрос установки потерян. Проверяем её статус…')}</p>
-            )}
-          </div>
-          {notice && <p className="form-error" role="alert">{t(notice)}</p>}
           {status === 'available' && installationStatus && !installationStatus.enabled && (
-            <p className="muted">{t('Установка из панели отключена на сервере.')} {' '}
+            <p className="updates-message muted">{t('Установка из панели отключена на сервере.')} {' '}
               <a href={`${PROJECT_URL}/blob/main/docs/panel-updater.md`} target="_blank" rel="noopener noreferrer">{t('Как включить установщик')}</a>
             </p>
           )}
           {status === 'available' && installationStatus?.enabled && !secure && (
-            <p className="muted">{t('Для установки откройте панель по HTTPS.')}</p>
+            <p className="updates-message muted">{t('Для установки откройте панель по HTTPS.')}</p>
           )}
-          <div className="modal-actions">
-            {releaseUrl && <a href={releaseUrl} target="_blank" rel="noopener noreferrer">{t('Открыть релиз')}</a>}
-            <button className={canInstall ? 'ghost' : 'primary'} onClick={() => {
-              onCheck()
-              installation.refresh()
-              setNotice('')
-            }} disabled={checking || info?.status === 'disabled'}>{t('Проверить')}</button>
-            {canInstall && latest && (
-              <button className="primary" onClick={() => setTarget(latest)}>{t('Установить {version}', { version: latest })}</button>
-            )}
+          {notice && <p className="updates-message form-error" role="alert">{t(notice)}</p>}
+          <div className="updates-footer">
+            <div className="updates-checked">
+              <span>{t('Последняя проверка')}</span>
+              {Number.isFinite(timestamp)
+                ? <time dateTime={checkedAt ?? undefined}>{new Intl.DateTimeFormat(lang, { dateStyle: 'medium', timeStyle: 'short' }).format(timestamp)}</time>
+                : <span>—</span>}
+            </div>
+            <div className="updates-actions">
+              {releaseUrl && (
+                <a className="updates-release" href={releaseUrl} target="_blank" rel="noopener noreferrer">
+                  {t('Открыть релиз')} <span aria-hidden="true">↗</span>
+                </a>
+              )}
+              <button type="button" className={canInstall ? 'ghost' : 'primary'} onClick={() => {
+                onCheck()
+                installation.refresh()
+                setNotice('')
+              }} disabled={checking || info?.status === 'disabled'}>{t('Проверить')}</button>
+              {canInstall && latest && (
+                <button type="button" className="updates-install-button" onClick={() => setTarget(latest)}>
+                  {t('Установить {version}', { version: latest })}
+                </button>
+              )}
+            </div>
           </div>
-        </section>
-      </div>
+        </div>
+        {(phase !== 'idle' || installation.reachable === false || (unconfirmed && !statusChanged)) && (
+          <div className="card updates-installation">
+            {phase !== 'idle' && (
+              <>
+                <header>
+                  <h3>{t('Установка обновления')}</h3>
+                  {updateVersion && <code>{updateVersion}</code>}
+                </header>
+                {showSteps && (
+                  <ol className="updates-steps">
+                    {INSTALL_STEPS.map(({ phase: key, label }, index) => (
+                      <li
+                        key={key}
+                        aria-current={index === activeStep ? 'step' : undefined}
+                        data-complete={phase === 'succeeded' || index < activeStep || undefined}
+                      >
+                        {t(label)}
+                      </li>
+                    ))}
+                  </ol>
+                )}
+              </>
+            )}
+            <div className="updates-install-messages" role="status" aria-atomic="false">
+              {phase !== 'idle' && <p>{t(LABELS.phase[phase])}</p>}
+              {installerError && <p className="muted small">{t(installerError)}</p>}
+              {installation.reachable === false && (
+                <p className="muted">{t('Не удалось получить статус установки. Повторяем запрос…')}</p>
+              )}
+              {unconfirmed && !statusChanged && (
+                <p className="muted">{installation.reachable === true
+                  ? t('Сервер не подтвердил запуск установки.')
+                  : t('Ответ на запрос установки потерян. Проверяем её статус…')}</p>
+              )}
+            </div>
+          </div>
+        )}
+      </section>
       {target && (
         <StepUpModal requiredOtp
           text={t('Для установки {version} введите пароль панели и свежий шестизначный код 2FA. Во время обновления панель может быть недоступна.', { version: target })}
