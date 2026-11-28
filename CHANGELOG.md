@@ -4,6 +4,12 @@ All notable changes to Amnezia Control are documented here. The format is based 
 [Keep a Changelog](https://keepachangelog.com/), and the project follows
 [Semantic Versioning](https://semver.org/).
 
+## [0.84.90] - 2026-11-28
+
+- Keep an active AmneziaWG 3.1 interface during node boot to prevent a second connection drop. Update the legacy panel-managed boot unit in place without restarting the VPN.
+- Recheck recovery scripts on AWG cascade exits so an exit restored independently can catch up with the entry.
+- Prefer live GRE and REALITY transport evidence when an old AWG helper is still present.
+
 ## [0.84.89] - 2026-11-28
 
 - Preserve active sessions during AmneziaWG cascade recovery. Existing links get the updated recovery scripts in place, with no client or tunnel reconfiguration (#54).

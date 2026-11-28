@@ -1102,8 +1102,6 @@ def build_check_command(country: str = "") -> str:
         f'echo "CASCADE_DNSSTRATEGY=$(sudo -n python3 -c {shlex.quote(_STRATEGY_PY)} {DIR}/config/config.json 2>/dev/null)"',
         f'echo "CASCADE_PRIVATERULE=$(sudo -n python3 -c {shlex.quote(_PRIVATE_PY)} {DIR}/config/config.json 2>/dev/null)"',
         f"echo \"CASCADE_GEOPIN=$(sudo -n cat {DIR}/geo/pin 2>/dev/null | cut -d' ' -f1)\"",
-        CASCADE_PROBE_COMMAND,
-        _reality_encryption_command(),
         f"GW=$(sudo docker ps --format '{{{{.Names}}}}' | grep -qx {GATEWAY} && echo yes || echo no)",
         "TP=$(systemctl is-active acontrol-cascade-tproxy.service 2>/dev/null)",
         f"TUN=$(ip -br link show {GRE_IF} 2>/dev/null | awk '{{print $2}}')",
@@ -1121,6 +1119,9 @@ def build_check_command(country: str = "") -> str:
         'echo "CASCADE_REV=${REV:-0}"; fi',
         'wait',
         cascade_awg.check_command(),
+        # A leftover native AWG helper must not override live GRE or REALITY proof.
+        CASCADE_PROBE_COMMAND,
+        _reality_encryption_command(),
     ]) + "\n"
 
 

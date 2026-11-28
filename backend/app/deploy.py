@@ -308,17 +308,37 @@ def _v3_build_lines(tail: int, *, probe: bool = False) -> list[str]:
     ]
 
 
-def _bringup(subnet: str = SUBNET) -> str:
-    """Идемпотентный подъём интерфейса + NAT внутри контейнера (подсеть — своя
-    у каждой версии протокола)."""
+def _forward_awg(subnet: str) -> str:
     return (
-        "awg-quick down /opt/amnezia/awg/awg0.conf >/dev/null 2>&1; "
-        "awg-quick up /opt/amnezia/awg/awg0.conf; "
         f"{_client_nat(subnet)}; "
         "iptables -C FORWARD -i awg0 -j ACCEPT 2>/dev/null "
         "|| iptables -A FORWARD -i awg0 -j ACCEPT; "
         "iptables -C FORWARD -m state --state ESTABLISHED,RELATED -j ACCEPT 2>/dev/null "
         "|| iptables -A FORWARD -m state --state ESTABLISHED,RELATED -j ACCEPT"
+    )
+
+
+def _bringup(subnet: str = SUBNET) -> str:
+    """Explicit reload for deployment and configuration changes."""
+    return (
+        "awg-quick down /opt/amnezia/awg/awg0.conf >/dev/null 2>&1; "
+        "awg-quick up /opt/amnezia/awg/awg0.conf; "
+        + _forward_awg(subnet)
+    )
+
+
+def _boot_bringup_v3() -> str:
+    # Docker already starts the interface. Reloading a live link here drops
+    # peer sessions which were established before systemd reached this unit.
+    return (
+        'set -e; ready() { '
+        'port=$(awg show awg0 listen-port 2>/dev/null) && [ "${port:-0}" -gt 0 ] '
+        '&& ip -o -4 addr show up dev awg0 scope global | grep -q .; }; '
+        'if ! ready; then '
+        'if ip link show dev awg0 >/dev/null 2>&1 && ! ready; then '
+        'awg-quick down /opt/amnezia/awg/awg0.conf >/dev/null 2>&1 || true; fi; '
+        'awg-quick up /opt/amnezia/awg/awg0.conf || ready; fi; '
+        + _forward_awg(SUBNET_V3)
     )
 
 
@@ -816,15 +836,16 @@ def _systemd_unit() -> str:
     )
 
 
-def _systemd_unit_v3() -> str:
+def _systemd_unit_v3(*, legacy: bool = False) -> str:
     """Юнит подъёма 3.0 — отдельный от awg-up.service, чтобы версии протокола
     не мешали друг другу при перезагрузке ноды."""
+    bringup = _bringup(SUBNET_V3) if legacy else _boot_bringup_v3()
     return (
         "[Unit]\n"
         "Description=Bring up AmneziaWG 3.0 interface + NAT inside container\n"
         "After=docker.service\nRequires=docker.service\n\n"
         "[Service]\nType=oneshot\nExecStartPre=/bin/sleep 8\n"
-        f"ExecStart=/usr/bin/docker exec {CONTAINER_V3} sh -c '{_bringup(SUBNET_V3).replace('$', '$$').replace('%', '%%')}'\n"
+        f"ExecStart=/usr/bin/docker exec {CONTAINER_V3} sh -c '{bringup.replace('$', '$$').replace('%', '%%')}'\n"
         "RemainAfterExit=yes\n\n"
         "[Install]\nWantedBy=multi-user.target\n"
     )

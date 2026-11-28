@@ -72,13 +72,15 @@ def test_health_reasons() -> None:
     assert cascade.health("gre", kv, cascade.check_result(kv)) == (False, "GRE-туннель выключен")
 
 
-async def test_awg_watcher_upgrades_exit_before_entry_and_skips_current_revision(factory, monkeypatch):
+async def test_awg_watcher_rechecks_exit_after_independent_rollback(factory, monkeypatch):
     async with factory() as session:
         row = await session.get(Cascade, 1)
         row.transport = "awg"
         row.params = json.dumps({"runtime_layout": 2, "runtime_owner": "a" * 32})
         await session.commit()
     sides = []
+    revisions = {}
+    exit_checks = {}
 
     @asynccontextmanager
     async def connect(_family, server_id, _manager):
@@ -86,19 +88,67 @@ async def test_awg_watcher_upgrades_exit_before_entry_and_skips_current_revision
             async def run(self, command, *, check, timeout):
                 assert check and timeout == 25
                 sides.append((server_id, command))
+                revisions[server_id] = cascade_awg.RUNTIME_REV
 
         yield Conn()
 
     monkeypatch.setattr(cascadewatch.cascadejob, "connect", lambda *_: None)
     monkeypatch.setattr(cascadewatch.nodelock, "connect", connect)
     settings = config.get_settings()
-    check = OK + "CASCADE_ENCRYPTION=awg\nCASCADE_AWG=yes\n"
-    await cascadewatch.watch_once(factory, settings, check=_check(check))
+    async def check(entry):
+        return OK + f"CASCADE_ENCRYPTION=awg\nCASCADE_AWG=yes\nCASCADE_AWGREV={revisions.get(entry.id, '')}\n"
+
+    async def cycle(now):
+        await cascadewatch.watch_once(factory, settings, now=now, check=check, awg_exit_checks=exit_checks)
+
+    await cycle(NOW)
     assert [server_id for server_id, _ in sides] == [2, 1]
     assert cascade_awg.resources(1)["script"] in sides[0][1]
     assert cascade_awg.SCRIPT in sides[1][1]
-    await cascadewatch.watch_once(factory, settings, check=_check(check + f"CASCADE_AWGREV={cascade_awg.RUNTIME_REV}\n"))
+    assert "org.amnezia.control.owner" in sides[0][1] and "a" * 32 in sides[0][1]
+
+    revisions[2] = "1"
+    await cycle(NOW + timedelta(minutes=2))
     assert len(sides) == 2
+    assert revisions[2] == "1"
+
+    await cycle(NOW + cascadewatch.AWG_EXIT_RECHECK)
+    assert [server_id for server_id, _ in sides] == [2, 1, 2]
+    assert revisions[2] == cascade_awg.RUNTIME_REV
+
+    revisions[1] = "1"
+    await cycle(NOW + cascadewatch.AWG_EXIT_RECHECK + timedelta(minutes=2))
+    assert [server_id for server_id, _ in sides] == [2, 1, 2, 2, 1]
+
+
+async def test_awg_watcher_dates_paths_before_runtime_work(factory, monkeypatch):
+    observed_at = NOW
+    updated_at = NOW + timedelta(seconds=1)
+
+    class Clock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return observed_at
+
+    async def update_runtime(*_args, **_kwargs):
+        nonlocal observed_at
+        observed_at = updated_at + timedelta(seconds=1)
+        async with factory() as s:
+            c = await s.get(Cascade, 1)
+            c.result = json.dumps({"egress": "198.51.100.9", "checked_at": updated_at.isoformat()})
+            await s.commit()
+        return True
+
+    async with factory() as s:
+        (await s.get(Cascade, 1)).transport = "awg"
+        await s.commit()
+    monkeypatch.setattr(cascadewatch, "datetime", Clock)
+    monkeypatch.setattr(cascadewatch, "ensure_awg_runtime", update_runtime)
+    await cascadewatch.watch_once(factory, config.get_settings(), check=_check(OK + "CASCADE_AWG=yes\n"))
+    async with factory() as s:
+        result = json.loads((await s.get(Cascade, 1)).result)
+    assert result["checked_at"] == updated_at.isoformat() and result["egress"] == "198.51.100.9"
+    assert result["health"]["checked_at"] == NOW.isoformat()
 
 
 async def test_alert_only_after_grace_and_once(factory, sent) -> None:

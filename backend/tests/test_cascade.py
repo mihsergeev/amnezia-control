@@ -977,6 +977,14 @@ def test_check_looks_from_inside_the_vpn_container() -> None:
     assert "fwmark 0x100 lookup 241" in cmd and "fwmark 0x200 lookup 242" in cmd
 
 
+def test_check_prefers_live_gre_and_reality_proofs_over_an_old_native_awg_helper() -> None:
+    cmd = cascade.build_check_command()
+    native = cmd.index(cascade.cascade_awg.check_command())
+    gre_underlay = cmd.index(cascade.CASCADE_PROBE_COMMAND)
+    reality = cmd.index(cascade._reality_encryption_command())
+    assert cmd.rindex("\nwait\n") < native < gre_underlay < reality
+
+
 def test_health_catches_a_leak() -> None:
     base = ("CASCADE_GW=yes\nCASCADE_TPROXY=active\nCASCADE_TUN=UNKNOWN\nCASCADE_RULE=yes\n"
             "CASCADE_GRERULE=yes\nCASCADE_EGRESS=198.51.100.20\nCASCADE_DIRECT=203.0.113.10\n")
